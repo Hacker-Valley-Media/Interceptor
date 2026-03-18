@@ -1,0 +1,14 @@
+{
+  "name": "slop-browser",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "./scripts/build.sh",
+    "daemon": "bun run daemon/index.ts",
+    "cli": "bun run cli/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/chrome": "latest"
+  }
+}

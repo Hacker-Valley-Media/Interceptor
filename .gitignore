@@ -1,0 +1,7 @@
+node_modules/
+dist/
+extension/dist/
+daemon/slop-daemon
+*.log
+/tmp/
+.DS_Store

@@ -1,0 +1,7 @@
+{
+  "name": "com.slopbrowser.host",
+  "description": "slop-browser daemon bridge",
+  "path": "/Volumes/VRAM/00-09_System/01_Tools/slop-browser/daemon/slop-daemon",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://clcflogdlhfnlibdiahigikhpnlmhnpl/"]
+}
