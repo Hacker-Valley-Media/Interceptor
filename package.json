@@ -2,6 +2,9 @@
   "name": "slop-browser",
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "slop": "./dist/slop"
+  },
   "scripts": {
     "build": "./scripts/build.sh",
     "daemon": "bun run daemon/index.ts",

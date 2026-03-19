@@ -1,45 +1,122 @@
 let nativePort: chrome.runtime.Port | null = null
+let connectionReady = false
+let isConnecting = false
+let reconnectDelay = 1000
+const messageQueue: Array<{ id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }> = []
+
+const EXT_REQUEST_TIMEOUT_MS = 30_000
+const pendingRequests = new Map<string, { action: string; tabId?: number; timestamp: number; timer: ReturnType<typeof setTimeout> }>()
 
 function connectToHost() {
-  if (nativePort) return
+  if (nativePort || isConnecting) return
+  isConnecting = true
 
-  nativePort = chrome.runtime.connectNative("com.slopbrowser.host")
+  const port = chrome.runtime.connectNative("com.slopbrowser.host")
 
-  nativePort.onMessage.addListener((msg: { id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }) => {
+  const handshakeTimer = setTimeout(() => {
+    console.error("native host handshake timeout (10s)")
+    port.disconnect()
+  }, 10000)
+
+  port.onMessage.addListener((msg: { id?: string; type?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }) => {
+    if (msg.type === "pong" && !connectionReady) {
+      clearTimeout(handshakeTimer)
+      connectionReady = true
+      reconnectDelay = 1000
+      isConnecting = false
+      console.log("native host connected (pong received)")
+      while (messageQueue.length > 0) {
+        const queued = messageQueue.shift()!
+        handleDaemonMessage(queued)
+      }
+      return
+    }
     handleDaemonMessage(msg)
   })
 
-  nativePort.onDisconnect.addListener(() => {
+  port.onDisconnect.addListener(() => {
     nativePort = null
+    connectionReady = false
+    isConnecting = false
     const lastError = chrome.runtime.lastError
     if (lastError) {
       console.error("native host disconnected:", lastError.message)
     }
-    setTimeout(connectToHost, 2000)
+    for (const [id, req] of pendingRequests) {
+      clearTimeout(req.timer)
+      console.error(`orphaned request ${id} (${req.action}) — native port disconnected`)
+    }
+    pendingRequests.clear()
+    const jitter = Math.random() * reconnectDelay * 0.3
+    setTimeout(connectToHost, reconnectDelay + jitter)
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000)
   })
+
+  nativePort = port
+  port.postMessage({ type: "ping" })
 }
 
 async function handleDaemonMessage(msg: { id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }) {
   if (!msg.action || !msg.id) return
 
+  if (!nativePort) {
+    connectToHost()
+  }
+
+  if (pendingRequests.has(msg.id)) {
+    sendToHost({ id: msg.id, result: { success: false, error: "duplicate request ID" } })
+    return
+  }
+
+  const requestTimer = setTimeout(() => {
+    pendingRequests.delete(msg.id!)
+    sendToHost({ id: msg.id, result: { success: false, error: "extension timeout" } })
+  }, EXT_REQUEST_TIMEOUT_MS)
+
+  const startTime = Date.now()
+  const shortId = msg.id.slice(0, 8)
+  console.log(`[${shortId}] executing ${msg.action.type}`)
+  pendingRequests.set(msg.id, { action: msg.action.type, tabId: msg.tabId, timestamp: startTime, timer: requestTimer })
+
   const action = msg.action
   let tabId = msg.tabId
 
   if (!tabId && needsTab(action.type)) {
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    tabId = activeTab?.id
+    const stored = await chrome.storage.session.get("activeTabId")
+    tabId = stored.activeTabId
   }
 
   if (!tabId && needsTab(action.type)) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    tabId = activeTab?.id
+    if (tabId) {
+      chrome.storage.session.set({ activeTabId: tabId })
+    }
+  }
+
+  if (!tabId && needsTab(action.type)) {
+    clearTimeout(requestTimer)
+    pendingRequests.delete(msg.id)
     sendToHost({ id: msg.id, result: { success: false, error: "no active tab" } })
     return
   }
 
+  if (tabId) {
+    chrome.storage.session.set({ activeTabId: tabId })
+  }
+
   try {
     const result = await routeAction(action, tabId!)
+    if (tabId) result.tabId = tabId
+    clearTimeout(requestTimer)
+    pendingRequests.delete(msg.id)
+    console.log(`[${shortId}] complete ${action.type} ${Date.now() - startTime}ms`)
     sendToHost({ id: msg.id, result })
   } catch (err) {
-    sendToHost({ id: msg.id, result: { success: false, error: (err as Error).message } })
+    clearTimeout(requestTimer)
+    pendingRequests.delete(msg.id)
+    console.error(`[${shortId}] error ${action.type} ${Date.now() - startTime}ms: ${(err as Error).message}`)
+    sendToHost({ id: msg.id, result: { success: false, error: (err as Error).message, tabId } })
   }
 }
 
@@ -54,7 +131,7 @@ function needsTab(type: string): boolean {
   return !noTabActions.has(type)
 }
 
-async function routeAction(action: { type: string; [key: string]: unknown }, tabId: number): Promise<{ success: boolean; error?: string; data?: unknown }> {
+async function routeAction(action: { type: string; [key: string]: unknown }, tabId: number): Promise<{ success: boolean; error?: string; data?: unknown; tabId?: number }> {
   switch (action.type) {
 
     // === META ===
@@ -68,9 +145,30 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
     // === SCREENSHOTS & CAPTURE ===
     case "screenshot": {
       const format = (action.format as string) === "png" ? "png" : "jpeg"
-      const quality = (action.quality as number) || 80
+      const quality = (action.quality as number) || 50
       const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality })
-      return { success: true, data: { dataUrl } }
+      const filename = `slop-screenshot-${Date.now()}.${format === "png" ? "png" : "jpg"}`
+      const downloadId = await chrome.downloads.download({
+        url: dataUrl,
+        filename,
+        conflictAction: "uniquify"
+      })
+      const filePath = await new Promise<string>((resolve) => {
+        function onChanged(delta: chrome.downloads.DownloadDelta) {
+          if (delta.id === downloadId && delta.state?.current === "complete") {
+            chrome.downloads.onChanged.removeListener(onChanged)
+            chrome.downloads.search({ id: downloadId }, (items) => {
+              resolve(items[0]?.filename || filename)
+            })
+          }
+        }
+        chrome.downloads.onChanged.addListener(onChanged)
+        setTimeout(() => {
+          chrome.downloads.onChanged.removeListener(onChanged)
+          resolve(filename)
+        }, 5000)
+      })
+      return { success: true, data: filePath }
     }
 
     case "page_capture": {
@@ -427,12 +525,24 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
     // === JAVASCRIPT EVALUATION ===
     case "evaluate": {
       const code = action.code as string
+      const world = (action.world as string) === "ISOLATED" ? "ISOLATED" : "MAIN"
       const results = await chrome.scripting.executeScript({
         target: { tabId },
-        world: "MAIN",
+        world: world as "MAIN" | "ISOLATED",
         args: [code],
         func: (c: string) => {
           try {
+            const w = window as any
+            if (w.trustedTypes) {
+              if (!w.__slop_tt_policy) {
+                w.__slop_tt_policy = w.trustedTypes.createPolicy("slop-eval", {
+                  createScript: (s: string) => s
+                })
+              }
+              const trusted = w.__slop_tt_policy.createScript(c)
+              const r = (0, eval)(trusted)
+              return { success: true, data: (typeof r === "object" && r !== null) ? JSON.parse(JSON.stringify(r)) : r }
+            }
             const r = (0, eval)(c)
             return { success: true, data: (typeof r === "object" && r !== null) ? JSON.parse(JSON.stringify(r)) : r }
           } catch (e: any) {

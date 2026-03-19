@@ -1,15 +1,22 @@
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "execute_action") {
-    handleAction(msg.action).then(sendResponse)
+    handleAction(msg.action)
+      .then(sendResponse)
+      .catch((err: Error) => sendResponse({ success: false, error: err.message }))
     return true
   }
   if (msg.type === "get_state") {
-    sendResponse(getPageState(msg.full))
+    try {
+      sendResponse(getPageState(msg.full))
+    } catch (err) {
+      sendResponse({ success: false, error: (err as Error).message })
+    }
     return true
   }
 })
 
 function getPageState(full = false) {
+  domDirty = false
   const elements = getInteractiveElements()
   const tree = buildElementTree(elements)
   const scrollY = window.scrollY
@@ -42,6 +49,15 @@ interface IndexedElement {
 
 const selectorMap = new Map<number, string>()
 let nextIndex = 0
+let domDirty = false
+
+const domObserver = new MutationObserver(() => {
+  domDirty = true
+})
+
+if (document.body) {
+  domObserver.observe(document.body, { childList: true, subtree: true })
+}
 
 function getInteractiveElements(): IndexedElement[] {
   selectorMap.clear()
@@ -159,7 +175,14 @@ function buildElementTree(elements: IndexedElement[]): string {
   }).join("\n")
 }
 
-async function handleAction(action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; data?: unknown }> {
+async function handleAction(action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; warning?: string; data?: unknown }> {
+  const warnDirty = domDirty
+  const result = await executeAction(action)
+  if (warnDirty && result.success) result.warning = "DOM has changed since last state read"
+  return result
+}
+
+async function executeAction(action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; warning?: string; data?: unknown }> {
   try {
     switch (action.type) {
       case "get_state":
@@ -167,7 +190,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "click": {
         const el = resolveElement(action.index as number)
-        if (!el) return { success: false, error: `element [${action.index}] not found (run slop state to refresh)` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
         dispatchClickSequence(el)
         return { success: true, data: `clicked [${action.index}]` }
@@ -175,7 +198,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "dblclick": {
         const el = resolveElement(action.index as number)
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
         dispatchClickSequence(el)
         const rect = el.getBoundingClientRect()
@@ -185,7 +208,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "rightclick": {
         const el = resolveElement(action.index as number)
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
         const rect = el.getBoundingClientRect()
         const x = rect.left + rect.width / 2
@@ -196,7 +219,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "input_text": {
         const el = resolveElement(action.index as number) as HTMLInputElement | HTMLTextAreaElement | null
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.focus()
         if (action.clear) {
           el.value = ""
@@ -218,7 +241,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "select_option": {
         const el = resolveElement(action.index as number) as HTMLSelectElement | null
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.value = action.value as string
         el.dispatchEvent(new Event("change", { bubbles: true }))
         return { success: true }
@@ -226,7 +249,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "check": {
         const el = resolveElement(action.index as number) as HTMLInputElement | null
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         const target = action.checked !== undefined ? !!(action.checked) : !el.checked
         if (el.checked !== target) {
           el.checked = target
@@ -249,37 +272,12 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
       }
 
       case "evaluate": {
-        const code = action.code as string
-        const resultId = "__slop_" + Math.random().toString(36).slice(2)
-        const container = document.createElement("div")
-        container.id = resultId
-        container.style.display = "none"
-        document.documentElement.appendChild(container)
-        const s = document.createElement("script")
-        s.textContent = `
-          (function() {
-            var c = document.getElementById("${resultId}");
-            try {
-              var __r = ${code};
-              c.setAttribute("data-result", JSON.stringify({ success: true, data: (typeof __r === 'object' && __r !== null) ? JSON.parse(JSON.stringify(__r)) : __r }));
-            } catch(e) {
-              c.setAttribute("data-result", JSON.stringify({ success: false, error: e.message }));
-            }
-          })();
-        `
-        document.documentElement.appendChild(s)
-        s.remove()
-        const result = container.getAttribute("data-result")
-        container.remove()
-        if (result) {
-          try { return JSON.parse(result) } catch { return { success: true, data: result } }
-        }
-        return { success: false, error: "eval produced no result" }
+        return { success: false, error: "evaluate is handled by background script — this should not be reached" }
       }
 
       case "scroll_to": {
         const el = resolveElement(action.index as number)
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.scrollIntoView({ block: "center", behavior: "instant" })
         return { success: true }
       }
@@ -307,7 +305,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
       case "extract_text": {
         if (action.index !== undefined) {
           const el = resolveElement(action.index as number)
-          if (!el) return { success: false, error: `element [${action.index}] not found` }
+          if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
           return { success: true, data: (el.textContent || "").trim() }
         }
         return { success: true, data: document.body.innerText.slice(0, 10000) }
@@ -316,7 +314,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
       case "extract_html": {
         if (action.index !== undefined) {
           const el = resolveElement(action.index as number)
-          if (!el) return { success: false, error: `element [${action.index}] not found` }
+          if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
           return { success: true, data: el.outerHTML.slice(0, 10000) }
         }
         return { success: true, data: document.documentElement.outerHTML.slice(0, 50000) }
@@ -324,7 +322,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "focus": {
         const el = resolveElement(action.index as number) as HTMLElement | null
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.focus()
         return { success: true }
       }
@@ -336,7 +334,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "hover": {
         const el = resolveElement(action.index as number)
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         dispatchHoverSequence(el)
         return { success: true }
       }
@@ -495,7 +493,7 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 
       case "selection_set": {
         const el = resolveElement(action.index as number) as HTMLInputElement | HTMLTextAreaElement | null
-        if (!el) return { success: false, error: `element [${action.index}] not found` }
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.setSelectionRange(action.start as number, action.end as number)
         return { success: true }
       }
@@ -558,7 +556,10 @@ async function handleAction(action: { type: string; [key: string]: unknown }): P
 function resolveElement(index: number): Element | null {
   const selector = selectorMap.get(index)
   if (!selector) return null
-  return document.querySelector(selector)
+  const el = document.querySelector(selector)
+  if (!el) return null
+  if (!isVisible(el)) return null
+  return el
 }
 
 function scrollIntoViewIfNeeded(el: Element) {

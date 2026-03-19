@@ -16,14 +16,56 @@ try { if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH) } catch {}
 const pendingRequests = new Map<string, {
   resolve: (v: string) => void
   timer: ReturnType<typeof setTimeout>
+  socket: { write: (data: Buffer | string) => number; readonly remoteAddress: string }
+  startTime: number
+  actionType: string
 }>()
+
+const socketBuffers = new Map<object, Buffer>()
+const socketWriteQueues = new Map<object, Buffer[]>()
+
+function socketWriteFramed(socket: { write: (data: Buffer | string) => number }, json: string): boolean {
+  try {
+    const encoded = Buffer.from(json, "utf-8")
+    const header = Buffer.alloc(4)
+    header.writeUInt32LE(encoded.byteLength, 0)
+    const frame = Buffer.concat([header, encoded])
+    const wrote = socket.write(frame)
+    if (wrote < frame.byteLength) {
+      const remainder = frame.subarray(wrote)
+      const queue = socketWriteQueues.get(socket) || []
+      queue.push(Buffer.from(remainder))
+      socketWriteQueues.set(socket, queue)
+    }
+    return true
+  } catch (err) {
+    log(`socket write error: ${(err as Error).message}`)
+    return false
+  }
+}
+
+function drainSocketQueue(socket: { write: (data: Buffer | string) => number }) {
+  const queue = socketWriteQueues.get(socket)
+  if (!queue || queue.length === 0) return
+  while (queue.length > 0) {
+    const chunk = queue[0]
+    const wrote = socket.write(chunk)
+    if (wrote < chunk.byteLength) {
+      queue[0] = chunk.subarray(wrote)
+      return
+    }
+    queue.shift()
+  }
+}
+
+const timedOutRequests = new Set<string>()
 
 let stdinBuffer = Buffer.alloc(0)
 
 function processStdinBuffer() {
   while (stdinBuffer.length >= 4) {
     const msgLen = stdinBuffer.readUInt32LE(0)
-    if (msgLen === 0 || msgLen > 1024 * 1024) {
+    if (msgLen === 0 || msgLen > 10 * 1024 * 1024) {
       log(`invalid message length: ${msgLen}, discarding buffer`)
       stdinBuffer = Buffer.alloc(0)
       return
@@ -41,12 +83,25 @@ function processStdinBuffer() {
   }
 }
 
-function handleNativeMessage(msg: { id?: string; [key: string]: unknown }) {
+function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: unknown }) {
+  if (msg.type === "ping") {
+    log("received ping, sending pong")
+    sendNativeMessage({ type: "pong" })
+    return
+  }
+
   if (msg.id) {
     const pending = pendingRequests.get(msg.id)
     if (pending) {
+      clearTimeout(pending.timer)
+      const duration = Date.now() - pending.startTime
+      const success = (msg as { result?: { success?: boolean } }).result?.success ?? true
+      log(`[${msg.id.slice(0, 8)}] resp ${success ? "ok" : "err"} ${pending.actionType} ${duration}ms`)
       pending.resolve(JSON.stringify(msg))
       pendingRequests.delete(msg.id)
+    } else if (timedOutRequests.has(msg.id)) {
+      log(`late response for timed-out request: ${msg.id}`)
+      timedOutRequests.delete(msg.id)
     }
   }
 }
@@ -78,41 +133,73 @@ process.stdin.resume()
 
 const REQUEST_TIMEOUT_MS = 30_000
 
+let socketServer: ReturnType<typeof Bun.listen> | null = null
+
 try {
-  Bun.listen({
+  socketServer = Bun.listen({
     unix: SOCKET_PATH,
     socket: {
       open(socket) {
+        socketBuffers.set(socket, Buffer.alloc(0))
         log("cli connected via socket")
       },
       data(socket, raw) {
-        let request: { id?: string; action?: unknown; tabId?: number }
-        try {
-          request = JSON.parse(raw.toString())
-        } catch {
-          socket.write(JSON.stringify({ error: "invalid JSON" }) + "\n")
-          return
+        let buf = Buffer.concat([socketBuffers.get(socket) || Buffer.alloc(0), Buffer.from(raw)])
+
+        while (buf.length >= 4) {
+          const msgLen = buf.readUInt32LE(0)
+          if (msgLen === 0 || msgLen > 1024 * 1024) {
+            log(`invalid socket message length: ${msgLen}, discarding`)
+            buf = Buffer.alloc(0)
+            break
+          }
+          if (buf.length < 4 + msgLen) break
+
+          const jsonBuf = buf.subarray(4, 4 + msgLen)
+          buf = buf.subarray(4 + msgLen)
+
+          let request: { id?: string; action?: unknown; tabId?: number }
+          try {
+            request = JSON.parse(jsonBuf.toString("utf-8"))
+          } catch {
+            socketWriteFramed(socket, JSON.stringify({ error: "invalid JSON" }))
+            continue
+          }
+
+          const id = request.id ?? crypto.randomUUID()
+          log(`cli request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
+
+          const timer = setTimeout(() => {
+            pendingRequests.delete(id)
+            timedOutRequests.add(id)
+            setTimeout(() => timedOutRequests.delete(id), 60_000)
+            log(`request timeout: ${id}`)
+            socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "timeout" } }))
+          }, REQUEST_TIMEOUT_MS)
+
+          const actionType = (request.action as { type?: string })?.type || "unknown"
+          pendingRequests.set(id, {
+            resolve: (response: string) => {
+              clearTimeout(timer)
+              socketWriteFramed(socket, response)
+            },
+            timer,
+            socket,
+            startTime: Date.now(),
+            actionType
+          })
+
+          sendNativeMessage({ id, action: request.action, tabId: request.tabId })
         }
 
-        const id = request.id ?? crypto.randomUUID()
-        log(`cli request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
-
-        const timer = setTimeout(() => {
-          pendingRequests.delete(id)
-          socket.write(JSON.stringify({ id, result: { success: false, error: "timeout" } }) + "\n")
-        }, REQUEST_TIMEOUT_MS)
-
-        pendingRequests.set(id, {
-          resolve: (response: string) => {
-            clearTimeout(timer)
-            socket.write(response + "\n")
-          },
-          timer
-        })
-
-        sendNativeMessage({ id, action: request.action, tabId: request.tabId })
+        socketBuffers.set(socket, buf)
       },
-      close() {
+      drain(socket) {
+        drainSocketQueue(socket)
+      },
+      close(socket) {
+        socketBuffers.delete(socket)
+        socketWriteQueues.delete(socket)
         log("cli disconnected")
       },
       error(_socket, err) {
@@ -129,13 +216,30 @@ try {
 Bun.write(PID_PATH, `${process.pid}\n${SOCKET_PATH}\n`)
 log(`pid file written: ${process.pid}`)
 
+function gracefulShutdown(signal: string) {
+  log(`${signal} received, draining ${pendingRequests.size} pending requests`)
+  for (const [id, req] of pendingRequests) {
+    clearTimeout(req.timer)
+    socketWriteFramed(req.socket, JSON.stringify({ id, result: { success: false, error: "daemon shutting down" } }))
+  }
+  pendingRequests.clear()
+  if (socketServer) {
+    socketServer.stop(true)
+    socketServer = null
+  }
+  try { unlinkSync(SOCKET_PATH) } catch {}
+  try { unlinkSync(PID_PATH) } catch {}
+  log("shutdown complete")
+  process.exit(0)
+}
+
 process.on("exit", (code) => {
   log(`exiting with code ${code}`)
   try { unlinkSync(SOCKET_PATH) } catch {}
   try { unlinkSync(PID_PATH) } catch {}
 })
-process.on("SIGTERM", () => process.exit(0))
-process.on("SIGINT", () => process.exit(0))
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+process.on("SIGINT", () => gracefulShutdown("SIGINT"))
 process.on("uncaughtException", (err) => {
   log(`uncaught exception: ${err.message}\n${err.stack}`)
 })

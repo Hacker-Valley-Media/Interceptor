@@ -3,37 +3,45 @@ import { existsSync } from "node:fs"
 const SOCKET_PATH = "/tmp/slop-browser.sock"
 const PID_PATH = "/tmp/slop-browser.pid"
 
-function sendCommand(action: { type: string; [key: string]: unknown }): Promise<{ id: string; result: { success: boolean; error?: string; data?: unknown } }> {
+function sendCommand(action: { type: string; [key: string]: unknown }, tabId?: number): Promise<{ id: string; result: { success: boolean; error?: string; data?: unknown; tabId?: number } }> {
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID()
-    let buffer = ""
+    const shortId = id.slice(0, 8)
+    process.stderr.write(`[${shortId}] → ${action.type}\n`)
+    let buffer = Buffer.alloc(0)
+    let resolved = false
+    const startTime = Date.now()
 
     Bun.connect({
       unix: SOCKET_PATH,
       socket: {
         open(socket) {
-          socket.write(JSON.stringify({ id, action }))
+          const payload = JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }) })
+          const encoded = Buffer.from(payload, "utf-8")
+          const header = Buffer.alloc(4)
+          header.writeUInt32LE(encoded.byteLength, 0)
+          socket.write(Buffer.concat([header, encoded]))
         },
         data(socket, raw) {
-          buffer += raw.toString()
-          const newlineIdx = buffer.indexOf("\n")
-          if (newlineIdx !== -1) {
-            const line = buffer.slice(0, newlineIdx)
-            try {
-              resolve(JSON.parse(line))
-            } catch {
-              reject(new Error("invalid response from daemon"))
+          buffer = Buffer.concat([buffer, Buffer.from(raw)])
+          if (buffer.length >= 4) {
+            const msgLen = buffer.readUInt32LE(0)
+            if (msgLen > 0 && msgLen <= 1024 * 1024 && buffer.length >= 4 + msgLen) {
+              const json = buffer.subarray(4, 4 + msgLen).toString("utf-8")
+              try {
+                resolved = true
+                resolve(JSON.parse(json))
+              } catch {
+                resolved = true
+                reject(new Error("invalid response from daemon"))
+              }
+              socket.end()
             }
-            socket.end()
           }
         },
         close() {
-          if (buffer && !buffer.includes("\n")) {
-            try {
-              resolve(JSON.parse(buffer))
-            } catch {
-              reject(new Error("connection closed before response"))
-            }
+          if (!resolved) {
+            reject(new Error("connection closed before response"))
           }
         },
         connectError(_socket, err) {
@@ -135,6 +143,7 @@ Flags:
 async function main() {
   const args = process.argv.slice(2)
   const jsonMode = args.includes("--json")
+  const globalTabId = parseTabFlag(args)
   const filtered = args.filter(a => a !== "--json")
 
   if (filtered.length === 0 || filtered[0] === "help") {
@@ -467,7 +476,7 @@ async function main() {
   }
 
   try {
-    const response = await sendCommand(action)
+    const response = await sendCommand(action, globalTabId)
 
     if (response.result) {
       const result = response.result
