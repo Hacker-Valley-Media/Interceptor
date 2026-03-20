@@ -35,11 +35,13 @@ function getPageState(full = false) {
     state.staticText = document.body.innerText.slice(0, 5000)
   }
 
+  cacheSnapshot()
   return { success: true, data: state }
 }
 
 interface IndexedElement {
   index: number
+  refId: string
   element: Element
   selector: string
   tag: string
@@ -50,6 +52,38 @@ interface IndexedElement {
 const selectorMap = new Map<number, string>()
 let nextIndex = 0
 let domDirty = false
+
+const refRegistry = new Map<string, WeakRef<Element>>()
+const elementToRef = new WeakMap<Element, string>()
+let nextRefId = 1
+
+function getOrAssignRef(el: Element): string {
+  const existing = elementToRef.get(el)
+  if (existing) {
+    const ref = refRegistry.get(existing)
+    if (ref?.deref() === el) return existing
+  }
+  const refId = `e${nextRefId++}`
+  refRegistry.set(refId, new WeakRef(el))
+  elementToRef.set(el, refId)
+  return refId
+}
+
+function resolveRef(refId: string): Element | null {
+  const ref = refRegistry.get(refId)
+  if (!ref) return null
+  const el = ref.deref()
+  if (!el || !el.isConnected) return null
+  if (!isVisible(el)) return null
+  return el
+}
+
+function pruneStaleRefs() {
+  for (const [id, ref] of refRegistry) {
+    const el = ref.deref()
+    if (!el || !el.isConnected) refRegistry.delete(id)
+  }
+}
 
 const domObserver = new MutationObserver(() => {
   domDirty = true
@@ -63,32 +97,52 @@ window.addEventListener("beforeunload", () => {
   domObserver.disconnect()
 })
 
+const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA", "DETAILS", "SUMMARY"])
+const INTERACTIVE_ROLES = new Set(["button", "link", "tab", "menuitem", "checkbox", "radio", "switch", "textbox", "combobox", "listbox", "option", "slider"])
+
+function getShadowRoot(el: Element): ShadowRoot | null {
+  if ((el as HTMLElement).shadowRoot) return (el as HTMLElement).shadowRoot
+  try {
+    if (typeof chrome !== "undefined" && chrome.dom?.openOrClosedShadowRoot) {
+      return chrome.dom.openOrClosedShadowRoot(el as HTMLElement) as ShadowRoot | null
+    }
+  } catch {}
+  return null
+}
+
+function walkWithShadow(root: Node, callback: (el: Element) => void) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
+  let node: Node | null = walker.nextNode()
+  while (node) {
+    const el = node as Element
+    callback(el)
+    const shadow = getShadowRoot(el)
+    if (shadow) walkWithShadow(shadow, callback)
+    node = walker.nextNode()
+  }
+}
+
 function getInteractiveElements(): IndexedElement[] {
   selectorMap.clear()
   nextIndex = 0
-
-  const interactiveTags = new Set(["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA", "DETAILS", "SUMMARY"])
-  const interactiveRoles = new Set(["button", "link", "tab", "menuitem", "checkbox", "radio", "switch", "textbox", "combobox", "listbox", "option", "slider"])
+  pruneStaleRefs()
 
   const results: IndexedElement[] = []
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT)
 
-  let node: Node | null = walker.currentNode
-  while (node) {
-    const el = node as Element
-    if (isInteractive(el, interactiveTags, interactiveRoles) && isVisible(el)) {
+  walkWithShadow(document.body, (el) => {
+    if (isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES) && isVisible(el)) {
       const idx = nextIndex++
       const selector = buildSelector(el)
       selectorMap.set(idx, selector)
+      const refId = getOrAssignRef(el)
 
       const tag = el.tagName.toLowerCase()
-      const text = (el.textContent || "").trim().slice(0, 80)
+      const text = getAccessibleName(el)
       const attrs = getRelevantAttrs(el)
 
-      results.push({ index: idx, element: el, selector, tag, text, attrs })
+      results.push({ index: idx, refId, element: el, selector, tag, text, attrs })
     }
-    node = walker.nextNode()
-  }
+  })
 
   return results
 }
@@ -113,6 +167,86 @@ function isVisible(el: Element): boolean {
   const rect = el.getBoundingClientRect()
   if (rect.width === 0 && rect.height === 0) return false
   return true
+}
+
+function getEffectiveRole(el: Element): string {
+  const explicit = el.getAttribute("role")
+  if (explicit) return explicit
+
+  const tag = el.tagName.toLowerCase()
+  if (tag === "a" && el.hasAttribute("href")) return "link"
+  if (tag === "button" || tag === "summary") return "button"
+  if (tag === "select") return "combobox"
+  if (tag === "textarea") return "textbox"
+  if (tag === "nav") return "navigation"
+  if (tag === "main") return "main"
+  if (tag === "aside") return "complementary"
+  if (tag === "form") return "form"
+  if (tag === "img") return "img"
+  if (tag === "details") return "group"
+  if (tag === "ul" || tag === "ol") return "list"
+  if (tag === "li") return "listitem"
+  if (tag === "table") return "table"
+  if (tag === "tr") return "row"
+  if (tag === "td") return "cell"
+  if (tag === "th") return "columnheader"
+  if (/^h[1-6]$/.test(tag)) return "heading"
+  if (tag === "header") {
+    if (!el.closest("article, section")) return "banner"
+  }
+  if (tag === "footer") {
+    if (!el.closest("article, section")) return "contentinfo"
+  }
+  if (tag === "section") {
+    const name = el.getAttribute("aria-label") || el.getAttribute("aria-labelledby")
+    if (name) return "region"
+  }
+  if (tag === "input") {
+    const type = (el.getAttribute("type") || "text").toLowerCase()
+    const inputRoles: Record<string, string> = {
+      checkbox: "checkbox", radio: "radio", range: "slider",
+      search: "searchbox", email: "textbox", tel: "textbox",
+      url: "textbox", number: "spinbutton", text: "textbox",
+      password: "textbox"
+    }
+    return inputRoles[type] || "textbox"
+  }
+  return ""
+}
+
+function getAccessibleName(el: Element): string {
+  const ariaLabel = el.getAttribute("aria-label")
+  if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim()
+
+  const labelledBy = el.getAttribute("aria-labelledby")
+  if (labelledBy) {
+    const parts = labelledBy.split(/\s+/).map(id => {
+      const ref = document.getElementById(id)
+      return ref ? (ref.textContent || "").trim() : ""
+    }).filter(Boolean)
+    if (parts.length) return parts.join(" ")
+  }
+
+  const tag = el.tagName
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
+    const id = el.getAttribute("id")
+    if (id) {
+      const label = document.querySelector(`label[for="${CSS.escape(id)}"]`)
+      if (label && (label.textContent || "").trim()) return (label.textContent || "").trim()
+    }
+    const parentLabel = el.closest("label")
+    if (parentLabel && (parentLabel.textContent || "").trim()) return (parentLabel.textContent || "").trim()
+  }
+
+  if (tag === "IMG") {
+    const alt = el.getAttribute("alt")
+    if (alt && alt.trim()) return alt.trim()
+  }
+
+  const title = el.getAttribute("title")
+  if (title && title.trim()) return title.trim()
+
+  return (el.textContent || "").trim().slice(0, 80)
 }
 
 function buildSelector(el: Element): string {
@@ -143,6 +277,9 @@ function getRelevantAttrs(el: Element): string {
   const attrs: string[] = []
   const tag = el.tagName.toLowerCase()
 
+  const role = el.getAttribute("role")
+  if (role) attrs.push(`role="${role}"`)
+
   if (tag === "a") {
     const href = el.getAttribute("href")
     if (href) attrs.push(`href="${href.slice(0, 60)}"`)
@@ -155,6 +292,7 @@ function getRelevantAttrs(el: Element): string {
     const value = (el as HTMLInputElement).value
     if (value) attrs.push(`value="${value.slice(0, 40)}"`)
     if ((el as HTMLInputElement).checked) attrs.push("checked")
+    if ((el as HTMLInputElement).disabled) attrs.push("disabled")
   }
   if (tag === "select" || tag === "textarea") {
     const value = (el as HTMLSelectElement | HTMLTextAreaElement).value
@@ -166,20 +304,161 @@ function getRelevantAttrs(el: Element): string {
     const alt = el.getAttribute("alt")
     if (alt) attrs.push(`alt="${alt.slice(0, 40)}"`)
   }
-  const ariaLabel = el.getAttribute("aria-label")
-  if (ariaLabel) attrs.push(`aria-label="${ariaLabel.slice(0, 40)}"`)
-  const cls = el.getAttribute("class")
-  if (cls) attrs.push(`class="${cls.split(" ").slice(0, 3).join(" ")}"`)
+
+  const expanded = el.getAttribute("aria-expanded")
+  if (expanded) attrs.push(`expanded=${expanded}`)
+
+  const pressed = el.getAttribute("aria-pressed")
+  if (pressed) attrs.push(`pressed=${pressed}`)
+
+  const selected = el.getAttribute("aria-selected")
+  if (selected === "true") attrs.push("selected")
+
+  const ariaHidden = el.getAttribute("aria-hidden")
+  if (ariaHidden === "true") attrs.push("aria-hidden")
+
+  if ((el as HTMLElement).ariaDisabled === "true" || (el as HTMLButtonElement).disabled) attrs.push("disabled")
+
+  const live = el.getAttribute("aria-live")
+  if (live && live !== "off") attrs.push(`live="${live}"`)
+
+  const required = el.getAttribute("aria-required") || (el.hasAttribute("required") ? "true" : null)
+  if (required === "true") attrs.push("required")
+
+  const invalid = el.getAttribute("aria-invalid")
+  if (invalid === "true") attrs.push("invalid")
 
   return attrs.join(" ")
 }
 
 function buildElementTree(elements: IndexedElement[]): string {
   return elements.map(e => {
+    const role = getEffectiveRole(e.element)
+    const name = e.text ? ` "${e.text}"` : ""
     const attrStr = e.attrs ? ` ${e.attrs}` : ""
-    const text = e.text ? e.text : ""
-    return `[${e.index}]<${e.tag}${attrStr}>${text}</${e.tag}>`
+    return `[${e.refId}] ${role || e.tag}${name}${attrStr}`
   }).join("\n")
+}
+
+const LANDMARK_ROLES = new Set(["banner", "navigation", "main", "complementary", "contentinfo", "search", "form", "region"])
+const LANDMARK_TAGS = new Set(["NAV", "MAIN", "ASIDE", "HEADER", "FOOTER", "FORM", "SECTION"])
+
+function buildA11yTree(root: Element, depth: number, maxDepth: number, filter: string): string {
+  if (depth > maxDepth) return ""
+  const lines: string[] = []
+
+  function walk(el: Element, d: number) {
+    if (d > maxDepth) return
+    if (!isVisible(el) && el.tagName !== "BODY") return
+
+    const role = getEffectiveRole(el)
+    const tag = el.tagName.toLowerCase()
+    const isLandmark = LANDMARK_ROLES.has(role) || LANDMARK_TAGS.has(el.tagName)
+    const isHeading = /^h[1-6]$/.test(tag) || role === "heading"
+    const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES)
+    const indent = "  ".repeat(d)
+
+    if (isLandmark && !isInteractiveEl) {
+      const name = getAccessibleName(el)
+      const nameStr = name && name !== (el.textContent || "").trim().slice(0, 80) ? ` "${name}"` : ""
+      lines.push(`${indent}${role || tag}${nameStr}`)
+    }
+
+    if (isHeading && filter === "all") {
+      const name = getAccessibleName(el)
+      lines.push(`${indent}heading "${name}"`)
+    }
+
+    if (isInteractiveEl) {
+      const refId = getOrAssignRef(el)
+      const name = getAccessibleName(el)
+      const nameStr = name ? ` "${name}"` : ""
+      const attrs = getRelevantAttrs(el)
+      const attrStr = attrs ? ` ${attrs}` : ""
+      lines.push(`${indent}[${refId}] ${role || tag}${nameStr}${attrStr}`)
+    }
+
+    const shadow = getShadowRoot(el)
+    if (shadow) {
+      lines.push(`${indent}  shadow-root`)
+      for (const child of shadow.children) {
+        walk(child, d + 2)
+      }
+    }
+
+    for (const child of el.children) {
+      walk(child, isLandmark ? d + 1 : d)
+    }
+  }
+
+  walk(root, depth)
+  return lines.join("\n")
+}
+
+interface SnapshotEntry {
+  refId: string
+  role: string
+  name: string
+  value: string
+  states: string
+}
+
+let lastSnapshot: SnapshotEntry[] = []
+let snapshotTabId: number | undefined
+
+function cacheSnapshot() {
+  const entries: SnapshotEntry[] = []
+  for (const [refId, weakRef] of refRegistry) {
+    const el = weakRef.deref()
+    if (!el || !el.isConnected) continue
+    entries.push({
+      refId,
+      role: getEffectiveRole(el),
+      name: getAccessibleName(el),
+      value: ((el as HTMLInputElement).value || "").slice(0, 40),
+      states: getRelevantAttrs(el)
+    })
+  }
+  lastSnapshot = entries
+}
+
+function computeSnapshotDiff(): { success: boolean; error?: string; data?: unknown } {
+  if (lastSnapshot.length === 0) {
+    return { success: false, error: "no previous snapshot — run 'slop tree' first" }
+  }
+
+  const oldMap = new Map(lastSnapshot.map(e => [e.refId, e]))
+  const current: SnapshotEntry[] = []
+  for (const [refId, weakRef] of refRegistry) {
+    const el = weakRef.deref()
+    if (!el || !el.isConnected) continue
+    current.push({
+      refId,
+      role: getEffectiveRole(el),
+      name: getAccessibleName(el),
+      value: ((el as HTMLInputElement).value || "").slice(0, 40),
+      states: getRelevantAttrs(el)
+    })
+  }
+  const newMap = new Map(current.map(e => [e.refId, e]))
+
+  const changes: string[] = []
+  for (const [id] of oldMap) {
+    if (!newMap.has(id)) changes.push(`- ${id} (removed)`)
+  }
+  for (const [id, cur] of newMap) {
+    const old = oldMap.get(id)
+    if (!old) {
+      changes.push(`+ ${id} ${cur.role} "${cur.name}" (new)`)
+    } else {
+      if (old.value !== cur.value) changes.push(`~ ${id} value: "${old.value}" → "${cur.value}"`)
+      if (old.states !== cur.states) changes.push(`~ ${id} states: ${old.states} → ${cur.states}`)
+      if (old.name !== cur.name) changes.push(`~ ${id} name: "${old.name}" → "${cur.name}"`)
+    }
+  }
+
+  lastSnapshot = current
+  return { success: true, data: changes.length ? changes.join("\n") : "no changes" }
 }
 
 async function handleAction(action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; warning?: string; data?: unknown }> {
@@ -196,15 +475,15 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
         return getPageState(action.full as boolean)
 
       case "click": {
-        const el = resolveElement(action.index as number)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
         dispatchClickSequence(el)
-        return { success: true, data: `clicked [${action.index}]` }
+        return { success: true, data: `clicked [${action.ref || action.index}]` }
       }
 
       case "dblclick": {
-        const el = resolveElement(action.index as number)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
         dispatchClickSequence(el)
@@ -214,7 +493,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "rightclick": {
-        const el = resolveElement(action.index as number)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
         const rect = el.getBoundingClientRect()
@@ -225,7 +504,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "input_text": {
-        const el = resolveElement(action.index as number) as HTMLInputElement | HTMLTextAreaElement | null
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLInputElement | HTMLTextAreaElement | null
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.focus()
         if (action.clear) {
@@ -247,7 +526,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "select_option": {
-        const el = resolveElement(action.index as number) as HTMLSelectElement | null
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLSelectElement | null
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.value = action.value as string
         el.dispatchEvent(new Event("change", { bubbles: true }))
@@ -255,7 +534,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "check": {
-        const el = resolveElement(action.index as number) as HTMLInputElement | null
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLInputElement | null
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         const target = action.checked !== undefined ? !!(action.checked) : !el.checked
         if (el.checked !== target) {
@@ -283,7 +562,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "scroll_to": {
-        const el = resolveElement(action.index as number)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.scrollIntoView({ block: "center", behavior: "instant" })
         return { success: true }
@@ -311,7 +590,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
 
       case "extract_text": {
         if (action.index !== undefined) {
-          const el = resolveElement(action.index as number)
+          const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
           if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
           return { success: true, data: (el.textContent || "").trim() }
         }
@@ -320,7 +599,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
 
       case "extract_html": {
         if (action.index !== undefined) {
-          const el = resolveElement(action.index as number)
+          const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
           if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
           return { success: true, data: el.outerHTML.slice(0, 10000) }
         }
@@ -328,7 +607,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "focus": {
-        const el = resolveElement(action.index as number) as HTMLElement | null
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.focus()
         return { success: true }
@@ -340,7 +619,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "hover": {
-        const el = resolveElement(action.index as number)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         dispatchHoverSequence(el)
         return { success: true }
@@ -378,21 +657,21 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "attr_get": {
-        const el = resolveElement(action.index as number) || document.querySelector(action.selector as string)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
         if (!el) return { success: false, error: "element not found" }
         const name = action.name as string
         return { success: true, data: el.getAttribute(name) }
       }
 
       case "attr_set": {
-        const el = resolveElement(action.index as number) || document.querySelector(action.selector as string)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
         if (!el) return { success: false, error: "element not found" }
         el.setAttribute(action.name as string, action.value as string)
         return { success: true }
       }
 
       case "style_get": {
-        const el = resolveElement(action.index as number) || document.querySelector(action.selector as string)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
         if (!el) return { success: false, error: "element not found" }
         const computed = getComputedStyle(el)
         if (action.property) {
@@ -499,14 +778,14 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "selection_set": {
-        const el = resolveElement(action.index as number) as HTMLInputElement | HTMLTextAreaElement | null
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLInputElement | HTMLTextAreaElement | null
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.setSelectionRange(action.start as number, action.end as number)
         return { success: true }
       }
 
       case "rect": {
-        const el = resolveElement(action.index as number) || document.querySelector(action.selector as string)
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
         if (!el) return { success: false, error: "element not found" }
         const r = el.getBoundingClientRect()
         return { success: true, data: { top: r.top, left: r.left, width: r.width, height: r.height, bottom: r.bottom, right: r.right } }
@@ -523,7 +802,7 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "table_data": {
-        const table = (action.index !== undefined ? resolveElement(action.index as number) : document.querySelector(action.selector as string || "table")) as HTMLTableElement | null
+        const table = (action.index !== undefined ? resolveElement(action.index as number | undefined, action.ref as string | undefined) : document.querySelector(action.selector as string || "table")) as HTMLTableElement | null
         if (!table) return { success: false, error: "table not found" }
         const rows: string[][] = []
         table.querySelectorAll("tr").forEach(tr => {
@@ -552,6 +831,58 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
         }
       }
 
+      case "get_a11y_tree": {
+        const maxDepth = (action.depth as number) || 15
+        const filter = (action.filter as string) || "interactive"
+        const maxChars = (action.maxChars as number) || 50000
+        pruneStaleRefs()
+        const treeOutput = buildA11yTree(document.body, 0, maxDepth, filter)
+        const truncated = treeOutput.length > maxChars
+          ? treeOutput.slice(0, maxChars) + "\n... (truncated)"
+          : treeOutput
+        cacheSnapshot()
+        return { success: true, data: truncated }
+      }
+
+      case "diff": {
+        return computeSnapshotDiff()
+      }
+
+      case "find_element": {
+        const query = (action.query as string || "").toLowerCase()
+        const targetRole = (action.role as string || "").toLowerCase()
+        const limit = (action.limit as number) || 10
+        const results: { refId: string; role: string; name: string; score: number }[] = []
+
+        for (const [refId, weakRef] of refRegistry) {
+          const el = weakRef.deref()
+          if (!el || !el.isConnected || !isVisible(el)) continue
+
+          const role = getEffectiveRole(el).toLowerCase()
+          const name = getAccessibleName(el).toLowerCase()
+          let score = 0
+
+          if (targetRole && role !== targetRole) continue
+          if (targetRole && role === targetRole) score += 50
+
+          if (query) {
+            if (name === query) score += 100
+            else if (name.includes(query)) score += 60
+            const id = el.getAttribute("id")?.toLowerCase()
+            if (id?.includes(query)) score += 50
+            const placeholder = el.getAttribute("placeholder")?.toLowerCase()
+            if (placeholder?.includes(query)) score += 40
+            const value = ((el as HTMLInputElement).value || "").toLowerCase()
+            if (value.includes(query)) score += 30
+          }
+
+          if (score > 0) results.push({ refId, role: getEffectiveRole(el), name: getAccessibleName(el), score })
+        }
+
+        results.sort((a, b) => b.score - a.score)
+        return { success: true, data: results.slice(0, limit) }
+      }
+
       default:
         return { success: false, error: `unknown action type: ${action.type}` }
     }
@@ -560,8 +891,12 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
   }
 }
 
-function resolveElement(index: number): Element | null {
-  const selector = selectorMap.get(index)
+function resolveElement(indexOrRef: number | undefined, ref?: string): Element | null {
+  if (ref) {
+    return resolveRef(ref)
+  }
+  if (indexOrRef === undefined) return null
+  const selector = selectorMap.get(indexOrRef)
   if (!selector) return null
   const el = document.querySelector(selector)
   if (!el) return null

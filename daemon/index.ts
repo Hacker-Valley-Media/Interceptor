@@ -41,18 +41,50 @@ const pendingRequests = new Map<string, {
 const socketBuffers = new Map<object, Buffer>()
 const socketWriteQueues = new Map<object, Buffer[]>()
 
+const LARGE_PAYLOAD_THRESHOLD = 16 * 1024
+const MAX_RESPONSE_CHARS = 50000
+
 function socketWriteFramed(socket: { write: (data: Buffer | string) => number }, json: string): boolean {
   try {
-    const encoded = Buffer.from(json, "utf-8")
-    const header = Buffer.alloc(4)
-    header.writeUInt32LE(encoded.byteLength, 0)
-    const frame = Buffer.concat([header, encoded])
-    const wrote = socket.write(frame)
-    if (wrote < frame.byteLength) {
-      const remainder = frame.subarray(wrote)
-      const queue = socketWriteQueues.get(socket) || []
-      queue.push(Buffer.from(remainder))
-      socketWriteQueues.set(socket, queue)
+    let payload = json
+    if (payload.length > MAX_RESPONSE_CHARS) {
+      try {
+        const parsed = JSON.parse(payload)
+        if (parsed.result?.data && typeof parsed.result.data === "string" && parsed.result.data.length > MAX_RESPONSE_CHARS) {
+          parsed.result.data = parsed.result.data.slice(0, MAX_RESPONSE_CHARS) + "\n... (truncated)"
+          payload = JSON.stringify(parsed)
+        }
+      } catch {}
+    }
+
+    const encoded = Buffer.from(payload, "utf-8")
+
+    if (encoded.byteLength > LARGE_PAYLOAD_THRESHOLD) {
+      const sink = new Bun.ArrayBufferSink()
+      sink.start({ asUint8Array: true, highWaterMark: 65536 })
+      const header = new Uint8Array(4)
+      new DataView(header.buffer).setUint32(0, encoded.byteLength, true)
+      sink.write(header)
+      sink.write(encoded)
+      const frame = sink.end() as Uint8Array
+      const wrote = socket.write(Buffer.from(frame))
+      if (wrote < frame.byteLength) {
+        const remainder = Buffer.from(frame.subarray(wrote))
+        const queue = socketWriteQueues.get(socket) || []
+        queue.push(remainder)
+        socketWriteQueues.set(socket, queue)
+      }
+    } else {
+      const header = Buffer.alloc(4)
+      header.writeUInt32LE(encoded.byteLength, 0)
+      const frame = Buffer.concat([header, encoded])
+      const wrote = socket.write(frame)
+      if (wrote < frame.byteLength) {
+        const remainder = frame.subarray(wrote)
+        const queue = socketWriteQueues.get(socket) || []
+        queue.push(Buffer.from(remainder))
+        socketWriteQueues.set(socket, queue)
+      }
     }
     return true
   } catch (err) {

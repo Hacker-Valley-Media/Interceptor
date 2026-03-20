@@ -23,7 +23,8 @@
     "search",
     "clipboardRead",
     "clipboardWrite",
-    "alarms"
+    "alarms",
+    "dom"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

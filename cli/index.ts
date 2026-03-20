@@ -136,17 +136,23 @@ const HELP = `slop — browser control CLI
 State:
   slop state                          Current page DOM tree + metadata
   slop state --full                   Include static text content
+  slop tree                           Semantic accessibility tree
+  slop tree --filter all              Include landmarks + headings
+  slop tree --depth N --max-chars N   Limit depth and output size
+  slop diff                           Changes since last state/tree read
+  slop find "query"                   Find elements by name
+  slop find "query" --role button     Filter by role
   slop text                           All visible text
-  slop text <index>                   Text from specific element
-  slop html <index>                   HTML of specific element
+  slop text <index|ref>               Text from specific element
+  slop html <index|ref>               HTML of specific element
 
 Actions:
-  slop click <index>                  Click element
-  slop type <index> <text>            Type into element (clears first)
-  slop type <index> <text> --append   Type without clearing
-  slop select <index> <value>         Select dropdown option
-  slop focus <index>                  Focus element
-  slop hover <index>                  Hover over element
+  slop click <index|ref>              Click element (e.g. slop click e5)
+  slop type <index|ref> <text>        Type into element (clears first)
+  slop type <index|ref> <text> --append  Type without clearing
+  slop select <index|ref> <value>     Select dropdown option
+  slop focus <index|ref>              Focus element
+  slop hover <index|ref>              Hover over element
   slop keys <combo>                   Keyboard shortcut (e.g. "Control+A")
 
 Navigation:
@@ -195,7 +201,10 @@ async function main() {
   const useWs = args.includes("--ws")
   const anyTab = args.includes("--any-tab")
   const globalTabId = parseTabFlag(args)
-  const filtered = args.filter(a => a !== "--json" && a !== "--ws" && a !== "--any-tab")
+  const tabIdx = args.indexOf("--tab")
+  const tabFilterSet = new Set(["--json", "--ws", "--any-tab"])
+  if (tabIdx !== -1) { tabFilterSet.add("--tab"); if (args[tabIdx + 1]) tabFilterSet.add(args[tabIdx + 1]) }
+  const filtered = args.filter(a => !tabFilterSet.has(a))
 
   if (filtered.length === 0 || filtered[0] === "help") {
     console.log(HELP)
@@ -239,26 +248,26 @@ async function main() {
       break
 
     case "click":
-      action = { type: "click", index: parseInt(filtered[1]) }
+      action = { type: "click", ...parseElementTarget(filtered[1]) }
       break
 
     case "type": {
       const append = filtered.includes("--append")
       const textArgs = filtered.slice(2).filter(a => a !== "--append")
-      action = { type: "input_text", index: parseInt(filtered[1]), text: textArgs.join(" "), clear: !append }
+      action = { type: "input_text", ...parseElementTarget(filtered[1]), text: textArgs.join(" "), clear: !append }
       break
     }
 
     case "select":
-      action = { type: "select_option", index: parseInt(filtered[1]), value: filtered[2] }
+      action = { type: "select_option", ...parseElementTarget(filtered[1]), value: filtered[2] }
       break
 
     case "focus":
-      action = { type: "focus", index: parseInt(filtered[1]) }
+      action = { type: "focus", ...parseElementTarget(filtered[1]) }
       break
 
     case "hover":
-      action = { type: "hover", index: parseInt(filtered[1]) }
+      action = { type: "hover", ...parseElementTarget(filtered[1]) }
       break
 
     case "keys":
@@ -290,11 +299,11 @@ async function main() {
       break
 
     case "text":
-      action = filtered[1] ? { type: "extract_text", index: parseInt(filtered[1]) } : { type: "extract_text" }
+      action = filtered[1] ? { type: "extract_text", ...parseElementTarget(filtered[1]) } : { type: "extract_text" }
       break
 
     case "html":
-      action = { type: "extract_html", index: parseInt(filtered[1]) }
+      action = { type: "extract_html", ...parseElementTarget(filtered[1]) }
       break
 
     case "eval": {
@@ -420,26 +429,26 @@ async function main() {
 
     case "attr":
       if (filtered[1] === "set") {
-        action = { type: "attr_set", index: parseInt(filtered[2]), name: filtered[3], value: filtered[4] }
+        action = { type: "attr_set", ...parseElementTarget(filtered[2]), name: filtered[3], value: filtered[4] }
       } else {
-        action = { type: "attr_get", index: parseInt(filtered[1]), name: filtered[2] }
+        action = { type: "attr_get", ...parseElementTarget(filtered[1]), name: filtered[2] }
       }
       break
 
     case "style":
-      action = { type: "style_get", index: parseInt(filtered[1]), property: filtered[2] }
+      action = { type: "style_get", ...parseElementTarget(filtered[1]), property: filtered[2] }
       break
 
     case "dblclick":
-      action = { type: "dblclick", index: parseInt(filtered[1]) }
+      action = { type: "dblclick", ...parseElementTarget(filtered[1]) }
       break
 
     case "rightclick":
-      action = { type: "rightclick", index: parseInt(filtered[1]) }
+      action = { type: "rightclick", ...parseElementTarget(filtered[1]) }
       break
 
     case "check":
-      action = { type: "check", index: parseInt(filtered[1]), checked: filtered[2] !== "false" }
+      action = { type: "check", ...parseElementTarget(filtered[1]), checked: filtered[2] !== "false" }
       break
 
     case "wait_for":
@@ -566,6 +575,36 @@ async function main() {
       return
     }
 
+    case "tree": {
+      const depthIdx = filtered.indexOf("--depth")
+      const filterIdx = filtered.indexOf("--filter")
+      const maxCharsIdx = filtered.indexOf("--max-chars")
+      action = {
+        type: "get_a11y_tree",
+        depth: depthIdx !== -1 ? parseInt(filtered[depthIdx + 1]) : 15,
+        filter: filterIdx !== -1 ? filtered[filterIdx + 1] : "interactive",
+        maxChars: maxCharsIdx !== -1 ? parseInt(filtered[maxCharsIdx + 1]) : 50000
+      }
+      break
+    }
+
+    case "find": {
+      const roleIdx = filtered.indexOf("--role")
+      const limitIdx = filtered.indexOf("--limit")
+      const queryParts = filtered.slice(1).filter(a => a !== "--role" && a !== "--limit" && (roleIdx === -1 || a !== filtered[roleIdx + 1]) && (limitIdx === -1 || a !== filtered[limitIdx + 1]))
+      action = {
+        type: "find_element",
+        query: queryParts.join(" "),
+        role: roleIdx !== -1 ? filtered[roleIdx + 1] : undefined,
+        limit: limitIdx !== -1 ? parseInt(filtered[limitIdx + 1]) : 10
+      }
+      break
+    }
+
+    case "diff":
+      action = { type: "diff" }
+      break
+
     case "raw":
       action = JSON.parse(filtered.slice(1).join(" "))
       break
@@ -605,6 +644,13 @@ async function main() {
     console.error(`error: ${(err as Error).message}`)
     process.exit(1)
   }
+}
+
+function parseElementTarget(arg: string): { index?: number; ref?: string } {
+  if (/^e\d+$/.test(arg)) return { ref: arg }
+  const n = parseInt(arg)
+  if (!isNaN(n)) return { index: n }
+  return { ref: arg }
 }
 
 function parseTabFlag(args: string[]): number | undefined {
