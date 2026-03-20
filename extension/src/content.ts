@@ -59,6 +59,10 @@ if (document.body) {
   domObserver.observe(document.body, { childList: true, subtree: true })
 }
 
+window.addEventListener("beforeunload", () => {
+  domObserver.disconnect()
+})
+
 function getInteractiveElements(): IndexedElement[] {
   selectorMap.clear()
   nextIndex = 0
@@ -100,9 +104,12 @@ function isInteractive(el: Element, tags: Set<string>, roles: Set<string>): bool
 }
 
 function isVisible(el: Element): boolean {
-  if (!(el as HTMLElement).offsetParent && el.tagName !== "BODY") return false
   const style = getComputedStyle(el)
   if (style.visibility === "hidden" || style.display === "none") return false
+  const pos = style.position
+  if (pos !== "fixed" && pos !== "sticky") {
+    if (!(el as HTMLElement).offsetParent && el.tagName !== "BODY") return false
+  }
   const rect = el.getBoundingClientRect()
   if (rect.width === 0 && rect.height === 0) return false
   return true
@@ -597,6 +604,23 @@ function dispatchHoverSequence(el: Element) {
   el.dispatchEvent(new MouseEvent("mousemove", opts))
 }
 
+const KEY_CODES: Record<string, string> = {
+  Enter: "Enter", Tab: "Tab", Escape: "Escape", Backspace: "Backspace",
+  Space: "Space", Delete: "Delete", Home: "Home", End: "End",
+  PageUp: "PageUp", PageDown: "PageDown",
+  ArrowUp: "ArrowUp", ArrowDown: "ArrowDown",
+  ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
+  F1: "F1", F2: "F2", F3: "F3", F4: "F4", F5: "F5", F6: "F6",
+  F7: "F7", F8: "F8", F9: "F9", F10: "F10", F11: "F11", F12: "F12",
+}
+
+function getKeyCode(key: string): string {
+  if (KEY_CODES[key]) return KEY_CODES[key]
+  if (key.length === 1 && key >= "0" && key <= "9") return `Digit${key}`
+  if (key.length === 1 && /^[a-zA-Z]$/.test(key)) return `Key${key.toUpperCase()}`
+  return KEY_CODES[key] || `Key${key.toUpperCase()}`
+}
+
 function dispatchKeySequence(target: Element, combo: string) {
   const parts = combo.split("+")
   const key = parts[parts.length - 1]
@@ -607,7 +631,8 @@ function dispatchKeySequence(target: Element, combo: string) {
     metaKey: parts.includes("Meta")
   }
 
-  const keyOpts = { key, code: `Key${key.toUpperCase()}`, bubbles: true, cancelable: true, ...modifiers }
+  const code = getKeyCode(key)
+  const keyOpts = { key, code, bubbles: true, cancelable: true, ...modifiers }
 
   target.dispatchEvent(new KeyboardEvent("keydown", keyOpts))
   target.dispatchEvent(new KeyboardEvent("keypress", keyOpts))

@@ -2,6 +2,11 @@ let nativePort: chrome.runtime.Port | null = null
 let connectionReady = false
 let isConnecting = false
 let reconnectDelay = 1000
+
+function emitEvent(event: string, data: Record<string, unknown> = {}) {
+  sendToHost({ type: "event", event, ...data })
+}
+const MESSAGE_QUEUE_CAP = 50
 const messageQueue: Array<{ id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }> = []
 
 const EXT_REQUEST_TIMEOUT_MS = 30_000
@@ -19,15 +24,22 @@ function connectToHost() {
   }, 10000)
 
   port.onMessage.addListener((msg: { id?: string; type?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }) => {
-    if (msg.type === "pong" && !connectionReady) {
-      clearTimeout(handshakeTimer)
-      connectionReady = true
-      reconnectDelay = 1000
-      isConnecting = false
-      console.log("native host connected (pong received)")
-      while (messageQueue.length > 0) {
-        const queued = messageQueue.shift()!
-        handleDaemonMessage(queued)
+    if (msg.type === "pong") {
+      if (!connectionReady) {
+        clearTimeout(handshakeTimer)
+        connectionReady = true
+        reconnectDelay = 1000
+        isConnecting = false
+        console.log("native host connected (pong received)")
+        emitEvent("connection_established")
+        while (messageQueue.length > 0) {
+          const queued = messageQueue.shift()!
+          handleDaemonMessage(queued)
+        }
+      }
+      if (keepalivePongTimer) {
+        clearTimeout(keepalivePongTimer)
+        keepalivePongTimer = null
       }
       return
     }
@@ -35,18 +47,23 @@ function connectToHost() {
   })
 
   port.onDisconnect.addListener(() => {
-    nativePort = null
+    const dyingPort = nativePort
     connectionReady = false
     isConnecting = false
     const lastError = chrome.runtime.lastError
     if (lastError) {
       console.error("native host disconnected:", lastError.message)
     }
+    console.log("connection_lost", lastError?.message)
     for (const [id, req] of pendingRequests) {
       clearTimeout(req.timer)
       console.error(`orphaned request ${id} (${req.action}) — native port disconnected`)
+      if (dyingPort) {
+        try { dyingPort.postMessage({ id, result: { success: false, error: "native port disconnected" } }) } catch {}
+      }
     }
     pendingRequests.clear()
+    nativePort = null
     const jitter = Math.random() * reconnectDelay * 0.3
     setTimeout(connectToHost, reconnectDelay + jitter)
     reconnectDelay = Math.min(reconnectDelay * 2, 30000)
@@ -59,8 +76,19 @@ function connectToHost() {
 async function handleDaemonMessage(msg: { id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }) {
   if (!msg.action || !msg.id) return
 
-  if (!nativePort) {
-    connectToHost()
+  if (!connectionReady) {
+    if (messageQueue.length >= MESSAGE_QUEUE_CAP) {
+      const evicted = messageQueue.shift()!
+      if (evicted.id) {
+        sendToHost({ id: evicted.id, result: { success: false, error: "message queue full — daemon not connected" } })
+      }
+    }
+    if (messageQueue.length >= MESSAGE_QUEUE_CAP / 2) {
+      console.warn(`message queue at ${messageQueue.length}/${MESSAGE_QUEUE_CAP}`)
+    }
+    messageQueue.push(msg)
+    if (!nativePort) connectToHost()
+    return
   }
 
   if (pendingRequests.has(msg.id)) {
@@ -105,6 +133,26 @@ async function handleDaemonMessage(msg: { id?: string; action?: { type: string; 
     chrome.storage.session.set({ activeTabId: tabId })
   }
 
+  if (tabId && needsTab(action.type) && !action.anyTab) {
+    const inGroup = await isTabInSlopGroup(tabId)
+    if (!inGroup && slopGroupId !== null) {
+      clearTimeout(requestTimer)
+      pendingRequests.delete(msg.id)
+      sendToHost({ id: msg.id, result: { success: false, error: `tab ${tabId} is not in the slop group — use 'slop tab new' to create managed tabs` } })
+      return
+    }
+  }
+
+  if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
+    const urlErr = await verifyTabUrl(tabId, action.expectedUrl as string)
+    if (urlErr) {
+      clearTimeout(requestTimer)
+      pendingRequests.delete(msg.id)
+      sendToHost({ id: msg.id, result: { success: false, error: urlErr, tabId } })
+      return
+    }
+  }
+
   try {
     const result = await routeAction(action, tabId!)
     if (tabId) result.tabId = tabId
@@ -129,6 +177,54 @@ function needsTab(type: string): boolean {
     "search_query"
   ])
   return !noTabActions.has(type)
+}
+
+let slopGroupId: number | null = null
+
+async function ensureSlopGroup(): Promise<number> {
+  if (slopGroupId !== null) {
+    try {
+      await chrome.tabGroups.get(slopGroupId)
+      return slopGroupId
+    } catch {
+      slopGroupId = null
+    }
+  }
+  const groups = await chrome.tabGroups.query({ title: "slop" })
+  if (groups.length > 0) {
+    slopGroupId = groups[0].id
+    return slopGroupId
+  }
+  return -1
+}
+
+async function addTabToSlopGroup(tabId: number): Promise<number> {
+  let groupId = await ensureSlopGroup()
+  if (groupId === -1) {
+    groupId = await chrome.tabs.group({ tabIds: tabId })
+    await chrome.tabGroups.update(groupId, { title: "slop", color: "cyan" })
+    slopGroupId = groupId
+  } else {
+    await chrome.tabs.group({ tabIds: tabId, groupId })
+  }
+  return groupId
+}
+
+async function isTabInSlopGroup(tabId: number): Promise<boolean> {
+  const tab = await chrome.tabs.get(tabId)
+  if (slopGroupId === null) await ensureSlopGroup()
+  return slopGroupId !== null && tab.groupId === slopGroupId
+}
+
+const SENSITIVE_ACTIONS = new Set(["evaluate", "cookies_get", "cookies_set", "cookies_delete", "storage_read", "storage_write", "storage_delete"])
+
+async function verifyTabUrl(tabId: number, expectedUrl?: string): Promise<string | null> {
+  if (!expectedUrl) return null
+  const tab = await chrome.tabs.get(tabId)
+  if (tab.url && tab.url !== expectedUrl) {
+    return `tab URL changed since last state read — expected ${expectedUrl}, got ${tab.url}`
+  }
+  return null
 }
 
 async function routeAction(action: { type: string; [key: string]: unknown }, tabId: number): Promise<{ success: boolean; error?: string; data?: unknown; tabId?: number }> {
@@ -201,6 +297,10 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
     // === TABS ===
     case "tab_create": {
       const newTab = await chrome.tabs.create({ url: (action.url as string) || "about:blank" })
+      if (newTab.id) {
+        const groupId = await addTabToSlopGroup(newTab.id)
+        return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId } }
+      }
       return { success: true, data: { tabId: newTab.id, url: newTab.url } }
     }
 
@@ -214,10 +314,12 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
 
     case "tab_list": {
       const tabs = await chrome.tabs.query({})
+      await ensureSlopGroup()
       const tabData = tabs.map(t => ({
         id: t.id, url: t.url, title: t.title, active: t.active,
         windowId: t.windowId, muted: t.mutedInfo?.muted, pinned: t.pinned,
-        groupId: t.groupId
+        groupId: t.groupId,
+        managed: slopGroupId !== null && t.groupId === slopGroupId
       }))
       return { success: true, data: tabData }
     }
@@ -559,9 +661,35 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
   }
 }
 
+let wsChannel: WebSocket | null = null
+let wsReady = false
+const WS_URL = "ws://localhost:19222"
+
+function connectWsChannel() {
+  if (wsChannel && (wsChannel.readyState === WebSocket.OPEN || wsChannel.readyState === WebSocket.CONNECTING)) return
+  try {
+    const ws = new WebSocket(WS_URL)
+    ws.onopen = () => {
+      wsChannel = ws
+      wsReady = true
+      ws.send(JSON.stringify({ type: "extension" }))
+      console.log("ws channel connected")
+    }
+    ws.onclose = () => {
+      wsReady = false
+      wsChannel = null
+    }
+    ws.onerror = () => {
+      wsReady = false
+      wsChannel = null
+    }
+  } catch {}
+}
+
 function sendToHost(msg: unknown) {
-  if (nativePort) {
-    nativePort.postMessage(msg)
+  const sent = nativePort ? (nativePort.postMessage(msg), true) : false
+  if (!sent && wsReady && wsChannel) {
+    try { wsChannel.send(JSON.stringify(msg)) } catch {}
   }
 }
 
@@ -596,6 +724,38 @@ function waitForTabLoad(tabId: number, timeoutMs = 15000): Promise<void> {
   })
 }
 
-chrome.runtime.onInstalled.addListener(connectToHost)
-chrome.runtime.onStartup.addListener(connectToHost)
+let keepalivePongTimer: ReturnType<typeof setTimeout> | null = null
+
+chrome.alarms.create("keepalive", { periodInMinutes: 0.5 })
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== "keepalive") return
+  if (!nativePort) {
+    connectToHost()
+    return
+  }
+  if (connectionReady) {
+    nativePort.postMessage({ type: "ping" })
+    keepalivePongTimer = setTimeout(() => {
+      console.error("keepalive pong timeout (5s) — forcing reconnect")
+      if (nativePort) nativePort.disconnect()
+    }, 5000)
+  }
+})
+
+chrome.tabs.onRemoved.addListener(async (removedTabId) => {
+  if (slopGroupId === null) return
+  try {
+    const tabs = await chrome.tabs.query({ groupId: slopGroupId })
+    if (tabs.length === 0) {
+      slopGroupId = null
+    }
+  } catch {
+    slopGroupId = null
+  }
+})
+
+chrome.runtime.onInstalled.addListener(() => { connectToHost(); connectWsChannel(); ensureSlopGroup() })
+chrome.runtime.onStartup.addListener(() => { connectToHost(); connectWsChannel(); ensureSlopGroup() })
 connectToHost()
+connectWsChannel()

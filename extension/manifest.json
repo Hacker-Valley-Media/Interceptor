@@ -22,7 +22,8 @@
     "notifications",
     "search",
     "clipboardRead",
-    "clipboardWrite"
+    "clipboardWrite",
+    "alarms"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

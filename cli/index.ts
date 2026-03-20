@@ -1,7 +1,10 @@
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync, unlinkSync } from "node:fs"
 
 const SOCKET_PATH = "/tmp/slop-browser.sock"
 const PID_PATH = "/tmp/slop-browser.pid"
+const WS_PORT = parseInt(process.env.SLOP_WS_PORT || "19222")
+
+const SLOP_TIMEOUT_MS = parseInt(process.env.SLOP_TIMEOUT || "15000")
 
 function sendCommand(action: { type: string; [key: string]: unknown }, tabId?: number): Promise<{ id: string; result: { success: boolean; error?: string; data?: unknown; tabId?: number } }> {
   return new Promise((resolve, reject) => {
@@ -10,12 +13,21 @@ function sendCommand(action: { type: string; [key: string]: unknown }, tabId?: n
     process.stderr.write(`[${shortId}] → ${action.type}\n`)
     let buffer = Buffer.alloc(0)
     let resolved = false
-    const startTime = Date.now()
+    let socketRef: ReturnType<Awaited<ReturnType<typeof Bun.connect>>> | null = null
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true
+        if (socketRef) try { socketRef.end() } catch {}
+        reject(new Error("timeout: no response from daemon after " + (SLOP_TIMEOUT_MS / 1000) + "s. Check extension connection with 'slop status'."))
+      }
+    }, SLOP_TIMEOUT_MS)
 
     Bun.connect({
       unix: SOCKET_PATH,
       socket: {
         open(socket) {
+          socketRef = socket
           const payload = JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }) })
           const encoded = Buffer.from(payload, "utf-8")
           const header = Buffer.alloc(4)
@@ -28,6 +40,7 @@ function sendCommand(action: { type: string; [key: string]: unknown }, tabId?: n
             const msgLen = buffer.readUInt32LE(0)
             if (msgLen > 0 && msgLen <= 1024 * 1024 && buffer.length >= 4 + msgLen) {
               const json = buffer.subarray(4, 4 + msgLen).toString("utf-8")
+              clearTimeout(timer)
               try {
                 resolved = true
                 resolve(JSON.parse(json))
@@ -40,18 +53,54 @@ function sendCommand(action: { type: string; [key: string]: unknown }, tabId?: n
           }
         },
         close() {
+          clearTimeout(timer)
           if (!resolved) {
             reject(new Error("connection closed before response"))
           }
         },
         connectError(_socket, err) {
+          clearTimeout(timer)
           reject(new Error("daemon not running. Open Chrome with the slop-browser extension loaded."))
         },
         error(_socket, err) {
+          clearTimeout(timer)
           reject(err)
         }
       }
     })
+  })
+}
+
+function sendCommandWs(action: { type: string; [key: string]: unknown }, tabId?: number): Promise<{ id: string; result: { success: boolean; error?: string; data?: unknown; tabId?: number } }> {
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID()
+    const shortId = id.slice(0, 8)
+    process.stderr.write(`[${shortId}] →ws ${action.type}\n`)
+
+    const timer = setTimeout(() => {
+      reject(new Error("timeout: no response from daemon after " + (SLOP_TIMEOUT_MS / 1000) + "s via WebSocket."))
+    }, SLOP_TIMEOUT_MS)
+
+    const ws = new WebSocket(`ws://localhost:${WS_PORT}`)
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }) }))
+    }
+    ws.onmessage = (event) => {
+      clearTimeout(timer)
+      try {
+        resolve(JSON.parse(typeof event.data === "string" ? event.data : ""))
+      } catch {
+        reject(new Error("invalid response from daemon via WebSocket"))
+      }
+      ws.close()
+    }
+    ws.onerror = () => {
+      clearTimeout(timer)
+      reject(new Error("WebSocket connection failed to daemon"))
+    }
+    ws.onclose = () => {
+      clearTimeout(timer)
+    }
   })
 }
 
@@ -143,17 +192,42 @@ Flags:
 async function main() {
   const args = process.argv.slice(2)
   const jsonMode = args.includes("--json")
+  const useWs = args.includes("--ws")
+  const anyTab = args.includes("--any-tab")
   const globalTabId = parseTabFlag(args)
-  const filtered = args.filter(a => a !== "--json")
+  const filtered = args.filter(a => a !== "--json" && a !== "--ws" && a !== "--any-tab")
 
   if (filtered.length === 0 || filtered[0] === "help") {
     console.log(HELP)
     return
   }
 
-  if (!existsSync(SOCKET_PATH)) {
-    console.error("error: daemon not running. Open Chrome with the slop-browser extension loaded.")
-    process.exit(1)
+  if (!useWs) {
+    if (!existsSync(SOCKET_PATH)) {
+      console.error("error: daemon not running. Open Chrome with the slop-browser extension loaded.")
+      process.exit(1)
+    }
+
+    if (existsSync(PID_PATH)) {
+      try {
+        const pidContent = readFileSync(PID_PATH, "utf-8").trim()
+        const pid = parseInt(pidContent.split("\n")[0])
+        if (!isNaN(pid)) {
+          try {
+            process.kill(pid, 0)
+          } catch {
+            try { unlinkSync(SOCKET_PATH) } catch {}
+            try { unlinkSync(PID_PATH) } catch {}
+            console.error("error: daemon not running (stale socket cleaned up). Open Chrome with the slop-browser extension loaded.")
+            process.exit(1)
+          }
+        }
+      } catch {}
+    } else if (existsSync(SOCKET_PATH)) {
+      try { unlinkSync(SOCKET_PATH) } catch {}
+      console.error("error: daemon not running (stale socket cleaned up). Open Chrome with the slop-browser extension loaded.")
+      process.exit(1)
+    }
   }
 
   const cmd = filtered[0]
@@ -466,6 +540,32 @@ async function main() {
       action = { type: "browsing_data_remove", types: filtered.slice(1), since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : 0 }
       break
 
+    case "events": {
+      const eventsPath = "/tmp/slop-browser-events.jsonl"
+      if (!existsSync(eventsPath)) {
+        console.log("no events yet")
+        return
+      }
+      const tail = filtered.includes("--tail")
+      if (tail) {
+        const proc = Bun.spawn(["tail", "-f", eventsPath], { stdout: "inherit", stderr: "inherit" })
+        await proc.exited
+      } else {
+        const since = filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : 0
+        const content = readFileSync(eventsPath, "utf-8").trim()
+        if (!content) { console.log("no events yet"); return }
+        const lines = content.split("\n")
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line)
+            if (since && new Date(event.timestamp).getTime() < since) continue
+            console.log(`${event.timestamp} ${event.event}${event.requestId ? ` [${event.requestId.slice(0, 8)}]` : ""}${event.action ? ` ${event.action}` : ""}${event.duration !== undefined ? ` ${event.duration}ms` : ""}${event.error ? ` error=${event.error}` : ""}`)
+          } catch {}
+        }
+      }
+      return
+    }
+
     case "raw":
       action = JSON.parse(filtered.slice(1).join(" "))
       break
@@ -475,8 +575,10 @@ async function main() {
       process.exit(1)
   }
 
+  if (anyTab) action.anyTab = true
+
   try {
-    const response = await sendCommand(action, globalTabId)
+    const response = useWs ? await sendCommandWs(action, globalTabId) : await sendCommand(action, globalTabId)
 
     if (response.result) {
       const result = response.result
@@ -507,8 +609,17 @@ async function main() {
 
 function parseTabFlag(args: string[]): number | undefined {
   const idx = args.indexOf("--tab")
-  if (idx !== -1 && args[idx + 1]) return parseInt(args[idx + 1])
-  return undefined
+  if (idx === -1) return undefined
+  if (!args[idx + 1]) {
+    console.error("error: --tab requires a numeric tab ID")
+    process.exit(1)
+  }
+  const tabId = parseInt(args[idx + 1])
+  if (isNaN(tabId)) {
+    console.error(`error: --tab requires a numeric tab ID, got '${args[idx + 1]}'`)
+    process.exit(1)
+  }
+  return tabId
 }
 
 main()

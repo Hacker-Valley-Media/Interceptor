@@ -1,12 +1,29 @@
-import { unlinkSync, existsSync, appendFileSync } from "node:fs"
+import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
 
 const SOCKET_PATH = "/tmp/slop-browser.sock"
 const PID_PATH = "/tmp/slop-browser.pid"
 const LOG_PATH = "/tmp/slop-browser.log"
+const EVENTS_PATH = "/tmp/slop-browser-events.jsonl"
+const WS_PORT = parseInt(process.env.SLOP_WS_PORT || "19222")
+const EVENTS_MAX_SIZE = 10 * 1024 * 1024
 
 function log(msg: string) {
   const line = `[${new Date().toISOString()}] ${msg}\n`
   try { appendFileSync(LOG_PATH, line) } catch {}
+}
+
+function emitEvent(event: string, data: Record<string, unknown> = {}) {
+  const entry = JSON.stringify({ timestamp: new Date().toISOString(), event, ...data })
+  try {
+    appendFileSync(EVENTS_PATH, entry + "\n")
+    const stat = statSync(EVENTS_PATH)
+    if (stat.size > EVENTS_MAX_SIZE) {
+      const content = readFileSync(EVENTS_PATH, "utf-8")
+      const lines = content.split("\n")
+      const half = lines.slice(Math.floor(lines.length / 2)).join("\n")
+      writeFileSync(EVENTS_PATH, half)
+    }
+  } catch {}
 }
 
 log("daemon starting")
@@ -87,6 +104,12 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
   if (msg.type === "ping") {
     log("received ping, sending pong")
     sendNativeMessage({ type: "pong" })
+    emitEvent("keepalive_ping")
+    return
+  }
+
+  if (msg.type === "event") {
+    emitEvent(msg.event as string || "extension_event", msg as Record<string, unknown>)
     return
   }
 
@@ -97,6 +120,7 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
       const duration = Date.now() - pending.startTime
       const success = (msg as { result?: { success?: boolean } }).result?.success ?? true
       log(`[${msg.id.slice(0, 8)}] resp ${success ? "ok" : "err"} ${pending.actionType} ${duration}ms`)
+      emitEvent("request_complete", { requestId: msg.id, action: pending.actionType, duration, success })
       pending.resolve(JSON.stringify(msg))
       pendingRequests.delete(msg.id)
     } else if (timedOutRequests.has(msg.id)) {
@@ -123,6 +147,7 @@ process.stdin.on("data", (chunk: Buffer) => {
 
 process.stdin.on("end", () => {
   log("stdin ended (native port disconnected)")
+  gracefulShutdown("stdin-end")
 })
 
 process.stdin.on("error", (err) => {
@@ -167,17 +192,18 @@ try {
           }
 
           const id = request.id ?? crypto.randomUUID()
+          const actionType = (request.action as { type?: string })?.type || "unknown"
           log(`cli request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
+          emitEvent("request_received", { requestId: id, action: actionType })
 
           const timer = setTimeout(() => {
             pendingRequests.delete(id)
             timedOutRequests.add(id)
             setTimeout(() => timedOutRequests.delete(id), 60_000)
             log(`request timeout: ${id}`)
+            emitEvent("request_timeout", { requestId: id, action: actionType })
             socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "timeout" } }))
           }, REQUEST_TIMEOUT_MS)
-
-          const actionType = (request.action as { type?: string })?.type || "unknown"
           pendingRequests.set(id, {
             resolve: (response: string) => {
               clearTimeout(timer)
@@ -216,6 +242,68 @@ try {
 Bun.write(PID_PATH, `${process.pid}\n${SOCKET_PATH}\n`)
 log(`pid file written: ${process.pid}`)
 
+let wsServer: ReturnType<typeof Bun.serve> | null = null
+try {
+  wsServer = Bun.serve({
+    port: WS_PORT,
+    fetch(req, server) {
+      if (server.upgrade(req)) return
+      return new Response("slop-browser daemon", { status: 200 })
+    },
+    websocket: {
+      open(ws) {
+        log(`ws client connected`)
+      },
+      message(ws, raw) {
+        let request: { id?: string; action?: unknown; tabId?: number; type?: string }
+        try {
+          request = JSON.parse(typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8"))
+        } catch {
+          ws.send(JSON.stringify({ error: "invalid JSON" }))
+          return
+        }
+
+        if (request.type === "extension") {
+          (ws as any).__isExtension = true
+          log("ws extension channel registered")
+          return
+        }
+
+        const id = request.id ?? crypto.randomUUID()
+        log(`ws request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
+
+        const actionType = (request.action as { type?: string })?.type || "unknown"
+        const timer = setTimeout(() => {
+          pendingRequests.delete(id)
+          timedOutRequests.add(id)
+          setTimeout(() => timedOutRequests.delete(id), 60_000)
+          log(`ws request timeout: ${id}`)
+          ws.send(JSON.stringify({ id, result: { success: false, error: "timeout" } }))
+        }, REQUEST_TIMEOUT_MS)
+
+        pendingRequests.set(id, {
+          resolve: (response: string) => {
+            clearTimeout(timer)
+            ws.send(response)
+          },
+          timer,
+          socket: { write: () => 0, remoteAddress: "ws" } as any,
+          startTime: Date.now(),
+          actionType
+        })
+
+        sendNativeMessage({ id, action: request.action, tabId: request.tabId })
+      },
+      close(ws) {
+        log("ws client disconnected")
+      }
+    }
+  })
+  log(`ws server listening on port ${WS_PORT}`)
+} catch (err) {
+  log(`ws server failed (port ${WS_PORT} in use?) — continuing without WebSocket: ${(err as Error).message}`)
+}
+
 function gracefulShutdown(signal: string) {
   log(`${signal} received, draining ${pendingRequests.size} pending requests`)
   for (const [id, req] of pendingRequests) {
@@ -227,6 +315,7 @@ function gracefulShutdown(signal: string) {
     socketServer.stop(true)
     socketServer = null
   }
+  if (wsServer) wsServer.stop(true)
   try { unlinkSync(SOCKET_PATH) } catch {}
   try { unlinkSync(PID_PATH) } catch {}
   log("shutdown complete")
