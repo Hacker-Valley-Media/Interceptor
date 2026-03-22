@@ -1,0 +1,271 @@
+[
+  {
+    "evaluator": "codex-a",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "performance",
+        "severity": "critical",
+        "evidence": {
+          "excerpt": "| CLI calls | 368 |\n| Sleep calls | 241 (209.7 seconds of blind waiting) |\n| State queries | 74 (rediscovering elements after every action) |\n| Screenshots | 27 (only way to know if anything worked) |\n| Commands per shape | 15-20 |\n| Final result | Blank canvas |"
+        },
+        "description": "Complex interactions are far too expensive. The Canva run needed hundreds of CLI invocations and still failed, which makes the tool too slow for real agent use.",
+        "suggested_fix": "Add first-class batch execution plus persistent session-mode connections so multi-step actions run in one request/response cycle instead of per-action CLI calls.",
+        "target": "cli",
+        "goal_alignment": "Fast: collapses round trips and latency. Resilient: fewer hops reduce desync between agent state and page state."
+      },
+      {
+        "id": "f-002",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "The agent had no readiness signals (it guessed with `sleep 10`)"
+        },
+        "description": "The agent had to guess when the page or DOM was ready, leading to blind waits and unreliable sequencing.",
+        "suggested_fix": "Implement event-driven readiness primitives such as DOM-stability waits and navigation-readiness checks backed by MutationObserver, document lifecycle, and content-script probes.",
+        "target": "extension",
+        "goal_alignment": "Resilient: replaces guesswork with actual readiness signals. Fast: removes unnecessary sleep time."
+      },
+      {
+        "id": "f-003",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "no stale-element recovery (7 `stale element` errors with no auto-retry)"
+        },
+        "description": "Element references became invalid during SPA mutations, and the tool offered no automatic recovery path.",
+        "suggested_fix": "Store semantic element fingerprints and auto-refind/retry once when a target goes stale instead of failing immediately.",
+        "target": "extension",
+        "goal_alignment": "Resilient: directly addresses stale DOM and connection-loss-style interaction failures."
+      },
+      {
+        "id": "f-004",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "no way to type into `contenteditable` elements (`Illegal invocation` error)"
+        },
+        "description": "Typing support breaks on `contenteditable` targets, which blocks common editors and design tools.",
+        "suggested_fix": "Detect editable target type and route `contenteditable` input through Selection/Range-based insertion plus input/change event dispatch instead of the regular input-element path.",
+        "target": "extension",
+        "goal_alignment": "Agent-driven: expands what the calling agent can control. Resilient: removes a hard failure mode in rich web apps."
+      },
+      {
+        "id": "f-005",
+        "type": "workaround",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "That's not the Canva canvas — that's another tab. Let me switch to the Canva tab first.\n\nThat's still the search engine tab. The screenshot captures the visible tab, which might be a different window. Let me check my tabs:\n\nGood — tab 1729150225 is the Canva tab and it's marked active (`*`). The screenshot is capturing a different window. Let me make sure the Canva tab's window is focused:"
+        },
+        "description": "The agent had to manually diagnose and work around screenshot capture targeting the wrong tab/window, even when the intended tab was active.",
+        "suggested_fix": "Make capture APIs explicitly tab/window scoped, verify the target before capture, and fail with a clear mismatch error instead of returning an image from the wrong window.",
+        "target": "extension",
+        "goal_alignment": "Resilient: avoids wrong-target actions and screenshots. Fast: removes recovery steps spent rechecking tabs and windows."
+      },
+      {
+        "id": "f-006",
+        "type": "missing_feature",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "why can't you work in the background while I have other apps open?"
+        },
+        "description": "The workflow appears dependent on foreground focus or visible-window state, which prevents reliable background operation.",
+        "suggested_fix": "Prefer tab-scoped DOM actions and tab/window-scoped capture paths that do not require the browser to be frontmost; document any remaining visibility limits explicitly.",
+        "target": "extension",
+        "goal_alignment": "Agent-driven: lets the agent keep working without user babysitting. Undetectable: avoids OS-level focus thrashing."
+      },
+      {
+        "id": "f-007",
+        "type": "ux_friction",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "Every shape required a 15-20 step ceremony: escape, add shape, open color panel, find searchbox (new ID every time), clear it, type hex, enter, wait, find swat"
+        },
+        "description": "The CLI is too low-level for common UI workflows. Dynamic IDs forced the agent through brittle, repetitive sequences for simple tasks.",
+        "suggested_fix": "Add higher-level find-and-act commands that target by visible text, label, role, or stable semantic hints instead of transient element IDs.",
+        "target": "extension",
+        "goal_alignment": "Fast: reduces command count drastically. Resilient: avoids breakage from changing DOM IDs."
+      },
+      {
+        "id": "f-008",
+        "type": "workaround",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "| State queries | 74 (rediscovering elements after every action) |\n| Screenshots | 27 (only way to know if anything worked) |"
+        },
+        "description": "The agent had to repeatedly re-query state and take screenshots just to confirm whether prior actions succeeded.",
+        "suggested_fix": "Return richer action results from the extension, including matched target metadata and post-action confirmation signals, so the agent does not need separate verification calls after each step.",
+        "target": "extension",
+        "goal_alignment": "Fast: cuts verification round trips. Agent-driven: gives the caller enough structured feedback to decide the next step directly."
+      },
+      {
+        "id": "f-009",
+        "type": "missing_feature",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "The SPA `onHistoryStateUpdated` listener is not yet implemented — I'll leave that one unchecked."
+        },
+        "description": "SPA navigation readiness was still incomplete, leaving a known gap for apps that change route without full page loads.",
+        "suggested_fix": "Implement SPA route-change detection and readiness reset using history/navigation events so waits and element resolution stay accurate after client-side transitions.",
+        "target": "extension",
+        "goal_alignment": "Resilient: directly improves SPA handling, which is central to modern web apps."
+      }
+    ]
+  },
+  {
+    "evaluator": "codex-b",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "performance",
+        "severity": "critical",
+        "evidence": {
+          "excerpt": "| CLI calls | 368 |\n| Sleep calls | 241 (209.7 seconds of blind waiting) |\n| State queries | 74 (rediscovering elements after every action) |\n| Screenshots | 27 (only way to know if anything worked) |\n| Commands per shape | 15-20 |"
+        },
+        "description": "Complex workflows were exploding into hundreds of one-shot CLI invocations, with most time lost to blind sleeps and repeated re-discovery of state.",
+        "suggested_fix": "Add first-class session mode and batch execution to keep one daemon connection open across many actions, and allow multi-step action lists to run in a single round trip with one final state read.",
+        "target": "daemon",
+        "goal_alignment": "Goal 4 Fast: removes avoidable IPC overhead and cuts command count for multi-step workflows."
+      },
+      {
+        "id": "f-002",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "The agent had no readiness signals (it guessed with `sleep 10`)"
+        },
+        "description": "There was no event-driven readiness primitive, so the agent had to guess when navigation or UI updates were finished.",
+        "suggested_fix": "Expose `wait_stable` and navigation-readiness commands that watch DOM mutation quiescence and content-script readiness instead of requiring `sleep` guesses.",
+        "target": "extension",
+        "goal_alignment": "Goal 3 Resilient and Goal 4 Fast: replaces blind waits with deterministic readiness checks."
+      },
+      {
+        "id": "f-003",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "no stale-element recovery (7 `stale element` errors with no auto-retry)"
+        },
+        "description": "Element references were going stale during SPA updates, and the tool did not recover automatically.",
+        "suggested_fix": "Return durable targeting metadata with actions and auto-refind once on stale-element failure using the original selector/text/role hints before surfacing an error.",
+        "target": "extension",
+        "goal_alignment": "Goal 3 Resilient: recovers from DOM churn instead of failing on common SPA mutations."
+      },
+      {
+        "id": "f-004",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "no way to type into `contenteditable` elements (`Illegal invocation` error)"
+        },
+        "description": "Typing failed on `contenteditable` targets, which blocks many modern editors and design tools.",
+        "suggested_fix": "Add a dedicated contenteditable input path that focuses the node, uses Selection/Range APIs, and dispatches the expected input events for editable non-input elements.",
+        "target": "extension",
+        "goal_alignment": "Goal 2 Agent-driven and Goal 3 Resilient: expands supported page controls without adding internal agent logic."
+      },
+      {
+        "id": "f-005",
+        "type": "ux_friction",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "Every shape required a 15-20 step ceremony: escape, add shape, open color panel, find searchbox (new ID every time), clear it, type hex, enter, wait, find swat"
+        },
+        "description": "Basic tasks required brittle, repetitive sequences because the CLI lacked compound find-and-act primitives and element handles were unstable across steps.",
+        "suggested_fix": "Add compound actions like `find_and_click`, `find_and_type`, and `find_and_check`, plus fuzzy text/role matching so agents can express intent without re-locating ephemeral IDs each time.",
+        "target": "cli",
+        "goal_alignment": "Goal 4 Fast and Goal 3 Resilient: reduces retries and makes targeting less brittle in dynamic UIs."
+      },
+      {
+        "id": "f-006",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "That's still the search engine tab. The screenshot captures the visible tab, which might be a different window. Let me check my tabs:"
+        },
+        "description": "Screenshots were not reliably scoped to the intended managed tab, so visual verification could reflect the wrong window entirely.",
+        "suggested_fix": "Make capture APIs validate the target tab/window before returning, and fail fast or auto-focus the owning window when capture would come from a different visible tab.",
+        "target": "extension",
+        "goal_alignment": "Goal 3 Resilient: prevents false state verification caused by cross-window capture mismatches."
+      },
+      {
+        "id": "f-007",
+        "type": "missing_feature",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "why can't you work in the background while I have other apps open?"
+        },
+        "description": "The workflow depended on foreground visibility/focus, which prevented reliable background operation while the user used other apps.",
+        "suggested_fix": "Reduce screenshot dependence by exposing richer DOM/state verification for off-screen tabs, and clearly label which commands are foreground-only versus safe in background tabs.",
+        "target": "docs",
+        "goal_alignment": "Goal 1 Undetectable and Goal 3 Resilient: minimizes focus-stealing behavior and makes background limitations explicit."
+      },
+      {
+        "id": "f-008",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "| Artworks destroyed | 2 (undo cascade + page deletion) |"
+        },
+        "description": "Mis-targeted destructive actions caused irreversible damage to the work product during the session.",
+        "suggested_fix": "Add guardrails for destructive key actions: verify focused target/context first, require explicit scope for undo/delete sequences, and prefer element-scoped close/dismiss actions over global keypresses.",
+        "target": "cli",
+        "goal_alignment": "Goal 3 Resilient: reduces catastrophic misfires during long multi-step automations."
+      }
+    ]
+  },
+  {
+    "evaluator": "qwen-122b",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": "Our extension is also going to need to speak directly back to our device because we're going to be using LLMs to control it... If we didn't have to use HTTP to interact with the extension from the LLM that would be optimal",
+        "description": "The session explicitly identifies a requirement for direct device-to-extension communication (bypassing HTTP) for LLM control, which is not currently supported by the existing nanobrowser architecture that relies on HTTP/CDP.",
+        "suggested_fix": "Implement a native messaging bridge or Unix socket listener in the daemon layer to allow the CLI to communicate directly with the extension without HTTP overhead, aligning with the 'slop' CLI architecture goals.",
+        "target": "daemon",
+        "goal_alignment": "Fast - Eliminates HTTP overhead and reduces IPC round trips for faster agent response times."
+      },
+      {
+        "id": "f-002",
+        "type": "missing_feature",
+        "severity": "critical",
+        "evidence": "how to simplify it so it's a lot less code, and how to make it work as well without launching and interacting with CDP",
+        "description": "The current nanobrowser implementation relies heavily on Puppeteer and CDP, which violates the 'Undetectable' goal. The session highlights the need to remove CDP dependency entirely.",
+        "suggested_fix": "Refactor the browser automation layer to use only Chrome Extension APIs (chrome.tabs, chrome.scripting) and direct DOM manipulation, removing Puppeteer Core and CDP transport logic.",
+        "target": "extension",
+        "goal_alignment": "Undetectable - Removes CDP artifacts and debugger banners that trigger bot detection."
+      },
+      {
+        "id": "f-003",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": "I need to understand: 1. How the agent system works (Navigator, Planner, Validator)... 3. How LLM calls are made (LangChain integration)",
+        "description": "The session reveals that nanobrowser includes internal LLM logic (LangChain integration) and multi-agent orchestration, which contradicts the 'Agent-driven' goal of slop-browser (no internal LLM).",
+        "suggested_fix": "Strip all internal LLM logic, LangChain dependencies, and agent orchestration code from the extension. Ensure the extension only exposes a command interface for external agents to drive decisions.",
+        "target": "extension",
+        "goal_alignment": "Agent-driven - Ensures the extension remains a dumb terminal for external agent commands without internal decision-making logic."
+      },
+      {
+        "id": "f-004",
+        "type": "ux_friction",
+        "severity": "medium",
+        "evidence": "Running the **CodebaseReview** workflow in the **BunDeveloper** skill to analyze nanobrowser architecture and plan slop-browser...",
+        "description": "The session indicates a complex, multi-step review process is required to understand the existing codebase before building slop-browser, suggesting high cognitive load and friction in the development workflow.",
+        "suggested_fix": "Create a simplified 'slop-browser' reference implementation or documentation that explicitly contrasts with nanobrowser, highlighting the removal of CDP and internal agents to reduce onboarding friction.",
+        "target": "docs",
+        "goal_alignment": "Resilient - Reduces developer friction and confusion when setting up the new architecture."
+      },
+      {
+        "id": "f-005",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": "How does it inject content scripts and interact with pages?",
+        "description": "The session questions the content script injection mechanism. Nanobrowser likely uses complex injection methods that may be detectable or fragile. Slop-browser needs a robust, undetectable injection strategy.",
+        "suggested_fix": "Implement a 'native messaging' based content script injection or use chrome.scripting.executeScript with careful payload management to avoid detection, ensuring the CLI can trigger these actions seamlessly.",
+        "target": "extension",
+        "goal_alignment": "Undetectable - Ensures content script injection does not leave artifacts or trigger security warnings."
+      }
+    ]
+  }
+]

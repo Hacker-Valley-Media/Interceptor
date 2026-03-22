@@ -1,0 +1,57 @@
+{
+  "timestamp": "2026-03-22T15-50-33",
+  "status": "completed",
+  "dryRun": false,
+  "sessionsScanned": 200,
+  "excerptsExtracted": 11,
+  "layer1": {
+    "durationMs": 130368,
+    "findings": 19,
+    "byEvaluator": [
+      {
+        "name": "codex-a",
+        "findings": 6,
+        "error": null
+      },
+      {
+        "name": "codex-b",
+        "findings": 8,
+        "error": null
+      },
+      {
+        "name": "qwen-122b",
+        "findings": 5,
+        "error": null
+      }
+    ]
+  },
+  "layer2": {
+    "durationMs": 243421,
+    "byReviewer": [
+      {
+        "name": "codex-c",
+        "approved": 0,
+        "rejected": 15,
+        "error": null
+      },
+      {
+        "name": "codex-d",
+        "approved": 2,
+        "rejected": 12,
+        "error": null
+      }
+    ]
+  },
+  "layer3": {
+    "durationMs": 118541,
+    "approved": 1,
+    "rejected": 17,
+    "error": null
+  },
+  "gate": {
+    "applied": 0,
+    "queued": 0,
+    "blocked": 1,
+    "trainingExamples": 3
+  }
+}

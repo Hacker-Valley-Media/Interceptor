@@ -104,9 +104,9 @@ function sendCommandWs(action: { type: string; [key: string]: unknown }, tabId?:
   })
 }
 
-function formatState(data: { url: string; title: string; elementTree: string; staticText?: string; scrollPosition: { y: number; height: number; viewportHeight: number }; tabId: number }) {
+function formatState(data: { url: string; title: string; elementTree: string; focused?: string; staticText?: string; scrollPosition: { y: number; height: number; viewportHeight: number }; tabId: number }) {
   const scroll = data.scrollPosition
-  let out = `url: ${data.url}\ntitle: ${data.title}\nscroll: ${scroll.y}/${scroll.height} (vh:${scroll.viewportHeight})\ntab: ${data.tabId}\n\n${data.elementTree}`
+  let out = `url: ${data.url}\ntitle: ${data.title}\nscroll: ${scroll.y}/${scroll.height} (vh:${scroll.viewportHeight})\ntab: ${data.tabId}\nfocused: ${data.focused || "none"}\n\n${data.elementTree}`
   if (data.staticText) {
     out += `\n---\n${data.staticText}`
   }
@@ -148,11 +148,19 @@ State:
 
 Actions:
   slop click <index|ref>              Click element (e.g. slop click e5)
+  slop click <index> --at X,Y        Click at coordinates on element
+  slop dblclick <index> --at X,Y     Double-click at coordinates
+  slop rightclick <index> --at X,Y   Right-click at coordinates
   slop type <index|ref> <text>        Type into element (clears first)
   slop type <index|ref> <text> --append  Type without clearing
+  slop type "role:name" <text>        Type using semantic selector
   slop select <index|ref> <value>     Select dropdown option
   slop focus <index|ref>              Focus element
   slop hover <index|ref>              Hover over element
+  slop hover <index> --from X,Y      Hover with mouse path
+  slop drag <index> --from X,Y --to X,Y  Drag gesture on element
+  slop drag <index> ... --steps 20   Number of intermediate moves
+  slop drag <index> ... --duration 500  Spread over milliseconds
   slop keys <combo>                   Keyboard shortcut (e.g. "Control+A")
 
 Navigation:
@@ -169,7 +177,13 @@ Tabs:
   slop tab switch <id>                Switch to tab
 
 Capture:
-  slop screenshot                     Save screenshot, print path
+  slop screenshot                     Viewport screenshot (returns data URL)
+  slop screenshot --save              Also save to disk
+  slop screenshot --format png        PNG format (default: jpeg)
+  slop screenshot --quality 80        JPEG quality 0-100 (default: 50)
+  slop screenshot --full              Full-page scroll+stitch capture
+  slop screenshot --clip X,Y,W,H     Capture region
+  slop screenshot --element N         Capture element bounding rect
   slop eval <code>                    Run JS in isolated world
   slop eval <code> --main             Run JS in page context
 
@@ -187,6 +201,29 @@ Headers:
   slop headers add <name> <value>     Add request header
   slop headers remove <name>          Remove header rule
   slop headers clear                  Clear all rules
+
+Canvas:
+  slop canvas list                    Discover canvas elements
+  slop canvas read N                  Read canvas as data URL
+  slop canvas read N --format png     PNG format
+  slop canvas read N --region X,Y,W,H  Read pixel region
+  slop canvas read N --webgl          WebGL canvas readPixels
+  slop canvas diff <url1> <url2>      Pixel diff between images
+  slop canvas diff --threshold 10     Per-channel tolerance
+  slop canvas diff --image            Return diff visualization
+
+Stream Capture:
+  slop capture start                  Begin tabCapture stream
+  slop capture frame                  Get current frame
+  slop capture stop                   Stop capture
+
+Batch:
+  slop batch '<json_array>'           Execute multiple actions in one call
+  slop batch '...' --stop-on-error    Halt on first failure
+  slop batch '...' --timeout 30000    Batch timeout in ms
+  slop wait-stable                    Wait for DOM stability (200ms default)
+  slop wait-stable --ms 500           Custom debounce duration
+  slop wait-stable --timeout 3000     Custom hard timeout
 
 Meta:
   slop status                         Daemon connection info
@@ -247,14 +284,49 @@ async function main() {
       action = { type: "get_state", full: filtered.includes("--full"), tabId: parseTabFlag(filtered) }
       break
 
-    case "click":
-      action = { type: "click", ...parseElementTarget(filtered[1]) }
+    case "click": {
+      const useOs = filtered.includes("--os")
+      const target = parseElementTarget(filtered[1])
+      if (useOs) {
+        const clickAction: Record<string, unknown> = { type: "os_click", ...target }
+        if (filtered.includes("--at")) {
+          const atParts = filtered[filtered.indexOf("--at") + 1].split(",").map(Number)
+          clickAction.x = atParts[0]
+          clickAction.y = atParts[1]
+        }
+        action = clickAction
+      } else if (target.semantic) {
+        const clickAction: Record<string, unknown> = { type: "find_and_click", name: target.semantic.name, role: target.semantic.role }
+        if (filtered.includes("--at")) {
+          const atParts = filtered[filtered.indexOf("--at") + 1].split(",").map(Number)
+          clickAction.x = atParts[0]
+          clickAction.y = atParts[1]
+        }
+        action = clickAction
+      } else {
+        const clickAction: Record<string, unknown> = { type: "click", ...target }
+        if (filtered.includes("--at")) {
+          const atParts = filtered[filtered.indexOf("--at") + 1].split(",").map(Number)
+          clickAction.x = atParts[0]
+          clickAction.y = atParts[1]
+        }
+        action = clickAction
+      }
       break
+    }
 
     case "type": {
       const append = filtered.includes("--append")
-      const textArgs = filtered.slice(2).filter(a => a !== "--append")
-      action = { type: "input_text", ...parseElementTarget(filtered[1]), text: textArgs.join(" "), clear: !append }
+      const useOs = filtered.includes("--os")
+      const target = parseElementTarget(filtered[1])
+      const textArgs = filtered.slice(2).filter(a => a !== "--append" && a !== "--os")
+      if (useOs) {
+        action = { type: "os_type", ...target, text: textArgs.join(" ") }
+      } else if (target.semantic) {
+        action = { type: "find_and_type", name: target.semantic.name, role: target.semantic.role, inputText: textArgs.join(" "), clear: !append }
+      } else {
+        action = { type: "input_text", ...target, text: textArgs.join(" "), clear: !append }
+      }
       break
     }
 
@@ -263,16 +335,113 @@ async function main() {
       break
 
     case "focus":
-      action = { type: "focus", ...parseElementTarget(filtered[1]) }
+      if (!filtered[1]) {
+        action = { type: "get_focus" }
+      } else {
+        action = { type: "focus", ...parseElementTarget(filtered[1]) }
+      }
       break
 
-    case "hover":
-      action = { type: "hover", ...parseElementTarget(filtered[1]) }
+    case "blur":
+      action = { type: "blur" }
       break
 
-    case "keys":
-      action = { type: "send_keys", keys: filtered[1] }
+    case "click-at": {
+      const coords = filtered[1]?.split(",").map(Number)
+      if (!coords || coords.length !== 2 || coords.some(isNaN)) {
+        console.error("error: click-at requires X,Y coordinates. Usage: slop click-at 500,300")
+        process.exit(1)
+      }
+      action = { type: "click_at", x: coords[0], y: coords[1] }
       break
+    }
+
+    case "what-at": {
+      const coords = filtered[1]?.split(",").map(Number)
+      if (!coords || coords.length !== 2 || coords.some(isNaN)) {
+        console.error("error: what-at requires X,Y coordinates. Usage: slop what-at 500,300")
+        process.exit(1)
+      }
+      action = { type: "what_at", x: coords[0], y: coords[1] }
+      break
+    }
+
+    case "regions":
+      action = { type: "regions" }
+      break
+
+    case "frames":
+      action = { type: "frames_list" }
+      break
+
+    case "modals":
+      action = { type: "modals" }
+      break
+
+    case "panels":
+      action = { type: "panels" }
+      break
+
+    case "session": {
+      if (filtered[1] === "start") {
+        const sessionPath = "/tmp/slop-browser-session.pid"
+        const { writeFileSync } = await import("node:fs")
+        writeFileSync(sessionPath, `${process.pid}\n${Date.now()}`)
+        console.log(`session started (pid: ${process.pid})`)
+        console.log("session mode: batch commands recommended for best performance")
+        return
+      }
+      if (filtered[1] === "end") {
+        const sessionPath = "/tmp/slop-browser-session.pid"
+        try { unlinkSync(sessionPath) } catch {}
+        console.log("session ended")
+        return
+      }
+      console.error("error: usage: slop session start|end")
+      process.exit(1)
+    }
+
+    case "hover": {
+      const hoverAction: Record<string, unknown> = { type: "hover", ...parseElementTarget(filtered[1]) }
+      if (filtered.includes("--from")) {
+        const fromParts = filtered[filtered.indexOf("--from") + 1].split(",").map(Number)
+        hoverAction.fromX = fromParts[0]
+        hoverAction.fromY = fromParts[1]
+      }
+      if (filtered.includes("--steps")) hoverAction.steps = parseInt(filtered[filtered.indexOf("--steps") + 1])
+      action = hoverAction
+      break
+    }
+
+    case "drag": {
+      const dragAction: Record<string, unknown> = { type: "drag", ...parseElementTarget(filtered[1]) }
+      if (filtered.includes("--from")) {
+        const fromParts = filtered[filtered.indexOf("--from") + 1].split(",").map(Number)
+        dragAction.fromX = fromParts[0]
+        dragAction.fromY = fromParts[1]
+      }
+      if (filtered.includes("--to")) {
+        const toParts = filtered[filtered.indexOf("--to") + 1].split(",").map(Number)
+        dragAction.toX = toParts[0]
+        dragAction.toY = toParts[1]
+      }
+      if (filtered.includes("--steps")) dragAction.steps = parseInt(filtered[filtered.indexOf("--steps") + 1])
+      if (filtered.includes("--duration")) dragAction.duration = parseInt(filtered[filtered.indexOf("--duration") + 1])
+      action = dragAction
+      break
+    }
+
+    case "keys": {
+      if (filtered.includes("--os")) {
+        const parts = filtered[1].split("+")
+        const key = parts[parts.length - 1]
+        const modifiers = parts.slice(0, -1)
+        action = { type: "os_key", key, modifiers }
+      } else {
+        action = { type: "send_keys", keys: filtered[1] }
+      }
+      break
+    }
 
     case "navigate":
       action = { type: "navigate", url: filtered[1] }
@@ -294,9 +463,27 @@ async function main() {
       action = { type: "wait", ms: parseInt(filtered[1]) }
       break
 
-    case "screenshot":
-      action = { type: "screenshot", tabId: parseTabFlag(filtered) }
+    case "screenshot": {
+      if (filtered.includes("--background")) {
+        const bgAction: Record<string, unknown> = { type: "screenshot_background" }
+        if (filtered.includes("--format")) bgAction.format = filtered[filtered.indexOf("--format") + 1]
+        if (filtered.includes("--quality")) bgAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
+        action = bgAction
+        break
+      }
+      const ssAction: Record<string, unknown> = { type: "screenshot" }
+      if (filtered.includes("--save")) ssAction.save = true
+      if (filtered.includes("--format")) ssAction.format = filtered[filtered.indexOf("--format") + 1]
+      if (filtered.includes("--quality")) ssAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
+      if (filtered.includes("--full")) ssAction.full = true
+      if (filtered.includes("--clip")) {
+        const clipParts = filtered[filtered.indexOf("--clip") + 1].split(",").map(Number)
+        ssAction.clip = { x: clipParts[0], y: clipParts[1], width: clipParts[2], height: clipParts[3] }
+      }
+      if (filtered.includes("--element")) ssAction.element = parseInt(filtered[filtered.indexOf("--element") + 1])
+      action = ssAction
       break
+    }
 
     case "text":
       action = filtered[1] ? { type: "extract_text", ...parseElementTarget(filtered[1]) } : { type: "extract_text" }
@@ -439,13 +626,27 @@ async function main() {
       action = { type: "style_get", ...parseElementTarget(filtered[1]), property: filtered[2] }
       break
 
-    case "dblclick":
-      action = { type: "dblclick", ...parseElementTarget(filtered[1]) }
+    case "dblclick": {
+      const dblAction: Record<string, unknown> = { type: "dblclick", ...parseElementTarget(filtered[1]) }
+      if (filtered.includes("--at")) {
+        const atParts = filtered[filtered.indexOf("--at") + 1].split(",").map(Number)
+        dblAction.x = atParts[0]
+        dblAction.y = atParts[1]
+      }
+      action = dblAction
       break
+    }
 
-    case "rightclick":
-      action = { type: "rightclick", ...parseElementTarget(filtered[1]) }
+    case "rightclick": {
+      const rcAction: Record<string, unknown> = { type: "rightclick", ...parseElementTarget(filtered[1]) }
+      if (filtered.includes("--at")) {
+        const atParts = filtered[filtered.indexOf("--at") + 1].split(",").map(Number)
+        rcAction.x = atParts[0]
+        rcAction.y = atParts[1]
+      }
+      action = rcAction
       break
+    }
 
     case "check":
       action = { type: "check", ...parseElementTarget(filtered[1]), checked: filtered[2] !== "false" }
@@ -454,6 +655,33 @@ async function main() {
     case "wait_for":
       action = { type: "wait_for", selector: filtered[1], timeout: filtered[2] ? parseInt(filtered[2]) : 10000 }
       break
+
+    case "wait-stable": {
+      const wsMs = filtered.includes("--ms") ? parseInt(filtered[filtered.indexOf("--ms") + 1]) : 200
+      const wsTimeout = filtered.includes("--timeout") ? parseInt(filtered[filtered.indexOf("--timeout") + 1]) : 5000
+      action = { type: "wait_stable", ms: wsMs, timeout: wsTimeout }
+      break
+    }
+
+    case "batch": {
+      if (!filtered[1]) {
+        console.error("error: batch requires a JSON array of actions. Usage: slop batch '[{\"type\":\"click\",\"ref\":\"e5\"}, ...]'")
+        process.exit(1)
+      }
+      try {
+        const batchActions = JSON.parse(filtered[1])
+        if (!Array.isArray(batchActions)) {
+          console.error("error: batch argument must be a JSON array")
+          process.exit(1)
+        }
+        const batchTimeout = filtered.includes("--timeout") ? parseInt(filtered[filtered.indexOf("--timeout") + 1]) : 30000
+        action = { type: "batch", actions: batchActions, stopOnError: filtered.includes("--stop-on-error"), timeout: batchTimeout }
+      } catch (e) {
+        console.error(`error: invalid JSON for batch: ${(e as Error).message}`)
+        process.exit(1)
+      }
+      break
+    }
 
     case "clipboard":
       if (filtered[1] === "write") {
@@ -576,6 +804,11 @@ async function main() {
     }
 
     case "tree": {
+      if (filtered.includes("--native")) {
+        const depthIdx = filtered.indexOf("--depth")
+        action = { type: "cdp_tree", depth: depthIdx !== -1 ? parseInt(filtered[depthIdx + 1]) : undefined }
+        break
+      }
       const depthIdx = filtered.indexOf("--depth")
       const filterIdx = filtered.indexOf("--filter")
       const maxCharsIdx = filtered.indexOf("--max-chars")
@@ -605,6 +838,61 @@ async function main() {
       action = { type: "diff" }
       break
 
+    case "canvas":
+      switch (filtered[1]) {
+        case "list":
+          action = { type: "canvas_list" }
+          break
+        case "read": {
+          const crAction: Record<string, unknown> = { type: "canvas_read", canvasIndex: parseInt(filtered[2]) }
+          if (filtered.includes("--format")) crAction.format = filtered[filtered.indexOf("--format") + 1]
+          if (filtered.includes("--quality")) crAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
+          if (filtered.includes("--webgl")) crAction.webgl = true
+          if (filtered.includes("--region")) {
+            const rp = filtered[filtered.indexOf("--region") + 1].split(",").map(Number)
+            crAction.region = { x: rp[0], y: rp[1], width: rp[2], height: rp[3] }
+          }
+          action = crAction
+          break
+        }
+        case "diff": {
+          const cdAction: Record<string, unknown> = { type: "canvas_diff", image1: filtered[2], image2: filtered[3] }
+          if (filtered.includes("--threshold")) cdAction.threshold = parseInt(filtered[filtered.indexOf("--threshold") + 1])
+          if (filtered.includes("--image")) cdAction.returnImage = true
+          action = cdAction
+          break
+        }
+        default:
+          console.error("error: unknown canvas subcommand. Use: list, read, diff")
+          process.exit(1)
+      }
+      break
+
+    case "capture":
+      switch (filtered[1]) {
+        case "start":
+          action = { type: "capture_start" }
+          break
+        case "frame": {
+          const cfAction: Record<string, unknown> = { type: "capture_frame" }
+          if (filtered.includes("--format")) cfAction.format = filtered[filtered.indexOf("--format") + 1]
+          if (filtered.includes("--quality")) cfAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
+          action = cfAction
+          break
+        }
+        case "stop":
+          action = { type: "capture_stop" }
+          break
+        default:
+          console.error("error: unknown capture subcommand. Use: start, frame, stop")
+          process.exit(1)
+      }
+      break
+
+    case "capabilities":
+      action = { type: "capabilities" }
+      break
+
     case "raw":
       action = JSON.parse(filtered.slice(1).join(" "))
       break
@@ -615,12 +903,30 @@ async function main() {
   }
 
   if (anyTab) action.anyTab = true
+  if (filtered.includes("--changes")) action.changes = true
+  const frameIdx = args.indexOf("--frame")
+  if (frameIdx !== -1 && args[frameIdx + 1]) {
+    action.frameId = parseInt(args[frameIdx + 1])
+  }
 
   try {
     const response = useWs ? await sendCommandWs(action, globalTabId) : await sendCommand(action, globalTabId)
 
     if (response.result) {
       const result = response.result
+
+      if (result.success && result.data && typeof result.data === "object" && (result.data as Record<string, unknown>).save && (result.data as Record<string, unknown>).dataUrl) {
+        const d = result.data as Record<string, unknown>
+        const dataUrl = d.dataUrl as string
+        const base64 = dataUrl.split(",")[1]
+        const ext = (d.format as string) === "png" ? "png" : "jpg"
+        const filename = `slop-screenshot-${Date.now()}.${ext}`
+        const bytes = Buffer.from(base64, "base64")
+        await Bun.write(filename, bytes)
+        d.filePath = `${process.cwd()}/${filename}`
+        delete d.save
+        process.stderr.write(`saved: ${d.filePath}\n`)
+      }
 
       if (!jsonMode && result.success) {
         switch (action.type) {
@@ -646,10 +952,14 @@ async function main() {
   }
 }
 
-function parseElementTarget(arg: string): { index?: number; ref?: string } {
+function parseElementTarget(arg: string): { index?: number; ref?: string; semantic?: { role: string; name: string } } {
   if (/^e\d+$/.test(arg)) return { ref: arg }
   const n = parseInt(arg)
   if (!isNaN(n)) return { index: n }
+  const colonIdx = arg.indexOf(":")
+  if (colonIdx > 0) {
+    return { semantic: { role: arg.slice(0, colonIdx), name: arg.slice(colonIdx + 1) } }
+  }
   return { ref: arg }
 }
 

@@ -3,6 +3,38 @@ let connectionReady = false
 let isConnecting = false
 let reconnectDelay = 1000
 
+let offscreenIdleTimer: ReturnType<typeof setTimeout> | null = null
+const OFFSCREEN_IDLE_MS = 30_000
+
+async function ensureOffscreen() {
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT" as chrome.runtime.ContextType] })
+  if (contexts.length > 0) {
+    resetOffscreenTimer()
+    return
+  }
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["BLOBS" as chrome.offscreen.Reason],
+    justification: "Image crop, stitch, and diff operations"
+  })
+  resetOffscreenTimer()
+}
+
+function resetOffscreenTimer() {
+  if (offscreenIdleTimer) clearTimeout(offscreenIdleTimer)
+  offscreenIdleTimer = setTimeout(async () => {
+    try { await chrome.offscreen.closeDocument() } catch {}
+    offscreenIdleTimer = null
+  }, OFFSCREEN_IDLE_MS)
+}
+
+async function sendToOffscreen(msg: Record<string, unknown>): Promise<unknown> {
+  await ensureOffscreen()
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ ...msg, target: "offscreen" }, resolve)
+  })
+}
+
 function emitEvent(event: string, data: Record<string, unknown> = {}) {
   sendToHost({ type: "event", event, ...data })
 }
@@ -227,8 +259,160 @@ async function verifyTabUrl(tabId: number, expectedUrl?: string): Promise<string
   return null
 }
 
+let debuggerAttached = new Set<number>()
+let infoBannerHeight = 0
+
+async function cdpCommand(tabId: number, method: string, params?: Record<string, unknown>): Promise<unknown> {
+  const target = { tabId }
+  const isAttached = debuggerAttached.has(tabId)
+  if (!isAttached) {
+    await chrome.debugger.attach(target, "1.3")
+    debuggerAttached.add(tabId)
+  }
+  try {
+    const result = await chrome.debugger.sendCommand(target, method, params)
+    return result
+  } finally {
+    if (!isAttached) {
+      try {
+        await chrome.debugger.detach(target)
+        debuggerAttached.delete(tabId)
+      } catch {}
+    }
+  }
+}
+
+async function cdpAttachActDetach<T>(tabId: number, method: string, params?: Record<string, unknown>): Promise<{ success: boolean; data?: T; error?: string }> {
+  try {
+    const result = await cdpCommand(tabId, method, params) as T
+    return { success: true, data: result }
+  } catch (err) {
+    return { success: false, error: (err as Error).message }
+  }
+}
+
+async function cdpInjectSourceCapabilitiesMock(tabId: number): Promise<void> {
+  try {
+    await cdpCommand(tabId, "Page.addScriptToEvaluateOnNewDocument", {
+      source: `
+        if (typeof UIEvent !== 'undefined') {
+          const origDesc = Object.getOwnPropertyDescriptor(UIEvent.prototype, 'sourceCapabilities');
+          if (origDesc) {
+            Object.defineProperty(UIEvent.prototype, 'sourceCapabilities', {
+              get() {
+                if (!this.isTrusted && origDesc.get) return origDesc.get.call(this);
+                return new InputDeviceCapabilities({ firesTouchEvents: false });
+              },
+              configurable: true
+            });
+          }
+        }
+      `
+    })
+  } catch {}
+}
+
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source.tabId) {
+    debuggerAttached.delete(source.tabId)
+  }
+  if (reason === "canceled_by_user") {
+    console.log("debugger detached by user (DevTools opened)")
+  }
+})
+
 async function routeAction(action: { type: string; [key: string]: unknown }, tabId: number): Promise<{ success: boolean; error?: string; data?: unknown; tabId?: number }> {
   switch (action.type) {
+
+    // === OS-LEVEL INPUT (forwarded to daemon with window bounds) ===
+    case "os_click": {
+      const win = await chrome.windows.getCurrent()
+      const windowBounds = { left: win.left || 0, top: win.top || 0, width: win.width || 0, height: win.height || 0 }
+      let pageX = action.x as number | undefined
+      let pageY = action.y as number | undefined
+
+      if ((action.index !== undefined || action.ref) && (pageX === undefined || pageY === undefined)) {
+        const rectResult = await sendToContentScript(tabId, { type: "rect", index: action.index, ref: action.ref }) as { success: boolean; data?: { left: number; top: number; width: number; height: number } }
+        if (!rectResult.success || !rectResult.data) return { success: false, error: "failed to get element coordinates for os_click" }
+        const rect = rectResult.data
+        pageX = rect.left + rect.width / 2
+        pageY = rect.top + rect.height / 2
+      }
+
+      if (pageX === undefined || pageY === undefined) return { success: false, error: "os_click requires element target or x,y coordinates" }
+
+      const chromeUiHeight = (action.chromeUiHeight as number) || (88 + (debuggerAttached.has(tabId) ? 35 : 0))
+      return { success: true, data: { method: "os_event", screenTarget: { pageX, pageY }, windowBounds, button: action.button || "left", clickCount: action.clickCount || 1, chromeUiHeight } }
+    }
+
+    case "os_key": {
+      return { success: true, data: { method: "os_event", key: action.key, modifiers: action.modifiers || [] } }
+    }
+
+    case "os_type": {
+      if (action.index !== undefined || action.ref) {
+        await sendToContentScript(tabId, { type: "focus", index: action.index, ref: action.ref })
+        await new Promise(r => setTimeout(r, 50))
+      }
+      return { success: true, data: { method: "os_event", text: action.text } }
+    }
+
+    case "os_move": {
+      const win = await chrome.windows.getCurrent()
+      const windowBounds = { left: win.left || 0, top: win.top || 0, width: win.width || 0, height: win.height || 0 }
+      const chromeUiHeight = (action.chromeUiHeight as number) || (88 + (debuggerAttached.has(tabId) ? 35 : 0))
+      return { success: true, data: { method: "os_event", path: action.path, windowBounds, duration: action.duration || 100, chromeUiHeight } }
+    }
+
+    case "screenshot_background": {
+      const format = (action.format as string) === "png" ? "image/png" : "image/jpeg"
+      const quality = ((action.quality as number) || 50) / 100
+      try {
+        const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId })
+        const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT" as chrome.runtime.ContextType] })
+        if (contexts.length === 0) {
+          await chrome.offscreen.createDocument({
+            url: "offscreen.html",
+            reasons: ["USER_MEDIA" as chrome.offscreen.Reason],
+            justification: "Background tab screenshot via tabCapture"
+          })
+        }
+        await new Promise<void>((resolve) => {
+          chrome.runtime.sendMessage({ target: "offscreen", type: "capture_start", streamId }, () => resolve())
+        })
+        await new Promise(r => setTimeout(r, 300))
+        const frameResult = await sendToOffscreen({ type: "capture_frame", format, quality }) as { success: boolean; data?: string; error?: string }
+        await sendToOffscreen({ type: "capture_stop" })
+        if (!frameResult.success) return { success: false, error: frameResult.error || "capture frame failed" }
+        const dataUrl = frameResult.data!
+        const sizeBytes = Math.round((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75)
+        return { success: true, data: { dataUrl, format: action.format || "jpeg", size: sizeBytes, method: "tabCapture" } }
+      } catch (err) {
+        return { success: false, error: `tabCapture failed: ${(err as Error).message}` }
+      }
+    }
+
+    case "cdp_tree": {
+      const depth = (action.depth as number) || undefined
+      const result = await cdpAttachActDetach<{ nodes: unknown[] }>(tabId, "Accessibility.getFullAXTree", depth ? { depth } : undefined)
+      if (!result.success) return { success: false, error: result.error }
+      const nodes = result.data?.nodes || []
+      const formatted = nodes.map((n: any) => {
+        const role = n.role?.value || ""
+        const name = n.name?.value || ""
+        const nodeId = n.nodeId || ""
+        return `[${nodeId}] ${role} "${name}"`
+      }).join("\n")
+      return { success: true, data: formatted || "empty tree" }
+    }
+
+    case "capabilities": {
+      const daemonConnected = connectionReady
+      const hasTabCapture = true
+      const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false
+      const debuggerActive = debuggerAttached.size > 0
+      return { success: true, data: { layers: { os_input: daemonConnected, tabCapture: hasTabCapture, cdp_debugger: hasDebugger, debugger_active: debuggerActive }, daemon: daemonConnected, infoBannerHeight: debuggerActive ? 35 : 0 } }
+    }
 
     // === META ===
     case "status":
@@ -242,29 +426,83 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
     case "screenshot": {
       const format = (action.format as string) === "png" ? "png" : "jpeg"
       const quality = (action.quality as number) || 50
-      const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality })
-      const filename = `slop-screenshot-${Date.now()}.${format === "png" ? "png" : "jpg"}`
-      const downloadId = await chrome.downloads.download({
-        url: dataUrl,
-        filename,
-        conflictAction: "uniquify"
-      })
-      const filePath = await new Promise<string>((resolve) => {
-        function onChanged(delta: chrome.downloads.DownloadDelta) {
-          if (delta.id === downloadId && delta.state?.current === "complete") {
-            chrome.downloads.onChanged.removeListener(onChanged)
-            chrome.downloads.search({ id: downloadId }, (items) => {
-              resolve(items[0]?.filename || filename)
-            })
-          }
+
+      if (action.full) {
+        const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" }) as { success: boolean; data?: { scrollHeight: number; scrollWidth: number; viewportHeight: number; viewportWidth: number; scrollY: number; devicePixelRatio: number } }
+        if (!dims.success || !dims.data) return { success: false, error: "failed to get page dimensions" }
+        const { scrollHeight, viewportHeight, viewportWidth, scrollY: origScrollY, devicePixelRatio } = dims.data
+        const stripCount = Math.ceil(scrollHeight / viewportHeight)
+        const strips: { dataUrl: string; y: number }[] = []
+
+        for (let i = 0; i < stripCount; i++) {
+          const scrollTo = i * viewportHeight
+          await sendToContentScript(tabId, { type: "scroll_absolute", y: scrollTo })
+          await new Promise(r => setTimeout(r, 150))
+          const stripUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality })
+          const stripHeight = (i === stripCount - 1) ? scrollHeight - scrollTo : viewportHeight
+          strips.push({ dataUrl: stripUrl, y: Math.round(scrollTo * devicePixelRatio) })
+          if (i < stripCount - 1) await new Promise(r => setTimeout(r, 500))
         }
-        chrome.downloads.onChanged.addListener(onChanged)
-        setTimeout(() => {
-          chrome.downloads.onChanged.removeListener(onChanged)
-          resolve(filename)
-        }, 5000)
-      })
-      return { success: true, data: filePath }
+
+        await sendToContentScript(tabId, { type: "scroll_absolute", y: origScrollY })
+
+        const stitchResult = await sendToOffscreen({
+          type: "stitch",
+          strips,
+          totalWidth: Math.round(viewportWidth * devicePixelRatio),
+          totalHeight: Math.round(scrollHeight * devicePixelRatio),
+          format,
+          quality: quality / 100
+        }) as { success: boolean; data?: string; error?: string }
+
+        if (!stitchResult.success) return { success: false, error: stitchResult.error }
+        const stitchedUrl = stitchResult.data!
+        const stitchedSize = Math.round((stitchedUrl.length - stitchedUrl.indexOf(",") - 1) * 0.75)
+
+        if (action.save) {
+          return { success: true, data: { dataUrl: stitchedUrl, format, size: stitchedSize, save: true, strips: stripCount } }
+        }
+
+        return { success: true, data: { dataUrl: stitchedUrl, format, size: stitchedSize, strips: stripCount } }
+      }
+
+      let dataUrl: string
+      try {
+        dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality })
+      } catch (captureErr) {
+        const fallback = await routeAction({ type: "screenshot_background", format: action.format, quality: action.quality }, tabId)
+        if (fallback.success && fallback.data) {
+          (fallback.data as Record<string, unknown>).fallback = "tabCapture (captureVisibleTab failed)"
+        }
+        return fallback
+      }
+      const sizeBytes = Math.round((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75)
+
+      if (action.save) {
+        return { success: true, data: { dataUrl, format, size: sizeBytes, save: true } }
+      }
+
+      let clip = action.clip as { x: number; y: number; width: number; height: number } | undefined
+      if (!clip && action.element !== undefined) {
+        const elemResult = await sendToContentScript(tabId, { type: "rect", index: action.element }) as { success: boolean; data?: { x: number; y: number; width: number; height: number } }
+        if (elemResult.success && elemResult.data) {
+          clip = elemResult.data
+        }
+      }
+
+      if (clip) {
+        const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip }) as { success: boolean; data?: string; error?: string }
+        if (!cropResult.success) return { success: false, error: cropResult.error }
+        const croppedUrl = cropResult.data!
+        const croppedSize = Math.round((croppedUrl.length - croppedUrl.indexOf(",") - 1) * 0.75)
+        return { success: true, data: { dataUrl: croppedUrl, format, size: croppedSize, clip } }
+      }
+
+      if (format === "png" && sizeBytes > 800 * 1024) {
+        return { success: true, data: { dataUrl, format, size: sizeBytes, warning: "PNG exceeds 800KB — consider using JPEG for smaller responses" } }
+      }
+
+      return { success: true, data: { dataUrl, format, size: sizeBytes } }
     }
 
     case "page_capture": {
@@ -624,6 +862,161 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
       return { success: true }
     }
 
+    // === CANVAS INTELLIGENCE ===
+    case "canvas_list": {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: () => {
+          const canvases = Array.from(document.querySelectorAll("canvas"))
+          function walkShadowRoots(root: Element | ShadowRoot): HTMLCanvasElement[] {
+            const found: HTMLCanvasElement[] = []
+            const children = root instanceof ShadowRoot ? Array.from(root.children) : Array.from(root.children)
+            for (const child of children) {
+              if (child.tagName === "CANVAS") found.push(child as HTMLCanvasElement)
+              const shadow = (child as any).shadowRoot
+              if (shadow) found.push(...walkShadowRoots(shadow))
+              found.push(...walkShadowRoots(child))
+            }
+            return found
+          }
+          const shadowCanvases = walkShadowRoots(document.body)
+          const all = [...new Set([...canvases, ...shadowCanvases])]
+          return all.map((c, i) => {
+            const rect = c.getBoundingClientRect()
+            let contextType = "none"
+            try {
+              if (c.getContext("2d")) contextType = "2d"
+              else if (c.getContext("webgl2")) contextType = "webgl2"
+              else if (c.getContext("webgl")) contextType = "webgl"
+              else if (c.getContext("bitmaprenderer")) contextType = "bitmaprenderer"
+            } catch {}
+            const style = getComputedStyle(c)
+            const hidden = style.display === "none" || style.visibility === "hidden" || (c.width === 0 && c.height === 0)
+            return {
+              index: i,
+              width: c.width,
+              height: c.height,
+              cssWidth: rect.width,
+              cssHeight: rect.height,
+              x: rect.x,
+              y: rect.y,
+              contextType,
+              hidden,
+              id: c.id || undefined,
+              className: c.className || undefined,
+            }
+          })
+        }
+      })
+      return { success: true, data: results[0]?.result ?? [] }
+    }
+
+    case "canvas_read": {
+      const canvasIdx = action.canvasIndex as number
+      const fmt = (action.format as string) === "png" ? "image/png" : "image/jpeg"
+      const qual = (action.quality as number) || 0.5
+      const region = action.region as { x: number; y: number; width: number; height: number } | undefined
+      const isWebgl = action.webgl as boolean | undefined
+
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        args: [canvasIdx, fmt, qual, region ?? null, isWebgl ?? false],
+        func: (idx: number, format: string, quality: number, reg: { x: number; y: number; width: number; height: number } | null, webgl: boolean) => {
+          const canvases = Array.from(document.querySelectorAll("canvas"))
+          const c = canvases[idx]
+          if (!c) return { success: false, error: `no canvas at index ${idx}` }
+
+          try {
+            if (reg) {
+              const ctx = c.getContext("2d")
+              if (!ctx) return { success: false, error: "canvas has no 2d context for region read" }
+              const data = ctx.getImageData(reg.x, reg.y, reg.width, reg.height)
+              const tmpCanvas = document.createElement("canvas")
+              tmpCanvas.width = reg.width
+              tmpCanvas.height = reg.height
+              const tmpCtx = tmpCanvas.getContext("2d")!
+              tmpCtx.putImageData(data, 0, 0)
+              return { success: true, data: tmpCanvas.toDataURL(format, quality) }
+            }
+
+            if (webgl) {
+              const gl = c.getContext("webgl2") || c.getContext("webgl")
+              if (!gl) return { success: false, error: "canvas has no webgl context" }
+              const pixels = new Uint8Array(c.width * c.height * 4)
+              gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+              const tmpCanvas = document.createElement("canvas")
+              tmpCanvas.width = c.width
+              tmpCanvas.height = c.height
+              const tmpCtx = tmpCanvas.getContext("2d")!
+              const imageData = tmpCtx.createImageData(c.width, c.height)
+              for (let row = 0; row < c.height; row++) {
+                const srcOff = row * c.width * 4
+                const dstOff = (c.height - 1 - row) * c.width * 4
+                imageData.data.set(pixels.subarray(srcOff, srcOff + c.width * 4), dstOff)
+              }
+              tmpCtx.putImageData(imageData, 0, 0)
+              return { success: true, data: tmpCanvas.toDataURL(format, quality) }
+            }
+
+            return { success: true, data: c.toDataURL(format, quality) }
+          } catch (e: any) {
+            if (e.message?.includes("tainted")) return { success: false, error: "canvas is tainted (cross-origin content)" }
+            return { success: false, error: e.message }
+          }
+        }
+      })
+      const res = results[0]?.result as { success: boolean; error?: string; data?: string } | undefined
+      if (!res) return { success: false, error: "no result from canvas read" }
+      if (!res.success) return { success: false, error: res.error }
+      const dataUrl = res.data!
+      const sizeBytes = Math.round((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75)
+      if (sizeBytes > 800 * 1024) {
+        return { success: true, data: { dataUrl, size: sizeBytes, warning: "Response exceeds 800KB — consider JPEG or smaller region" } }
+      }
+      return { success: true, data: { dataUrl, size: sizeBytes } }
+    }
+
+    // === TAB CAPTURE STREAM ===
+    case "capture_start": {
+      const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId })
+      const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT" as chrome.runtime.ContextType] })
+      if (contexts.length === 0) {
+        await chrome.offscreen.createDocument({
+          url: "offscreen.html",
+          reasons: ["USER_MEDIA" as chrome.offscreen.Reason],
+          justification: "Tab capture stream processing"
+        })
+      }
+      chrome.runtime.sendMessage({ target: "offscreen", type: "capture_start", streamId })
+      return { success: true, data: { streamId, tabId } }
+    }
+
+    case "capture_frame": {
+      const fmt = (action.format as string) === "png" ? "image/png" : "image/jpeg"
+      const qual = (action.quality as number) || 50
+      const frameResult = await sendToOffscreen({ type: "capture_frame", format: fmt, quality: qual / 100 }) as { success: boolean; data?: string; error?: string }
+      if (!frameResult.success) return { success: false, error: frameResult.error }
+      return { success: true, data: { dataUrl: frameResult.data } }
+    }
+
+    case "capture_stop": {
+      const stopResult = await sendToOffscreen({ type: "capture_stop" }) as { success: boolean }
+      try { await chrome.offscreen.closeDocument() } catch {}
+      return { success: true }
+    }
+
+    case "canvas_diff": {
+      const image1 = action.image1 as string
+      const image2 = action.image2 as string
+      const threshold = (action.threshold as number) || 0
+      const returnImage = (action.returnImage as boolean) || false
+      const diffResult = await sendToOffscreen({ type: "diff", image1, image2, threshold, returnImage }) as { success: boolean; data?: unknown; error?: string }
+      if (!diffResult.success) return { success: false, error: diffResult.error }
+      return { success: true, data: diffResult.data }
+    }
+
     // === JAVASCRIPT EVALUATION ===
     case "evaluate": {
       const code = action.code as string
@@ -656,8 +1049,24 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
     }
 
     // === CONTENT SCRIPT ACTIONS (forwarded to content.ts) ===
-    default:
-      return await sendToContentScript(tabId, action) as { success: boolean; error?: string; data?: unknown }
+    default: {
+      const contentResult = await sendToContentScript(tabId, action, action.frameId as number | undefined) as { success: boolean; error?: string; data?: unknown; warning?: string }
+
+      if (action.type === "click" && contentResult.success && contentResult.warning?.includes("no DOM change") && connectionReady) {
+        console.log("auto-escalating click to OS-level input")
+        const osResult = await routeAction({ ...action, type: "os_click" }, tabId)
+        if (osResult.success) {
+          return { success: true, data: { ...((typeof osResult.data === "object" && osResult.data) || {}), escalated: { from: "synthetic", to: "os_click", reason: "no DOM mutation after synthetic click" } }, tabId }
+        }
+        return { success: false, error: "click failed at all layers", data: { diagnostics: { layers_tried: ["synthetic", "os_click"], reason: "synthetic produced no DOM change, os_click failed", suggestion: "verify element is interactive and Chrome window is visible" } } }
+      }
+
+      if (!contentResult.success && contentResult.error) {
+        (contentResult as Record<string, unknown>).data = { ...(typeof contentResult.data === "object" && contentResult.data ? contentResult.data : {}), diagnostics: { layer_tried: "content_script", reason: contentResult.error, suggestion: action.type === "click" ? "try: slop click --os " + (action.ref || action.index || "") : undefined } }
+      }
+
+      return contentResult
+    }
   }
 }
 
@@ -693,9 +1102,11 @@ function sendToHost(msg: unknown) {
   }
 }
 
-async function sendToContentScript(tabId: number, action: { type: string; [key: string]: unknown }): Promise<unknown> {
+async function sendToContentScript(tabId: number, action: { type: string; [key: string]: unknown }, frameId?: number): Promise<unknown> {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, { type: "execute_action", action }, (response) => {
+    const targetFrame = frameId !== undefined ? frameId : 0
+    const opts = { frameId: targetFrame }
+    chrome.tabs.sendMessage(tabId, { type: "execute_action", action }, opts as chrome.tabs.MessageSendOptions, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ success: false, error: chrome.runtime.lastError.message })
       } else {
@@ -705,23 +1116,50 @@ async function sendToContentScript(tabId: number, action: { type: string; [key: 
   })
 }
 
-function waitForTabLoad(tabId: number, timeoutMs = 15000): Promise<void> {
+function waitForTabLoad(tabId: number, timeoutMs = 15000): Promise<{ ready: boolean; elapsed: number }> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    const start = Date.now()
+    const stage1Timeout = Math.min(timeoutMs, 10000)
+
+    const hardTimer = setTimeout(async () => {
       chrome.tabs.onUpdated.removeListener(listener)
-      resolve()
+      const probeResult = await probeContentReady(tabId, Math.max(timeoutMs - (Date.now() - start), 1000))
+      resolve({ ready: probeResult, elapsed: Date.now() - start })
     }, timeoutMs)
 
     function listener(updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
-        clearTimeout(timer)
+        clearTimeout(hardTimer)
         chrome.tabs.onUpdated.removeListener(listener)
-        resolve()
+        const remaining = Math.max(timeoutMs - (Date.now() - start), 2000)
+        probeContentReady(tabId, remaining).then((ready) => {
+          resolve({ ready, elapsed: Date.now() - start })
+        })
       }
     }
 
     chrome.tabs.onUpdated.addListener(listener)
+
+    setTimeout(async () => {
+      const tab = await chrome.tabs.get(tabId).catch(() => null)
+      if (tab && tab.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener)
+        clearTimeout(hardTimer)
+        const remaining = Math.max(timeoutMs - (Date.now() - start), 2000)
+        const ready = await probeContentReady(tabId, remaining)
+        resolve({ ready, elapsed: Date.now() - start })
+      }
+    }, stage1Timeout)
   })
+}
+
+async function probeContentReady(tabId: number, timeoutMs: number): Promise<boolean> {
+  try {
+    const result = await sendToContentScript(tabId, { type: "wait_stable", ms: 500, timeout: Math.min(timeoutMs, 5000) }) as { success: boolean; data?: { stable: boolean } }
+    return result.success && (result.data?.stable ?? true)
+  } catch {
+    return false
+  }
 }
 
 let keepalivePongTimer: ReturnType<typeof setTimeout> | null = null

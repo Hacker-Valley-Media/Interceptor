@@ -23,10 +23,20 @@ function getPageState(full = false) {
   const scrollHeight = document.documentElement.scrollHeight
   const viewportHeight = window.innerHeight
 
+  const active = document.activeElement as HTMLElement | null
+  let focusedStr = "none"
+  if (active && active !== document.body && active !== document.documentElement) {
+    const fRef = getOrAssignRef(active)
+    const fRole = getEffectiveRole(active)
+    const fName = getAccessibleName(active)
+    focusedStr = `${fRef} ${fRole || active.tagName.toLowerCase()} "${fName}"`
+  }
+
   const state: Record<string, unknown> = {
     url: location.href,
     title: document.title,
     elementTree: tree,
+    focused: focusedStr,
     scrollPosition: { y: scrollY, height: scrollHeight, viewportHeight },
     timestamp: Date.now()
   }
@@ -55,6 +65,7 @@ let domDirty = false
 
 const refRegistry = new Map<string, WeakRef<Element>>()
 const elementToRef = new WeakMap<Element, string>()
+const refMetadata = new Map<string, { role: string; name: string; tag: string; value: string }>()
 let nextRefId = 1
 
 function getOrAssignRef(el: Element): string {
@@ -71,12 +82,22 @@ function getOrAssignRef(el: Element): string {
 
 function resolveRef(refId: string): Element | null {
   const ref = refRegistry.get(refId)
-  if (!ref) return null
-  const el = ref.deref()
-  if (!el || !el.isConnected) return null
-  if (!isVisible(el)) return null
-  return el
+  if (ref) {
+    const el = ref.deref()
+    if (el && el.isConnected && isVisible(el)) return el
+  }
+  const meta = refMetadata.get(refId)
+  if (meta) {
+    const match = findBestMatch(meta.name, meta.role)
+    if (match && match.score >= 70) {
+      staleWarning = `stale ref ${refId} re-resolved to ${match.refId} (${match.role} '${match.name}', score: ${match.score})`
+      return match.element
+    }
+  }
+  return null
 }
+
+let staleWarning: string | null = null
 
 function pruneStaleRefs() {
   for (const [id, ref] of refRegistry) {
@@ -140,6 +161,8 @@ function getInteractiveElements(): IndexedElement[] {
       const text = getAccessibleName(el)
       const attrs = getRelevantAttrs(el)
 
+      refMetadata.set(refId, { role: getEffectiveRole(el), name: text, tag, value: ((el as HTMLInputElement).value || "").slice(0, 40) })
+
       results.push({ index: idx, refId, element: el, selector, tag, text, attrs })
     }
   })
@@ -154,6 +177,14 @@ function isInteractive(el: Element, tags: Set<string>, roles: Set<string>): bool
   if (el.hasAttribute("onclick")) return true
   if (el.getAttribute("contenteditable") === "true") return true
   if (el.hasAttribute("tabindex") && el.getAttribute("tabindex") !== "-1") return true
+  if (el.namespaceURI === "http://www.w3.org/2000/svg") {
+    const svgTag = el.tagName.toLowerCase()
+    if (svgTag === "a" && (el.hasAttribute("href") || el.getAttributeNS("http://www.w3.org/1999/xlink", "href"))) return true
+    if (el.hasAttribute("onclick") || el.hasAttribute("tabindex")) return true
+    if (role && roles.has(role)) return true
+    const cursor = getComputedStyle(el).cursor
+    if (cursor === "pointer") return true
+  }
   return false
 }
 
@@ -200,6 +231,11 @@ function getEffectiveRole(el: Element): string {
   if (tag === "section") {
     const name = el.getAttribute("aria-label") || el.getAttribute("aria-labelledby")
     if (name) return "region"
+  }
+  if (el.namespaceURI === "http://www.w3.org/2000/svg") {
+    if (tag === "a") return "link"
+    if (el.hasAttribute("onclick") || getComputedStyle(el).cursor === "pointer") return "button"
+    return "img"
   }
   if (tag === "input") {
     const type = (el.getAttribute("type") || "text").toLowerCase()
@@ -461,10 +497,18 @@ function computeSnapshotDiff(): { success: boolean; error?: string; data?: unkno
   return { success: true, data: changes.length ? changes.join("\n") : "no changes" }
 }
 
-async function handleAction(action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; warning?: string; data?: unknown }> {
+async function handleAction(action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; warning?: string; data?: unknown; changes?: unknown }> {
   const warnDirty = domDirty
+  staleWarning = null
+  const wantChanges = !!(action.changes)
+  if (wantChanges) cacheSnapshot()
   const result = await executeAction(action)
-  if (warnDirty && result.success) result.warning = "DOM has changed since last state read"
+  if (staleWarning && result.success) result.warning = staleWarning
+  else if (warnDirty && result.success) result.warning = "DOM has changed since last state read"
+  if (wantChanges && result.success) {
+    const diffResult = computeSnapshotDiff()
+    if (diffResult.success) (result as Record<string, unknown>).changes = diffResult.data
+  }
   return result
 }
 
@@ -478,17 +522,24 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
         const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
-        dispatchClickSequence(el)
-        return { success: true, data: `clicked [${action.ref || action.index}]` }
+        dispatchClickSequence(el, action.x as number | undefined, action.y as number | undefined)
+        const clickMsg = `clicked [${action.ref || action.index}]${action.x !== undefined ? ` at (${action.x},${action.y})` : ""}`
+        const mutated = await waitForMutation(200)
+        if (!mutated) {
+          return { success: true, data: clickMsg, warning: "no DOM change after click — if the site requires trusted events, try: slop click --os " + (action.ref || action.index) }
+        }
+        return { success: true, data: clickMsg }
       }
 
       case "dblclick": {
         const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
-        dispatchClickSequence(el)
+        dispatchClickSequence(el, action.x as number | undefined, action.y as number | undefined)
         const rect = el.getBoundingClientRect()
-        el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }))
+        const cx = action.x !== undefined ? rect.left + (action.x as number) : rect.left + rect.width / 2
+        const cy = action.y !== undefined ? rect.top + (action.y as number) : rect.top + rect.height / 2
+        el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: cx, clientY: cy }))
         return { success: true }
       }
 
@@ -497,32 +548,124 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         scrollIntoViewIfNeeded(el)
         const rect = el.getBoundingClientRect()
-        const x = rect.left + rect.width / 2
-        const y = rect.top + rect.height / 2
+        const x = action.x !== undefined ? rect.left + (action.x as number) : rect.left + rect.width / 2
+        const y = action.y !== undefined ? rect.top + (action.y as number) : rect.top + rect.height / 2
         el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2 }))
         return { success: true }
       }
 
+      case "drag": {
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
+        if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+        scrollIntoViewIfNeeded(el)
+        const dragRect = el.getBoundingClientRect()
+        const fromX = dragRect.left + (action.fromX as number)
+        const fromY = dragRect.top + (action.fromY as number)
+        const toX = dragRect.left + (action.toX as number)
+        const toY = dragRect.top + (action.toY as number)
+        const steps = (action.steps as number) || 10
+        const duration = action.duration as number | undefined
+
+        const baseOpts = { bubbles: true, cancelable: true, button: 0 }
+
+        el.dispatchEvent(new PointerEvent("pointerdown", { ...baseOpts, clientX: fromX, clientY: fromY }))
+        el.dispatchEvent(new MouseEvent("mousedown", { ...baseOpts, clientX: fromX, clientY: fromY }))
+
+        if (duration) {
+          await new Promise<void>((resolve) => {
+            let step = 0
+            function tick() {
+              step++
+              if (step > steps) {
+                resolve()
+                return
+              }
+              const t = step / steps
+              const cx = fromX + (toX - fromX) * t
+              const cy = fromY + (toY - fromY) * t
+              const mx = (toX - fromX) / steps
+              const my = (toY - fromY) / steps
+              el!.dispatchEvent(new PointerEvent("pointermove", { ...baseOpts, clientX: cx, clientY: cy, movementX: mx, movementY: my }))
+              el!.dispatchEvent(new MouseEvent("mousemove", { ...baseOpts, clientX: cx, clientY: cy, movementX: mx, movementY: my }))
+              setTimeout(tick, duration! / steps)
+            }
+            tick()
+          })
+        } else {
+          for (let i = 1; i <= steps; i++) {
+            const t = i / steps
+            const cx = fromX + (toX - fromX) * t
+            const cy = fromY + (toY - fromY) * t
+            const mx = (toX - fromX) / steps
+            const my = (toY - fromY) / steps
+            el.dispatchEvent(new PointerEvent("pointermove", { ...baseOpts, clientX: cx, clientY: cy, movementX: mx, movementY: my }))
+            el.dispatchEvent(new MouseEvent("mousemove", { ...baseOpts, clientX: cx, clientY: cy, movementX: mx, movementY: my }))
+          }
+        }
+
+        el.dispatchEvent(new PointerEvent("pointerup", { ...baseOpts, clientX: toX, clientY: toY }))
+        el.dispatchEvent(new MouseEvent("mouseup", { ...baseOpts, clientX: toX, clientY: toY }))
+        return { success: true, data: `dragged from (${action.fromX},${action.fromY}) to (${action.toX},${action.toY}) in ${steps} steps` }
+      }
+
       case "input_text": {
-        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLInputElement | HTMLTextAreaElement | null
+        const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
         el.focus()
-        if (action.clear) {
-          el.value = ""
+        const text = action.text as string
+        const tag = el.tagName
+        const isContentEditable = el.getAttribute("contenteditable") === "true" || el.isContentEditable
+        const isStandardInput = tag === "INPUT" || tag === "TEXTAREA"
+
+        if (isStandardInput) {
+          const inputEl = el as HTMLInputElement | HTMLTextAreaElement
+          if (action.clear) {
+            inputEl.value = ""
+            inputEl.dispatchEvent(new Event("input", { bubbles: true }))
+          }
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            tag === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
+            "value"
+          )?.set
+          if (nativeInputValueSetter) {
+            nativeInputValueSetter.call(inputEl, (action.clear ? "" : inputEl.value) + text)
+          } else {
+            inputEl.value = (action.clear ? "" : inputEl.value) + text
+          }
+          inputEl.dispatchEvent(new Event("input", { bubbles: true }))
+          inputEl.dispatchEvent(new Event("change", { bubbles: true }))
+          return { success: true, data: { typed: true, elementType: "input", method: "nativeSetter" } }
+        }
+
+        if (isContentEditable) {
+          if (action.clear) {
+            document.execCommand("selectAll", false)
+            document.execCommand("delete", false)
+          }
+          document.execCommand("insertText", false, text)
           el.dispatchEvent(new Event("input", { bubbles: true }))
+          return { success: true, data: { typed: true, elementType: "contenteditable", method: "execCommand" } }
         }
-        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-          el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
-          "value"
-        )?.set
-        if (nativeInputValueSetter) {
-          nativeInputValueSetter.call(el, (action.clear ? "" : el.value) + (action.text as string))
-        } else {
-          el.value = (action.clear ? "" : el.value) + (action.text as string)
+
+        const shadowRoot = getShadowRoot(el)
+        if (shadowRoot) {
+          const innerInput = shadowRoot.querySelector("input, textarea, [contenteditable='true']") as HTMLElement | null
+          if (innerInput) {
+            return await executeAction({ type: "input_text", ref: getOrAssignRef(innerInput), text, clear: action.clear })
+          }
         }
-        el.dispatchEvent(new Event("input", { bubbles: true }))
-        el.dispatchEvent(new Event("change", { bubbles: true }))
-        return { success: true }
+
+        const role = el.getAttribute("role")
+        if (role === "textbox" || role === "combobox") {
+          if (action.clear) {
+            el.textContent = ""
+          }
+          el.textContent = (action.clear ? "" : (el.textContent || "")) + text
+          el.dispatchEvent(new Event("input", { bubbles: true }))
+          return { success: true, data: { typed: true, elementType: `role=${role}`, method: "textContent" } }
+        }
+
+        return { success: false, error: `element is <${tag.toLowerCase()}${isContentEditable ? " contenteditable" : ""}> — unsupported input type` }
       }
 
       case "select_option": {
@@ -555,6 +698,26 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
           case "bottom": window.scrollTo(0, document.documentElement.scrollHeight); break
         }
         return { success: true }
+      }
+
+      case "scroll_absolute": {
+        window.scrollTo(0, action.y as number)
+        return { success: true }
+      }
+
+      case "get_page_dimensions": {
+        return {
+          success: true,
+          data: {
+            scrollHeight: document.documentElement.scrollHeight,
+            scrollWidth: document.documentElement.scrollWidth,
+            viewportHeight: window.innerHeight,
+            viewportWidth: window.innerWidth,
+            scrollY: window.scrollY,
+            scrollX: window.scrollX,
+            devicePixelRatio: window.devicePixelRatio
+          }
+        }
       }
 
       case "evaluate": {
@@ -621,7 +784,28 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       case "hover": {
         const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
         if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
-        dispatchHoverSequence(el)
+        const hoverFromX = action.fromX as number | undefined
+        const hoverFromY = action.fromY as number | undefined
+        if (hoverFromX !== undefined && hoverFromY !== undefined) {
+          const rect = el.getBoundingClientRect()
+          const targetX = rect.left + rect.width / 2
+          const targetY = rect.top + rect.height / 2
+          const hoverSteps = (action.steps as number) || 5
+          const baseOpts = { bubbles: true, cancelable: true }
+          for (let i = 0; i <= hoverSteps; i++) {
+            const t = i / hoverSteps
+            const cx = hoverFromX + (targetX - hoverFromX) * t
+            const cy = hoverFromY + (targetY - hoverFromY) * t
+            const mx = (targetX - hoverFromX) / hoverSteps
+            const my = (targetY - hoverFromY) / hoverSteps
+            el.dispatchEvent(new PointerEvent("pointermove", { ...baseOpts, clientX: cx, clientY: cy, movementX: mx, movementY: my }))
+            el.dispatchEvent(new MouseEvent("mousemove", { ...baseOpts, clientX: cx, clientY: cy, movementX: mx, movementY: my }))
+          }
+          el.dispatchEvent(new PointerEvent("pointerover", { ...baseOpts, clientX: targetX, clientY: targetY }))
+          el.dispatchEvent(new MouseEvent("mouseover", { ...baseOpts, clientX: targetX, clientY: targetY }))
+        } else {
+          dispatchHoverSequence(el)
+        }
         return { success: true }
       }
 
@@ -845,7 +1029,18 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
       }
 
       case "diff": {
-        return computeSnapshotDiff()
+        if (!domDirty && lastSnapshot.length > 0) {
+          return { success: true, data: { changes: 0, added: [], removed: [], changed: [] } }
+        }
+        const diffResult = computeSnapshotDiff()
+        if (diffResult.success && typeof diffResult.data === "string") {
+          const lines = diffResult.data === "no changes" ? [] : (diffResult.data as string).split("\n")
+          const added = lines.filter(l => l.startsWith("+ "))
+          const removed = lines.filter(l => l.startsWith("- "))
+          const changed = lines.filter(l => l.startsWith("~ "))
+          return { success: true, data: { changes: lines.length, added, removed, changed, total: lines.length } }
+        }
+        return diffResult
       }
 
       case "find_element": {
@@ -883,6 +1078,216 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
         return { success: true, data: results.slice(0, limit) }
       }
 
+      case "modals": {
+        const modals: Array<{ ref: string; role: string; name: string; rect: { top: number; left: number; width: number; height: number }; children: number }> = []
+        const dialogEls = document.querySelectorAll('dialog[open], [role="dialog"], [aria-modal="true"]')
+        dialogEls.forEach(el => {
+          if (!isVisible(el)) return
+          const ref = getOrAssignRef(el)
+          const rect = el.getBoundingClientRect()
+          const interactiveChildren = el.querySelectorAll('a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"]').length
+          modals.push({
+            ref,
+            role: getEffectiveRole(el) || "dialog",
+            name: getAccessibleName(el),
+            rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+            children: interactiveChildren
+          })
+        })
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        const overlays = document.querySelectorAll("*")
+        overlays.forEach(el => {
+          if (el.matches('dialog[open], [role="dialog"], [aria-modal="true"]')) return
+          const style = getComputedStyle(el)
+          if (style.position !== "fixed" && style.position !== "absolute") return
+          const z = parseInt(style.zIndex)
+          if (isNaN(z) || z < 100) return
+          const rect = el.getBoundingClientRect()
+          if (rect.width * rect.height > vw * vh * 0.25) {
+            const ref = getOrAssignRef(el)
+            modals.push({
+              ref,
+              role: "overlay",
+              name: getAccessibleName(el) || el.tagName.toLowerCase(),
+              rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+              children: el.querySelectorAll('a, button, input, select, textarea').length
+            })
+          }
+        })
+        return { success: true, data: { modals } }
+      }
+
+      case "panels": {
+        const panels: Array<{ ref: string; role: string; name: string; expanded: boolean; contentRef?: string }> = []
+        const expandedEls = document.querySelectorAll('[aria-expanded="true"]')
+        expandedEls.forEach(el => {
+          if (!isVisible(el)) return
+          const ref = getOrAssignRef(el)
+          const controls = el.getAttribute("aria-controls")
+          let contentRef: string | undefined
+          if (controls) {
+            const controlledEl = document.getElementById(controls)
+            if (controlledEl) contentRef = getOrAssignRef(controlledEl)
+          }
+          panels.push({
+            ref,
+            role: getEffectiveRole(el) || el.tagName.toLowerCase(),
+            name: getAccessibleName(el),
+            expanded: true,
+            contentRef
+          })
+        })
+        return { success: true, data: { panels } }
+      }
+
+      case "click_at": {
+        const cx = action.x as number
+        const cy = action.y as number
+        const targetEl = document.elementFromPoint(cx, cy)
+        if (!targetEl) return { success: false, error: `no element at viewport coordinates (${cx}, ${cy})` }
+        const opts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 }
+        targetEl.dispatchEvent(new PointerEvent("pointerover", opts))
+        targetEl.dispatchEvent(new MouseEvent("mouseover", opts))
+        targetEl.dispatchEvent(new PointerEvent("pointerdown", opts))
+        targetEl.dispatchEvent(new MouseEvent("mousedown", opts))
+        if ((targetEl as HTMLElement).focus) (targetEl as HTMLElement).focus()
+        targetEl.dispatchEvent(new PointerEvent("pointerup", opts))
+        targetEl.dispatchEvent(new MouseEvent("mouseup", opts))
+        targetEl.dispatchEvent(new MouseEvent("click", opts))
+        const targetRef = getOrAssignRef(targetEl)
+        return { success: true, data: { clicked: targetRef, tag: targetEl.tagName.toLowerCase(), at: { x: cx, y: cy } } }
+      }
+
+      case "what_at": {
+        const wx = action.x as number
+        const wy = action.y as number
+        const whatEl = document.elementFromPoint(wx, wy)
+        if (!whatEl) return { success: true, data: { element: null, at: { x: wx, y: wy } } }
+        const whatRef = getOrAssignRef(whatEl)
+        const whatRect = whatEl.getBoundingClientRect()
+        return {
+          success: true,
+          data: {
+            ref: whatRef,
+            tag: whatEl.tagName.toLowerCase(),
+            role: getEffectiveRole(whatEl),
+            name: getAccessibleName(whatEl),
+            rect: { top: whatRect.top, left: whatRect.left, width: whatRect.width, height: whatRect.height }
+          }
+        }
+      }
+
+      case "regions": {
+        const regionElements = getInteractiveElements()
+        const regions = regionElements.map(e => {
+          const rect = e.element.getBoundingClientRect()
+          return {
+            ref: e.refId,
+            role: getEffectiveRole(e.element) || e.tag,
+            name: e.text,
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height)
+          }
+        })
+        regions.sort((a, b) => a.y === b.y ? a.x - b.x : a.y - b.y)
+        return { success: true, data: regions }
+      }
+
+      case "get_focus": {
+        const active = document.activeElement as HTMLElement | null
+        if (!active || active === document.body || active === document.documentElement) {
+          return { success: true, data: { focused: null } }
+        }
+        const focusRef = getOrAssignRef(active)
+        const focusRole = getEffectiveRole(active)
+        const focusName = getAccessibleName(active)
+        const isEditable = active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable || active.getAttribute("role") === "textbox"
+        return {
+          success: true,
+          data: {
+            focused: {
+              ref: focusRef,
+              tag: active.tagName.toLowerCase(),
+              role: focusRole,
+              name: focusName,
+              type: (active as HTMLInputElement).type || undefined,
+              editable: isEditable
+            }
+          }
+        }
+      }
+
+      case "semantic_resolve": {
+        const match = findBestMatch(action.name as string, action.role as string)
+        if (!match) return { success: false, error: `no element matching ${action.role}:${action.name}` }
+        return { success: true, data: { ref: match.refId, role: match.role, name: match.name, score: match.score } }
+      }
+
+      case "find_and_click": {
+        const match = findBestMatch(action.name as string | undefined, action.role as string | undefined, action.text as string | undefined)
+        if (!match) return { success: false, error: "no matching element found (score < 30)" }
+        scrollIntoViewIfNeeded(match.element)
+        dispatchClickSequence(match.element, action.x as number | undefined, action.y as number | undefined)
+        return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: `clicked [${match.refId}]` } }
+      }
+
+      case "find_and_type": {
+        const match = findBestMatch(action.name as string | undefined, action.role as string | undefined, action.text as string | undefined)
+        if (!match) return { success: false, error: "no matching element found (score < 30)" }
+        const typeResult = await executeAction({ type: "input_text", ref: match.refId, text: action.inputText as string, clear: action.clear })
+        return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: typeResult } }
+      }
+
+      case "find_and_check": {
+        const match = findBestMatch(action.name as string | undefined, action.role as string | undefined, action.text as string | undefined)
+        if (!match) return { success: false, error: "no matching element found (score < 30)" }
+        const checkResult = await executeAction({ type: "check", ref: match.refId, checked: action.checked })
+        return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: checkResult } }
+      }
+
+      case "wait_stable": {
+        const debounceMs = (action.ms as number) || 200
+        const timeoutMs = (action.timeout as number) || 5000
+        const stableResult = await waitForDomStable(debounceMs, timeoutMs)
+        return { success: true, data: stableResult }
+      }
+
+      case "batch": {
+        const actions = action.actions as Array<{ type: string; [key: string]: unknown }>
+        if (!actions || !Array.isArray(actions)) return { success: false, error: "batch requires actions array" }
+        if (actions.length > 100) return { success: false, error: "batch limited to 100 sub-actions" }
+        const stopOnError = !!(action.stopOnError)
+        const batchTimeout = (action.timeout as number) || 30000
+        const batchStart = Date.now()
+        const results: Array<{ action: string; success: boolean; data?: unknown; error?: string; warning?: string }> = []
+
+        for (const subAction of actions) {
+          if (Date.now() - batchStart > batchTimeout) {
+            results.push({ action: subAction.type, success: false, error: "batch timeout exceeded" })
+            break
+          }
+          try {
+            const subResult = await executeAction(subAction)
+            results.push({
+              action: subAction.type,
+              success: subResult.success,
+              data: subResult.data,
+              error: subResult.error,
+              warning: subResult.warning
+            })
+            if (!subResult.success && stopOnError) break
+          } catch (err) {
+            results.push({ action: subAction.type, success: false, error: (err as Error).message })
+            if (stopOnError) break
+          }
+        }
+
+        return { success: true, data: { results, elapsed: Date.now() - batchStart } }
+      }
+
       default:
         return { success: false, error: `unknown action type: ${action.type}` }
     }
@@ -911,10 +1316,10 @@ function scrollIntoViewIfNeeded(el: Element) {
   }
 }
 
-function dispatchClickSequence(el: Element) {
+function dispatchClickSequence(el: Element, atX?: number, atY?: number) {
   const rect = el.getBoundingClientRect()
-  const x = rect.left + rect.width / 2
-  const y = rect.top + rect.height / 2
+  const x = atX !== undefined ? rect.left + atX : rect.left + rect.width / 2
+  const y = atY !== undefined ? rect.top + atY : rect.top + rect.height / 2
   const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }
 
   el.dispatchEvent(new PointerEvent("pointerover", opts))
@@ -974,6 +1379,71 @@ function dispatchKeySequence(target: Element, combo: string) {
   target.dispatchEvent(new KeyboardEvent("keyup", keyOpts))
 }
 
+function findBestMatch(name?: string, role?: string, text?: string): { refId: string; role: string; name: string; score: number; element: Element } | null {
+  const query = (name || text || "").toLowerCase()
+  const targetRole = (role || "").toLowerCase()
+  let best: { refId: string; role: string; name: string; score: number; element: Element } | null = null
+
+  for (const [refId, weakRef] of refRegistry) {
+    const el = weakRef.deref()
+    if (!el || !el.isConnected || !isVisible(el)) continue
+
+    const elRole = getEffectiveRole(el).toLowerCase()
+    const elName = getAccessibleName(el).toLowerCase()
+    let score = 0
+
+    if (targetRole && elRole !== targetRole) continue
+    if (targetRole && elRole === targetRole) score += 50
+
+    if (query) {
+      if (elName === query) score += 100
+      else if (elName.includes(query)) score += 60
+      const id = el.getAttribute("id")?.toLowerCase()
+      if (id?.includes(query)) score += 50
+      const placeholder = el.getAttribute("placeholder")?.toLowerCase()
+      if (placeholder?.includes(query)) score += 40
+    }
+
+    if (score >= 30 && (!best || score > best.score)) {
+      best = { refId, role: getEffectiveRole(el), name: getAccessibleName(el), score, element: el }
+    }
+  }
+
+  return best
+}
+
+function waitForDomStable(debounceMs = 200, timeoutMs = 5000): Promise<{ stable: boolean; elapsed: number; mutations: number }> {
+  return new Promise((resolve) => {
+    const start = Date.now()
+    let mutationCount = 0
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+    const hardTimeout = setTimeout(() => {
+      observer.disconnect()
+      if (debounceTimer) clearTimeout(debounceTimer)
+      resolve({ stable: false, elapsed: Date.now() - start, mutations: mutationCount })
+    }, timeoutMs)
+
+    const observer = new MutationObserver(() => {
+      mutationCount++
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        observer.disconnect()
+        clearTimeout(hardTimeout)
+        resolve({ stable: true, elapsed: Date.now() - start, mutations: mutationCount })
+      }, debounceMs)
+    })
+
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true })
+
+    debounceTimer = setTimeout(() => {
+      observer.disconnect()
+      clearTimeout(hardTimeout)
+      resolve({ stable: true, elapsed: Date.now() - start, mutations: mutationCount })
+    }, debounceMs)
+  })
+}
+
 function waitForElement(selector: string, timeout: number): Promise<Element | null> {
   return new Promise((resolve) => {
     const existing = document.querySelector(selector)
@@ -994,5 +1464,26 @@ function waitForElement(selector: string, timeout: number): Promise<Element | nu
     })
 
     observer.observe(document.body, { childList: true, subtree: true })
+  })
+}
+
+function waitForMutation(timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let resolved = false
+    const observer = new MutationObserver(() => {
+      if (!resolved) {
+        resolved = true
+        observer.disconnect()
+        resolve(true)
+      }
+    })
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true })
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true
+        observer.disconnect()
+        resolve(false)
+      }
+    }, timeoutMs)
   })
 }

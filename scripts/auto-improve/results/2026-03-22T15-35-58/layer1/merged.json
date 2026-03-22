@@ -1,0 +1,17 @@
+[
+  {
+    "evaluator": "codex-a",
+    "findings": [],
+    "error": "Exit code 1: OpenAI Codex v0.116.0 (research preview)\n--------\nworkdir: /Volumes/VRAM/00-09_System/01_Tools/slop-browser\nmodel: o3\nprovider: openai\napproval: never\nsandbox: workspace-write [workdir, /tmp, $TMPDIR,"
+  },
+  {
+    "evaluator": "codex-b",
+    "findings": [],
+    "error": "Exit code 1: OpenAI Codex v0.116.0 (research preview)\n--------\nworkdir: /Volumes/VRAM/00-09_System/01_Tools/slop-browser\nmodel: o3\nprovider: openai\napproval: never\nsandbox: workspace-write [workdir, /tmp, $TMPDIR,"
+  },
+  {
+    "evaluator": "qwen-122b",
+    "findings": [],
+    "error": "Exit code 1: \rFetching 24 files:   0%|          | 0/24 [00:00<?, ?it/s]\rFetching 24 files: 100%|██████████| 24/24 [00:00<00:00, 41803.69it/s]\nYou are using a model of type qwen3_5_moe to instantiate a model of typ"
+  }
+]

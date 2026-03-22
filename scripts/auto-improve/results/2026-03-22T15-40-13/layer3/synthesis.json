@@ -1,0 +1,147 @@
+{
+  "approved_changes": [
+    {
+      "finding_id": "merged:f-001-batch-session",
+      "priority": 1,
+      "target": "cli",
+      "change_type": "fix_bug",
+      "description": "Replace the placeholder session mode with a real persistent socket session and streamed multi-action execution so long workflows stop paying one CLI connect/disconnect cost per step.",
+      "implementation": "Modify `cli/index.ts` only. Remove the current `case \"session\"` branch that just writes `/tmp/slop-browser-session.pid`. Add a persistent `connectSocket()` helper that opens one Unix socket, keeps a framed read buffer alive, and resolves responses by request id without calling `socket.end()` after the first reply. Rework `sendCommand()` to use that helper for one-shot calls, and add `slop session run <file|->` to read NDJSON actions from a file or stdin, send them sequentially over the same socket, and print one JSON result per line. Keep `slop batch` for single-request execution, but document it as the preferred one-round-trip path for short action lists. No daemon protocol rewrite is needed because `daemon/index.ts` already accepts multiple framed requests on one open socket.",
+      "layer1_consensus": 2,
+      "layer2_consensus": 2,
+      "confidence": 0.95
+    },
+    {
+      "finding_id": "merged:f-002-readiness",
+      "priority": 2,
+      "target": "extension",
+      "change_type": "fix_bug",
+      "description": "Upgrade readiness from simple mutation quiescence to navigation-aware readiness so agents can wait on real page stability instead of guessing with sleeps.",
+      "implementation": "Modify `extension/src/content.ts` and `extension/src/background.ts`. In `content.ts`, add a lifecycle tracker with `navSeq`, `lastMutationAt`, `lastNavigationAt`, and `readyState`. Patch `history.pushState` and `history.replaceState`, and add listeners for `popstate`, `hashchange`, `readystatechange`, and `load` so SPA route changes reset readiness. Replace `waitForDomStable()` so it only returns `stable: true` after `document.readyState === \"complete\"` and no navigation or DOM mutation has occurred for `debounceMs`; include `{ stable, elapsed, mutations, navSeq, readyState }` in the response. In `background.ts`, make `waitForTabLoad()` and the `navigate`/`go_back`/`go_forward`/`reload` paths treat that upgraded readiness result as the navigation completion gate. Add a `wait_ready` action alias routed to the same content-side readiness check, and expose `slop wait-ready` in `cli/index.ts` help/parser as the explicit replacement for blind `slop wait` calls.",
+      "layer1_consensus": 2,
+      "layer2_consensus": 2,
+      "confidence": 0.93
+    },
+    {
+      "finding_id": "merged:f-004-contenteditable",
+      "priority": 3,
+      "target": "extension",
+      "change_type": "fix_bug",
+      "description": "Replace the fragile `contenteditable` typing path with a Selection/Range-based implementation that works in rich editors.",
+      "implementation": "Modify `extension/src/content.ts` inside `case \"input_text\"`. Delete the current `document.execCommand(...)` branch for `isContentEditable`. Replace it with: focus the target element; obtain `window.getSelection()`; if the current range is outside the target, create a new collapsed `Range` at the end of the editable node; if `clear` is true, run `range.selectNodeContents(el)` and `range.deleteContents()`; insert text with `range.insertNode(document.createTextNode(text))`; move the caret after the inserted node; dispatch `beforeinput` and `input` `InputEvent`s with `inputType` set to `insertText` or `insertReplacementText`, then dispatch `change`. Return `{ typed: true, elementType: \"contenteditable\", method: \"range\" }`. Do not use `document.execCommand` anywhere in this path.",
+      "layer1_consensus": 2,
+      "layer2_consensus": 2,
+      "confidence": 0.93
+    },
+    {
+      "finding_id": "merged:f-005-capture-scope",
+      "priority": 4,
+      "target": "extension",
+      "change_type": "fix_bug",
+      "description": "Scope screenshots to the requested tab/window and fail fast on mismatch instead of returning an image from whichever window is currently visible.",
+      "implementation": "Modify `extension/src/background.ts`. Add a helper `getCaptureTarget(tabId)` that calls `chrome.tabs.get(tabId)`, records `windowId`, and queries the active tab in that same window. In both `case \"screenshot\"` and the full-page strip capture path, call `chrome.tabs.captureVisibleTab(requestedTab.windowId, { format, quality })` instead of passing `undefined`. Before every capture, if the requested tab is not the active tab in its own window, return `{ success: false, error: \"capture target mismatch\", data: { requestedTabId, requestedWindowId, visibleTabId, visibleWindowId } }` and do not return image bytes. Apply the same validation to `screenshot_background`, and always include `tabId`, `windowId`, and `method` in successful screenshot metadata. Keep background capture opt-in; do not silently replace a normal screenshot with a background capture result.",
+      "layer1_consensus": 2,
+      "layer2_consensus": 2,
+      "confidence": 0.89
+    },
+    {
+      "finding_id": "merged:f-007-semantic-actions",
+      "priority": 5,
+      "target": "cli",
+      "change_type": "add_command",
+      "description": "Expose high-level semantic find-and-act commands and harden matching so agents stop chasing transient IDs for routine actions.",
+      "implementation": "Modify `cli/index.ts` and `extension/src/content.ts`. In `cli/index.ts`, add explicit commands `slop find-click <query>`, `slop find-type <query> <text>`, and `slop find-check <query>` with optional `--role`, `--text`, and `--append` flags, all mapped to the existing `find_and_click`, `find_and_type`, and `find_and_check` actions. In `content.ts`, expand `findBestMatch()` to score normalized accessible name, visible text, `aria-label`, `aria-labelledby` text, associated `<label>` text, `placeholder`, `title`, `value`, `name`, `data-testid`, and `data-test`. Normalize whitespace and case before scoring. Allow role synonyms for common cases such as `searchbox -> textbox`. Raise the minimum score to 50 for write actions (`find_and_type`, `find_and_check`), and when no match passes threshold, return the top 3 scored candidates so the caller can recover without rerunning `slop state`.",
+      "layer1_consensus": 2,
+      "layer2_consensus": 2,
+      "confidence": 0.9
+    }
+  ],
+  "rejected_changes": [
+    {
+      "finding_id": "merged:f-003-stale-recovery",
+      "reason": "Rejected for this run because Layer 2 did not converge. One reviewer approved a tightly bounded retry, the other held at needs-more-data due to mistargeting risk. Current code already performs limited stale ref re-resolution in `extension/src/content.ts`, so any further automatic retry logic needs a separate safety design pass."
+    },
+    {
+      "finding_id": "merged:f-006-background-operation",
+      "reason": "Rejected due to insufficient evidence. Both Layer 2 reviewers treated the session evidence as suggestive rather than conclusive, and it does not cleanly separate screenshot limitations from true foreground-only DOM action requirements."
+    },
+    {
+      "finding_id": "codex-a:f-008",
+      "reason": "Rejected because it had only single-evaluator Layer 1 support and both Layer 2 reviewers marked it needs-more-data. The session proves verification churn, but not that richer action payloads alone would remove most of it."
+    },
+    {
+      "finding_id": "codex-a:f-009",
+      "reason": "Rejected for this run because it had only single-evaluator Layer 1 support and did not receive both Layer 2 approvals, even though the gap is plausible."
+    },
+    {
+      "finding_id": "codex-b:f-008",
+      "reason": "Rejected because the evidence does not isolate missing tool guardrails from agent error or earlier targeting failures, and the proposed undo/delete restrictions risk breaking legitimate workflows."
+    },
+    {
+      "finding_id": "qwen-122b:f-001",
+      "reason": "Rejected by both Layer 2 reviewers as mis-scoped architecture commentary rather than a slop-browser usage defect; slop-browser already uses direct Unix socket plus native messaging."
+    },
+    {
+      "finding_id": "qwen-122b:f-002",
+      "reason": "Rejected by both Layer 2 reviewers as a misread of predecessor-architecture discussion, not a verified slop-browser failure."
+    },
+    {
+      "finding_id": "qwen-122b:f-003",
+      "reason": "Rejected by both Layer 2 reviewers as misattributed; slop-browser is already agent-driven and the evidence does not show an internal-LLM defect."
+    },
+    {
+      "finding_id": "qwen-122b:f-004",
+      "reason": "Rejected by both Layer 2 reviewers because it describes research/onboarding activity, not a product defect aligned to the session evidence standard."
+    },
+    {
+      "finding_id": "qwen-122b:f-005",
+      "reason": "Rejected by both Layer 2 reviewers because a question about injection mechanics is not evidence of a failure, and the suggested fix is speculative."
+    }
+  ],
+  "training_data": [
+    {
+      "input": "| CLI calls | 368 |\n| Sleep calls | 241 (209.7 seconds of blind waiting) |\n| State queries | 74 |\n| Screenshots | 27 |\n| Commands per shape | 15-20 |",
+      "output": {
+        "finding_id": "merged:f-001-batch-session",
+        "target": "cli",
+        "change_type": "fix_bug",
+        "description": "Replace placeholder session mode with real persistent socket reuse and streamed action execution."
+      },
+      "label": "approved",
+      "reasoning": "Two Layer 1 evaluators independently found the same bottleneck and both Layer 2 reviewers approved it with high confidence. The evidence is concrete, severe, and directly mapped to the fix."
+    },
+    {
+      "input": "The agent had no readiness signals (it guessed with `sleep 10`)",
+      "output": {
+        "finding_id": "merged:f-002-readiness",
+        "target": "extension",
+        "change_type": "fix_bug",
+        "description": "Add navigation-aware readiness primitives instead of relying on blind sleeps."
+      },
+      "label": "approved",
+      "reasoning": "This is a direct missing-capability excerpt, it had Layer 1 consensus of 2, and both Layer 2 reviewers approved it as low-risk and strongly goal-aligned."
+    },
+    {
+      "input": "no stale-element recovery (7 `stale element` errors with no auto-retry)",
+      "output": {
+        "finding_id": "merged:f-003-stale-recovery",
+        "target": "extension",
+        "change_type": "fix_bug",
+        "description": "Auto-refind and retry stale targets using semantic fingerprints."
+      },
+      "label": "rejected",
+      "reasoning": "The failure is real, but Layer 2 did not converge on the remedy. Automatic retries can silently hit the wrong target, so the change did not meet the approval bar for this run."
+    },
+    {
+      "input": "Our extension is also going to need to speak directly back to our device because we're going to be using LLMs to control it... If we didn't have to use HTTP to interact with the extension from the LLM that would be optimal",
+      "output": {
+        "finding_id": "qwen-122b:f-001",
+        "target": "daemon",
+        "change_type": "fix_bug",
+        "description": "Implement direct device-to-extension communication to bypass HTTP."
+      },
+      "label": "rejected",
+      "reasoning": "Both Layer 2 reviewers rejected this as mis-scoped architecture discussion, not observed slop-browser session evidence, and the suggested fix is already part of the current design."
+    }
+  ]
+}

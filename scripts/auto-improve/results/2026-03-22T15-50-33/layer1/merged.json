@@ -1,0 +1,235 @@
+[
+  {
+    "evaluator": "codex-a",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "slop-browser captures screenshots by downloading them to disk and discarding the data URL."
+        },
+        "description": "Screenshot output required a file-system round trip and threw away the inline image payload, making visual inspection awkward for agents and forcing extra steps outside the CLI response.",
+        "suggested_fix": "Change the screenshot path so `slop screenshot` returns image data directly by default, with file saving as an optional flag instead of the only output mode.",
+        "target": "cli",
+        "goal_alignment": "Serves Fast and Agent-driven by letting the calling agent consume pixels immediately without extra IPC or disk work."
+      },
+      {
+        "id": "f-002",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "Canvas elements are invisible to the agent."
+        },
+        "description": "The agent could not inspect canvas-rendered UIs, which blocks automation on apps that render controls, previews, or state entirely inside canvas/WebGL.",
+        "suggested_fix": "Expose canvas discovery and read APIs from the content script, including bounds, dimensions, and pixel export via `toDataURL()` with optional WebGL `readPixels` support where available.",
+        "target": "extension",
+        "goal_alignment": "Serves Agent-driven and Undetectable by giving the external agent visual state without CDP."
+      },
+      {
+        "id": "f-003",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "Full-page capture doesn't exist."
+        },
+        "description": "Only viewport capture was available, so agents could not inspect long pages or create a complete visual snapshot in one operation.",
+        "suggested_fix": "Implement full-page stitched capture using repeated viewport screenshots plus an offscreen document compositor, and return the stitched image directly to the caller.",
+        "target": "extension",
+        "goal_alignment": "Serves Undetectable and Fast by delivering full-page screenshots without CDP while reducing manual scroll-and-capture loops."
+      },
+      {
+        "id": "f-004",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "Drag operations on canvas apps silently fail."
+        },
+        "description": "Drag actions could report success while doing nothing on canvas-heavy apps, leaving the agent without a reliable way to manipulate visual editors or game-like UIs.",
+        "suggested_fix": "Add explicit coordinate-path drag execution with pointer down/move/up sequencing, verify post-action state, and surface a hard error when the target does not respond instead of failing silently.",
+        "target": "extension",
+        "goal_alignment": "Serves Resilient by making complex interactions observable and recoverable instead of silently broken."
+      },
+      {
+        "id": "f-005",
+        "type": "performance",
+        "severity": "critical",
+        "evidence": {
+          "excerpt": "Session `ce33c009` exposed catastrophic inefficiency: an agent needed 368 CLI calls, 241 sleeps (209.7 seconds of blind waiting), 74 state re-queries, and 27 screenshots to place 8 shapes in Canva — an"
+        },
+        "description": "Complex workflows were far too chatty and slow, with huge command counts and large amounts of blind waiting just to complete a small canvas task.",
+        "suggested_fix": "Add batch execution, persistent command sessions, cached state reuse, and multi-action round trips so a workflow can issue fewer higher-value commands.",
+        "target": "daemon",
+        "goal_alignment": "Directly serves Fast by collapsing IPC overhead and eliminating most of the avoidable wait time."
+      },
+      {
+        "id": "f-006",
+        "type": "workaround",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "replace blind sleeps with event-driven readiness signals, and make element targeting resilient to SPA DOM mutations"
+        },
+        "description": "The agent was compensating for missing readiness and stale-target handling with manual sleeps and repeated re-targeting, which is brittle on SPAs and dynamic editors.",
+        "suggested_fix": "Add DOM-stability and navigation-readiness primitives plus stable element refs/versioning so agents can wait on real signals instead of retry loops.",
+        "target": "extension",
+        "goal_alignment": "Serves Resilient and Fast by reducing stale-DOM failures and replacing polling-style workarounds with deterministic readiness checks."
+      }
+    ]
+  },
+  {
+    "evaluator": "codex-b",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "performance",
+        "severity": "critical",
+        "evidence": {
+          "excerpt": "Session `ce33c009` exposed catastrophic inefficiency: an agent needed 368 CLI calls, 241 sleeps (209.7 seconds of blind waiting), 74 state re-queries, and 27 screenshots to place 8 shapes in Canva — an"
+        },
+        "description": "The current interaction model is too atomic. A moderately complex workflow required hundreds of `slop` invocations and excessive IPC churn, making the tool materially too slow for agent use.",
+        "suggested_fix": "Add first-class batch execution and persistent/session-mode socket reuse so one `slop` call can carry a multi-step action list and receive one aggregated result.",
+        "target": "cli",
+        "goal_alignment": "Serves Goal 4 (Fast) by cutting round trips dramatically, and Goal 2 (Agent-driven) because the external agent can still specify every step explicitly."
+      },
+      {
+        "id": "f-002",
+        "type": "workaround",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "Session `ce33c009` exposed catastrophic inefficiency: an agent needed 368 CLI calls, 241 sleeps (209.7 seconds of blind waiting), 74 state re-queries, and 27 screenshots to place 8 shapes in Canva — an"
+        },
+        "description": "The agent had to compensate for missing readiness and stable-targeting primitives by repeatedly sleeping and re-querying page state.",
+        "suggested_fix": "Expose event-driven waits such as DOM-idle/navigation-ready/element-ready and add resilient ref recovery so agents do not need sleep loops and repeated `get state` calls.",
+        "target": "extension",
+        "goal_alignment": "Serves Goal 3 (Resilient) by handling async DOM changes correctly and Goal 4 (Fast) by removing blind waits."
+      },
+      {
+        "id": "f-003",
+        "type": "ux_friction",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "slop-browser captures screenshots by downloading them to disk and discarding the data URL."
+        },
+        "description": "Screenshot output is optimized for files instead of agents, forcing extra handling and preventing direct visual consumption in the response path.",
+        "suggested_fix": "Make screenshot commands return image data or a consistent saved-path payload by default, with disk download as an explicit opt-in mode.",
+        "target": "cli",
+        "goal_alignment": "Serves Goal 2 (Agent-driven) by returning usable artifacts directly to the calling agent, and Goal 4 (Fast) by removing extra file-handling steps."
+      },
+      {
+        "id": "f-004",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "Full-page capture doesn't exist."
+        },
+        "description": "There is no full-page screenshot capability, which blocks long-page inspection and visual QA workflows.",
+        "suggested_fix": "Implement full-page capture with viewport tiling plus offscreen stitching behind a single `slop screenshot --full` path.",
+        "target": "extension",
+        "goal_alignment": "Serves Goal 2 (Agent-driven) by giving the agent complete page visibility, and Goal 4 (Fast) by replacing manual multi-shot workarounds."
+      },
+      {
+        "id": "f-005",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "Canvas elements are invisible to the agent."
+        },
+        "description": "The current DOM-centric model cannot expose canvas/WebGL content, so agents cannot inspect or reason about canvas-heavy apps.",
+        "suggested_fix": "Add canvas discovery and read commands that return bitmap/WebGL pixel data and element metadata without relying on CDP.",
+        "target": "extension",
+        "goal_alignment": "Serves Goal 2 (Agent-driven) by making non-DOM UIs observable, while preserving Goal 1 (Undetectable) because it stays within extension/content-script techniques."
+      },
+      {
+        "id": "f-006",
+        "type": "failure",
+        "severity": "high",
+        "evidence": {
+          "excerpt": "Drag operations on canvas apps silently fail."
+        },
+        "description": "Canvas interactions are unreliable and failures are not surfaced clearly, so agents cannot tell whether the action missed, was blocked, or partially executed.",
+        "suggested_fix": "Implement coordinate-based drag with full pointer down/move/up sequencing and return explicit drag outcome/error telemetry instead of silent failure.",
+        "target": "extension",
+        "goal_alignment": "Serves Goal 3 (Resilient) by making interactions dependable and debuggable, without violating Goal 1 (Undetectable)."
+      },
+      {
+        "id": "f-007",
+        "type": "missing_feature",
+        "severity": "critical",
+        "evidence": {
+          "excerpt": "**Goal:** Give slop-browser the ability to deliver `isTrusted: true` events AND capture screenshots in the background — without ANY detectable side effects. No infobanner. No `navigator.webdriver`. No timing jitter. No `sourceCapabilities` anomalies. Completely invisible to websites."
+        },
+        "description": "The stack still lacks a robust way to send trusted input and do background capture invisibly, which leaves high-friction actions dependent on weaker or more detectable mechanisms.",
+        "suggested_fix": "Use the native host for OS-level trusted input and pair it with offscreen/tabCapture-based background capture, preferring non-debugger paths and treating debugger-based techniques as optional fallback only.",
+        "target": "daemon",
+        "goal_alignment": "Directly serves Goal 1 (Undetectable) and Goal 3 (Resilient) by adding invisible fallback layers for hard interactions."
+      },
+      {
+        "id": "f-008",
+        "type": "missing_feature",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "Transform slop-browser from an atomic-action CLI into an agent-speed interaction layer — batch commands in single IPC round trips, replace blind sleeps with event-driven readiness signals, and make element targeting resilient to SPA DOM mutations"
+        },
+        "description": "Element targeting is not resilient to SPA re-renders, which forces agents to recover manually when refs go stale after DOM mutation.",
+        "suggested_fix": "Persist stable element refs with fallback matching on role, text, ancestry, and geometry so commands can recover targets across SPA updates.",
+        "target": "extension",
+        "goal_alignment": "Serves Goal 3 (Resilient) by reducing stale-DOM failures and Goal 4 (Fast) by cutting re-query loops."
+      }
+    ]
+  },
+  {
+    "evaluator": "qwen-122b",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": "Our extension is also going to need to speak directly back to our device because we're going to be using LLMs to control it... If we didn't have to use HTTP to interact with the extension from the LLM that would be optimal",
+        "description": "The session explicitly identifies a requirement for direct device-to-extension communication (bypassing HTTP) for LLM control, which is not currently supported by the existing nanobrowser architecture that relies on HTTP/CDP.",
+        "suggested_fix": "Implement a native messaging bridge or Unix socket listener in the daemon layer to allow the CLI to communicate directly with the extension without HTTP overhead, aligning with the 'slop' CLI architecture goals.",
+        "target": "daemon",
+        "goal_alignment": "Fast - Eliminates HTTP overhead and reduces IPC round trips for faster agent response times."
+      },
+      {
+        "id": "f-002",
+        "type": "missing_feature",
+        "severity": "critical",
+        "evidence": "how to simplify it so it's a lot less code, and how to make it work as well without launching and interacting with CDP",
+        "description": "The current nanobrowser implementation relies heavily on Puppeteer and CDP, which violates the 'Undetectable' goal. The session highlights the need to remove CDP dependency entirely.",
+        "suggested_fix": "Refactor the browser automation layer to use only Chrome Extension APIs (chrome.tabs, chrome.scripting) and direct DOM manipulation, removing Puppeteer Core and CDP transport logic.",
+        "target": "extension",
+        "goal_alignment": "Undetectable - Removes CDP artifacts and debugger banners that trigger bot detection."
+      },
+      {
+        "id": "f-003",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": "I need to understand: 1. How the agent system works (Navigator, Planner, Validator)... 3. How LLM calls are made (LangChain integration)",
+        "description": "The session reveals that nanobrowser includes internal LLM logic (LangChain integration) and multi-agent orchestration, which contradicts the 'Agent-driven' goal of slop-browser (no internal LLM).",
+        "suggested_fix": "Strip all internal LLM logic, LangChain dependencies, and agent orchestration code from the extension. Ensure the extension only exposes a command interface for external agents to drive decisions.",
+        "target": "extension",
+        "goal_alignment": "Agent-driven - Ensures the extension remains a dumb terminal for external agent commands without internal decision-making logic."
+      },
+      {
+        "id": "f-004",
+        "type": "ux_friction",
+        "severity": "medium",
+        "evidence": "Running the **CodebaseReview** workflow in the **BunDeveloper** skill to analyze nanobrowser architecture and plan slop-browser...",
+        "description": "The session indicates a complex, multi-step review process is required to understand the existing codebase before building slop-browser, suggesting high cognitive load and friction in the development workflow.",
+        "suggested_fix": "Create a simplified 'slop-browser' reference implementation or documentation that explicitly contrasts with nanobrowser, highlighting the removal of CDP and internal agents to reduce onboarding friction.",
+        "target": "docs",
+        "goal_alignment": "Resilient - Reduces developer friction and confusion when setting up the new architecture."
+      },
+      {
+        "id": "f-005",
+        "type": "missing_feature",
+        "severity": "high",
+        "evidence": "How does it inject content scripts and interact with pages?",
+        "description": "The session questions the content script injection mechanism. Nanobrowser likely uses complex injection methods that may be detectable or fragile. Slop-browser needs a robust, undetectable injection strategy.",
+        "suggested_fix": "Implement a 'native messaging' based content script injection or use chrome.scripting.executeScript with careful payload management to avoid detection, ensuring the CLI can trigger these actions seamlessly.",
+        "target": "extension",
+        "goal_alignment": "Undetectable - Ensures content script injection does not leave artifacts or trigger security warnings."
+      }
+    ]
+  }
+]

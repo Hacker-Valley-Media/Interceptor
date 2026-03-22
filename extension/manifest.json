@@ -24,7 +24,10 @@
     "clipboardRead",
     "clipboardWrite",
     "alarms",
-    "dom"
+    "dom",
+    "offscreen",
+    "tabCapture",
+    "debugger"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -35,7 +38,9 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_origin_as_fallback": true
     }
   ]
 }

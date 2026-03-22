@@ -1,0 +1,17 @@
+[
+  {
+    "evaluator": "codex-a",
+    "findings": [],
+    "error": "Exit code 2: error: unexpected argument '-a' found\n\n  tip: to pass '-a' as a value, use '-- -a'\n\nUsage: codex exec [OPTIONS] [PROMPT] [COMMAND]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "evaluator": "codex-b",
+    "findings": [],
+    "error": "Exit code 2: error: unexpected argument '-a' found\n\n  tip: to pass '-a' as a value, use '-- -a'\n\nUsage: codex exec [OPTIONS] [PROMPT] [COMMAND]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "evaluator": "qwen-122b",
+    "findings": [],
+    "error": "JSON parse error: JSON Parse error: Unrecognized token '`'"
+  }
+]

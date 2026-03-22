@@ -1,0 +1,76 @@
+[
+  {
+    "evaluator": "codex-a",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "ux_friction",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "0 mutations — the shortcut might not have fired. Let me check focus and try clicking the canvas directly first:\n\nA textbox has focus — that's why `R` didn't trigger the shortcut, it typed into the textbox instead. I need to blur first, then press R."
+        },
+        "description": "Keyboard shortcuts can fail silently when an editable element still has focus. The agent had to infer the failure from zero mutations, inspect focus, and manually recover with blur/escape before retrying.",
+        "suggested_fix": "Add a preflight/warning path for `slop keys` in the extension: if the active element is editable and the requested keys look like an app shortcut, return focused-element info plus a clear hint to use `slop blur` or `slop keys --os` instead of reporting a generic success/no-op.",
+        "target": "extension",
+        "goal_alignment": "Serves Resilient and Fast by turning silent shortcut failures into actionable feedback and cutting retry loops."
+      },
+      {
+        "id": "f-002",
+        "type": "workaround",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "The `R` shortcut works with trusted events from MCP."
+        },
+        "description": "The agent discovered through trial and fallback that Canva accepted trusted key events, but not the path it was using first. This pushed the workflow out of slop and into MCP during a live task.",
+        "suggested_fix": "Update the slop skill/docs and CLI help to explicitly recommend `slop keys --os`, `slop click --os`, and `slop type --os` for apps like Canva/Figma/Docs that often ignore synthetic events. Include a short decision rule and one Canva example so agents use the existing trusted-input path first.",
+        "target": "docs",
+        "goal_alignment": "Serves Undetectable and Fast by keeping agents on slop-browser’s native trusted-input path and reducing fallback to alternate tooling."
+      }
+    ]
+  },
+  {
+    "evaluator": "codex-b",
+    "findings": [
+      {
+        "id": "f-001",
+        "type": "workaround",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "\"error\": \"stale element [undefined] — run slop state to refresh\"\nStale ref on e32. Let me use `find_and_click` — the new feature:"
+        },
+        "description": "In a mutation-heavy editor session, the agent hit a stale-ref failure and had to switch strategies manually. The problem is no longer missing capability; the remaining gap is that the browser workflow still lets agents lean on brittle cached refs too long before switching to resilient targeting.",
+        "suggested_fix": "Update the slop/browser skill guidance so SPA workflows default to semantic targeting inside `slop batch` with `wait-stable`, and explicitly warn agents not to reuse refs across DOM-changing steps in apps like Canva.",
+        "target": "skill",
+        "goal_alignment": "Resilient: reduces stale-DOM failures in SPA editors. Fast: avoids extra `state` refreshes and recovery round trips."
+      },
+      {
+        "id": "f-002",
+        "type": "ux_friction",
+        "severity": "medium",
+        "evidence": {
+          "excerpt": "0 mutations — the shortcut might not have fired. Let me check focus and try clicking the canvas directly first:\nA textbox has focus — that's why `R` didn't trigger the shortcut, it typed into the textbox instead. I need to blur first, then press R."
+        },
+        "description": "Editor shortcuts were easy to misfire because focus stayed inside a textbox. The agent had to diagnose focus state manually before a single-key shortcut would work.",
+        "suggested_fix": "Add a documented design-app workflow to the slop/browser skill: check focus first, blur or refocus the canvas, then send trusted shortcuts (`slop keys --os`). Put this recipe in the default guidance for Canva/Figma-style sessions.",
+        "target": "skill",
+        "goal_alignment": "Resilient: reduces focus-related shortcut failures. Fast: removes trial-and-error retries before shortcut commands take effect."
+      },
+      {
+        "id": "f-003",
+        "type": "workaround",
+        "severity": "low",
+        "evidence": {
+          "excerpt": "The panel X button isn't responding to my clicks. Let me use the slop CLI to close it — the `find_and_click` approach:"
+        },
+        "description": "The agent initially tried coordinate-style dismissal on a floating panel, then had to switch to semantic lookup to close it. That points to a workflow/documentation gap around how transient overlay controls should be targeted.",
+        "suggested_fix": "Document a default rule in the slop/browser skill: for modal or panel controls with labels, prefer semantic targeting first (`slop click \"button:Close\"` or `slop find \"Close\" --role button`) and treat coordinate clicks as a last resort.",
+        "target": "skill",
+        "goal_alignment": "Resilient: reduces misses on overlay controls. Fast: cuts screenshot/retry cycles when dismissing transient UI."
+      }
+    ]
+  },
+  {
+    "evaluator": "qwen-122b",
+    "findings": []
+  }
+]

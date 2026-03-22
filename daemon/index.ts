@@ -1,4 +1,5 @@
 import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
+import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input"
 
 const SOCKET_PATH = "/tmp/slop-browser.sock"
 const PID_PATH = "/tmp/slop-browser.pid"
@@ -150,7 +151,44 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
     if (pending) {
       clearTimeout(pending.timer)
       const duration = Date.now() - pending.startTime
-      const success = (msg as { result?: { success?: boolean } }).result?.success ?? true
+      const result = (msg as { result?: { success?: boolean; data?: Record<string, unknown> } }).result
+      const success = result?.success ?? true
+
+      if (success && pending.actionType.startsWith("os_") && result?.data) {
+        const data = result.data as Record<string, unknown>
+        if (data.method === "os_event") {
+          const enrichedAction: Record<string, unknown> = { type: pending.actionType }
+          if (data.windowBounds) {
+            Object.assign(enrichedAction, data.screenTarget as Record<string, unknown> || {})
+            enrichedAction.windowBounds = data.windowBounds
+            enrichedAction.chromeUiHeight = data.chromeUiHeight
+          }
+          if (pending.actionType === "os_click") {
+            enrichedAction.button = data.button || "left"
+            enrichedAction.clickCount = data.clickCount || 1
+          }
+          if (pending.actionType === "os_key") {
+            enrichedAction.key = data.key
+            enrichedAction.modifiers = data.modifiers
+          }
+          if (pending.actionType === "os_type") {
+            enrichedAction.text = data.text
+          }
+          if (pending.actionType === "os_move") {
+            enrichedAction.path = data.path
+            enrichedAction.duration = data.duration
+          }
+          log(`[${msg.id.slice(0, 8)}] posting OS event for ${pending.actionType}`)
+          handleOsAction(msg.id, enrichedAction).then((osResult) => {
+            const finalResult = osResult || { success: false, error: "os action failed" }
+            emitEvent("request_complete", { requestId: msg.id, action: pending.actionType, duration: Date.now() - pending.startTime, success: finalResult.success })
+            pending.resolve(JSON.stringify({ id: msg.id, result: finalResult }))
+            pendingRequests.delete(msg.id)
+          })
+          return
+        }
+      }
+
       log(`[${msg.id.slice(0, 8)}] resp ${success ? "ok" : "err"} ${pending.actionType} ${duration}ms`)
       emitEvent("request_complete", { requestId: msg.id, action: pending.actionType, duration, success })
       pending.resolve(JSON.stringify(msg))
@@ -190,6 +228,69 @@ process.stdin.resume()
 
 const REQUEST_TIMEOUT_MS = 30_000
 
+async function handleOsAction(
+  id: string,
+  action: { type?: string; [key: string]: unknown } | undefined
+): Promise<{ success: boolean; error?: string; data?: unknown } | null> {
+  if (!action) return null
+  const startTime = Date.now()
+
+  switch (action.type) {
+    case "os_click": {
+      const windowBounds = action.windowBounds as { left: number; top: number; width: number; height: number } | undefined
+      const pageX = action.pageX as number | undefined
+      const pageY = action.pageY as number | undefined
+      if (!windowBounds || pageX === undefined || pageY === undefined) {
+        return { success: false, error: "os_click requires windowBounds, pageX, pageY" }
+      }
+      const chromeUiHeight = (action.chromeUiHeight as number) || 88
+      const { screenX, screenY } = translateCoords(pageX, pageY, windowBounds, chromeUiHeight)
+      const button = (action.button as "left" | "right") || "left"
+      const clickCount = (action.clickCount as number) || 1
+      log(`[${id.slice(0, 8)}] os_click screen(${screenX},${screenY}) button=${button} clicks=${clickCount}`)
+      const result = await osClick(screenX, screenY, button, clickCount)
+      emitEvent("os_action", { requestId: id, action: "os_click", duration: Date.now() - startTime, success: result.success })
+      return result
+    }
+
+    case "os_key": {
+      const key = action.key as string
+      const modifiers = (action.modifiers as string[]) || []
+      if (!key) return { success: false, error: "os_key requires key" }
+      log(`[${id.slice(0, 8)}] os_key ${modifiers.join("+")}${modifiers.length ? "+" : ""}${key}`)
+      const result = await osKey(key, modifiers)
+      emitEvent("os_action", { requestId: id, action: "os_key", duration: Date.now() - startTime, success: result.success })
+      return result
+    }
+
+    case "os_type": {
+      const text = action.text as string
+      if (!text) return { success: false, error: "os_type requires text" }
+      log(`[${id.slice(0, 8)}] os_type "${text.slice(0, 50)}"`)
+      const result = await osType(text)
+      emitEvent("os_action", { requestId: id, action: "os_type", duration: Date.now() - startTime, success: result.success })
+      return result
+    }
+
+    case "os_move": {
+      const path = action.path as Array<{ x: number; y: number }> | undefined
+      const windowBounds = action.windowBounds as { left: number; top: number; width: number; height: number } | undefined
+      if (!path || !windowBounds) return { success: false, error: "os_move requires path and windowBounds" }
+      const chromeUiHeight = (action.chromeUiHeight as number) || 88
+      const screenPath = path.map(p => translateCoords(p.x, p.y, windowBounds, chromeUiHeight))
+        .map(p => ({ x: p.screenX, y: p.screenY }))
+      const duration = (action.duration as number) || 100
+      log(`[${id.slice(0, 8)}] os_move ${screenPath.length} points`)
+      const result = await osMove(screenPath, duration)
+      emitEvent("os_action", { requestId: id, action: "os_move", duration: Date.now() - startTime, success: result.success })
+      return result
+    }
+
+    default:
+      return null
+  }
+}
+
 let socketServer: ReturnType<typeof Bun.listen> | null = null
 
 try {
@@ -224,9 +325,21 @@ try {
           }
 
           const id = request.id ?? crypto.randomUUID()
-          const actionType = (request.action as { type?: string })?.type || "unknown"
+          const action = request.action as { type?: string; [key: string]: unknown } | undefined
+          const actionType = action?.type || "unknown"
           log(`cli request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
           emitEvent("request_received", { requestId: id, action: actionType })
+
+          if (action?.type?.startsWith("os_") && action.windowBounds && action.pageX !== undefined) {
+            handleOsAction(id, action).then((osResult) => {
+              if (osResult) {
+                socketWriteFramed(socket, JSON.stringify({ id, result: osResult }))
+              } else {
+                socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "unhandled os action" } }))
+              }
+            })
+            continue
+          }
 
           const timer = setTimeout(() => {
             pendingRequests.delete(id)
