@@ -1,14 +1,6 @@
 import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
-import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-win"
-
-const IS_WIN = process.platform === "win32"
-const TEMP = IS_WIN ? (process.env.TEMP || "C:\\Temp") : "/tmp"
-const SOCKET_PATH = IS_WIN ? "\\\\.\\pipe\\slop-browser" : "/tmp/slop-browser.sock"
-const PID_PATH = `${TEMP}${IS_WIN ? "\\" : "/"}slop-browser.pid`
-const LOG_PATH = `${TEMP}${IS_WIN ? "\\" : "/"}slop-browser.log`
-const EVENTS_PATH = `${TEMP}${IS_WIN ? "\\" : "/"}slop-browser-events.jsonl`
-const WS_PORT = parseInt(process.env.SLOP_WS_PORT || "19222")
-const EVENTS_MAX_SIZE = 10 * 1024 * 1024
+import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
+import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
 
 function log(msg: string) {
   const line = `[${new Date().toISOString()}] ${msg}\n`
@@ -206,18 +198,16 @@ let extensionWs: { send: (data: string) => void } | null = null
 
 function sendNativeMessage(msg: unknown): void {
   const json = JSON.stringify(msg)
-  log(`sending: ${json.slice(0, 200)}`)
   if (extensionWs) {
+    log(`forwarding via ws: ${json.slice(0, 200)}`)
     try {
-      const sent = extensionWs.send(json)
-      log(`ws send result: ${sent}, extensionWs readyState exists`)
+      extensionWs.send(json)
       return
     } catch (err) {
       log(`ws send error: ${(err as Error).message}`)
     }
-  } else {
-    log(`no extensionWs available, falling back to stdout`)
   }
+  log(`forwarding via native: ${json.slice(0, 200)}`)
   const encoded = Buffer.from(json, "utf-8")
   const header = Buffer.alloc(4)
   header.writeUInt32LE(encoded.byteLength, 0)
@@ -309,8 +299,11 @@ async function handleOsAction(
 let socketServer: ReturnType<typeof Bun.listen> | null = null
 
 try {
+  const listenOpts = IS_WIN
+    ? { hostname: "127.0.0.1", port: IPC_PORT }
+    : { unix: SOCKET_PATH }
   socketServer = Bun.listen({
-    unix: SOCKET_PATH,
+    ...listenOpts,
     socket: {
       open(socket) {
         socketBuffers.set(socket, Buffer.alloc(0))
@@ -393,13 +386,13 @@ try {
       }
     }
   })
-  log(`socket listening on ${SOCKET_PATH}`)
+  log(`socket listening on ${transportLabel()}`)
 } catch (err) {
   log(`socket listen failed: ${(err as Error).message}`)
   process.exit(1)
 }
 
-Bun.write(PID_PATH, `${process.pid}\n${SOCKET_PATH}\n`)
+Bun.write(PID_PATH, `${process.pid}\n${transportLabel()}\n`)
 log(`pid file written: ${process.pid}`)
 
 let wsServer: ReturnType<typeof Bun.serve> | null = null

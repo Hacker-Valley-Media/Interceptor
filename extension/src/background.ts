@@ -1,5 +1,7 @@
+type ActiveTransport = "none" | "native" | "websocket"
+
 let nativePort: chrome.runtime.Port | null = null
-let connectionReady = false
+let activeTransport: ActiveTransport = "none"
 let isConnecting = false
 let reconnectDelay = 1000
 
@@ -44,6 +46,13 @@ const messageQueue: Array<{ id?: string; action?: { type: string; [key: string]:
 const EXT_REQUEST_TIMEOUT_MS = 30_000
 const pendingRequests = new Map<string, { action: string; tabId?: number; timestamp: number; timer: ReturnType<typeof setTimeout> }>()
 
+function drainMessageQueue() {
+  while (messageQueue.length > 0) {
+    const queued = messageQueue.shift()!
+    handleDaemonMessage(queued)
+  }
+}
+
 function connectToHost() {
   if (nativePort || isConnecting) return
   isConnecting = true
@@ -57,18 +66,13 @@ function connectToHost() {
 
   port.onMessage.addListener((msg: { id?: string; type?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }) => {
     if (msg.type === "pong") {
-      if (!connectionReady) {
-        clearTimeout(handshakeTimer)
-        connectionReady = true
-        reconnectDelay = 1000
-        isConnecting = false
-        console.log("native host connected (pong received)")
-        emitEvent("connection_established")
-        while (messageQueue.length > 0) {
-          const queued = messageQueue.shift()!
-          handleDaemonMessage(queued)
-        }
-      }
+      clearTimeout(handshakeTimer)
+      activeTransport = "native"
+      reconnectDelay = 1000
+      isConnecting = false
+      console.log("native host connected (pong received)")
+      emitEvent("connection_established")
+      drainMessageQueue()
       if (keepalivePongTimer) {
         clearTimeout(keepalivePongTimer)
         keepalivePongTimer = null
@@ -88,10 +92,11 @@ function connectToHost() {
     console.log("connection_lost", lastError?.message)
     nativePort = null
     if (wsReady && wsChannel) {
-      console.log("native host down but ws channel active, staying ready")
+      activeTransport = "websocket"
+      console.log("native host down but ws channel active, switching to websocket")
       return
     }
-    connectionReady = false
+    if (activeTransport === "native") activeTransport = "none"
     for (const [id, req] of pendingRequests) {
       clearTimeout(req.timer)
       console.error(`orphaned request ${id} (${req.action}) — native port disconnected`)
@@ -112,7 +117,7 @@ function connectToHost() {
 async function handleDaemonMessage(msg: { id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }) {
   if (!msg.action || !msg.id) return
 
-  if (!connectionReady) {
+  if (activeTransport === "none") {
     if (messageQueue.length >= MESSAGE_QUEUE_CAP) {
       const evicted = messageQueue.shift()!
       if (evicted.id) {
@@ -124,6 +129,7 @@ async function handleDaemonMessage(msg: { id?: string; action?: { type: string; 
     }
     messageQueue.push(msg)
     if (!nativePort) connectToHost()
+    if (!wsChannel || wsChannel.readyState === WebSocket.CLOSED) connectWsChannel()
     return
   }
 
@@ -411,7 +417,7 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
     }
 
     case "capabilities": {
-      const daemonConnected = connectionReady
+      const daemonConnected = activeTransport !== "none"
       const hasTabCapture = true
       const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false
       const debuggerActive = debuggerAttached.size > 0
@@ -1056,7 +1062,7 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
     default: {
       const contentResult = await sendToContentScript(tabId, action, action.frameId as number | undefined) as { success: boolean; error?: string; data?: unknown; warning?: string }
 
-      if (action.type === "click" && contentResult.success && contentResult.warning?.includes("no DOM change") && connectionReady) {
+      if (action.type === "click" && contentResult.success && contentResult.warning?.includes("no DOM change") && activeTransport !== "none") {
         console.log("auto-escalating click to OS-level input")
         const osResult = await routeAction({ ...action, type: "os_click" }, tabId)
         if (osResult.success) {
@@ -1087,15 +1093,12 @@ function connectWsChannel() {
       wsReady = true
       ws.send(JSON.stringify({ type: "extension" }))
       console.log("ws channel connected")
-      if (!connectionReady) {
-        connectionReady = true
+      if (activeTransport !== "native") {
+        activeTransport = "websocket"
         reconnectDelay = 1000
         isConnecting = false
         console.log("connection ready via ws channel")
-        while (messageQueue.length > 0) {
-          const queued = messageQueue.shift()!
-          handleDaemonMessage(queued)
-        }
+        drainMessageQueue()
       }
     }
     ws.onmessage = (event) => {
@@ -1112,17 +1115,30 @@ function connectWsChannel() {
     ws.onclose = () => {
       wsReady = false
       wsChannel = null
+      if (activeTransport === "websocket") activeTransport = "none"
     }
     ws.onerror = () => {
       wsReady = false
       wsChannel = null
+      if (activeTransport === "websocket") activeTransport = "none"
     }
   } catch {}
 }
 
 function sendToHost(msg: unknown) {
-  const sent = nativePort ? (nativePort.postMessage(msg), true) : false
-  if (!sent && wsReady && wsChannel) {
+  if (activeTransport === "native" && nativePort) {
+    nativePort.postMessage(msg)
+    return
+  }
+  if (activeTransport === "websocket" && wsReady && wsChannel) {
+    try { wsChannel.send(JSON.stringify(msg)) } catch {}
+    return
+  }
+  if (nativePort) {
+    nativePort.postMessage(msg)
+    return
+  }
+  if (wsReady && wsChannel) {
     try { wsChannel.send(JSON.stringify(msg)) } catch {}
   }
 }
@@ -1197,7 +1213,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     connectToHost()
     return
   }
-  if (connectionReady) {
+  if (activeTransport === "native") {
     nativePort.postMessage({ type: "ping" })
     keepalivePongTimer = setTimeout(() => {
       console.error("keepalive pong timeout (5s) — forcing reconnect")

@@ -1,9 +1,0 @@
-{
-  "name": "com.slopbrowser.host",
-  "description": "slop-browser daemon bridge",
-  "path": "C:\\Users\\Ivan\\Downloads\\slop-browser-main\\slop-browser-main\\daemon\\slop-daemon.exe",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://ocflgkmkfhkefkjlpegcbdnlalhfhnnf/"
-  ]
-}
