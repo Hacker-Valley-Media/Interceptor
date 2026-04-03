@@ -1,3 +1,10 @@
+import { buildLinkedInEventExtractionPayload } from "./linkedin/event-page-extraction-payload"
+import { buildLinkedInAttendeeCliPayload } from "./linkedin/event-attendees-extraction-payload"
+import { buildLinkedInEventAttendeeOverrideRules } from "./linkedin/event-attendees-request-override"
+import { enrichLinkedInAttendee } from "./linkedin/attendee-profile-enrichment"
+import { extractLinkedInEventId, normalizeText } from "./linkedin/linkedin-shared-types"
+import { fetchLinkedInEventAttendeesById } from "./linkedin/professional-event-api"
+
 type ActiveTransport = "none" | "native" | "websocket"
 
 let nativePort: chrome.runtime.Port | null = null
@@ -43,7 +50,7 @@ function emitEvent(event: string, data: Record<string, unknown> = {}) {
 const MESSAGE_QUEUE_CAP = 50
 const messageQueue: Array<{ id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }> = []
 
-const EXT_REQUEST_TIMEOUT_MS = 30_000
+const EXT_REQUEST_TIMEOUT_MS = 180_000
 const pendingRequests = new Map<string, { action: string; tabId?: number; timestamp: number; timer: ReturnType<typeof setTimeout> }>()
 
 function drainMessageQueue() {
@@ -322,9 +329,702 @@ async function cdpInjectSourceCapabilitiesMock(tabId: number): Promise<void> {
   } catch {}
 }
 
+type CapturedNetworkEntry = {
+  tabId: number
+  requestId: string
+  url: string
+  method: string
+  resourceType?: string
+  timestamp: number
+  status?: number
+  mimeType?: string
+  requestHeaders?: Record<string, unknown>
+  responseHeaders?: Record<string, unknown>
+  requestPostData?: string
+  responseBody?: string
+  errorText?: string
+}
+
+type NetworkCaptureConfig = {
+  enabled: boolean
+  patterns: string[]
+  startedAt: number
+}
+
+type NetworkOverrideRule = {
+  id?: string
+  urlPattern?: string
+  methods?: string[]
+  resourceTypes?: string[]
+  replaceUrl?: string
+  queryAddOrReplace?: Record<string, string | number | boolean>
+  queryRemove?: string[]
+  setHeaders?: Record<string, string>
+  removeHeaders?: string[]
+  postData?: string
+}
+
+const NETWORK_LOG_LIMIT = 250
+const NETWORK_BODY_LIMIT = 120000
+const networkCaptureConfigs = new Map<number, NetworkCaptureConfig>()
+const networkCaptureLogs = new Map<number, CapturedNetworkEntry[]>()
+const pendingNetworkEntries = new Map<string, CapturedNetworkEntry>()
+const networkOverrideConfigs = new Map<number, NetworkOverrideRule[]>()
+const fetchInterceptionEnabled = new Set<number>()
+
+function networkEntryKey(tabId: number, requestId: string): string {
+  return `${tabId}:${requestId}`
+}
+
+function getNetworkLogs(tabId: number): CapturedNetworkEntry[] {
+  const logs = networkCaptureLogs.get(tabId)
+  if (logs) return logs
+  const next: CapturedNetworkEntry[] = []
+  networkCaptureLogs.set(tabId, next)
+  return next
+}
+
+function clearNetworkLogs(tabId: number) {
+  networkCaptureLogs.set(tabId, [])
+  for (const key of Array.from(pendingNetworkEntries.keys())) {
+    if (key.startsWith(`${tabId}:`)) pendingNetworkEntries.delete(key)
+  }
+}
+
+function appendNetworkLog(tabId: number, entry: CapturedNetworkEntry) {
+  const logs = getNetworkLogs(tabId)
+  logs.push(entry)
+  if (logs.length > NETWORK_LOG_LIMIT) {
+    logs.splice(0, logs.length - NETWORK_LOG_LIMIT)
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function matchesCapturePatterns(url: string, patterns: string[]): boolean {
+  if (!patterns.length) return true
+  return patterns.some(pattern => {
+    const regex = new RegExp(escapeRegExp(pattern).replace(/\\\*/g, ".*"), "i")
+    return regex.test(url)
+  })
+}
+
+function truncateBody(body?: string): string | undefined {
+  if (!body) return body
+  return body.length > NETWORK_BODY_LIMIT ? body.slice(0, NETWORK_BODY_LIMIT) + "\n... (truncated)" : body
+}
+
+function matchesRequestMethod(method: string | undefined, allowed: string[] | undefined): boolean {
+  if (!allowed || !allowed.length) return true
+  if (!method) return false
+  return allowed.map(item => item.toUpperCase()).includes(method.toUpperCase())
+}
+
+function matchesRequestResourceType(resourceType: string | undefined, allowed: string[] | undefined): boolean {
+  if (!allowed || !allowed.length) return true
+  if (!resourceType) return false
+  return allowed.map(item => item.toLowerCase()).includes(resourceType.toLowerCase())
+}
+
+function findMatchingNetworkOverrideRule(url: string, method: string | undefined, resourceType: string | undefined, rules: NetworkOverrideRule[]): NetworkOverrideRule | null {
+  for (const rule of rules) {
+    if (rule.urlPattern && !matchesCapturePatterns(url, [rule.urlPattern])) continue
+    if (!matchesRequestMethod(method, rule.methods)) continue
+    if (!matchesRequestResourceType(resourceType, rule.resourceTypes)) continue
+    return rule
+  }
+  return null
+}
+
+function applyNetworkOverrideRule(request: Record<string, any>, resourceType: string | undefined, rule: NetworkOverrideRule): { url?: string; headers?: Array<{ name: string; value: string }>; postData?: string } {
+  const nextUrl = new URL(rule.replaceUrl || request.url)
+  if (rule.queryRemove?.length) {
+    for (const key of rule.queryRemove) nextUrl.searchParams.delete(key)
+  }
+  if (rule.queryAddOrReplace) {
+    for (const [key, value] of Object.entries(rule.queryAddOrReplace)) {
+      nextUrl.searchParams.set(key, String(value))
+    }
+  }
+  const headerMap = new Map<string, string>()
+  for (const [name, value] of Object.entries(request.headers || {})) {
+    headerMap.set(name.toLowerCase(), String(value))
+  }
+  if (rule.removeHeaders?.length) {
+    for (const header of rule.removeHeaders) headerMap.delete(header.toLowerCase())
+  }
+  if (rule.setHeaders) {
+    for (const [name, value] of Object.entries(rule.setHeaders)) {
+      headerMap.set(name.toLowerCase(), value)
+    }
+  }
+  const headers = Array.from(headerMap.entries()).map(([name, value]) => ({ name, value }))
+  const postData = rule.postData !== undefined ? rule.postData : request.postData
+  return {
+    url: nextUrl.toString() !== request.url ? nextUrl.toString() : undefined,
+    headers,
+    postData
+  }
+}
+
+async function refreshFetchInterception(tabId: number): Promise<void> {
+  const hasOverrides = (networkOverrideConfigs.get(tabId)?.length || 0) > 0
+  await ensureDebuggerSession(tabId)
+  if (hasOverrides && !fetchInterceptionEnabled.has(tabId)) {
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
+      patterns: [{ urlPattern: "*", requestStage: "Request" }]
+    })
+    fetchInterceptionEnabled.add(tabId)
+    return
+  }
+  if (!hasOverrides && fetchInterceptionEnabled.has(tabId)) {
+    try {
+      await chrome.debugger.sendCommand({ tabId }, "Fetch.disable")
+    } catch {}
+    fetchInterceptionEnabled.delete(tabId)
+  }
+}
+
+async function ensureDebuggerSession(tabId: number): Promise<void> {
+  if (debuggerAttached.has(tabId)) return
+  await chrome.debugger.attach({ tabId }, "1.3")
+  debuggerAttached.add(tabId)
+}
+
+async function enableNetworkCapture(tabId: number, patterns: string[]): Promise<void> {
+  await ensureDebuggerSession(tabId)
+  await chrome.debugger.sendCommand({ tabId }, "Network.enable", {
+    maxTotalBufferSize: 10000000,
+    maxResourceBufferSize: 2000000
+  })
+  networkCaptureConfigs.set(tabId, { enabled: true, patterns, startedAt: Date.now() })
+  clearNetworkLogs(tabId)
+}
+
+async function disableNetworkCapture(tabId: number): Promise<void> {
+  networkCaptureConfigs.set(tabId, {
+    enabled: false,
+    patterns: networkCaptureConfigs.get(tabId)?.patterns || [],
+    startedAt: networkCaptureConfigs.get(tabId)?.startedAt || Date.now()
+  })
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Network.disable")
+  } catch {}
+}
+
+function stripJsonPrefix(body: string): string {
+  return body
+    .replace(/^for\s*\(;;\s*\);?\s*/, "")
+    .replace(/^\)\]\}',?\s*/, "")
+    .trim()
+}
+
+function tryParseJsonBody(body?: string): unknown | null {
+  if (!body) return null
+  const cleaned = stripJsonPrefix(body)
+  if (!cleaned || (!["{", "["].includes(cleaned[0]))) return null
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    return null
+  }
+}
+
+function normalizeText(value?: string | null): string {
+  return (value || "").replace(/\s+/g, " ").trim().toLowerCase()
+}
+
+function extractLinkedInEventId(url?: string | null): string | null {
+  if (!url) return null
+  return url.match(/\/events\/(\d+)/)?.[1] || null
+}
+
+function walkValues(value: unknown, visitor: (key: string | null, value: unknown, path: string[]) => void, path: string[] = [], seen = new WeakSet<object>()) {
+  visitor(path.length ? path[path.length - 1] : null, value, path)
+  if (!value || typeof value !== "object") return
+  if (seen.has(value as object)) return
+  seen.add(value as object)
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => walkValues(item, visitor, [...path, String(index)], seen))
+    return
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    walkValues(child, visitor, [...path, key], seen)
+  }
+}
+
+function collectStringCandidates(value: unknown, keyHints: string[]): Array<{ key: string | null; path: string[]; value: string }> {
+  const results: Array<{ key: string | null; path: string[]; value: string }> = []
+  walkValues(value, (key, current, path) => {
+    if (typeof current !== "string") return
+    if (!key) return
+    const lowerKey = key.toLowerCase()
+    if (keyHints.some(hint => lowerKey.includes(hint))) {
+      const normalized = current.replace(/\s+/g, " ").trim()
+      if (normalized) results.push({ key, path, value: normalized })
+    }
+  })
+  return results
+}
+
+function collectNumberCandidates(value: unknown, keyHints: string[]): Array<{ key: string | null; path: string[]; value: number }> {
+  const results: Array<{ key: string | null; path: string[]; value: number }> = []
+  walkValues(value, (key, current, path) => {
+    if (!key) return
+    const lowerKey = key.toLowerCase()
+    if (!keyHints.some(hint => lowerKey.includes(hint))) return
+    if (typeof current === "number" && Number.isFinite(current)) {
+      results.push({ key, path, value: current })
+      return
+    }
+    if (typeof current === "string" && /^\d[\d,]*$/.test(current.trim())) {
+      results.push({ key, path, value: parseInt(current.replace(/,/g, ""), 10) })
+    }
+  })
+  return results
+}
+
+function pickBestString(candidates: Array<{ value: string }>, preferred?: string | null, fallbackContains?: string | null): string | null {
+  if (!candidates.length) return null
+  const preferredNormalized = normalizeText(preferred)
+  if (preferredNormalized) {
+    const exact = candidates.find(candidate => normalizeText(candidate.value) === preferredNormalized)
+    if (exact) return exact.value
+    const contains = candidates.find(candidate => normalizeText(candidate.value).includes(preferredNormalized) || preferredNormalized.includes(normalizeText(candidate.value)))
+    if (contains) return contains.value
+  }
+  const fallbackNormalized = normalizeText(fallbackContains)
+  if (fallbackNormalized) {
+    const matched = candidates.find(candidate => normalizeText(candidate.value).includes(fallbackNormalized))
+    if (matched) return matched.value
+  }
+  return candidates.slice().sort((a, b) => b.value.length - a.value.length)[0].value
+}
+
+function pickBestNumber(candidates: Array<{ value: number }>, preferred?: number | null): number | null {
+  if (!candidates.length) return null
+  if (preferred !== undefined && preferred !== null) {
+    const exact = candidates.find(candidate => candidate.value === preferred)
+    if (exact) return exact.value
+  }
+  return candidates.slice().sort((a, b) => b.value - a.value)[0].value
+}
+
+function toIsoTimestamp(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const millis = value > 10_000_000_000 ? value : value * 1000
+    const date = new Date(millis)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (/^\d{13}$/.test(trimmed)) return toIsoTimestamp(parseInt(trimmed, 10))
+  if (/^\d{10}$/.test(trimmed)) return toIsoTimestamp(parseInt(trimmed, 10))
+  const date = new Date(trimmed)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function collectIsoCandidates(value: unknown, keyHints: string[]): string[] {
+  const results: string[] = []
+  walkValues(value, (key, current) => {
+    if (!key) return
+    const lowerKey = key.toLowerCase()
+    if (!keyHints.some(hint => lowerKey.includes(hint))) return
+    const iso = toIsoTimestamp(current)
+    if (iso) results.push(iso)
+  })
+  return results
+}
+
+function pickBestParsedResponse(entries: CapturedNetworkEntry[], clues: { title?: string | null; organizerName?: string | null; postText?: string | null; posterName?: string | null; eventId?: string | null; url?: string | null }, mode: "event" | "post"): { entry: CapturedNetworkEntry; parsed: unknown } | null {
+  const parsedEntries = entries
+    .filter(entry => !isNoiseLinkedInUrl(entry.url))
+    .map(entry => ({ entry, parsed: tryParseJsonBody(entry.responseBody) }))
+    .filter(item => item.parsed !== null) as Array<{ entry: CapturedNetworkEntry; parsed: unknown }>
+  let best: { entry: CapturedNetworkEntry; parsed: unknown; score: number } | null = null
+  for (const item of parsedEntries) {
+    const haystack = normalizeText(item.entry.responseBody)
+    let score = 0
+    if (mode === "event") {
+      if (/voyager\/api\/events\/dash\/professionalevents/i.test(item.entry.url)) score += 120
+      if (clues.eventId && item.entry.url.includes(clues.eventId)) score += 60
+      if (clues.title && haystack.includes(normalizeText(clues.title))) score += 35
+      if (clues.organizerName && haystack.includes(normalizeText(clues.organizerName))) score += 20
+      if (/events|event/i.test(item.entry.url)) score += 15
+    } else {
+      if (/voyagerSocialDash(Reactions|Comments)|socialDetailUrn|ugcPost|comment|reaction/i.test(item.entry.url)) score += 100
+      if (clues.postText && haystack.includes(normalizeText(clues.postText).slice(0, 80))) score += 45
+      if (clues.posterName && haystack.includes(normalizeText(clues.posterName))) score += 20
+      if (/comment|social|feed|activity|update|ugc|share/i.test(item.entry.url)) score += 20
+    }
+    if (item.entry.status && item.entry.status >= 200 && item.entry.status < 300) score += 5
+    if (item.entry.mimeType?.includes("json")) score += 5
+    if (!best || score > best.score) best = { ...item, score }
+  }
+  return best ? { entry: best.entry, parsed: best.parsed } : null
+}
+
+function extractFollowerCountFromText(text?: string | null): number | null {
+  if (!text) return null
+  const match = text.match(/(\d[\d,]*)\s+followers?/i)
+  return match ? parseInt(match[1].replace(/,/g, ""), 10) : null
+}
+
+function isNoiseLinkedInUrl(url: string): boolean {
+  return /messaging|policy\/notices|realtimeFrontendSubscriptions|presenceStatuses|deliveryAcknowledgements|seenReceipts|quickReplies|psettings|DVyeH0l6|tracking/i.test(url)
+}
+
+async function getLinkedInCsrfToken(): Promise<string | null> {
+  try {
+    const cookie = await chrome.cookies.get({ url: "https://www.linkedin.com", name: "JSESSIONID" })
+    if (!cookie?.value) return null
+    return cookie.value.replace(/^"|"$/g, "")
+  } catch {
+    return null
+  }
+}
+
+async function fetchLinkedInJson(url: string): Promise<unknown | null> {
+  const csrfToken = await getLinkedInCsrfToken()
+  const headers: Record<string, string> = {
+    accept: "application/vnd.linkedin.normalized+json+2.1",
+    "x-restli-protocol-version": "2.0.0"
+  }
+  if (csrfToken) headers["csrf-token"] = csrfToken
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "include",
+      headers
+    })
+    if (!response.ok) return null
+    return await response.json()
+  } catch {
+    return null
+  }
+}
+
+async function fetchLinkedInEventDetailsById(eventId: string): Promise<unknown | null> {
+  const url = `https://www.linkedin.com/voyager/api/events/dash/professionalEvents?decorationId=com.linkedin.voyager.dash.deco.events.ProfessionalEventDetailPage-49&eventIdentifier=${eventId}&q=eventIdentifier`
+  return await fetchLinkedInJson(url)
+}
+
+async function fetchLinkedInEventAttendeesById(eventId: string, maxCount = 250): Promise<Array<{ user_id: string; display_name: string; headline: string }>> {
+  const pageSize = 50
+  let start = 0
+  const attendees: Array<{ user_id: string; display_name: string; headline: string }> = []
+  while (start < maxCount) {
+    const url = `https://www.linkedin.com/voyager/api/graphql?variables=(count:${pageSize},start:${start},origin:EVENT_PAGE_CANNED_SEARCH,query:(flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:eventAttending,value:List(${eventId})),(key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))&&queryId=voyagerSearchDashClusters.a789a8e572711844816fa31872de1e2f`
+    const json = await fetchLinkedInJson(url) as Record<string, any> | null
+    const included = Array.isArray(json?.included) ? json!.included : []
+    const pageAttendees = included
+      .filter(item => item?.$type === "com.linkedin.voyager.dash.search.EntityResultViewModel")
+      .map(item => {
+        const entityUrn = item.entityUrn || ""
+        const match = String(entityUrn).match(/fsd_profile:([^,)]+)/)
+        return {
+          user_id: match?.[1] || "",
+          display_name: item?.image?.accessibilityText || "",
+          headline: item?.primarySubtitle?.text || ""
+        }
+      })
+      .filter(item => item.user_id && item.display_name)
+    if (!pageAttendees.length) break
+    attendees.push(...pageAttendees)
+    if (pageAttendees.length < pageSize) break
+    start += pageSize
+  }
+  return attendees
+}
+
+function extractPostIdFromLogs(entries: CapturedNetworkEntry[], postText: string | null): string | null {
+  const clue = normalizeText(postText).slice(0, 80)
+  for (const entry of entries) {
+    if (!entry.responseBody) continue
+    const body = entry.responseBody
+    if (clue && !normalizeText(body).includes(clue)) continue
+    const match = body.match(/urn:li:ugcPost:(\d{6,})/)
+    if (match) return match[1]
+  }
+  for (const entry of entries) {
+    const match = (entry.responseBody || "").match(/urn:li:ugcPost:(\d{6,})/)
+    if (match) return match[1]
+  }
+  return null
+}
+
+async function fetchLinkedInReactionsByPostId(postId: string, maxCount = 100): Promise<Array<{ user_id: string; display_name: string; headline?: string }>> {
+  const url = `https://www.linkedin.com/voyager/api/graphql?includeWebMetadata=true&variables=(count:${maxCount},start:0,threadUrn:${encodeURIComponent(`urn:li:ugcPost:${postId}`)})&&queryId=voyagerSocialDashReactions.9c8a84d441790b2edf06110ed28b675c`
+  const json = await fetchLinkedInJson(url) as Record<string, any> | null
+  const included = Array.isArray(json?.included) ? json!.included : []
+  return included
+    .filter(item => item?.$type === "com.linkedin.voyager.dash.social.Reaction")
+    .map(item => ({
+      user_id: String(item.preDashActorUrn || "").split(":").pop() || "",
+      display_name: item?.reactorLockup?.title?.text || "",
+      headline: item?.reactorLockup?.subtitle?.text || undefined
+    }))
+    .filter(item => item.user_id)
+}
+
+async function fetchLinkedInCommentsByPostId(postId: string, maxCount = 100): Promise<Array<{ comment_id: string; user_id: string; comment_text: string }>> {
+  const encodedPostId = encodeURIComponent(`urn:li:ugcPost:${postId}`)
+  const url = `https://www.linkedin.com/voyager/api/graphql?includeWebMetadata=true&variables=(count:${maxCount},numReplies:100,socialDetailUrn:urn%3Ali%3Afsd_socialDetail%3A%28${encodedPostId}%2C${encodedPostId}%2Curn%3Ali%3AhighlightedReply%3A-%29,sortOrder:RELEVANCE,start:0)&&queryId=voyagerSocialDashComments.053c2a505a15e5561b6df67b905d056a`
+  const json = await fetchLinkedInJson(url) as Record<string, any> | null
+  const included = Array.isArray(json?.included) ? json!.included : []
+  return included
+    .filter(item => item?.$type === "com.linkedin.voyager.dash.social.Comment")
+    .map(item => ({
+      comment_id: item.urn || "",
+      user_id: String(item?.commenter?.actor?.["*profileUrn"] || item?.commenter?.actor?.["*companyUrn"] || "").split(":").pop() || "",
+      comment_text: item?.commentary?.text || ""
+    }))
+    .filter(item => item.comment_id)
+}
+
+function extractEventDataFromParsed(parsed: unknown, dom: Record<string, any>) {
+  const titleCandidates = collectStringCandidates(parsed, ["title", "name", "headline", "eventname"])
+  const organizerCandidates = collectStringCandidates(parsed, ["organizer", "owner", "host", "author", "actor", "name", "fullname", "displayname"])
+  const descriptionCandidates = collectStringCandidates(parsed, ["description", "details", "summary", "about", "body"])
+  const attendeeNameCandidates = collectStringCandidates(parsed, ["attendee", "member", "participant", "name", "fullname", "displayname"])
+  const attendeeCountCandidates = collectNumberCandidates(parsed, ["attendeecount", "membercount", "participantcount", "totalattendees", "totalmembers", "count"])
+  const dateCandidates = collectIsoCandidates(parsed, ["start", "end", "time", "date"])
+  return {
+    title: pickBestString(titleCandidates, dom.title),
+    organizerName: pickBestString(organizerCandidates, dom.organizerName),
+    startTimeIso: dateCandidates[0] || null,
+    endTimeIso: dateCandidates[1] || null,
+    attendeeCount: pickBestNumber(attendeeCountCandidates, dom.attendeeCountFromScreen),
+    attendeeNames: attendeeNameCandidates
+      .map(candidate => candidate.value)
+      .filter(value => /^[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3}$/.test(value))
+      .filter((value, index, array) => array.indexOf(value) === index)
+      .slice(0, 25),
+    detailsText: pickBestString(descriptionCandidates, dom.detailsText, normalizeText(dom.detailsText).slice(0, 80))
+  }
+}
+
+function extractPostDataFromParsed(parsed: unknown, dom: Record<string, any>) {
+  const textCandidates = collectStringCandidates(parsed, ["commentary", "text", "message", "description", "body"])
+  const posterCandidates = collectStringCandidates(parsed, ["author", "actor", "owner", "name", "fullname", "displayname"])
+  const followerCountCandidates = collectNumberCandidates(parsed, ["followercount", "followerscount"])
+  const reactionCountCandidates = collectNumberCandidates(parsed, ["reactioncount", "likecount", "likes", "reaction"])
+  const commentCountCandidates = collectNumberCandidates(parsed, ["commentcount", "commentscount", "comments"])
+  const repostCountCandidates = collectNumberCandidates(parsed, ["repostcount", "sharecount", "shares", "reposts"])
+  return {
+    postText: pickBestString(textCandidates, dom.post?.text, normalizeText(dom.post?.text).slice(0, 80)),
+    posterName: pickBestString(posterCandidates, dom.post?.posterName),
+    followerCount: pickBestNumber(followerCountCandidates, extractFollowerCountFromText(dom.post?.followerCountText)),
+    likes: pickBestNumber(reactionCountCandidates, dom.post?.engagement?.likes),
+    comments: pickBestNumber(commentCountCandidates, dom.post?.engagement?.comments),
+    reposts: pickBestNumber(repostCountCandidates, dom.post?.engagement?.reposts)
+  }
+}
+
+function validateValue(networkValue: unknown, domValue: unknown): boolean | null {
+  if (networkValue === undefined || networkValue === null || domValue === undefined || domValue === null) return null
+  if (typeof networkValue === "number" && typeof domValue === "number") return networkValue === domValue
+  const left = normalizeText(String(networkValue))
+  const right = normalizeText(String(domValue))
+  if (!left || !right) return null
+  return left === right || left.includes(right) || right.includes(left)
+}
+
+async function buildLinkedInEventExtraction(tabId: number, action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; data?: unknown }> {
+  const currentTab = await chrome.tabs.get(tabId)
+  const targetUrl = (action.url as string | undefined) || currentTab.url || ""
+  if (!targetUrl) return { success: false, error: "linkedin event extraction requires a URL or active tab URL" }
+  await enableNetworkCapture(tabId, ["linkedin.com", "voyager", "graphql", "event"])
+  if (currentTab.url !== targetUrl) {
+    await chrome.tabs.update(tabId, { url: targetUrl })
+    await waitForTabLoad(tabId, 20000)
+  }
+  const waitMs = (action.waitMs as number) || 2500
+  await new Promise(resolve => setTimeout(resolve, waitMs))
+  await sendToContentScript(tabId, { type: "wait_stable", ms: 800, timeout: 6000 })
+  const domResult = await sendToContentScript(tabId, { type: "linkedin_event_dom" }) as { success: boolean; data?: Record<string, unknown>; error?: string }
+  if (!domResult.success || !domResult.data) return { success: false, error: domResult.error || "failed to extract LinkedIn DOM data" }
+  return {
+    success: true,
+    data: await buildLinkedInEventExtractionPayload(targetUrl, domResult.data as Record<string, any>, getNetworkLogs(tabId))
+  }
+}
+
+async function buildLinkedInAttendeesExtraction(tabId: number, action: { type: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string; data?: unknown }> {
+  const currentTab = await chrome.tabs.get(tabId)
+  const targetUrl = (action.url as string | undefined) || currentTab.url || ""
+  if (!targetUrl) return { success: false, error: "linkedin attendee extraction requires a URL or active tab URL" }
+
+  const eventId = extractLinkedInEventId(targetUrl)
+  if (!eventId) return { success: false, error: "could not derive LinkedIn event ID from URL" }
+
+  await enableNetworkCapture(tabId, ["linkedin.com", "voyager", "graphql", "eventAttending", "attendee", eventId])
+  const overrideRules = buildLinkedInEventAttendeeOverrideRules(targetUrl) as NetworkOverrideRule[]
+  networkOverrideConfigs.set(tabId, overrideRules)
+  await refreshFetchInterception(tabId)
+
+  if (currentTab.url !== targetUrl) {
+    await chrome.tabs.update(tabId, { url: targetUrl })
+    await waitForTabLoad(tabId, 20000)
+  }
+
+  const waitMs = (action.waitMs as number) || 2500
+  await new Promise(resolve => setTimeout(resolve, waitMs))
+  await sendToContentScript(tabId, { type: "wait_stable", ms: 800, timeout: 6000 })
+
+  const openResult = await sendToContentScript(tabId, { type: "linkedin_attendees_open" }) as { success: boolean; data?: { opened?: boolean }; error?: string }
+  const modalOpened = !!(openResult.success && openResult.data?.opened)
+
+  const modalRows = new Map<string, any>()
+  let totalCount: number | null = null
+  let batchesLoaded = 0
+  if (modalOpened) {
+    batchesLoaded = 1
+    for (let i = 0; i < 10; i++) {
+      const snapshot = await sendToContentScript(tabId, { type: "linkedin_attendees_snapshot" }) as { success: boolean; data?: { isOpen: boolean; totalCount: number | null; rows: any[]; showMoreVisible: boolean }; error?: string }
+      if (!snapshot.success || !snapshot.data?.isOpen) break
+      totalCount = snapshot.data.totalCount ?? totalCount
+      for (const row of snapshot.data.rows || []) {
+        const key = row.profileUrl || row.fullName || `${row.rowText}-${modalRows.size}`
+        if (!modalRows.has(key)) modalRows.set(key, row)
+      }
+      if (!snapshot.data.showMoreVisible) break
+      const showMore = await sendToContentScript(tabId, { type: "linkedin_attendees_show_more" }) as { success: boolean; data?: { clicked?: boolean }; error?: string }
+      if (!showMore.success || !showMore.data?.clicked) break
+      batchesLoaded += 1
+      await new Promise(resolve => setTimeout(resolve, 1100))
+    }
+  }
+
+  const apiAttendees = await fetchLinkedInEventAttendeesById(eventId, Math.max(totalCount || 0, 250))
+  const modalRowsList = Array.from(modalRows.values())
+  const mergedRows = apiAttendees.map(attendee => {
+    const modalMatch = modalRowsList.find(row => normalizeText(row.fullName) === normalizeText(attendee.display_name))
+    const fullName = modalMatch?.fullName || attendee.display_name || null
+    const nameParts = fullName ? fullName.trim().split(/\s+/) : []
+    return {
+      profileUrl: modalMatch?.profileUrl || null,
+      profileSlug: modalMatch?.profileSlug || null,
+      fullName,
+      firstName: modalMatch?.firstName || (nameParts[0] || null),
+      lastName: modalMatch?.lastName || (nameParts.length > 1 ? nameParts.slice(1).join(" ") : null),
+      connectionDegree: modalMatch?.connectionDegree || null,
+      headline: modalMatch?.headline || attendee.headline || null,
+      rowText: modalMatch?.rowText || "",
+      userId: attendee.user_id || null
+    }
+  })
+
+  const enrichLimit = (action.enrichLimit as number | undefined) || mergedRows.length
+  const enrichTargets = mergedRows.slice(0, enrichLimit)
+  const enrichments: Awaited<ReturnType<typeof enrichLinkedInAttendee>>[] = []
+  for (const row of enrichTargets) {
+    enrichments.push(await enrichLinkedInAttendee(row))
+  }
+
+  return {
+    success: true,
+    data: buildLinkedInAttendeeCliPayload({
+      eventId,
+      pageUrl: targetUrl,
+      modalOpened,
+      totalCount,
+      batchesLoaded,
+      overrideRules,
+      rows: enrichTargets,
+      enrichments
+    })
+  }
+}
+
+chrome.debugger.onEvent.addListener(async (source, method, params) => {
+  const tabId = source.tabId
+  if (!tabId) return
+  const config = networkCaptureConfigs.get(tabId)
+  const overrideRules = networkOverrideConfigs.get(tabId) || []
+
+  try {
+    if (method === "Fetch.requestPaused") {
+      const request = (params as Record<string, any>).request || {}
+      const rule = findMatchingNetworkOverrideRule(request.url || "", request.method, (params as Record<string, any>).resourceType, overrideRules)
+      const payload = rule ? applyNetworkOverrideRule(request, (params as Record<string, any>).resourceType, rule) : {}
+      await chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
+        requestId: (params as Record<string, any>).requestId,
+        ...(payload.url ? { url: payload.url } : {}),
+        ...(payload.headers ? { headers: payload.headers } : {}),
+        ...(payload.postData ? { postData: payload.postData } : {})
+      })
+      return
+    }
+
+    if (!config?.enabled) return
+
+    if (method === "Network.requestWillBeSent") {
+      const request = (params as Record<string, any>).request
+      if (!request?.url || !matchesCapturePatterns(request.url, config.patterns)) return
+      pendingNetworkEntries.set(networkEntryKey(tabId, (params as Record<string, any>).requestId), {
+        tabId,
+        requestId: (params as Record<string, any>).requestId,
+        url: request.url,
+        method: request.method || "GET",
+        resourceType: (params as Record<string, any>).type,
+        timestamp: Date.now(),
+        requestHeaders: request.headers,
+        requestPostData: truncateBody(request.postData)
+      })
+      return
+    }
+
+    if (method === "Network.responseReceived") {
+      const requestId = (params as Record<string, any>).requestId
+      const key = networkEntryKey(tabId, requestId)
+      const existing = pendingNetworkEntries.get(key)
+      if (!existing) return
+      const response = (params as Record<string, any>).response || {}
+      existing.status = response.status
+      existing.mimeType = response.mimeType
+      existing.responseHeaders = response.headers
+      return
+    }
+
+    if (method === "Network.loadingFinished") {
+      const requestId = (params as Record<string, any>).requestId
+      const key = networkEntryKey(tabId, requestId)
+      const existing = pendingNetworkEntries.get(key)
+      if (!existing) return
+      try {
+        const bodyResult = await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId }) as { body?: string; base64Encoded?: boolean }
+        existing.responseBody = bodyResult.base64Encoded ? "[base64 body omitted]" : truncateBody(bodyResult.body)
+      } catch {}
+      appendNetworkLog(tabId, { ...existing })
+      pendingNetworkEntries.delete(key)
+      return
+    }
+
+    if (method === "Network.loadingFailed") {
+      const requestId = (params as Record<string, any>).requestId
+      const key = networkEntryKey(tabId, requestId)
+      const existing = pendingNetworkEntries.get(key)
+      if (!existing) return
+      existing.errorText = (params as Record<string, any>).errorText || "loading failed"
+      appendNetworkLog(tabId, { ...existing })
+      pendingNetworkEntries.delete(key)
+    }
+  } catch (err) {
+    console.error("network capture error:", (err as Error).message)
+  }
+})
+
 chrome.debugger.onDetach.addListener((source, reason) => {
   if (source.tabId) {
     debuggerAttached.delete(source.tabId)
+    fetchInterceptionEnabled.delete(source.tabId)
+    networkCaptureConfigs.delete(source.tabId)
+    networkOverrideConfigs.delete(source.tabId)
+    clearNetworkLogs(source.tabId)
   }
   if (reason === "canceled_by_user") {
     console.log("debugger detached by user (DevTools opened)")
@@ -845,6 +1545,38 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
       return { success: true, data: frames?.map(f => ({ frameId: f.frameId, url: f.url, parentFrameId: f.parentFrameId })) }
     }
 
+    case "network_intercept": {
+      if (action.enabled === false) {
+        await disableNetworkCapture(tabId)
+        return { success: true, data: { enabled: false, captured: getNetworkLogs(tabId).length } }
+      }
+      const patterns = Array.isArray(action.patterns) ? (action.patterns as string[]) : []
+      await enableNetworkCapture(tabId, patterns)
+      return { success: true, data: { enabled: true, patterns } }
+    }
+
+    case "network_log": {
+      const since = (action.since as number) || 0
+      const limit = (action.limit as number) || 100
+      const logs = getNetworkLogs(tabId)
+        .filter(entry => !since || entry.timestamp >= since)
+        .slice(-limit)
+      return { success: true, data: logs }
+    }
+
+    case "network_override": {
+      const rules = action.enabled === false ? [] : ((action.rules as NetworkOverrideRule[] | undefined) || [])
+      networkOverrideConfigs.set(tabId, rules)
+      await refreshFetchInterception(tabId)
+      return { success: true, data: { enabled: rules.length > 0, ruleCount: rules.length, rules } }
+    }
+
+    case "linkedin_event_extract":
+      return await buildLinkedInEventExtraction(tabId, action)
+
+    case "linkedin_attendees_extract":
+      return await buildLinkedInAttendeesExtraction(tabId, action)
+
     // === DECLARATIVE NET REQUEST (HEADERS) ===
     case "headers_modify": {
       const rules = action.rules as Array<{ operation: string; header: string; value?: string }> | undefined
@@ -1082,7 +1814,27 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
 
 let wsChannel: WebSocket | null = null
 let wsReady = false
+let wsKeepAliveTimer: ReturnType<typeof setInterval> | null = null
 const WS_URL = "ws://localhost:19222"
+
+function startWsKeepAlive() {
+  if (wsKeepAliveTimer) clearInterval(wsKeepAliveTimer)
+  wsKeepAliveTimer = setInterval(() => {
+    if (!wsChannel || wsChannel.readyState !== WebSocket.OPEN) {
+      if (wsKeepAliveTimer) clearInterval(wsKeepAliveTimer)
+      wsKeepAliveTimer = null
+      return
+    }
+    try {
+      wsChannel.send(JSON.stringify({ type: "keepalive", timestamp: Date.now() }))
+    } catch {}
+  }, 20_000)
+}
+
+function stopWsKeepAlive() {
+  if (wsKeepAliveTimer) clearInterval(wsKeepAliveTimer)
+  wsKeepAliveTimer = null
+}
 
 function connectWsChannel() {
   if (wsChannel && (wsChannel.readyState === WebSocket.OPEN || wsChannel.readyState === WebSocket.CONNECTING)) return
@@ -1092,6 +1844,7 @@ function connectWsChannel() {
       wsChannel = ws
       wsReady = true
       ws.send(JSON.stringify({ type: "extension" }))
+      startWsKeepAlive()
       console.log("ws channel connected")
       if (activeTransport !== "native") {
         activeTransport = "websocket"
@@ -1113,11 +1866,13 @@ function connectWsChannel() {
       }
     }
     ws.onclose = () => {
+      stopWsKeepAlive()
       wsReady = false
       wsChannel = null
       if (activeTransport === "websocket") activeTransport = "none"
     }
     ws.onerror = () => {
+      stopWsKeepAlive()
       wsReady = false
       wsChannel = null
       if (activeTransport === "websocket") activeTransport = "none"
@@ -1209,11 +1964,9 @@ chrome.alarms.create("keepalive", { periodInMinutes: 0.5 })
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "keepalive") return
-  if (!nativePort) {
-    connectToHost()
-    return
-  }
-  if (activeTransport === "native") {
+  if (!nativePort) connectToHost()
+  if (!wsChannel || wsChannel.readyState === WebSocket.CLOSED) connectWsChannel()
+  if (activeTransport === "native" && nativePort) {
     nativePort.postMessage({ type: "ping" })
     keepalivePongTimer = setTimeout(() => {
       console.error("keepalive pong timeout (5s) — forcing reconnect")

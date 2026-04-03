@@ -20,7 +20,10 @@ export type Action =
   | { type: "cookies_set"; cookie: Record<string, unknown> }
   | { type: "cookies_delete"; url: string; name: string }
   | { type: "network_intercept"; patterns: string[]; enabled: boolean }
-  | { type: "network_log"; since?: number }
+  | { type: "network_log"; since?: number; limit?: number }
+  | { type: "network_override"; enabled: boolean; rules?: NetworkOverrideRule[] }
+  | { type: "linkedin_event_extract"; url?: string; waitMs?: number }
+  | { type: "linkedin_attendees_extract"; url?: string; waitMs?: number; enrichLimit?: number }
   | { type: "storage_get"; keys?: string[] }
   | { type: "storage_set"; data: Record<string, unknown> }
   | { type: "headers_modify"; rules: HeaderRule[] }
@@ -73,6 +76,19 @@ export interface HeaderRule {
   operation: "set" | "remove"
   header: string
   value?: string
+}
+
+export interface NetworkOverrideRule {
+  id?: string
+  urlPattern?: string
+  methods?: string[]
+  resourceTypes?: string[]
+  replaceUrl?: string
+  queryAddOrReplace?: Record<string, string | number | boolean>
+  queryRemove?: string[]
+  setHeaders?: Record<string, string>
+  removeHeaders?: string[]
+  postData?: string
 }
 
 export interface ActionResult {

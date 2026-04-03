@@ -231,7 +231,7 @@ process.stdin.on("error", (err) => {
 
 process.stdin.resume()
 
-const REQUEST_TIMEOUT_MS = 30_000
+const REQUEST_TIMEOUT_MS = 180_000
 
 async function handleOsAction(
   id: string,
@@ -422,6 +422,11 @@ try {
           (ws as any).__isExtension = true
           extensionWs = ws
           log("ws extension channel registered")
+          return
+        }
+
+        if (request.type === "keepalive") {
+          log("ws keepalive")
           return
         }
 

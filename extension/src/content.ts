@@ -1,3 +1,6 @@
+import { extractLinkedInEventDom } from "./linkedin/event-page-dom-extraction"
+import { clickManageAttendeesShowMore, extractManageAttendeesModal, openManageAttendeesModal } from "./linkedin/event-attendees-modal-dom"
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "execute_action") {
     handleAction(msg.action)
@@ -1248,6 +1251,18 @@ async function executeAction(action: { type: string; [key: string]: unknown }): 
         return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: checkResult } }
       }
 
+      case "linkedin_event_dom":
+        return { success: true, data: await extractLinkedInEventDom(waitForDomStable, dispatchClickSequence) }
+
+      case "linkedin_attendees_open":
+        return { success: true, data: { opened: await openManageAttendeesModal(waitForDomStable, dispatchClickSequence) } }
+
+      case "linkedin_attendees_snapshot":
+        return { success: true, data: extractManageAttendeesModal() }
+
+      case "linkedin_attendees_show_more":
+        return { success: true, data: { clicked: clickManageAttendeesShowMore(dispatchClickSequence) } }
+
       case "wait_stable": {
         const debounceMs = (action.ms as number) || 200
         const timeoutMs = (action.timeout as number) || 5000
@@ -1410,6 +1425,221 @@ function findBestMatch(name?: string, role?: string, text?: string): { refId: st
   }
 
   return best
+}
+
+function getVisibleText(el: Element | null | undefined): string {
+  if (!el || !isVisible(el)) return ""
+  return ((el as HTMLElement).innerText || el.textContent || "").replace(/\s+/g, " ").trim()
+}
+
+function isLinkedInNoiseText(text: string): boolean {
+  return /Close your conversation|Reply to conversation|Page inboxes|Compose message|Messaging overlay|Open GIF Keyboard|Open Emoji Keyboard|Search\s*$|Skip to main content|About Accessibility Help Center Privacy & Terms/i.test(text)
+}
+
+function findLinkedInEventRoot(title: string): Element | null {
+  const heading = Array.from(document.querySelectorAll("h1")).find(el => getVisibleText(el) === title)
+  if (!heading) return document.querySelector("main")
+  let current: Element | null = heading
+  let best: { element: Element; score: number } | null = null
+  while (current && current !== document.body) {
+    const text = getVisibleText(current)
+    if (text) {
+      let score = 0
+      if (text.includes(title)) score += 40
+      if (/Event by/i.test(text)) score += 20
+      if (/attendees?/i.test(text)) score += 15
+      if (/Add to calendar/i.test(text)) score += 10
+      if (/Close your conversation|Reply to conversation|Page inboxes/i.test(text)) score -= 80
+      if (!best || score > best.score) best = { element: current, score }
+    }
+    current = current.parentElement
+  }
+  return best?.element || document.querySelector("main")
+}
+
+function extractEventByName(lines: string[]): string | null {
+  const eventByIndex = lines.findIndex(line => /^event by$/i.test(line) || /^event by\s+/i.test(line))
+  if (eventByIndex !== -1) {
+    const sameLine = lines[eventByIndex].replace(/^event by\s*/i, "").trim()
+    if (sameLine && !/^event by$/i.test(sameLine)) return sameLine
+    if (lines[eventByIndex + 1]) return lines[eventByIndex + 1]
+  }
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^event by$/i.test(lines[i]) && lines[i + 1]) return lines[i + 1]
+  }
+  const labeled = lines.find(line => /^hosted by\s+/i.test(line) || /^by\s+[A-Z]/.test(line))
+  if (labeled) return labeled.replace(/^(hosted by|by)\s+/i, "").trim()
+  return null
+}
+
+function extractDisplayedDate(lines: string[]): string | null {
+  const line = lines.find(item => /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}\b/.test(item))
+  if (line) return line
+  const timeEl = document.querySelector("time")
+  const timeText = getVisibleText(timeEl)
+  if (timeText) return timeText
+  return null
+}
+
+function buildIsoWithOffset(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const offsetMinutes = -date.getTimezoneOffset()
+  const sign = offsetMinutes >= 0 ? "+" : "-"
+  const abs = Math.abs(offsetMinutes)
+  const offsetHours = pad(Math.floor(abs / 60))
+  const offsetRemainder = pad(abs % 60)
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${offsetHours}:${offsetRemainder}`
+}
+
+function parseDisplayedDateRangeToIso(displayedDateText: string | null): { startTimeIso: string | null; endTimeIso: string | null; timeZone: string | null } {
+  if (!displayedDateText) return { startTimeIso: null, endTimeIso: null, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || null }
+  const match = displayedDateText.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+([A-Za-z]{3})\s+(\d{1,2}),\s+(\d{4}),\s+(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)/i)
+  if (!match) return { startTimeIso: null, endTimeIso: null, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || null }
+  const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
+  const monthIndex = months.indexOf(match[1].toLowerCase())
+  if (monthIndex === -1) return { startTimeIso: null, endTimeIso: null, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || null }
+  const year = parseInt(match[3], 10)
+  const day = parseInt(match[2], 10)
+  const toDate = (timeText: string) => {
+    const [, hoursText, minutesText, period] = timeText.match(/(\d{1,2}):(\d{2})\s*([AP]M)/i) || []
+    if (!hoursText || !minutesText || !period) return null
+    let hours = parseInt(hoursText, 10)
+    const minutes = parseInt(minutesText, 10)
+    const upperPeriod = period.toUpperCase()
+    if (upperPeriod === "PM" && hours !== 12) hours += 12
+    if (upperPeriod === "AM" && hours === 12) hours = 0
+    return new Date(year, monthIndex, day, hours, minutes, 0)
+  }
+  const startDate = toDate(match[4])
+  const endDate = toDate(match[5])
+  return {
+    startTimeIso: startDate ? buildIsoWithOffset(startDate) : null,
+    endTimeIso: endDate ? buildIsoWithOffset(endDate) : null,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
+  }
+}
+
+function extractAttendeeSummary(lines: string[]): { text: string | null; totalCount: number | null; names: string[] } {
+  const summary = lines.find(line => /attendees?/i.test(line) && (/other attendees?/i.test(line) || /^[A-Z].*attendees?/i.test(line))) || null
+  if (!summary) return { text: null, totalCount: null, names: [] }
+  const otherMatch = summary.match(/and\s+(\d[\d,]*)\s+other attendees?/i)
+  const prefix = summary.split(/\sand\s+\d[\d,]*\s+other attendees?/i)[0] || ""
+  const names = prefix.split(/,| and /).map(part => part.trim()).filter(part => /^[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3}$/.test(part))
+  const otherCount = otherMatch ? parseInt(otherMatch[1].replace(/,/g, ""), 10) : 0
+  const totalCount = otherMatch ? otherCount + names.length : null
+  return { text: summary, totalCount, names }
+}
+
+function extractEngagementCounts(text: string): { likes: number | null; reposts: number | null; comments: number | null; threadedComments: number | null } {
+  const lines = text.split("\n").map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean)
+  const numberFor = (pattern: RegExp): number | null => {
+    const match = text.replace(/\s+/g, " ").match(pattern)
+    return match ? parseInt(match[1].replace(/,/g, ""), 10) : null
+  }
+  let likes = numberFor(/(\d[\d,]*)\s+(?:likes?|reactions?)/i)
+  if (!likes) {
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (/^\d+$/.test(lines[i]) && /others|reactions?/i.test(lines[i + 1])) {
+        likes = parseInt(lines[i], 10)
+        break
+      }
+    }
+  }
+  const comments = numberFor(/(\d[\d,]*)\s+comments?/i)
+  return {
+    likes,
+    reposts: numberFor(/(\d[\d,]*)\s+(?:reposts?|shares?)/i),
+    comments,
+    threadedComments: comments
+  }
+}
+
+function isMeaningfulImage(img: HTMLImageElement): boolean {
+  const src = img.currentSrc || img.src || ""
+  if (!src) return false
+  if (/^data:image\/gif;base64,R0lGODlhAQABA/i.test(src)) return false
+  if (/transparent|spacer|pixel/i.test(src)) return false
+  const rect = img.getBoundingClientRect()
+  return rect.width >= 40 && rect.height >= 40
+}
+
+function extractMeaningfulThumbnail(root: Element | null): string | null {
+  const direct = document.querySelector("#ember33")
+  if (direct instanceof HTMLImageElement && isMeaningfulImage(direct)) return direct.currentSrc || direct.src || null
+  const scope = root || document.body
+  const images = Array.from(scope.querySelectorAll("img"))
+    .filter(img => isVisible(img) && isMeaningfulImage(img as HTMLImageElement)) as HTMLImageElement[]
+  images.sort((a, b) => {
+    const ra = a.getBoundingClientRect()
+    const rb = b.getBoundingClientRect()
+    return (rb.width * rb.height) - (ra.width * ra.height)
+  })
+  return images[0] ? (images[0].currentSrc || images[0].src || null) : null
+}
+
+function extractPostTextFromLines(lines: string[], eventTitle: string, organizerName: string | null): string | null {
+  const startIndex = lines.findIndex(line => line.length > 25 && line !== eventTitle && !/followers?|Visible to anyone|week|weeks|day|days|hour|hours|minute|minutes/i.test(line))
+  if (startIndex === -1) return null
+  const parts: string[] = []
+  for (let i = startIndex; i < lines.length; i++) {
+    const line = lines[i]
+    if (/^\d+$/.test(line) || /^\d+\s+repost/i.test(line) || /^Reactions?$/i.test(line) || /^Like$/i.test(line) || /^Comment$/i.test(line) || /^Repost$/i.test(line) || /^Send$/i.test(line) || /^Add a comment/i.test(line) || /^Other events for you$/i.test(line) || isLinkedInNoiseText(line)) break
+    if (organizerName && line === organizerName && parts.length) continue
+    parts.push(line)
+  }
+  const text = parts.join(" ").replace(/\s+/g, " ").trim()
+  return text || null
+}
+
+function extractLinkedInPostCard(eventTitle: string, organizerName: string | null, root: Element | null): { text: string | null; posterName: string | null; followerCountText: string | null; engagement: { likes: number | null; reposts: number | null; comments: number | null; threadedComments: number | null } } {
+  const containers = Array.from((root || document.body).querySelectorAll("article, [role='article'], section, div"))
+    .filter(el => isVisible(el))
+    .map(el => {
+      const text = getVisibleText(el)
+      let score = 0
+      if (isLinkedInNoiseText(text)) score -= 200
+      if (organizerName && text.includes(organizerName)) score += 40
+      if (text.includes(eventTitle)) score += 20
+      if (/followers?/i.test(text)) score += 25
+      if (/Like|Comment|Repost|Send|repost|reactions?/i.test(text)) score += 25
+      if (/Visible to anyone/i.test(text)) score += 20
+      if (text.length > 200) score += 10
+      return { el, text, score }
+    })
+    .filter(item => item.score > 20)
+    .sort((a, b) => b.score - a.score)
+
+  const best = containers[0]
+  if (!best) {
+    return { text: null, posterName: organizerName, followerCountText: null, engagement: { likes: null, reposts: null, comments: null, threadedComments: null } }
+  }
+
+  const lines = best.text.split("\n").map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean)
+  const followerCountText = lines.find(line => /followers?/i.test(line)) || null
+  const postText = extractPostTextFromLines(lines, eventTitle, organizerName)
+  const posterName = organizerName || lines.find(line => /^[A-Z][A-Za-z0-9&.'’\-]+(?:\s+[A-Z][A-Za-z0-9&.'’\-]+){0,4}$/.test(line) && line !== eventTitle && !/followers?/i.test(line)) || null
+
+  return {
+    text: postText,
+    posterName,
+    followerCountText,
+    engagement: extractEngagementCounts(best.text)
+  }
+}
+
+function extractDetailsText(root: Element | null, eventTitle: string): string | null {
+  const text = getVisibleText(root || document.body)
+  const lines = text.split("\n").map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean)
+  const start = lines.findIndex(line => line === eventTitle)
+  const end = lines.findIndex(line => /^Other events for you$/i.test(line))
+  const slice = lines.slice(start >= 0 ? start + 1 : 0, end >= 0 ? end : lines.length)
+    .filter(line => !/^Add to calendar$/i.test(line))
+    .filter(line => !/^Attendee profile images$/i.test(line))
+    .filter(line => !/^Boost$/i.test(line))
+    .filter(line => !/^(Details|Comments|Networking|Analytics)$/i.test(line))
+    .filter(line => !isLinkedInNoiseText(line))
+  const joined = slice.join(" ").replace(/\s+/g, " ").trim()
+  return joined || null
 }
 
 function waitForDomStable(debounceMs = 200, timeoutMs = 5000): Promise<{ stable: boolean; elapsed: number; mutations: number }> {

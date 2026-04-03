@@ -191,6 +191,12 @@ Network:
   slop network on [patterns...]       Start intercepting
   slop network off                    Stop intercepting
   slop network log                    Print captured requests
+  slop network override on '<json>'   Rewrite matching requests before they leave the browser
+  slop network override off           Disable request rewriting
+
+LinkedIn:
+  slop linkedin event [url]           Extract LinkedIn event + post data via network and DOM validation
+  slop linkedin attendees [url]       Extract LinkedIn event attendees with request override, batching, and enrichment
 
 Headers:
   slop headers add <name> <value>     Add request header
@@ -544,11 +550,55 @@ async function main() {
           action = { type: "network_intercept", patterns: [], enabled: false }
           break
         case "log":
-          action = { type: "network_log", since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : undefined }
+          action = {
+            type: "network_log",
+            since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : undefined,
+            limit: filtered.includes("--limit") ? parseInt(filtered[filtered.indexOf("--limit") + 1]) : undefined
+          }
           break
-        default:
-          console.error("error: unknown network subcommand. Use: on, off, log")
+        case "override":
+          if (filtered[2] === "on") {
+            action = { type: "network_override", enabled: true, rules: JSON.parse(filtered[3] || "[]") }
+            break
+          }
+          if (filtered[2] === "off") {
+            action = { type: "network_override", enabled: false, rules: [] }
+            break
+          }
+          console.error("error: unknown network override subcommand. Use: on, off")
           process.exit(1)
+        default:
+          console.error("error: unknown network subcommand. Use: on, off, log, override")
+          process.exit(1)
+      }
+      break
+
+    case "linkedin":
+      if (filtered[1] === "event") {
+        action = {
+          type: "linkedin_event_extract",
+          url: filtered[2],
+          waitMs: filtered.includes("--wait") ? parseInt(filtered[filtered.indexOf("--wait") + 1]) : undefined
+        }
+        break
+      }
+      if (filtered[1] === "attendees") {
+        action = {
+          type: "linkedin_attendees_extract",
+          url: filtered[2],
+          waitMs: filtered.includes("--wait") ? parseInt(filtered[filtered.indexOf("--wait") + 1]) : undefined,
+          enrichLimit: filtered.includes("--enrich-limit") ? parseInt(filtered[filtered.indexOf("--enrich-limit") + 1]) : undefined
+        }
+        break
+      }
+      console.error("error: unknown linkedin subcommand. Use: event, attendees")
+      process.exit(1)
+
+    case "linkedin-event":
+      action = {
+        type: "linkedin_event_extract",
+        url: filtered[1],
+        waitMs: filtered.includes("--wait") ? parseInt(filtered[filtered.indexOf("--wait") + 1]) : undefined
       }
       break
 
