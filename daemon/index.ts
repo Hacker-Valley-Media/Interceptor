@@ -1,10 +1,12 @@
 import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
-import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input"
+import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-win"
 
-const SOCKET_PATH = "/tmp/slop-browser.sock"
-const PID_PATH = "/tmp/slop-browser.pid"
-const LOG_PATH = "/tmp/slop-browser.log"
-const EVENTS_PATH = "/tmp/slop-browser-events.jsonl"
+const IS_WIN = process.platform === "win32"
+const TEMP = IS_WIN ? (process.env.TEMP || "C:\\Temp") : "/tmp"
+const SOCKET_PATH = IS_WIN ? "\\\\.\\pipe\\slop-browser" : "/tmp/slop-browser.sock"
+const PID_PATH = `${TEMP}${IS_WIN ? "\\" : "/"}slop-browser.pid`
+const LOG_PATH = `${TEMP}${IS_WIN ? "\\" : "/"}slop-browser.log`
+const EVENTS_PATH = `${TEMP}${IS_WIN ? "\\" : "/"}slop-browser-events.jsonl`
 const WS_PORT = parseInt(process.env.SLOP_WS_PORT || "19222")
 const EVENTS_MAX_SIZE = 10 * 1024 * 1024
 
@@ -200,13 +202,26 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
   }
 }
 
+let extensionWs: { send: (data: string) => void } | null = null
+
 function sendNativeMessage(msg: unknown): void {
   const json = JSON.stringify(msg)
+  log(`sending: ${json.slice(0, 200)}`)
+  if (extensionWs) {
+    try {
+      const sent = extensionWs.send(json)
+      log(`ws send result: ${sent}, extensionWs readyState exists`)
+      return
+    } catch (err) {
+      log(`ws send error: ${(err as Error).message}`)
+    }
+  } else {
+    log(`no extensionWs available, falling back to stdout`)
+  }
   const encoded = Buffer.from(json, "utf-8")
   const header = Buffer.alloc(4)
   header.writeUInt32LE(encoded.byteLength, 0)
   const combined = Buffer.concat([header, encoded])
-  log(`sending: ${json.slice(0, 200)}`)
   process.stdout.write(combined)
 }
 
@@ -400,9 +415,11 @@ try {
         log(`ws client connected`)
       },
       message(ws, raw) {
-        let request: { id?: string; action?: unknown; tabId?: number; type?: string }
+        const rawStr = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8")
+        log(`ws recv: ${rawStr.slice(0, 300)}`)
+        let request: { id?: string; action?: unknown; tabId?: number; type?: string; result?: unknown }
         try {
-          request = JSON.parse(typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8"))
+          request = JSON.parse(rawStr)
         } catch {
           ws.send(JSON.stringify({ error: "invalid JSON" }))
           return
@@ -410,7 +427,13 @@ try {
 
         if (request.type === "extension") {
           (ws as any).__isExtension = true
+          extensionWs = ws
           log("ws extension channel registered")
+          return
+        }
+
+        if ((request as any).id && (request as any).result !== undefined) {
+          handleNativeMessage(request as any)
           return
         }
 
@@ -440,6 +463,7 @@ try {
         sendNativeMessage({ id, action: request.action, tabId: request.tabId })
       },
       close(ws) {
+        if ((ws as any).__isExtension) extensionWs = null
         log("ws client disconnected")
       }
     }

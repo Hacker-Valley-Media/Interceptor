@@ -3,6 +3,37 @@ var nativePort = null;
 var connectionReady = false;
 var isConnecting = false;
 var reconnectDelay = 1000;
+var offscreenIdleTimer = null;
+var OFFSCREEN_IDLE_MS = 30000;
+async function ensureOffscreen() {
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+  if (contexts.length > 0) {
+    resetOffscreenTimer();
+    return;
+  }
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["BLOBS"],
+    justification: "Image crop, stitch, and diff operations"
+  });
+  resetOffscreenTimer();
+}
+function resetOffscreenTimer() {
+  if (offscreenIdleTimer)
+    clearTimeout(offscreenIdleTimer);
+  offscreenIdleTimer = setTimeout(async () => {
+    try {
+      await chrome.offscreen.closeDocument();
+    } catch {}
+    offscreenIdleTimer = null;
+  }, OFFSCREEN_IDLE_MS);
+}
+async function sendToOffscreen(msg) {
+  await ensureOffscreen();
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ ...msg, target: "offscreen" }, resolve);
+  });
+}
 function emitEvent(event, data = {}) {
   sendToHost({ type: "event", event, ...data });
 }
@@ -43,13 +74,18 @@ function connectToHost() {
   });
   port.onDisconnect.addListener(() => {
     const dyingPort = nativePort;
-    connectionReady = false;
     isConnecting = false;
     const lastError = chrome.runtime.lastError;
     if (lastError) {
       console.error("native host disconnected:", lastError.message);
     }
     console.log("connection_lost", lastError?.message);
+    nativePort = null;
+    if (wsReady && wsChannel) {
+      console.log("native host down but ws channel active, staying ready");
+      return;
+    }
+    connectionReady = false;
     for (const [id, req] of pendingRequests) {
       clearTimeout(req.timer);
       console.error(`orphaned request ${id} (${req.action}) — native port disconnected`);
@@ -60,7 +96,6 @@ function connectToHost() {
       }
     }
     pendingRequests.clear();
-    nativePort = null;
     const jitter = Math.random() * reconnectDelay * 0.3;
     setTimeout(connectToHost, reconnectDelay + jitter);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
@@ -221,8 +256,128 @@ async function verifyTabUrl(tabId, expectedUrl) {
   }
   return null;
 }
+var debuggerAttached = new Set;
+async function cdpCommand(tabId, method, params) {
+  const target = { tabId };
+  const isAttached = debuggerAttached.has(tabId);
+  if (!isAttached) {
+    await chrome.debugger.attach(target, "1.3");
+    debuggerAttached.add(tabId);
+  }
+  try {
+    const result = await chrome.debugger.sendCommand(target, method, params);
+    return result;
+  } finally {
+    if (!isAttached) {
+      try {
+        await chrome.debugger.detach(target);
+        debuggerAttached.delete(tabId);
+      } catch {}
+    }
+  }
+}
+async function cdpAttachActDetach(tabId, method, params) {
+  try {
+    const result = await cdpCommand(tabId, method, params);
+    return { success: true, data: result };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source.tabId) {
+    debuggerAttached.delete(source.tabId);
+  }
+  if (reason === "canceled_by_user") {
+    console.log("debugger detached by user (DevTools opened)");
+  }
+});
 async function routeAction(action, tabId) {
   switch (action.type) {
+    case "os_click": {
+      const win = await chrome.windows.getCurrent();
+      const windowBounds = { left: win.left || 0, top: win.top || 0, width: win.width || 0, height: win.height || 0 };
+      let pageX = action.x;
+      let pageY = action.y;
+      if ((action.index !== undefined || action.ref) && (pageX === undefined || pageY === undefined)) {
+        const rectResult = await sendToContentScript(tabId, { type: "rect", index: action.index, ref: action.ref });
+        if (!rectResult.success || !rectResult.data)
+          return { success: false, error: "failed to get element coordinates for os_click" };
+        const rect = rectResult.data;
+        pageX = rect.left + rect.width / 2;
+        pageY = rect.top + rect.height / 2;
+      }
+      if (pageX === undefined || pageY === undefined)
+        return { success: false, error: "os_click requires element target or x,y coordinates" };
+      const chromeUiHeight = action.chromeUiHeight || 88 + (debuggerAttached.has(tabId) ? 35 : 0);
+      return { success: true, data: { method: "os_event", screenTarget: { pageX, pageY }, windowBounds, button: action.button || "left", clickCount: action.clickCount || 1, chromeUiHeight } };
+    }
+    case "os_key": {
+      return { success: true, data: { method: "os_event", key: action.key, modifiers: action.modifiers || [] } };
+    }
+    case "os_type": {
+      if (action.index !== undefined || action.ref) {
+        await sendToContentScript(tabId, { type: "focus", index: action.index, ref: action.ref });
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return { success: true, data: { method: "os_event", text: action.text } };
+    }
+    case "os_move": {
+      const win = await chrome.windows.getCurrent();
+      const windowBounds = { left: win.left || 0, top: win.top || 0, width: win.width || 0, height: win.height || 0 };
+      const chromeUiHeight = action.chromeUiHeight || 88 + (debuggerAttached.has(tabId) ? 35 : 0);
+      return { success: true, data: { method: "os_event", path: action.path, windowBounds, duration: action.duration || 100, chromeUiHeight } };
+    }
+    case "screenshot_background": {
+      const format = action.format === "png" ? "image/png" : "image/jpeg";
+      const quality = (action.quality || 50) / 100;
+      try {
+        const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+        const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+        if (contexts.length === 0) {
+          await chrome.offscreen.createDocument({
+            url: "offscreen.html",
+            reasons: ["USER_MEDIA"],
+            justification: "Background tab screenshot via tabCapture"
+          });
+        }
+        await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ target: "offscreen", type: "capture_start", streamId }, () => resolve());
+        });
+        await new Promise((r) => setTimeout(r, 300));
+        const frameResult = await sendToOffscreen({ type: "capture_frame", format, quality });
+        await sendToOffscreen({ type: "capture_stop" });
+        if (!frameResult.success)
+          return { success: false, error: frameResult.error || "capture frame failed" };
+        const dataUrl = frameResult.data;
+        const sizeBytes = Math.round((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75);
+        return { success: true, data: { dataUrl, format: action.format || "jpeg", size: sizeBytes, method: "tabCapture" } };
+      } catch (err) {
+        return { success: false, error: `tabCapture failed: ${err.message}` };
+      }
+    }
+    case "cdp_tree": {
+      const depth = action.depth || undefined;
+      const result = await cdpAttachActDetach(tabId, "Accessibility.getFullAXTree", depth ? { depth } : undefined);
+      if (!result.success)
+        return { success: false, error: result.error };
+      const nodes = result.data?.nodes || [];
+      const formatted = nodes.map((n) => {
+        const role = n.role?.value || "";
+        const name = n.name?.value || "";
+        const nodeId = n.nodeId || "";
+        return `[${nodeId}] ${role} "${name}"`;
+      }).join(`
+`);
+      return { success: true, data: formatted || "empty tree" };
+    }
+    case "capabilities": {
+      const daemonConnected = connectionReady;
+      const hasTabCapture = true;
+      const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false;
+      const debuggerActive = debuggerAttached.size > 0;
+      return { success: true, data: { layers: { os_input: daemonConnected, tabCapture: hasTabCapture, cdp_debugger: hasDebugger, debugger_active: debuggerActive }, daemon: daemonConnected, infoBannerHeight: debuggerActive ? 35 : 0 } };
+    }
     case "status":
       return { success: true, data: { connected: true, version: chrome.runtime.getManifest().version } };
     case "reload_extension":
@@ -231,29 +386,74 @@ async function routeAction(action, tabId) {
     case "screenshot": {
       const format = action.format === "png" ? "png" : "jpeg";
       const quality = action.quality || 50;
-      const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality });
-      const filename = `slop-screenshot-${Date.now()}.${format === "png" ? "png" : "jpg"}`;
-      const downloadId = await chrome.downloads.download({
-        url: dataUrl,
-        filename,
-        conflictAction: "uniquify"
-      });
-      const filePath = await new Promise((resolve) => {
-        function onChanged(delta) {
-          if (delta.id === downloadId && delta.state?.current === "complete") {
-            chrome.downloads.onChanged.removeListener(onChanged);
-            chrome.downloads.search({ id: downloadId }, (items) => {
-              resolve(items[0]?.filename || filename);
-            });
-          }
+      if (action.full) {
+        const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" });
+        if (!dims.success || !dims.data)
+          return { success: false, error: "failed to get page dimensions" };
+        const { scrollHeight, viewportHeight, viewportWidth, scrollY: origScrollY, devicePixelRatio } = dims.data;
+        const stripCount = Math.ceil(scrollHeight / viewportHeight);
+        const strips = [];
+        for (let i = 0;i < stripCount; i++) {
+          const scrollTo = i * viewportHeight;
+          await sendToContentScript(tabId, { type: "scroll_absolute", y: scrollTo });
+          await new Promise((r) => setTimeout(r, 150));
+          const stripUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality });
+          const stripHeight = i === stripCount - 1 ? scrollHeight - scrollTo : viewportHeight;
+          strips.push({ dataUrl: stripUrl, y: Math.round(scrollTo * devicePixelRatio) });
+          if (i < stripCount - 1)
+            await new Promise((r) => setTimeout(r, 500));
         }
-        chrome.downloads.onChanged.addListener(onChanged);
-        setTimeout(() => {
-          chrome.downloads.onChanged.removeListener(onChanged);
-          resolve(filename);
-        }, 5000);
-      });
-      return { success: true, data: filePath };
+        await sendToContentScript(tabId, { type: "scroll_absolute", y: origScrollY });
+        const stitchResult = await sendToOffscreen({
+          type: "stitch",
+          strips,
+          totalWidth: Math.round(viewportWidth * devicePixelRatio),
+          totalHeight: Math.round(scrollHeight * devicePixelRatio),
+          format,
+          quality: quality / 100
+        });
+        if (!stitchResult.success)
+          return { success: false, error: stitchResult.error };
+        const stitchedUrl = stitchResult.data;
+        const stitchedSize = Math.round((stitchedUrl.length - stitchedUrl.indexOf(",") - 1) * 0.75);
+        if (action.save) {
+          return { success: true, data: { dataUrl: stitchedUrl, format, size: stitchedSize, save: true, strips: stripCount } };
+        }
+        return { success: true, data: { dataUrl: stitchedUrl, format, size: stitchedSize, strips: stripCount } };
+      }
+      let dataUrl;
+      try {
+        dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality });
+      } catch (captureErr) {
+        const fallback = await routeAction({ type: "screenshot_background", format: action.format, quality: action.quality }, tabId);
+        if (fallback.success && fallback.data) {
+          fallback.data.fallback = "tabCapture (captureVisibleTab failed)";
+        }
+        return fallback;
+      }
+      const sizeBytes = Math.round((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75);
+      if (action.save) {
+        return { success: true, data: { dataUrl, format, size: sizeBytes, save: true } };
+      }
+      let clip = action.clip;
+      if (!clip && action.element !== undefined) {
+        const elemResult = await sendToContentScript(tabId, { type: "rect", index: action.element });
+        if (elemResult.success && elemResult.data) {
+          clip = elemResult.data;
+        }
+      }
+      if (clip) {
+        const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip });
+        if (!cropResult.success)
+          return { success: false, error: cropResult.error };
+        const croppedUrl = cropResult.data;
+        const croppedSize = Math.round((croppedUrl.length - croppedUrl.indexOf(",") - 1) * 0.75);
+        return { success: true, data: { dataUrl: croppedUrl, format, size: croppedSize, clip } };
+      }
+      if (format === "png" && sizeBytes > 800 * 1024) {
+        return { success: true, data: { dataUrl, format, size: sizeBytes, warning: "PNG exceeds 800KB — consider using JPEG for smaller responses" } };
+      }
+      return { success: true, data: { dataUrl, format, size: sizeBytes } };
     }
     case "page_capture": {
       const mhtml = await chrome.pageCapture.saveAsMHTML({ tabId });
@@ -577,6 +777,165 @@ async function routeAction(action, tabId) {
       });
       return { success: true };
     }
+    case "canvas_list": {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: () => {
+          const canvases = Array.from(document.querySelectorAll("canvas"));
+          function walkShadowRoots(root) {
+            const found = [];
+            const children = root instanceof ShadowRoot ? Array.from(root.children) : Array.from(root.children);
+            for (const child of children) {
+              if (child.tagName === "CANVAS")
+                found.push(child);
+              const shadow = child.shadowRoot;
+              if (shadow)
+                found.push(...walkShadowRoots(shadow));
+              found.push(...walkShadowRoots(child));
+            }
+            return found;
+          }
+          const shadowCanvases = walkShadowRoots(document.body);
+          const all = [...new Set([...canvases, ...shadowCanvases])];
+          return all.map((c, i) => {
+            const rect = c.getBoundingClientRect();
+            let contextType = "none";
+            try {
+              if (c.getContext("2d"))
+                contextType = "2d";
+              else if (c.getContext("webgl2"))
+                contextType = "webgl2";
+              else if (c.getContext("webgl"))
+                contextType = "webgl";
+              else if (c.getContext("bitmaprenderer"))
+                contextType = "bitmaprenderer";
+            } catch {}
+            const style = getComputedStyle(c);
+            const hidden = style.display === "none" || style.visibility === "hidden" || c.width === 0 && c.height === 0;
+            return {
+              index: i,
+              width: c.width,
+              height: c.height,
+              cssWidth: rect.width,
+              cssHeight: rect.height,
+              x: rect.x,
+              y: rect.y,
+              contextType,
+              hidden,
+              id: c.id || undefined,
+              className: c.className || undefined
+            };
+          });
+        }
+      });
+      return { success: true, data: results[0]?.result ?? [] };
+    }
+    case "canvas_read": {
+      const canvasIdx = action.canvasIndex;
+      const fmt = action.format === "png" ? "image/png" : "image/jpeg";
+      const qual = action.quality || 0.5;
+      const region = action.region;
+      const isWebgl = action.webgl;
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        args: [canvasIdx, fmt, qual, region ?? null, isWebgl ?? false],
+        func: (idx, format, quality, reg, webgl) => {
+          const canvases = Array.from(document.querySelectorAll("canvas"));
+          const c = canvases[idx];
+          if (!c)
+            return { success: false, error: `no canvas at index ${idx}` };
+          try {
+            if (reg) {
+              const ctx = c.getContext("2d");
+              if (!ctx)
+                return { success: false, error: "canvas has no 2d context for region read" };
+              const data = ctx.getImageData(reg.x, reg.y, reg.width, reg.height);
+              const tmpCanvas = document.createElement("canvas");
+              tmpCanvas.width = reg.width;
+              tmpCanvas.height = reg.height;
+              const tmpCtx = tmpCanvas.getContext("2d");
+              tmpCtx.putImageData(data, 0, 0);
+              return { success: true, data: tmpCanvas.toDataURL(format, quality) };
+            }
+            if (webgl) {
+              const gl = c.getContext("webgl2") || c.getContext("webgl");
+              if (!gl)
+                return { success: false, error: "canvas has no webgl context" };
+              const pixels = new Uint8Array(c.width * c.height * 4);
+              gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+              const tmpCanvas = document.createElement("canvas");
+              tmpCanvas.width = c.width;
+              tmpCanvas.height = c.height;
+              const tmpCtx = tmpCanvas.getContext("2d");
+              const imageData = tmpCtx.createImageData(c.width, c.height);
+              for (let row = 0;row < c.height; row++) {
+                const srcOff = row * c.width * 4;
+                const dstOff = (c.height - 1 - row) * c.width * 4;
+                imageData.data.set(pixels.subarray(srcOff, srcOff + c.width * 4), dstOff);
+              }
+              tmpCtx.putImageData(imageData, 0, 0);
+              return { success: true, data: tmpCanvas.toDataURL(format, quality) };
+            }
+            return { success: true, data: c.toDataURL(format, quality) };
+          } catch (e) {
+            if (e.message?.includes("tainted"))
+              return { success: false, error: "canvas is tainted (cross-origin content)" };
+            return { success: false, error: e.message };
+          }
+        }
+      });
+      const res = results[0]?.result;
+      if (!res)
+        return { success: false, error: "no result from canvas read" };
+      if (!res.success)
+        return { success: false, error: res.error };
+      const dataUrl = res.data;
+      const sizeBytes = Math.round((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75);
+      if (sizeBytes > 800 * 1024) {
+        return { success: true, data: { dataUrl, size: sizeBytes, warning: "Response exceeds 800KB — consider JPEG or smaller region" } };
+      }
+      return { success: true, data: { dataUrl, size: sizeBytes } };
+    }
+    case "capture_start": {
+      const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+      const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+      if (contexts.length === 0) {
+        await chrome.offscreen.createDocument({
+          url: "offscreen.html",
+          reasons: ["USER_MEDIA"],
+          justification: "Tab capture stream processing"
+        });
+      }
+      chrome.runtime.sendMessage({ target: "offscreen", type: "capture_start", streamId });
+      return { success: true, data: { streamId, tabId } };
+    }
+    case "capture_frame": {
+      const fmt = action.format === "png" ? "image/png" : "image/jpeg";
+      const qual = action.quality || 50;
+      const frameResult = await sendToOffscreen({ type: "capture_frame", format: fmt, quality: qual / 100 });
+      if (!frameResult.success)
+        return { success: false, error: frameResult.error };
+      return { success: true, data: { dataUrl: frameResult.data } };
+    }
+    case "capture_stop": {
+      const stopResult = await sendToOffscreen({ type: "capture_stop" });
+      try {
+        await chrome.offscreen.closeDocument();
+      } catch {}
+      return { success: true };
+    }
+    case "canvas_diff": {
+      const image1 = action.image1;
+      const image2 = action.image2;
+      const threshold = action.threshold || 0;
+      const returnImage = action.returnImage || false;
+      const diffResult = await sendToOffscreen({ type: "diff", image1, image2, threshold, returnImage });
+      if (!diffResult.success)
+        return { success: false, error: diffResult.error };
+      return { success: true, data: diffResult.data };
+    }
     case "evaluate": {
       const code = action.code;
       const world = action.world === "ISOLATED" ? "ISOLATED" : "MAIN";
@@ -606,8 +965,21 @@ async function routeAction(action, tabId) {
       });
       return results[0]?.result ?? { success: false, error: "no result" };
     }
-    default:
-      return await sendToContentScript(tabId, action);
+    default: {
+      const contentResult = await sendToContentScript(tabId, action, action.frameId);
+      if (action.type === "click" && contentResult.success && contentResult.warning?.includes("no DOM change") && connectionReady) {
+        console.log("auto-escalating click to OS-level input");
+        const osResult = await routeAction({ ...action, type: "os_click" }, tabId);
+        if (osResult.success) {
+          return { success: true, data: { ...typeof osResult.data === "object" && osResult.data || {}, escalated: { from: "synthetic", to: "os_click", reason: "no DOM mutation after synthetic click" } }, tabId };
+        }
+        return { success: false, error: "click failed at all layers", data: { diagnostics: { layers_tried: ["synthetic", "os_click"], reason: "synthetic produced no DOM change, os_click failed", suggestion: "verify element is interactive and Chrome window is visible" } } };
+      }
+      if (!contentResult.success && contentResult.error) {
+        contentResult.data = { ...typeof contentResult.data === "object" && contentResult.data ? contentResult.data : {}, diagnostics: { layer_tried: "content_script", reason: contentResult.error, suggestion: action.type === "click" ? "try: slop click --os " + (action.ref || action.index || "") : undefined } };
+      }
+      return contentResult;
+    }
   }
 }
 var wsChannel = null;
@@ -623,6 +995,27 @@ function connectWsChannel() {
       wsReady = true;
       ws.send(JSON.stringify({ type: "extension" }));
       console.log("ws channel connected");
+      if (!connectionReady) {
+        connectionReady = true;
+        reconnectDelay = 1000;
+        isConnecting = false;
+        console.log("connection ready via ws channel");
+        while (messageQueue.length > 0) {
+          const queued = messageQueue.shift();
+          handleDaemonMessage(queued);
+        }
+      }
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+        console.log("ws onmessage:", JSON.stringify(msg).slice(0, 200));
+        if (msg.id && msg.action) {
+          handleDaemonMessage(msg);
+        }
+      } catch (err) {
+        console.error("ws onmessage error:", err);
+      }
     };
     ws.onclose = () => {
       wsReady = false;
@@ -642,9 +1035,11 @@ function sendToHost(msg) {
     } catch {}
   }
 }
-async function sendToContentScript(tabId, action) {
+async function sendToContentScript(tabId, action, frameId) {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, { type: "execute_action", action }, (response) => {
+    const targetFrame = frameId !== undefined ? frameId : 0;
+    const opts = { frameId: targetFrame };
+    chrome.tabs.sendMessage(tabId, { type: "execute_action", action }, opts, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ success: false, error: chrome.runtime.lastError.message });
       } else {
@@ -655,19 +1050,43 @@ async function sendToContentScript(tabId, action) {
 }
 function waitForTabLoad(tabId, timeoutMs = 15000) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    const start = Date.now();
+    const stage1Timeout = Math.min(timeoutMs, 1e4);
+    const hardTimer = setTimeout(async () => {
       chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
+      const probeResult = await probeContentReady(tabId, Math.max(timeoutMs - (Date.now() - start), 1000));
+      resolve({ ready: probeResult, elapsed: Date.now() - start });
     }, timeoutMs);
     function listener(updatedTabId, changeInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
-        clearTimeout(timer);
+        clearTimeout(hardTimer);
         chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
+        const remaining = Math.max(timeoutMs - (Date.now() - start), 2000);
+        probeContentReady(tabId, remaining).then((ready) => {
+          resolve({ ready, elapsed: Date.now() - start });
+        });
       }
     }
     chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(async () => {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (tab && tab.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        clearTimeout(hardTimer);
+        const remaining = Math.max(timeoutMs - (Date.now() - start), 2000);
+        const ready = await probeContentReady(tabId, remaining);
+        resolve({ ready, elapsed: Date.now() - start });
+      }
+    }, stage1Timeout);
   });
+}
+async function probeContentReady(tabId, timeoutMs) {
+  try {
+    const result = await sendToContentScript(tabId, { type: "wait_stable", ms: 500, timeout: Math.min(timeoutMs, 5000) });
+    return result.success && (result.data?.stable ?? true);
+  } catch {
+    return false;
+  }
 }
 var keepalivePongTimer = null;
 chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });

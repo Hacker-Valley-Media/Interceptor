@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
 
-const SOCKET_PATH = "/tmp/slop-browser.sock"
-const PID_PATH = "/tmp/slop-browser.pid"
+const IS_WIN = process.platform === "win32"
+const SOCKET_PATH = IS_WIN ? "\\\\.\\pipe\\slop-browser" : "/tmp/slop-browser.sock"
+const PID_PATH = IS_WIN ? `${process.env.TEMP || "C:\\Temp"}\\slop-browser.pid` : "/tmp/slop-browser.pid"
 const WS_PORT = parseInt(process.env.SLOP_WS_PORT || "19222")
 
 const SLOP_TIMEOUT_MS = parseInt(process.env.SLOP_TIMEOUT || "15000")

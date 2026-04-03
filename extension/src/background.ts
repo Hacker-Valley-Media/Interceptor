@@ -80,13 +80,18 @@ function connectToHost() {
 
   port.onDisconnect.addListener(() => {
     const dyingPort = nativePort
-    connectionReady = false
     isConnecting = false
     const lastError = chrome.runtime.lastError
     if (lastError) {
       console.error("native host disconnected:", lastError.message)
     }
     console.log("connection_lost", lastError?.message)
+    nativePort = null
+    if (wsReady && wsChannel) {
+      console.log("native host down but ws channel active, staying ready")
+      return
+    }
+    connectionReady = false
     for (const [id, req] of pendingRequests) {
       clearTimeout(req.timer)
       console.error(`orphaned request ${id} (${req.action}) — native port disconnected`)
@@ -95,7 +100,6 @@ function connectToHost() {
       }
     }
     pendingRequests.clear()
-    nativePort = null
     const jitter = Math.random() * reconnectDelay * 0.3
     setTimeout(connectToHost, reconnectDelay + jitter)
     reconnectDelay = Math.min(reconnectDelay * 2, 30000)
@@ -1083,6 +1087,27 @@ function connectWsChannel() {
       wsReady = true
       ws.send(JSON.stringify({ type: "extension" }))
       console.log("ws channel connected")
+      if (!connectionReady) {
+        connectionReady = true
+        reconnectDelay = 1000
+        isConnecting = false
+        console.log("connection ready via ws channel")
+        while (messageQueue.length > 0) {
+          const queued = messageQueue.shift()!
+          handleDaemonMessage(queued)
+        }
+      }
+    }
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(typeof event.data === "string" ? event.data : "")
+        console.log("ws onmessage:", JSON.stringify(msg).slice(0, 200))
+        if (msg.id && msg.action) {
+          handleDaemonMessage(msg)
+        }
+      } catch (err) {
+        console.error("ws onmessage error:", err)
+      }
     }
     ws.onclose = () => {
       wsReady = false
