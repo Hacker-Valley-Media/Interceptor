@@ -2,6 +2,8 @@ node_modules/
 dist/
 extension/dist/
 daemon/slop-daemon
+daemon/*.exe
+daemon/.generated/
 *.log
 /tmp/
 .DS_Store

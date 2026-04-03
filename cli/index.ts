@@ -1,8 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
+import { IS_WIN, SOCKET_PATH, PID_PATH, WS_PORT, connectOptions, transportLabel } from "../shared/platform"
 
-const SOCKET_PATH = "/tmp/slop-browser.sock"
-const PID_PATH = "/tmp/slop-browser.pid"
-const WS_PORT = parseInt(process.env.SLOP_WS_PORT || "19222")
 
 const SLOP_TIMEOUT_MS = parseInt(process.env.SLOP_TIMEOUT || "15000")
 
@@ -23,51 +21,48 @@ function sendCommand(action: { type: string; [key: string]: unknown }, tabId?: n
       }
     }, SLOP_TIMEOUT_MS)
 
-    Bun.connect({
-      unix: SOCKET_PATH,
-      socket: {
-        open(socket) {
-          socketRef = socket
-          const payload = JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }) })
-          const encoded = Buffer.from(payload, "utf-8")
-          const header = Buffer.alloc(4)
-          header.writeUInt32LE(encoded.byteLength, 0)
-          socket.write(Buffer.concat([header, encoded]))
-        },
-        data(socket, raw) {
-          buffer = Buffer.concat([buffer, Buffer.from(raw)])
-          if (buffer.length >= 4) {
-            const msgLen = buffer.readUInt32LE(0)
-            if (msgLen > 0 && msgLen <= 1024 * 1024 && buffer.length >= 4 + msgLen) {
-              const json = buffer.subarray(4, 4 + msgLen).toString("utf-8")
-              clearTimeout(timer)
-              try {
-                resolved = true
-                resolve(JSON.parse(json))
-              } catch {
-                resolved = true
-                reject(new Error("invalid response from daemon"))
-              }
-              socket.end()
+    Bun.connect(connectOptions({
+      open(socket) {
+        socketRef = socket
+        const payload = JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }) })
+        const encoded = Buffer.from(payload, "utf-8")
+        const header = Buffer.alloc(4)
+        header.writeUInt32LE(encoded.byteLength, 0)
+        socket.write(Buffer.concat([header, encoded]))
+      },
+      data(socket, raw) {
+        buffer = Buffer.concat([buffer, Buffer.from(raw)])
+        if (buffer.length >= 4) {
+          const msgLen = buffer.readUInt32LE(0)
+          if (msgLen > 0 && msgLen <= 1024 * 1024 && buffer.length >= 4 + msgLen) {
+            const json = buffer.subarray(4, 4 + msgLen).toString("utf-8")
+            clearTimeout(timer)
+            try {
+              resolved = true
+              resolve(JSON.parse(json))
+            } catch {
+              resolved = true
+              reject(new Error("invalid response from daemon"))
             }
+            socket.end()
           }
-        },
-        close() {
-          clearTimeout(timer)
-          if (!resolved) {
-            reject(new Error("connection closed before response"))
-          }
-        },
-        connectError(_socket, err) {
-          clearTimeout(timer)
-          reject(new Error("daemon not running. Open Chrome with the slop-browser extension loaded."))
-        },
-        error(_socket, err) {
-          clearTimeout(timer)
-          reject(err)
         }
+      },
+      close() {
+        clearTimeout(timer)
+        if (!resolved) {
+          reject(new Error("connection closed before response"))
+        }
+      },
+      connectError(_socket, _err) {
+        clearTimeout(timer)
+        reject(new Error("daemon not running. Open Chrome with the slop-browser extension loaded."))
+      },
+      error(_socket, err) {
+        clearTimeout(timer)
+        reject(err)
       }
-    })
+    }))
   })
 }
 
@@ -249,7 +244,7 @@ async function main() {
   }
 
   if (!useWs) {
-    if (!existsSync(SOCKET_PATH)) {
+    if (!IS_WIN && !existsSync(SOCKET_PATH)) {
       console.error("error: daemon not running. Open Chrome with the slop-browser extension loaded.")
       process.exit(1)
     }
@@ -262,16 +257,21 @@ async function main() {
           try {
             process.kill(pid, 0)
           } catch {
-            try { unlinkSync(SOCKET_PATH) } catch {}
+            if (!IS_WIN) {
+              try { unlinkSync(SOCKET_PATH) } catch {}
+            }
             try { unlinkSync(PID_PATH) } catch {}
-            console.error("error: daemon not running (stale socket cleaned up). Open Chrome with the slop-browser extension loaded.")
+            console.error("error: daemon not running (stale transport cleaned up). Open Chrome with the slop-browser extension loaded.")
             process.exit(1)
           }
         }
       } catch {}
-    } else if (existsSync(SOCKET_PATH)) {
+    } else if (!IS_WIN && existsSync(SOCKET_PATH)) {
       try { unlinkSync(SOCKET_PATH) } catch {}
       console.error("error: daemon not running (stale socket cleaned up). Open Chrome with the slop-browser extension loaded.")
+      process.exit(1)
+    } else if (IS_WIN) {
+      console.error(`error: daemon not running (${transportLabel()}). Open Chrome with the slop-browser extension loaded.`)
       process.exit(1)
     }
   }
