@@ -1,5 +1,23 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { IS_WIN, SOCKET_PATH, PID_PATH, WS_PORT, connectOptions, transportLabel } from "../shared/platform"
+
+const DAEMON_BINARY = IS_WIN ? "slop-daemon.exe" : "slop-daemon"
+
+function findDaemonBinary(): string | null {
+  const candidates: string[] = []
+  const exePath = resolve(process.execPath || process.argv[0] || "")
+  const exeDir = dirname(exePath)
+  candidates.push(join(exeDir, "..", "daemon", DAEMON_BINARY))
+  candidates.push(join(exeDir, DAEMON_BINARY))
+  candidates.push(join(exeDir, "daemon", DAEMON_BINARY))
+  candidates.push(resolve("daemon", DAEMON_BINARY))
+  candidates.push(resolve("daemon", "slop-daemon"))
+  for (const c of candidates) {
+    if (existsSync(c)) return c
+  }
+  return null
+}
 
 
 const SLOP_TIMEOUT_MS = parseInt(process.env.SLOP_TIMEOUT || "15000")
@@ -17,7 +35,7 @@ function sendCommand(action: { type: string; [key: string]: unknown }, tabId?: n
       if (!resolved) {
         resolved = true
         if (socketRef) try { socketRef.end() } catch {}
-        reject(new Error("timeout: no response from daemon after " + (SLOP_TIMEOUT_MS / 1000) + "s. Check extension connection with 'slop status'."))
+        reject(new Error("timeout: no response from daemon after " + (SLOP_TIMEOUT_MS / 1000) + "s. Ensure Chrome/Brave is open with the slop-browser extension loaded."))
       }
     }, SLOP_TIMEOUT_MS)
 
@@ -187,12 +205,21 @@ Cookies:
   slop cookies set <json>             Set cookie
   slop cookies delete <url> <name>    Delete cookie
 
-Network:
-  slop network on [patterns...]       Start intercepting
+Network (CDP — explicit opt-in):
+  slop network on [patterns...]       Start intercepting (attaches debugger)
   slop network off                    Stop intercepting
-  slop network log                    Print captured requests
+  slop network log                    Print captured requests (CDP)
   slop network override on '<json>'   Rewrite matching requests before they leave the browser
   slop network override off           Disable request rewriting
+
+Passive Network (always-on, no CDP):
+  slop net log                        Passively captured fetch/XHR traffic
+  slop net log --filter <pattern>     Filter by URL substring
+  slop net log --since <timestamp>    Entries after timestamp
+  slop net log --limit <n>            Max entries (default 100)
+  slop net clear                      Flush passive capture buffer
+  slop net headers                    Show captured request headers (CSRF, auth)
+  slop net headers --filter <pattern> Filter headers by URL
 
 LinkedIn:
   slop linkedin event [url]           Extract LinkedIn event + post data via network and DOM validation
@@ -227,7 +254,7 @@ Batch:
   slop wait-stable --timeout 3000     Custom hard timeout
 
 Meta:
-  slop status                         Daemon connection info
+  slop status                         Check daemon status (local — no connection needed)
   slop help                           This help text
 
 Flags:
@@ -249,36 +276,49 @@ async function main() {
     return
   }
 
-  if (!useWs) {
-    if (!IS_WIN && !existsSync(SOCKET_PATH)) {
-      console.error("error: daemon not running. Open Chrome with the slop-browser extension loaded.")
-      process.exit(1)
-    }
+  const needsDaemon = filtered[0] !== "status" && filtered[0] !== "help" && filtered[0] !== "events" && filtered[0] !== "session"
+
+  if (needsDaemon && !useWs) {
+    let daemonAlive = false
 
     if (existsSync(PID_PATH)) {
       try {
         const pidContent = readFileSync(PID_PATH, "utf-8").trim()
         const pid = parseInt(pidContent.split("\n")[0])
         if (!isNaN(pid)) {
-          try {
-            process.kill(pid, 0)
-          } catch {
-            if (!IS_WIN) {
-              try { unlinkSync(SOCKET_PATH) } catch {}
-            }
-            try { unlinkSync(PID_PATH) } catch {}
-            console.error("error: daemon not running (stale transport cleaned up). Open Chrome with the slop-browser extension loaded.")
-            process.exit(1)
-          }
+          try { process.kill(pid, 0); daemonAlive = true } catch { daemonAlive = false }
         }
       } catch {}
-    } else if (!IS_WIN && existsSync(SOCKET_PATH)) {
-      try { unlinkSync(SOCKET_PATH) } catch {}
-      console.error("error: daemon not running (stale socket cleaned up). Open Chrome with the slop-browser extension loaded.")
-      process.exit(1)
-    } else if (IS_WIN) {
-      console.error(`error: daemon not running (${transportLabel()}). Open Chrome with the slop-browser extension loaded.`)
-      process.exit(1)
+    }
+
+    if (!daemonAlive) {
+      if (!IS_WIN) { try { unlinkSync(SOCKET_PATH) } catch {} }
+      try { unlinkSync(PID_PATH) } catch {}
+
+      const resolvedDaemon = findDaemonBinary()
+
+      if (resolvedDaemon) {
+        process.stderr.write("daemon not running — spawning...\n")
+        const child = Bun.spawn([resolvedDaemon, "--standalone"], {
+          stdout: "ignore",
+          stderr: "ignore",
+          stdin: "ignore",
+        })
+        child.unref()
+
+        for (let i = 0; i < 20; i++) {
+          await Bun.sleep(250)
+          if (existsSync(SOCKET_PATH) || (IS_WIN && existsSync(PID_PATH))) break
+        }
+
+        if (!IS_WIN && !existsSync(SOCKET_PATH)) {
+          console.error("error: daemon failed to start. Check /tmp/slop-browser.log")
+          process.exit(1)
+        }
+      } else {
+        console.error("error: daemon not running and slop-daemon binary not found. Open Chrome with the slop-browser extension loaded, or build the daemon.")
+        process.exit(1)
+      }
     }
   }
 
@@ -573,6 +613,31 @@ async function main() {
       }
       break
 
+    case "net":
+      switch (filtered[1]) {
+        case "log":
+          action = {
+            type: "net_log",
+            filter: filtered.includes("--filter") ? filtered[filtered.indexOf("--filter") + 1] : undefined,
+            since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : undefined,
+            limit: filtered.includes("--limit") ? parseInt(filtered[filtered.indexOf("--limit") + 1]) : undefined
+          }
+          break
+        case "clear":
+          action = { type: "net_clear" }
+          break
+        case "headers":
+          action = {
+            type: "net_headers",
+            filter: filtered.includes("--filter") ? filtered[filtered.indexOf("--filter") + 1] : undefined
+          }
+          break
+        default:
+          console.error("error: unknown net subcommand. Use: log, clear, headers")
+          process.exit(1)
+      }
+      break
+
     case "linkedin":
       if (filtered[1] === "event") {
         action = {
@@ -619,9 +684,39 @@ async function main() {
       }
       break
 
-    case "status":
-      action = { type: "status" }
-      break
+    case "status": {
+      const statusLines: string[] = []
+      const sockExists = !IS_WIN && existsSync(SOCKET_PATH)
+      let daemonPid: number | null = null
+      let daemonAlive = false
+      let transport = "unknown"
+      if (existsSync(PID_PATH)) {
+        try {
+          const pidContent = readFileSync(PID_PATH, "utf-8").trim()
+          const lines = pidContent.split("\n")
+          daemonPid = parseInt(lines[0])
+          transport = lines[1] || transportLabel()
+          if (!isNaN(daemonPid)) {
+            try { process.kill(daemonPid, 0); daemonAlive = true } catch { daemonAlive = false }
+          }
+        } catch {}
+      }
+      statusLines.push(`daemon: ${daemonAlive ? "running" : "not running"}`)
+      if (daemonPid) statusLines.push(`pid: ${daemonPid}`)
+      statusLines.push(`socket: ${sockExists ? SOCKET_PATH : "not found"}`)
+      statusLines.push(`transport: ${transport}`)
+      if (!daemonAlive) {
+        statusLines.push("")
+        statusLines.push("hint: run any slop command and the daemon will auto-start.")
+        statusLines.push("ensure Chrome/Brave has the slop-browser extension loaded for browser control.")
+      }
+      if (jsonMode) {
+        console.log(JSON.stringify({ daemon: daemonAlive, pid: daemonPid, socket: sockExists ? SOCKET_PATH : null, transport }, null, 2))
+      } else {
+        console.log(statusLines.join("\n"))
+      }
+      return
+    }
 
     case "reload":
       action = { type: "reload_extension" }

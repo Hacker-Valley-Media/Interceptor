@@ -51,7 +51,7 @@ const MESSAGE_QUEUE_CAP = 50
 const messageQueue: Array<{ id?: string; action?: { type: string; [key: string]: unknown }; tabId?: number }> = []
 
 const EXT_REQUEST_TIMEOUT_MS = 180_000
-const pendingRequests = new Map<string, { action: string; tabId?: number; timestamp: number; timer: ReturnType<typeof setTimeout> }>()
+const pendingRequests = new Map<string, { action: string; tabId?: number; timestamp: number; timer: ReturnType<typeof setTimeout>; viaWs?: boolean }>()
 
 function drainMessageQueue() {
   while (messageQueue.length > 0) {
@@ -140,20 +140,24 @@ async function handleDaemonMessage(msg: { id?: string; action?: { type: string; 
     return
   }
 
+  const respondViaWsEarly = !!(msg as any)._viaWs
+
   if (pendingRequests.has(msg.id)) {
-    sendToHost({ id: msg.id, result: { success: false, error: "duplicate request ID" } })
+    sendToHost({ id: msg.id, result: { success: false, error: "duplicate request ID" } }, respondViaWsEarly)
     return
   }
 
   const requestTimer = setTimeout(() => {
+    const req = pendingRequests.get(msg.id!)
     pendingRequests.delete(msg.id!)
-    sendToHost({ id: msg.id, result: { success: false, error: "extension timeout" } })
+    sendToHost({ id: msg.id, result: { success: false, error: "extension timeout" } }, req?.viaWs)
   }, EXT_REQUEST_TIMEOUT_MS)
 
   const startTime = Date.now()
   const shortId = msg.id.slice(0, 8)
-  console.log(`[${shortId}] executing ${msg.action.type}`)
-  pendingRequests.set(msg.id, { action: msg.action.type, tabId: msg.tabId, timestamp: startTime, timer: requestTimer })
+  const respondViaWs = !!(msg as any)._viaWs
+  console.log(`[${shortId}] executing ${msg.action.type} (via ${respondViaWs ? "ws" : "native"})`)
+  pendingRequests.set(msg.id, { action: msg.action.type, tabId: msg.tabId, timestamp: startTime, timer: requestTimer, viaWs: respondViaWs })
 
   const action = msg.action
   let tabId = msg.tabId
@@ -174,7 +178,7 @@ async function handleDaemonMessage(msg: { id?: string; action?: { type: string; 
   if (!tabId && needsTab(action.type)) {
     clearTimeout(requestTimer)
     pendingRequests.delete(msg.id)
-    sendToHost({ id: msg.id, result: { success: false, error: "no active tab" } })
+    sendToHost({ id: msg.id, result: { success: false, error: "no active tab" } }, respondViaWs)
     return
   }
 
@@ -187,7 +191,7 @@ async function handleDaemonMessage(msg: { id?: string; action?: { type: string; 
     if (!inGroup && slopGroupId !== null) {
       clearTimeout(requestTimer)
       pendingRequests.delete(msg.id)
-      sendToHost({ id: msg.id, result: { success: false, error: `tab ${tabId} is not in the slop group — use 'slop tab new' to create managed tabs` } })
+      sendToHost({ id: msg.id, result: { success: false, error: `tab ${tabId} is not in the slop group — use 'slop tab new' to create managed tabs` } }, respondViaWs)
       return
     }
   }
@@ -197,7 +201,7 @@ async function handleDaemonMessage(msg: { id?: string; action?: { type: string; 
     if (urlErr) {
       clearTimeout(requestTimer)
       pendingRequests.delete(msg.id)
-      sendToHost({ id: msg.id, result: { success: false, error: urlErr, tabId } })
+      sendToHost({ id: msg.id, result: { success: false, error: urlErr, tabId } }, respondViaWs)
       return
     }
   }
@@ -208,12 +212,12 @@ async function handleDaemonMessage(msg: { id?: string; action?: { type: string; 
     clearTimeout(requestTimer)
     pendingRequests.delete(msg.id)
     console.log(`[${shortId}] complete ${action.type} ${Date.now() - startTime}ms`)
-    sendToHost({ id: msg.id, result })
+    sendToHost({ id: msg.id, result }, respondViaWs)
   } catch (err) {
     clearTimeout(requestTimer)
     pendingRequests.delete(msg.id)
     console.error(`[${shortId}] error ${action.type} ${Date.now() - startTime}ms: ${(err as Error).message}`)
-    sendToHost({ id: msg.id, result: { success: false, error: (err as Error).message, tabId } })
+    sendToHost({ id: msg.id, result: { success: false, error: (err as Error).message, tabId } }, respondViaWs)
   }
 }
 
@@ -677,7 +681,22 @@ function isNoiseLinkedInUrl(url: string): boolean {
   return /messaging|policy\/notices|realtimeFrontendSubscriptions|presenceStatuses|deliveryAcknowledgements|seenReceipts|quickReplies|psettings|DVyeH0l6|tracking/i.test(url)
 }
 
-async function getLinkedInCsrfToken(): Promise<string | null> {
+async function getLinkedInCsrfTokenFromPassiveCapture(tabId?: number): Promise<string | null> {
+  if (!tabId) return null
+  try {
+    const result = await sendNetDirect(tabId, { type: "get_captured_headers", filter: "linkedin.com" }) as { success: boolean; data?: Array<{ headers: Record<string, string> }> }
+    if (!result.success || !result.data) return null
+    for (let i = result.data.length - 1; i >= 0; i--) {
+      const csrf = result.data[i].headers["csrf-token"]
+      if (csrf) return csrf.replace(/^"|"$/g, "")
+    }
+  } catch {}
+  return null
+}
+
+async function getLinkedInCsrfToken(tabId?: number): Promise<string | null> {
+  const passive = await getLinkedInCsrfTokenFromPassiveCapture(tabId)
+  if (passive) return passive
   try {
     const cookie = await chrome.cookies.get({ url: "https://www.linkedin.com", name: "JSESSIONID" })
     if (!cookie?.value) return null
@@ -837,19 +856,30 @@ async function buildLinkedInEventExtraction(tabId: number, action: { type: strin
   const currentTab = await chrome.tabs.get(tabId)
   const targetUrl = (action.url as string | undefined) || currentTab.url || ""
   if (!targetUrl) return { success: false, error: "linkedin event extraction requires a URL or active tab URL" }
-  await enableNetworkCapture(tabId, ["linkedin.com", "voyager", "graphql", "event"])
   if (currentTab.url !== targetUrl) {
     await chrome.tabs.update(tabId, { url: targetUrl })
     await waitForTabLoad(tabId, 20000)
   }
-  const waitMs = (action.waitMs as number) || 2500
+  const waitMs = (action.waitMs as number) || 500
   await new Promise(resolve => setTimeout(resolve, waitMs))
   await sendToContentScript(tabId, { type: "wait_stable", ms: 800, timeout: 6000 })
   const domResult = await sendToContentScript(tabId, { type: "linkedin_event_dom" }) as { success: boolean; data?: Record<string, unknown>; error?: string }
   if (!domResult.success || !domResult.data) return { success: false, error: domResult.error || "failed to extract LinkedIn DOM data" }
+  const netResult = await sendNetDirect(tabId, { type: "get_net_log", filter: "linkedin.com" }) as { success: boolean; data?: Array<{ url: string; method: string; status: number; body: string; type: string; timestamp: number; tabUrl: string }>; error?: string }
+  const passiveEntries = (netResult.success && netResult.data) ? netResult.data : []
+  const logs: CapturedNetworkEntry[] = passiveEntries.map((e, i) => ({
+    tabId,
+    requestId: `passive-${i}`,
+    url: e.url,
+    method: e.method,
+    timestamp: e.timestamp,
+    status: e.status,
+    mimeType: e.url.includes("json") || e.body?.startsWith("{") || e.body?.startsWith("[") ? "application/json" : undefined,
+    responseBody: e.body
+  }))
   return {
     success: true,
-    data: await buildLinkedInEventExtractionPayload(targetUrl, domResult.data as Record<string, any>, getNetworkLogs(tabId))
+    data: await buildLinkedInEventExtractionPayload(targetUrl, domResult.data as Record<string, any>, logs)
   }
 }
 
@@ -1337,7 +1367,12 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
         incognito: !!action.incognito,
         focused: action.focused !== false
       })
-      return { success: true, data: { windowId: win.id, tabs: win.tabs?.map(t => ({ id: t.id, url: t.url })) } }
+      const firstTab = win.tabs?.[0]
+      let groupId: number | undefined
+      if (firstTab?.id && !action.incognito) {
+        groupId = await addTabToSlopGroup(firstTab.id)
+      }
+      return { success: true, data: { windowId: win.id, groupId, tabs: win.tabs?.map(t => ({ id: t.id, url: t.url })) } }
     }
 
     case "window_close":
@@ -1571,6 +1606,33 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
       return { success: true, data: { enabled: rules.length > 0, ruleCount: rules.length, rules } }
     }
 
+    case "net_log": {
+      const result = await sendNetDirect(tabId, {
+        type: "get_net_log",
+        filter: action.filter as string | undefined,
+        since: action.since as number | undefined
+      }) as { success: boolean; data?: unknown[]; error?: string }
+      if (!result.success) return { success: false, error: result.error || "failed to get passive net log" }
+      let entries = result.data || []
+      const limit = (action.limit as number) || 100
+      entries = entries.slice(-limit)
+      return { success: true, data: entries }
+    }
+
+    case "net_clear": {
+      const result = await sendNetDirect(tabId, { type: "clear_net_log" }) as { success: boolean; error?: string }
+      return result.success ? { success: true, data: "passive net log cleared" } : { success: false, error: result.error }
+    }
+
+    case "net_headers": {
+      const result = await sendNetDirect(tabId, {
+        type: "get_captured_headers",
+        filter: action.filter as string | undefined
+      }) as { success: boolean; data?: unknown[]; error?: string }
+      if (!result.success) return { success: false, error: result.error || "failed to get captured headers" }
+      return { success: true, data: result.data }
+    }
+
     case "linkedin_event_extract":
       return await buildLinkedInEventExtraction(tabId, action)
 
@@ -1772,13 +1834,23 @@ async function routeAction(action: { type: string; [key: string]: unknown }, tab
             const w = window as any
             if (w.trustedTypes) {
               if (!w.__slop_tt_policy) {
-                w.__slop_tt_policy = w.trustedTypes.createPolicy("slop-eval", {
-                  createScript: (s: string) => s
-                })
+                try {
+                  w.__slop_tt_policy = w.trustedTypes.createPolicy("slop-eval", {
+                    createScript: (s: string) => s
+                  })
+                } catch {
+                  try {
+                    w.__slop_tt_policy = w.trustedTypes.createPolicy("slop-eval-" + Date.now(), {
+                      createScript: (s: string) => s
+                    })
+                  } catch {}
+                }
               }
-              const trusted = w.__slop_tt_policy.createScript(c)
-              const r = (0, eval)(trusted)
-              return { success: true, data: (typeof r === "object" && r !== null) ? JSON.parse(JSON.stringify(r)) : r }
+              if (w.__slop_tt_policy) {
+                const trusted = w.__slop_tt_policy.createScript(c)
+                const r = (0, eval)(trusted)
+                return { success: true, data: (typeof r === "object" && r !== null) ? JSON.parse(JSON.stringify(r)) : r }
+              }
             }
             const r = (0, eval)(c)
             return { success: true, data: (typeof r === "object" && r !== null) ? JSON.parse(JSON.stringify(r)) : r }
@@ -1859,6 +1931,7 @@ function connectWsChannel() {
         const msg = JSON.parse(typeof event.data === "string" ? event.data : "")
         console.log("ws onmessage:", JSON.stringify(msg).slice(0, 200))
         if (msg.id && msg.action) {
+          msg._viaWs = true
           handleDaemonMessage(msg)
         }
       } catch (err) {
@@ -1880,7 +1953,11 @@ function connectWsChannel() {
   } catch {}
 }
 
-function sendToHost(msg: unknown) {
+function sendToHost(msg: unknown, forceWs?: boolean) {
+  if (forceWs && wsReady && wsChannel) {
+    try { wsChannel.send(JSON.stringify(msg)) } catch {}
+    return
+  }
   if (activeTransport === "native" && nativePort) {
     nativePort.postMessage(msg)
     return
@@ -1903,6 +1980,18 @@ async function sendToContentScript(tabId: number, action: { type: string; [key: 
     const targetFrame = frameId !== undefined ? frameId : 0
     const opts = { frameId: targetFrame }
     chrome.tabs.sendMessage(tabId, { type: "execute_action", action }, opts as chrome.tabs.MessageSendOptions, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve({ success: false, error: chrome.runtime.lastError.message })
+      } else {
+        resolve(response ?? { success: false, error: "no response from content script" })
+      }
+    })
+  })
+}
+
+async function sendNetDirect(tabId: number, msg: { type: string; [key: string]: unknown }): Promise<unknown> {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, msg, { frameId: 0 } as chrome.tabs.MessageSendOptions, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ success: false, error: chrome.runtime.lastError.message })
       } else {

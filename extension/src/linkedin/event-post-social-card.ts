@@ -15,6 +15,10 @@ export function extractEngagementCounts(text: string): { likes: number | null; r
       }
     }
   }
+  if (!likes) {
+    const socialMatch = text.replace(/\s+/g, " ").match(/(\d[\d,]*)\s+[A-Z][A-Za-z.'\-]+.*?and\s+(\d[\d,]*)\s+others?/i)
+    if (socialMatch) likes = parseInt(socialMatch[1].replace(/,/g, ""), 10)
+  }
   const comments = numberFor(/(\d[\d,]*)\s+comments?/i)
   return {
     likes,
@@ -47,12 +51,18 @@ export function extractLinkedInPostCard(eventTitle: string, organizerName: strin
       const text = visibleText(el)
       let score = 0
       if (isLinkedInNoiseText(text)) score -= 200
+      if (text.length < 100) score -= 50
       if (organizerName && text.includes(organizerName)) score += 40
       if (text.includes(eventTitle)) score += 20
-      if (/followers?/i.test(text)) score += 25
-      if (/Like|Comment|Repost|Send|repost|reactions?/i.test(text)) score += 25
+      if (/\d[\d,]*\s+followers?/i.test(text)) score += 30
+      if (/Like|Comment|Repost|Send/i.test(text)) score += 25
+      if (/\d+\s+repost/i.test(text)) score += 30
       if (/Visible to anyone/i.test(text)) score += 120
-      if (/Add to calendar|Attendee profile images|Reach up to 120,000 more impressions/i.test(text)) score -= 40
+      if (/\d+\s*weeks?\s*ago|\d+\s*days?\s*ago|\d+\s*hours?\s*ago|\d+\s*minutes?\s*ago|\dw\s*•/i.test(text)) score += 40
+      if (/Add to calendar/i.test(text)) score -= 80
+      if (/Attendee profile images/i.test(text)) score -= 80
+      if (/Reach up to \d[\d,]* more impressions/i.test(text)) score -= 60
+      if (/Manage\b/i.test(text) && /Boost\b/i.test(text) && !/Visible to anyone/i.test(text)) score -= 50
       if (text.length > 200) score += 10
       return { text, score }
     })
@@ -65,7 +75,7 @@ export function extractLinkedInPostCard(eventTitle: string, organizerName: strin
   }
 
   const lines = best.text.split("\n").map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean)
-  const followerCountText = lines.find(line => /followers?/i.test(line)) || null
+  const followerCountText = lines.find(line => /\d[\d,]*\s+followers?/i.test(line)) || lines.find(line => /followers?/i.test(line)) || null
   const postText = extractPostTextFromLines(lines, eventTitle, organizerName)
   const posterName = organizerName || lines.find(line => /^[A-Z][A-Za-z0-9&.'’\-]+(?:\s+[A-Z][A-Za-z0-9&.'’\-]+){0,4}$/.test(line) && line !== eventTitle && !/followers?/i.test(line)) || null
   return {

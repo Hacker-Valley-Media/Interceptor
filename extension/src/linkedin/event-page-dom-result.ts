@@ -17,4 +17,5 @@ export type LinkedInEventDomResult = {
     engagement: { likes: number | null; reposts: number | null; comments: number | null; threadedComments: number | null }
   }
   visibleTextPreview: string
+  ugcPostId: string | null
 }
