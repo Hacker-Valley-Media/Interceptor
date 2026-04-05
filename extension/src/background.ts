@@ -891,17 +891,15 @@ async function buildLinkedInAttendeesExtraction(tabId: number, action: { type: s
   const eventId = extractLinkedInEventId(targetUrl)
   if (!eventId) return { success: false, error: "could not derive LinkedIn event ID from URL" }
 
-  await enableNetworkCapture(tabId, ["linkedin.com", "voyager", "graphql", "eventAttending", "attendee", eventId])
-  const overrideRules = buildLinkedInEventAttendeeOverrideRules(targetUrl) as NetworkOverrideRule[]
-  networkOverrideConfigs.set(tabId, overrideRules)
-  await refreshFetchInterception(tabId)
+  const overrideRules = buildLinkedInEventAttendeeOverrideRules(targetUrl)
+  await sendNetDirect(tabId, { type: "set_net_overrides", rules: overrideRules })
 
   if (currentTab.url !== targetUrl) {
     await chrome.tabs.update(tabId, { url: targetUrl })
     await waitForTabLoad(tabId, 20000)
   }
 
-  const waitMs = (action.waitMs as number) || 2500
+  const waitMs = (action.waitMs as number) || 500
   await new Promise(resolve => setTimeout(resolve, waitMs))
   await sendToContentScript(tabId, { type: "wait_stable", ms: 800, timeout: 6000 })
 
@@ -954,6 +952,8 @@ async function buildLinkedInAttendeesExtraction(tabId: number, action: { type: s
   for (const row of enrichTargets) {
     enrichments.push(await enrichLinkedInAttendee(row))
   }
+
+  await sendNetDirect(tabId, { type: "clear_net_overrides" })
 
   return {
     success: true,

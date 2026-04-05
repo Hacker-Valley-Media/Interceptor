@@ -75,6 +75,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     return true
   }
+  if (msg.type === "set_net_overrides") {
+    try {
+      document.dispatchEvent(new CustomEvent("__slop_set_overrides", { detail: msg.rules || [] }))
+      sendResponse({ success: true })
+    } catch (err) {
+      sendResponse({ success: false, error: (err as Error).message })
+    }
+    return true
+  }
+  if (msg.type === "clear_net_overrides") {
+    try {
+      document.dispatchEvent(new CustomEvent("__slop_set_overrides", { detail: [] }))
+      sendResponse({ success: true })
+    } catch (err) {
+      sendResponse({ success: false, error: (err as Error).message })
+    }
+    return true
+  }
 })
 
 function getPageState(full = false) {

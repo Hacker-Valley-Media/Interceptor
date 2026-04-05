@@ -13,6 +13,43 @@ if ((window as any).__slop_net_installed) {
     } catch {}
   }
 
+  type OverrideRule = { urlPattern: string; queryAddOrReplace?: Record<string, string | number | boolean>; queryRemove?: string[] }
+  const overrideRules: OverrideRule[] = (window as any).__slop_override_rules = []
+
+  document.addEventListener("__slop_set_overrides", ((e: CustomEvent) => {
+    overrideRules.length = 0
+    if (Array.isArray(e.detail)) {
+      for (const rule of e.detail) overrideRules.push(rule)
+    }
+  }) as EventListener)
+
+  function applyOverrides(rawUrl: string): string {
+    if (!overrideRules.length) return rawUrl
+    for (const rule of overrideRules) {
+      if (!matchesPattern(rawUrl, rule.urlPattern)) continue
+      try {
+        const base = rawUrl.startsWith("/") ? window.location.origin + rawUrl : rawUrl
+        const u = new URL(base)
+        if (rule.queryRemove) {
+          for (const key of rule.queryRemove) u.searchParams.delete(key)
+        }
+        if (rule.queryAddOrReplace) {
+          for (const [key, value] of Object.entries(rule.queryAddOrReplace)) {
+            u.searchParams.set(key, String(value))
+          }
+        }
+        const result = rawUrl.startsWith("/") ? u.pathname + u.search + u.hash : u.toString()
+        return result
+      } catch {}
+    }
+    return rawUrl
+  }
+
+  function matchesPattern(url: string, pattern: string): boolean {
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*")
+    return new RegExp(escaped, "i").test(url)
+  }
+
   const originalFetch = window.fetch
 
   window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -24,6 +61,14 @@ if ((window as any).__slop_net_installed) {
       else url = String(input)
     } catch {
       return originalFetch.call(this, input, init)
+    }
+
+    const overriddenUrl = applyOverrides(url)
+    if (overriddenUrl !== url) {
+      if (typeof input === "string") input = overriddenUrl
+      else if (input instanceof URL) input = new URL(overriddenUrl)
+      else if (input instanceof Request) input = new Request(overriddenUrl, input)
+      url = overriddenUrl
     }
 
     const method = init?.method || "GET"
@@ -86,9 +131,14 @@ if ((window as any).__slop_net_installed) {
   const origSetHeader = XHR.setRequestHeader
 
   XHR.open = function (this: XHRWithSlop, method: string, url: string | URL, ...rest: any[]): void {
-    this._slop_url = url.toString()
+    const rawUrl = url.toString()
+    const overriddenUrl = applyOverrides(rawUrl)
+    this._slop_url = overriddenUrl
     this._slop_method = method
     this._slop_headers = {}
+    if (overriddenUrl !== rawUrl) {
+      return origOpen.apply(this, [method, overriddenUrl, ...rest] as any)
+    }
     return origOpen.apply(this, arguments as any)
   }
 
