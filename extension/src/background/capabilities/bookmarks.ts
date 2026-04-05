@@ -1,0 +1,42 @@
+type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+
+export async function handleBookmarkActions(
+  action: { type: string; [key: string]: unknown },
+  _tabId: number
+): Promise<ActionResult> {
+  switch (action.type) {
+    case "bookmark_tree": {
+      const tree = await chrome.bookmarks.getTree()
+      return { success: true, data: tree }
+    }
+
+    case "bookmark_search": {
+      const results = await chrome.bookmarks.search(action.query as string)
+      return {
+        success: true,
+        data: results.map(b => ({ id: b.id, title: b.title, url: b.url, parentId: b.parentId }))
+      }
+    }
+
+    case "bookmark_create": {
+      const bm = await chrome.bookmarks.create({
+        title: action.title as string,
+        url: action.url as string | undefined,
+        parentId: action.parentId as string | undefined
+      })
+      return { success: true, data: bm }
+    }
+
+    case "bookmark_delete":
+      await chrome.bookmarks.remove(action.id as string)
+      return { success: true }
+
+    case "bookmark_update":
+      await chrome.bookmarks.update(action.id as string, {
+        title: action.title as string | undefined,
+        url: action.url as string | undefined
+      })
+      return { success: true }
+  }
+  return { success: false, error: `unknown bookmark action: ${action.type}` }
+}

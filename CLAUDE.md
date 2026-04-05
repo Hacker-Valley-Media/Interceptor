@@ -173,14 +173,27 @@ bun test
 
 | File | Purpose |
 |------|---------|
-| `cli/index.ts` | CLI — all commands |
-| `daemon/index.ts` | IPC server + native messaging + WebSocket bridge |
-| `extension/src/inject-net.ts` | MAIN world — passive fetch/XHR interception |
-| `extension/src/content.ts` | ISOLATED world — DOM, actions, net buffer |
-| `extension/src/background.ts` | Service worker — routing, Chrome APIs, LinkedIn |
-| `extension/src/linkedin/` | LinkedIn extraction pipeline (29 files) |
-| `shared/platform.ts` | Cross-platform transport config |
-| `scripts/build.sh` | Build orchestrator |
+Entry points are thin — all logic lives in capability modules.
+
+| Entry Point | Lines | Purpose |
+|-------------|-------|---------|
+| `extension/src/background.ts` | 23 | Service worker entry — imports + startup listeners |
+| `extension/src/content.ts` | 191 | Content script entry — message listener + action dispatch |
+| `extension/src/inject-net.ts` | 181 | MAIN world — passive fetch/XHR interception + request overrides |
+| `cli/index.ts` | 139 | CLI entry — parse args, route command, send, format |
+| `daemon/index.ts` | 557 | IPC server + native messaging + WebSocket bridge |
+
+| Module Directory | Files | Purpose |
+|-----------------|-------|---------|
+| `extension/src/background/` | 10 | Transport, dispatch, tab groups, offscreen, CDP, router |
+| `extension/src/background/capabilities/` | 21 | One file per Chrome API surface (tabs, windows, cookies...) |
+| `extension/src/content/` | 10 | Ref registry, DOM observer, a11y tree, element discovery |
+| `extension/src/content/actions/` | 7 | click, type, scroll, wait, drag, hover, focus |
+| `extension/src/content/data/` | 5 | extract, query, forms, storage, clipboard |
+| `extension/src/content/inspection/` | 2 | rect/regions, modals/panels |
+| `extension/src/linkedin/` | 29 | LinkedIn extraction pipeline |
+| `cli/commands/` | 11 | One file per command group (state, actions, tabs, network...) |
+| `cli/` | 5 | transport, daemon-spawn, format, help, parse |
 
 ## Code Style
 
