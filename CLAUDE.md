@@ -44,31 +44,47 @@ slop scroll down                       # Scroll page
 ```
 
 ### Passive Network Capture (always-on, no CDP)
-All fetch/XHR traffic is intercepted automatically on every page. No setup required.
+All fetch/XHR traffic is intercepted automatically on every page. `inject-net.ts` monkey-patches `window.fetch` and `XMLHttpRequest` in the page's MAIN world at `document_start`. Every API call the page makes is captured with full response body.
 ```bash
 slop net log                           # All captured traffic
 slop net log --filter linkedin.com     # Filter by URL substring
-slop net log --filter voyager          # API calls only
+slop net log --filter voyager          # LinkedIn API calls
 slop net log --since 1700000000000     # After timestamp
+slop net log --limit 50                # Max entries (default 100)
 slop net clear                         # Flush buffer
 slop net headers                       # Captured request headers (CSRF, auth)
 slop net headers --filter linkedin     # Filter headers by URL
 ```
 
+### Request Overrides (rewrite requests, no CDP)
+The inject script can rewrite URLs before `originalFetch.call()` fires. Override rules modify query parameters on matching URLs. This is how slop changes LinkedIn's attendee page size from 20→50 without a debugger.
+```bash
+# Internal: push override rules to inject-net.ts via content script
+slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*eventAttending*","queryAddOrReplace":{"count":50}}]}'
+slop raw '{"type":"net_override_clear"}'     # Remove all overrides
+```
+The `slop linkedin attendees` command pushes these rules automatically before opening the modal.
+
 ### CDP Network (explicit opt-in — shows debugger bar)
+Only use when you specifically need CDP-level capture (rare).
 ```bash
 slop network on                        # Attach debugger, start capture
 slop network log                       # Print CDP-captured requests
 slop network off                       # Detach debugger
-slop network override on '[rules]'     # Rewrite requests before they leave browser
 ```
+> Prefer passive capture. CDP shows a yellow infobanner and can trigger anti-automation detection.
 
-### LinkedIn Extraction
+### LinkedIn Extraction (zero CDP)
 ```bash
 slop linkedin event <url>              # Full event extraction (passive capture, no CDP)
 slop linkedin event <url> --wait 3000  # Custom wait for slow pages
-slop linkedin attendees <url>          # Attendee extraction with modal + API
+slop linkedin attendees <url>          # Attendees: override rules + modal + API
+slop linkedin attendees <url> --enrich-limit 5  # Limit per-attendee enrichment
 ```
+
+**Event extraction** navigates to the page, extracts DOM (title, organizer, ISO date, thumbnail, attendee count, post text, engagement), scans innerHTML for UGC post URN, queries passive net buffer, calls voyager APIs directly (event details, reactions, comments), and cross-validates.
+
+**Attendee extraction** pushes request overrides via inject-net.ts (changes attendee page size 20→50), opens Manage Attendees modal, paginates it, calls voyager attendee API (up to 250), merges results, optionally enriches profiles. Zero CDP.
 
 ### Screenshots & Canvas
 ```bash
@@ -93,13 +109,17 @@ slop storage                           # Read localStorage
 Every `tab new` and `window new` adds tabs to a cyan "slop" group. Commands only work on tabs in this group by default. Use `--any-tab` to break out.
 
 ### Passive Network — How It Works
-`inject-net.ts` runs in every page's MAIN world at `document_start`. It monkey-patches `fetch()` and `XMLHttpRequest`, cloning every response and emitting it as a `CustomEvent`. The content script buffers these (ring buffer, cap 500). Background queries the buffer on demand.
+`inject-net.ts` runs in every page's MAIN world at `document_start`. It does two things:
+
+1. **Capture** — Monkey-patches `fetch()` and `XMLHttpRequest`, clones every response, emits `__slop_net` and `__slop_headers` CustomEvents. Content script buffers these (ring buffer, cap 500).
+2. **Override** — Stores URL rewrite rules. Before calling `originalFetch.call()` or `origOpen.apply()`, checks if the URL matches any rule and rewrites query params (`queryAddOrReplace`, `queryRemove`). Rules are pushed from the content script via `__slop_set_overrides` CustomEvent.
 
 ```
-Page calls fetch()/XHR → inject-net.ts clones response → CustomEvent → content.ts buffer → slop net log
+Capture:   Page calls fetch() → inject-net clones response → CustomEvent → content.ts buffer → slop net log
+Override:  Background pushes rules → content.ts dispatches event → inject-net rewrites URL → originalFetch(rewritten)
 ```
 
-No CDP. No debugger. No infobanner. No race conditions.
+No CDP. No debugger. No infobanner. No race conditions. The page's own JavaScript sees the rewritten URL — the server receives the modified request.
 
 ### Trusted Events (OS-Level Input)
 For sites that check `event.isTrusted`, use `--os` flag. This routes through CoreGraphics CGEvent (macOS) — genuinely trusted kernel-level input.

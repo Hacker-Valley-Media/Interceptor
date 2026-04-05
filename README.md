@@ -97,10 +97,13 @@ slop window new "https://example.com" # New window (tab joins slop group)
 slop window list                      # List all windows
 ```
 
-### Passive Network (always-on, no CDP)
+### Passive Network Capture (always-on, no CDP)
+All `fetch()` and `XMLHttpRequest` traffic is intercepted automatically on every page. No debugger, no infobanner, no setup. The extension monkey-patches `window.fetch` and `XHR` in the page's MAIN world at `document_start` — it sees every API call the page makes.
+
 ```bash
 slop net log                          # All passively captured fetch/XHR traffic
 slop net log --filter voyager         # Filter by URL substring
+slop net log --filter linkedin.com    # See LinkedIn API calls
 slop net log --since 1700000000000    # Entries after timestamp
 slop net log --limit 50               # Max entries (default 100)
 slop net clear                        # Flush capture buffer
@@ -108,15 +111,36 @@ slop net headers                      # Captured request headers (CSRF tokens, a
 slop net headers --filter linkedin    # Filter headers by URL
 ```
 
-### Network Interception (CDP — explicit opt-in)
+Each captured entry includes: `url`, `method`, `status`, `body` (full response), `type` (fetch/xhr), `timestamp`.
+
+### Request Overrides (rewrite requests without CDP)
+The inject script can modify requests before they fire — rewrite query parameters, remove params, change URLs. This is how the LinkedIn attendees extraction changes the page size from 20→50 without a CDP debugger.
+
+Overrides are pushed to the page via the content script:
 ```bash
-slop network on                       # Start CDP capture (attaches debugger)
-slop network on "api" "graphql"       # Capture matching patterns only
-slop network off                      # Stop CDP capture
-slop network log                      # Print CDP-captured requests
-slop network override on '<json>'     # Rewrite requests before they leave browser
-slop network override off             # Disable overrides
+# Push override rules (done internally by linkedin attendees extraction)
+# Rules format: { urlPattern, queryAddOrReplace, queryRemove }
+# Example: change count=20 to count=50 on any eventAttending graphql call
+slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*eventAttending*","queryAddOrReplace":{"count":50}}]}'
+
+# Clear overrides
+slop raw '{"type":"net_override_clear"}'
 ```
+
+The LinkedIn `slop linkedin attendees` command does this automatically — it pushes rules before opening the Manage Attendees modal, so when LinkedIn's JavaScript fetches attendees, the request is rewritten to fetch 50 per page instead of 20.
+
+### CDP Network (explicit opt-in — shows debugger bar)
+For cases where you need raw CDP access (debugging, response body capture via debugger protocol):
+```bash
+slop network on                       # Attach debugger + start capture
+slop network on "api" "graphql"       # Capture matching patterns only
+slop network off                      # Detach debugger
+slop network log                      # Print CDP-captured requests
+slop network override on '<json>'     # CDP-level request rewriting
+slop network override off             # Disable CDP overrides
+```
+
+> **Prefer passive capture.** CDP attaches `chrome.debugger` which shows a yellow infobanner, shifts viewport by 35px, and can trigger anti-automation detection. Passive capture is invisible.
 
 ### Screenshots & Capture
 ```bash
@@ -148,8 +172,25 @@ slop storage --session                # Use sessionStorage
 ```bash
 slop linkedin event <url>             # Extract event data (passive capture, no CDP)
 slop linkedin event <url> --wait 3000 # Extra wait time for slow pages
-slop linkedin attendees <url>         # Extract attendees with modal + API
+slop linkedin attendees <url>         # Extract attendees with modal + API + request overrides
+slop linkedin attendees <url> --enrich-limit 10  # Limit per-attendee API enrichment
 ```
+
+**Event extraction flow (no CDP):**
+1. Navigates to event page, waits for DOM stability
+2. Extracts from DOM: title, organizer, date (ISO), thumbnail, attendee summary, post text, engagement
+3. Scans DOM innerHTML for UGC post URN (`urn:li:ugcPost:NNNN`)
+4. Queries passive net buffer for LinkedIn API responses
+5. Calls voyager API directly: event details, attendees (paginated), reactions, comments
+6. Cross-validates DOM vs API data
+
+**Attendee extraction flow (no CDP):**
+1. Pushes request override rules via inject-net.ts (20→50 page size)
+2. Opens Manage → Manage Attendees modal
+3. Paginates modal (clicks "Show more results" up to 10x)
+4. Calls voyager attendee API directly (up to 250)
+5. Merges modal rows + API results
+6. Optionally enriches each attendee (profile, company, activity)
 
 ### Canvas Intelligence
 ```bash
