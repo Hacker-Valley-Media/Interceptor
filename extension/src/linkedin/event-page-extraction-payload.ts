@@ -3,6 +3,16 @@ import { extractEventDataFromParsed, extractPostDataFromParsed, pickBestParsedRe
 import { extractFollowerCountFromText, extractPostIdFromLogs, fetchLinkedInCommentsByPostId, fetchLinkedInReactionsByPostId } from "./ugc-post-social-api"
 import { extractLinkedInEventId, LinkedInCapturedNetworkEntry } from "./linkedin-shared-types"
 
+function extractPosterFollowerCount(visibleText: string | null, posterName: string | null): number | null {
+  if (!visibleText || !posterName) return null
+  const escaped = posterName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const idx = visibleText.search(new RegExp(escaped, "i"))
+  if (idx === -1) return null
+  const after = visibleText.slice(idx, idx + 500)
+  const match = after.match(/(\d[\d,]*)\s+[Ff]ollowers?/)
+  return match ? parseInt(match[1].replace(/,/g, ""), 10) : null
+}
+
 export async function buildLinkedInEventExtractionPayload(targetUrl: string, dom: Record<string, any>, logs: LinkedInCapturedNetworkEntry[]) {
   const eventId = extractLinkedInEventId(targetUrl)
   const eventParsed = pickBestParsedResponse(logs, { title: dom.title, organizerName: dom.organizerName, eventId }, "event")
@@ -11,7 +21,7 @@ export async function buildLinkedInEventExtractionPayload(targetUrl: string, dom
   const directAttendees = eventId ? await fetchLinkedInEventAttendeesById(eventId) : []
   const eventData = directEventJson ? extractEventDataFromParsed(directEventJson, dom) : eventParsed ? extractEventDataFromParsed(eventParsed.parsed, dom) : null
   const postData = postParsed && /ugcPost|social|reaction|comment/i.test(postParsed.entry.url) ? extractPostDataFromParsed(postParsed.parsed, dom) : null
-  const postId = extractPostIdFromLogs(logs, dom.post?.text || postData?.postText || null)
+  const postId = dom.ugcPostId || extractPostIdFromLogs(logs, dom.post?.text || postData?.postText || null)
   const reactionUsers = postId ? await fetchLinkedInReactionsByPostId(postId) : []
   const commentItems = postId ? await fetchLinkedInCommentsByPostId(postId) : []
   const attendeeNames = directAttendees.length
@@ -30,7 +40,8 @@ export async function buildLinkedInEventExtractionPayload(targetUrl: string, dom
   const comments = commentItems.length > 0
     ? commentItems.length
     : (postData?.comments ?? dom.post?.engagement?.comments ?? null)
-  const reposts = postData?.reposts ?? dom.post?.engagement?.reposts ?? null
+  const repostsFromPreview = dom.visibleTextPreview ? (dom.visibleTextPreview.match(/(\d[\d,]*)\s+reposts?/i)?.[1] ? parseInt(dom.visibleTextPreview.match(/(\d[\d,]*)\s+reposts?/i)![1].replace(/,/g, ""), 10) : null) : null
+  const reposts = postData?.reposts ?? dom.post?.engagement?.reposts ?? repostsFromPreview ?? null
   return {
     eventId,
     pageUrl: targetUrl,
@@ -46,7 +57,7 @@ export async function buildLinkedInEventExtractionPayload(targetUrl: string, dom
     attendeeSummaryText: dom.attendeeSummary?.text || null,
     linkedPostText: postData?.postText || dom.post?.text || null,
     posterName: postData?.posterName || dom.post?.posterName || null,
-    posterFollowerCount: postData?.followerCount ?? extractFollowerCountFromText(dom.post?.followerCountText) ?? null,
+    posterFollowerCount: extractPosterFollowerCount(dom.visibleTextPreview, dom.post?.posterName || dom.organizerName) ?? postData?.followerCount ?? extractFollowerCountFromText(dom.post?.followerCountText) ?? null,
     likes,
     reposts,
     comments,

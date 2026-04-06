@@ -23,6 +23,7 @@ export async function extractLinkedInEventDom(waitForDomStable: (debounceMs?: nu
   }
   const detailsText = extractDetailsText(eventScope, title)
   const post = extractLinkedInPostCard(title, organizerName, eventScope)
+  const ugcPostId = extractUgcPostIdFromDom()
   return {
     title,
     organizerName,
@@ -36,6 +37,20 @@ export async function extractLinkedInEventDom(waitForDomStable: (debounceMs?: nu
     thumbnail,
     detailsText,
     post,
-    visibleTextPreview
+    visibleTextPreview,
+    ugcPostId
   }
+}
+
+function extractUgcPostIdFromDom(): string | null {
+  const html = document.body.innerHTML
+  const match = html.match(/urn:li:ugcPost:(\d{6,})/)
+  if (match) return match[1]
+  const dataUrns = document.querySelectorAll("[data-urn], [data-activity-urn]")
+  for (const el of dataUrns) {
+    const urn = el.getAttribute("data-urn") || el.getAttribute("data-activity-urn") || ""
+    const urnMatch = urn.match(/ugcPost:(\d{6,})/)
+    if (urnMatch) return urnMatch[1]
+  }
+  return null
 }

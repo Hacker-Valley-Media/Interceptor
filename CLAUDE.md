@@ -1,166 +1,248 @@
 # slop-browser
 
-Agent-driven Chrome extension with CLI bridge. Gives AI agents full browser control without CDP, MCP, or API keys. The agent IS the LLM — slop-browser is a dumb actuator.
+Browser control CLI for AI agents. No CDP, no MCP, no API keys. You call `slop`, read the output, decide what's next.
 
-## Architecture
+**Binary:** `dist/slop`
 
-```text
-macOS:   Agent → CLI (dist/slop) → Unix socket → Daemon → Native Messaging / WebSocket → Chrome Extension
-Windows: Agent → CLI (dist/slop.exe) → TCP loopback → Daemon → Native Messaging / WebSocket → Chrome Extension
-```
-
-Three components, one data flow:
-- **CLI** (`cli/index.ts`) — Stateless client. Uses Unix sockets on macOS and TCP loopback on Windows.
-- **Daemon** (`daemon/index.ts`) — Local IPC server + Chrome native messaging bridge + WebSocket bridge. Usually spawned by the browser.
-- **Extension** (`extension/src/`) — MV3 Chrome extension. Background service worker routes messages; content script executes DOM actions.
-
-Platform-specific transport config lives in `shared/platform.ts`.
-
-## Build
+## Start Here
 
 ```bash
-bun run build                    # Build extension + host-platform CLI + host-platform daemon
-bash scripts/build.sh            # Same as above
-bash scripts/build.sh --target=macos
-bash scripts/build.sh --target=windows
-bash scripts/build.sh --all
+slop tab new "https://example.com"    # Open managed tab
+sleep 2                                # Wait for load
+slop tree                              # See interactive elements
+slop click e1                          # Click by ref
+slop type e2 "hello"                   # Type into field
+slop text                              # Read visible text
 ```
 
-Individual builds:
+The daemon auto-starts. No setup needed.
+
+## Reading Pages
+
+```bash
+slop tree                              # Interactive elements with refs (e1, e2...)
+slop tree --filter all                 # Include headings + landmarks
+slop text                              # All visible text
+slop text e7                           # Text from specific element
+slop html e5                           # HTML of element
+slop find "Submit"                     # Find elements by name
+slop find "Submit" --role button       # Filter by ARIA role
+slop diff                              # What changed since last tree
+slop state                             # DOM tree + scroll + focus (verbose)
+```
+
+## Interacting With Pages
+
+```bash
+slop click e5                          # Click element
+slop click e5 --os                     # OS-level trusted click (bypasses isTrusted)
+slop type e3 "hello"                   # Type into field (clears first)
+slop type e3 "more" --append           # Append without clearing
+slop select e7 "option-value"          # Select dropdown option
+slop hover e5                          # Hover over element
+slop keys "Enter"                      # Keyboard shortcut
+slop keys "Control+A" --os             # OS-level keyboard
+slop scroll down                       # Scroll
+```
+
+When a synthetic click doesn't trigger anything (React/Angular sites), slop auto-escalates to OS-level input. You can also force it with `--os`.
+
+## Navigating
+
+```bash
+slop tab new "https://example.com"     # New tab (joins slop group)
+slop navigate "https://other.com"      # Navigate current tab
+slop tabs                              # List all tabs (* = active)
+slop tab switch 12345                  # Switch to tab by ID
+slop tab close                         # Close current tab
+slop back                              # History back
+slop forward                           # History forward
+slop wait 2000                         # Wait milliseconds
+slop wait-stable                       # Wait for DOM to stop changing
+```
+
+## Sniffing Network Traffic
+
+All `fetch()` and `XMLHttpRequest` traffic is captured automatically on every page. No setup. No CDP. No debugger bar.
+
+```bash
+slop net log                           # All captured fetch/XHR requests
+slop net log --filter voyager          # Filter by URL substring
+slop net log --filter api.example.com  # See specific API calls
+slop net log --since 1700000000000     # After timestamp
+slop net log --limit 50                # Max entries (default 100)
+slop net clear                         # Flush buffer
+slop net headers                       # Request headers the page sent (CSRF tokens, auth)
+slop net headers --filter linkedin     # Filter by URL
+```
+
+Each entry includes: `url`, `method`, `status`, `body` (full response text), `type` (fetch/xhr), `timestamp`.
+
+### Injecting / Rewriting Requests
+
+Override rules rewrite URLs before the page's JavaScript sends them. The page sees the modified request. The server gets the modified request. No CDP.
+
+```bash
+# Change a query parameter on matching requests
+slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*eventAttending*","queryAddOrReplace":{"count":50}}]}'
+
+# Clear overrides
+slop raw '{"type":"net_override_clear"}'
+```
+
+This is how `slop linkedin attendees` changes LinkedIn's page size from 20→50 — the page's own JavaScript fetches attendees, but slop rewrites the request in-flight to ask for more results.
+
+## Screenshots
+
+```bash
+slop screenshot                        # Viewport JPEG (returns data URL)
+slop screenshot --save                 # Save to disk as file
+slop screenshot --full                 # Full-page scroll+stitch
+slop screenshot --format png           # PNG format
+slop screenshot --quality 80           # JPEG quality 0-100
+slop screenshot --element 5            # Capture specific element
+```
+
+## LinkedIn Extraction
+
+### Event Data (no CDP)
+```bash
+slop linkedin event "https://www.linkedin.com/events/1234567890/"
+slop linkedin event "https://www.linkedin.com/events/1234567890/?viewAsMember=true" --wait 3000
+```
+
+Returns: title, organizer name, ISO start/end timestamps, timezone, attendee count, 250 attendee names, poster name, poster follower count, likes, reposts, comments, UGC post ID, event details text. Cross-validated against DOM.
+
+### Attendees (no CDP)
+```bash
+slop linkedin attendees "https://www.linkedin.com/events/1234567890/"
+slop linkedin attendees "https://www.linkedin.com/events/1234567890/" --enrich-limit 10
+```
+
+Opens Manage Attendees modal, paginates it, calls voyager API (up to 250), merges results. Automatically pushes request overrides to change page size 20→50. `--enrich-limit` controls per-attendee profile/company API enrichment (default: all, which is slow for 250+).
+
+## Stealth
+
+slop passes every major bot detection site:
+- **BrowserScan**: Normal (all checks)
+- **CreepJS**: 0% headless, 0% stealth
+- **Fingerprint.com**: `"notDetected"`
+- **Sannysoft**: All passed
+- **Pixelscan**: "You're Definitely a Human"
+- **AreyouHeadless**: "You are not Chrome headless"
+
+No CDP is used for any default operation. Network capture is done by monkey-patching `fetch`/`XHR` in the page's JavaScript context — invisible to detection.
+
+## The Slop Group
+
+Every `slop tab new` and `slop window new` adds tabs to a cyan "slop" tab group. By default, slop only operates on tabs in this group — the user's personal tabs are never touched.
+
+Pass `--any-tab` to operate on any tab.
+
+## Flags
+
+| Flag | Effect |
+|------|--------|
+| `--json` | JSON output instead of plain text |
+| `--tab <id>` | Target specific tab by ID |
+| `--any-tab` | Operate outside the slop group |
+| `--os` | OS-level trusted input (CGEvent) |
+| `--frame <id>` | Target iframe |
+| `--changes` | Include DOM diff in response |
+
+## Typical Flows
+
+### Fill out a form
+```bash
+slop tab new "https://app.example.com/signup"
+sleep 3
+slop tree
+slop type e5 "user@example.com"
+slop type e7 "password123"
+slop click e9                          # Submit button
+sleep 2
+slop text                              # Read result
+```
+
+### Extract API data from an SPA
+```bash
+slop tab new "https://app.example.com/dashboard"
+sleep 5
+slop net log --filter api              # See what APIs the page called
+slop net headers --filter api          # See auth headers / tokens
+```
+
+### Monitor a page for changes
+```bash
+slop tab new "https://example.com/status"
+sleep 3
+slop tree                              # Baseline
+# ... time passes ...
+slop diff                              # What changed
+slop text                              # Current state
+```
+
+### Navigate a multi-step flow
+```bash
+slop tab new "https://example.com"
+sleep 2
+slop tree                              # See what's on page
+slop click e12                         # Click "Next"
+sleep 1
+slop tree                              # See new page
+slop type e5 "search query"            # Fill field
+slop click e8                          # Submit
+sleep 2
+slop text                              # Read results
+slop tab close
+```
+
+## What NOT to Do
+
+- Don't use screenshots to understand pages — use `slop tree` and `slop text`
+- Don't start the daemon manually — it auto-starts on first command
+- Don't chain commands without `sleep` — the extension needs time to process
+- Don't interact with tabs outside the slop group without `--any-tab`
+- Don't use `slop network on` (CDP) unless you specifically need raw debugger capture — it shows a yellow bar and can be detected
+
+## Reference
+
+Run `slop help` for the complete command list. Key commands not covered above:
+
+```bash
+slop cookies example.com              # List cookies for domain
+slop storage                          # Read localStorage
+slop eval "document.title"            # Run JS (isolated world)
+slop eval "window.foo" --main         # Run JS (page context)
+slop history "search"                 # Search browser history
+slop bookmarks "query"                # Search bookmarks
+slop batch '[{"type":"click","ref":"e5"},{"type":"wait","ms":500}]'  # Batch actions
+slop status                           # Daemon status (local check)
+```
+
+---
+
+## Development Reference
+
+### Build
+```bash
+bash scripts/build.sh                  # Build extension + CLI + daemon
+bash scripts/build.sh --target=macos   # macOS only
+bun test                               # Run tests
+```
+
+### After code changes
 ```bash
 bun build extension/src/background.ts --outdir=extension/dist --target=browser
 bun build extension/src/content.ts --outdir=extension/dist --target=browser
-bun build cli/index.ts --compile --outfile=dist/slop
-bun build daemon/index.ts --compile --outfile=daemon/slop-daemon
+bun build extension/src/inject-net.ts --outdir=extension/dist --target=browser
+cp extension/manifest.json extension/dist/
+slop reload                            # Reload extension in browser
+pkill slop-daemon                      # Next command auto-respawns
 ```
 
-Cross-platform examples:
+### Extension install
 ```bash
-bun build cli/index.ts --compile --target=bun-windows-x64 --outfile=dist/slop.exe
-bun build daemon/index.ts --compile --target=bun-windows-x64 --outfile=daemon/slop-daemon.exe
-bun build cli/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/slop
-bun build daemon/index.ts --compile --target=bun-darwin-arm64 --outfile=daemon/slop-daemon
+bash scripts/install.sh                # macOS — native messaging manifest
 ```
-
-## Run
-
-```bash
-bun run daemon                # Start daemon in dev mode
-bun run cli -- <cmd>          # Run CLI in dev mode
-./dist/slop <cmd>             # Run compiled macOS CLI
-./dist/slop --ws <cmd>        # Force WebSocket transport
-./daemon/slop-daemon          # Run compiled macOS daemon directly
-```
-
-Windows equivalents:
-```powershell
-.\dist\slop.exe <cmd>
-.\dist\slop.exe --ws <cmd>
-.\daemon\slop-daemon.exe
-```
-
-## Test
-
-```bash
-bun test
-bun test test/daemon-cli.test.ts
-```
-
-Current test coverage verifies:
-- PID file creation
-- current-platform transport availability
-- CLI connectivity to the daemon
-- `os-input-loader` exports
-- platform helper resolution for `darwin` and `win32`
-
-## Tech Stack
-
-- **Runtime:** Bun (TypeScript, no Node.js)
-- **Extension:** Chrome Manifest V3
-- **IPC:** Unix domain socket on macOS, TCP loopback on Windows, native messaging, and WebSocket fallback/bridge
-- **Dependencies:** Zero runtime deps. Dev-only: `@types/bun`, `@types/chrome`
-
-## Code Style
-
-- TypeScript strict mode (`strict: true` in tsconfig)
-- ES modules only (`"type": "module"`)
-- No comments unless logic is non-obvious
-- Extension builds target `browser`; CLI/daemon target Bun standalone binary
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `cli/index.ts` | CLI client — all commands defined here |
-| `daemon/index.ts` | Native messaging bridge + local IPC server + WebSocket bridge |
-| `daemon/os-input-loader.ts` | Platform-selecting OS-input module loader |
-| `daemon/os-input.ts` | macOS CoreGraphics OS-input implementation |
-| `daemon/os-input-win.ts` | Windows OS-input stub |
-| `shared/platform.ts` | Shared transport/path configuration for macOS and Windows |
-| `extension/src/background.ts` | Service worker — message routing, transport state machine, Chrome APIs |
-| `extension/src/content.ts` | Content script — DOM extraction, action execution |
-| `daemon/com.slopbrowser.host.json` | Native messaging manifest template |
-| `scripts/build.sh` | Cross-platform build orchestrator |
-| `scripts/install.sh` | macOS native-messaging installer |
-| `scripts/install.ps1` | Windows native-messaging installer |
-| `prd/PRD-9.md` | Cross-platform implementation PRD |
-
-## Extension Installation
-
-macOS:
-```bash
-bash scripts/install.sh
-```
-
-This generates `daemon/.generated/com.slopbrowser.host.json` and symlinks it into:
-```text
-~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.slopbrowser.host.json
-~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.slopbrowser.host.json
-```
-
-Windows:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
-```
-
-This generates the manifest and writes registry keys for:
-```text
-HKCU\Software\Google\Chrome\NativeMessagingHosts\com.slopbrowser.host
-HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.slopbrowser.host
-```
-
-## Message Protocol
-
-CLI sends framed JSON to the daemon over the current platform transport:
-```json
-{"id": "uuid", "action": {"type": "click", "index": 5}}
-```
-
-Transport details:
-- macOS CLI ↔ daemon: Unix socket
-- Windows CLI ↔ daemon: TCP loopback (`127.0.0.1:19221` by default)
-- daemon ↔ extension: native messaging and/or WebSocket bridge
-
-Native messaging uses 4-byte little-endian length-prefixed JSON. WebSocket messages are plain JSON objects.
-
-## Design Constraints
-
-- No CDP — content scripts + Chrome extension APIs only (undetectable by websites)
-- No internal agent loop — the calling agent drives all decisions
-- No API keys or external services
-- CLI returns plain text by default (LLM-optimized); `--json` for structured output
-- Full event simulation for clicks/typing (realistic 6-event pointer sequence)
-- Stateless CLI — no persistent connections or state between invocations
-
-## Compiled Binaries
-
-Host/macOS builds produce:
-- `dist/slop`
-- `daemon/slop-daemon`
-
-Windows builds produce:
-- `dist/slop.exe`
-- `daemon/slop-daemon.exe`
-
-`dist/` and `daemon/.generated/` are ignored. `daemon/slop-daemon` remains the checked-in host daemon binary; rebuild after code changes.
-
+Then load `extension/dist/` as unpacked extension in Chrome/Brave.

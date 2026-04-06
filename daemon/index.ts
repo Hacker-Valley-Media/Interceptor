@@ -21,7 +21,24 @@ function emitEvent(event: string, data: Record<string, unknown> = {}) {
   } catch {}
 }
 
-log("daemon starting")
+const STANDALONE = process.argv.includes("--standalone")
+
+log(`daemon starting (mode: ${STANDALONE ? "standalone" : "native-messaging"})`)
+
+if (existsSync(PID_PATH)) {
+  try {
+    const existingPid = parseInt(readFileSync(PID_PATH, "utf-8").trim().split("\n")[0])
+    if (!isNaN(existingPid) && existingPid !== process.pid) {
+      try {
+        process.kill(existingPid, 0)
+        log(`another daemon already running (pid ${existingPid}) — exiting`)
+        process.exit(0)
+      } catch {
+        log(`stale pid file for dead process ${existingPid} — taking over`)
+      }
+    }
+  } catch {}
+}
 
 try { if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH) } catch {}
 
@@ -195,6 +212,17 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
 }
 
 let extensionWs: { send: (data: string) => void } | null = null
+const wsOutboundQueue: string[] = []
+const WS_QUEUE_CAP = 50
+
+function drainWsOutboundQueue(): void {
+  if (!extensionWs) return
+  while (wsOutboundQueue.length > 0) {
+    const msg = wsOutboundQueue.shift()!
+    log(`draining queued ws message: ${msg.slice(0, 100)}`)
+    try { extensionWs.send(msg) } catch (err) { log(`ws drain error: ${(err as Error).message}`) }
+  }
+}
 
 function sendNativeMessage(msg: unknown): void {
   const json = JSON.stringify(msg)
@@ -207,6 +235,12 @@ function sendNativeMessage(msg: unknown): void {
       log(`ws send error: ${(err as Error).message}`)
     }
   }
+  if (STANDALONE || !stdinAlive) {
+    if (wsOutboundQueue.length >= WS_QUEUE_CAP) wsOutboundQueue.shift()
+    wsOutboundQueue.push(json)
+    log(`queued for ws (${wsOutboundQueue.length} pending): ${json.slice(0, 100)}`)
+    return
+  }
   log(`forwarding via native: ${json.slice(0, 200)}`)
   const encoded = Buffer.from(json, "utf-8")
   const header = Buffer.alloc(4)
@@ -215,21 +249,27 @@ function sendNativeMessage(msg: unknown): void {
   process.stdout.write(combined)
 }
 
-process.stdin.on("data", (chunk: Buffer) => {
-  stdinBuffer = Buffer.concat([stdinBuffer, chunk])
-  processStdinBuffer()
-})
+let stdinAlive = !STANDALONE
 
-process.stdin.on("end", () => {
-  log("stdin ended (native port disconnected)")
-  gracefulShutdown("stdin-end")
-})
+if (!STANDALONE) {
+  process.stdin.on("data", (chunk: Buffer) => {
+    stdinBuffer = Buffer.concat([stdinBuffer, chunk])
+    processStdinBuffer()
+  })
 
-process.stdin.on("error", (err) => {
-  log(`stdin error: ${err.message}`)
-})
+  process.stdin.on("end", () => {
+    stdinAlive = false
+    log("stdin ended (native port disconnected) — daemon continues in standalone mode")
+  })
 
-process.stdin.resume()
+  process.stdin.on("error", (err) => {
+    log(`stdin error: ${err.message}`)
+  })
+
+  process.stdin.resume()
+} else {
+  log("standalone mode — no native messaging stdin")
+}
 
 const REQUEST_TIMEOUT_MS = 180_000
 
@@ -422,6 +462,7 @@ try {
           (ws as any).__isExtension = true
           extensionWs = ws
           log("ws extension channel registered")
+          drainWsOutboundQueue()
           return
         }
 
@@ -502,5 +543,15 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   log(`unhandled rejection: ${reason}`)
 })
+
+// Global keepalive — prevent Bun from exiting when stdin closes.
+// Bun compiled binaries exit when the event loop is empty.
+// An infinite async loop guarantees the process stays alive.
+async function keepAliveForever() {
+  while (true) {
+    await Bun.sleep(10_000)
+  }
+}
+keepAliveForever()
 
 log("daemon ready, waiting for native messages")
