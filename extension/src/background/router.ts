@@ -22,6 +22,9 @@ import { handleFrameActions } from "./capabilities/frames"
 import { handleMetaActions } from "./capabilities/meta"
 import { handlePassiveNetActions } from "./capabilities/passive-net"
 import { handleCdpNetworkActions } from "./capabilities/cdp-network-actions"
+import { handleMonitorActions, registerMonitorListeners } from "./capabilities/monitor"
+
+registerMonitorListeners()
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -57,6 +60,13 @@ const FRAME_ACTIONS = new Set(["frames_list"])
 const META_ACTIONS = new Set(["status", "reload_extension", "capabilities", "cdp_tree"])
 const PASSIVE_NET_ACTIONS = new Set(["net_log", "net_clear", "net_headers"])
 const CDP_NETWORK_ACTIONS = new Set(["network_intercept", "network_log", "network_override"])
+const MONITOR_ACTIONS = new Set(["monitor_start", "monitor_stop", "monitor_status", "monitor_pause", "monitor_resume"])
+const SCENE_ACTIONS = new Set([
+  "scene_list", "scene_click", "scene_dblclick", "scene_select", "scene_hit",
+  "scene_selected", "scene_text", "scene_insert", "scene_cursor_to", "scene_cursor",
+  "scene_slide_list", "scene_slide_goto", "scene_slide_current",
+  "scene_notes", "scene_render", "scene_zoom", "scene_profile"
+])
 
 export async function routeAction(
   action: { type: string; [key: string]: unknown },
@@ -83,6 +93,7 @@ export async function routeAction(
   if (META_ACTIONS.has(action.type)) return handleMetaActions(action, tabId)
   if (PASSIVE_NET_ACTIONS.has(action.type)) return handlePassiveNetActions(action, tabId)
   if (CDP_NETWORK_ACTIONS.has(action.type)) return handleCdpNetworkActions(action, tabId)
+  if (MONITOR_ACTIONS.has(action.type)) return handleMonitorActions(action, tabId)
 
   if (action.type === "linkedin_event_extract") return buildLinkedInEventExtraction(tabId, action)
   if (action.type === "linkedin_attendees_extract") return buildLinkedInAttendeesExtraction(tabId, action)

@@ -1,5 +1,6 @@
 import "./content/net-buffer"
 import "./content/dom-observer"
+import "./content/monitor"
 import { extractLinkedInEventDom } from "./linkedin/event-page-dom-extraction"
 import { clickManageAttendeesShowMore, extractManageAttendeesModal, openManageAttendeesModal } from "./linkedin/event-attendees-modal-dom"
 import { getDomDirty, setDomDirty } from "./content/dom-observer"
@@ -24,6 +25,7 @@ import { handleClipboardRead, handleClipboardWrite, handleSelectionGet, handleSe
 import { handleRect, handleRegions } from "./content/inspection/rect"
 import { handleModals, handlePanels } from "./content/inspection/modals"
 import { handleFindElement, handleSemanticResolve, handleFindAndClick, handleFindAndType, handleFindAndCheck } from "./content/find"
+import { handleCanvasAction } from "./content/scene/engine"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; changes?: unknown }
@@ -147,6 +149,24 @@ async function executeAction(action: Action): Promise<ActionResult> {
       case "find_and_click":      return handleFindAndClick(action)
       case "find_and_type":       return handleFindAndType(action)
       case "find_and_check":      return handleFindAndCheck(action)
+      case "scene_list":
+      case "scene_click":
+      case "scene_dblclick":
+      case "scene_select":
+      case "scene_hit":
+      case "scene_selected":
+      case "scene_text":
+      case "scene_insert":
+      case "scene_cursor_to":
+      case "scene_cursor":
+      case "scene_slide_list":
+      case "scene_slide_goto":
+      case "scene_slide_current":
+      case "scene_notes":
+      case "scene_render":
+      case "scene_zoom":
+      case "scene_profile":
+        return await handleCanvasAction(action)
       case "linkedin_event_dom":
         return { success: true, data: await extractLinkedInEventDom(waitForDomStable, dispatchClickSequence) }
       case "linkedin_attendees_open":

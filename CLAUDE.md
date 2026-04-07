@@ -92,6 +92,75 @@ slop raw '{"type":"net_override_clear"}'
 
 This is how `slop linkedin attendees` changes LinkedIn's page size from 20→50 — the page's own JavaScript fetches attendees, but slop rewrites the request in-flight to ask for more results.
 
+## Scene-Graph Access (Canva, Google Docs, Google Slides)
+
+`slop scene` exposes editor objects by stable identifier so an agent can click, read, and write inside visual editors without screenshots or vision. Profile-driven: per-host detection picks the right resolver.
+
+```bash
+slop scene profile [--verbose]        # Detect host editor profile + capabilities
+slop scene list [--type <t>]          # List scene objects (images, shapes, text, slides, pages)
+slop scene click <id>                 # Click by stable id (Canva LB*, Slides filmstrip-slide-N-*, Docs page-N)
+slop scene dblclick <id>              # Enter text-edit mode in Canva/Slides
+slop scene hit <x>,<y>                # Identify object at viewport X,Y
+slop scene selected                   # Read current selection label
+slop scene zoom                       # Read editor zoom factor
+
+slop scene text [--with-html]         # Read full document (Google Docs hidden iframe mirror)
+slop scene insert "<text>"            # Insert at cursor (Google Docs)
+
+slop scene slide list                 # All slides with stable IDs + blob URLs
+slop scene slide current              # Current slide index + id
+slop scene slide goto <n>             # Navigate via URL fragment
+slop scene notes [--slide <n>]        # Read speaker notes
+
+slop scene render <id> [--save]       # Render a scene object to PNG
+```
+
+**Architecture by editor:**
+
+- **Canva** — every canvas object is a `<div id="LB…">` with `style.transform: translate(x, y)`. Stable across reloads.
+- **Google Docs** — the canvas is opaque, but the full document HTML lives in `.docs-texteventtarget-iframe > [role=textbox]` with `data-ri` range offsets. `insert` uses `execCommand('insertText')` on the iframe contenteditable; writes are undoable via `slop keys Meta+z`.
+- **Google Slides** — each slide is an SVG `<g id="filmstrip-slide-N-gd…">` with a blob-URL PNG thumbnail. `scene slide goto` sets `location.hash = "#slide=id." + pageId`. `scene render` fetches the blob and draws it into a canvas. Text-box content only appears in the text-event iframe when a text box is in edit mode — a documented caveat.
+
+**Caveats:**
+- Canva synthetic clicks require prior interactive warmup to trigger the selection state machine. Use `slop scene click <id> --os` when `scene selected` doesn't update.
+- Google Docs canvas rendering means visual assertions must go through `slop scene text` (reads) or the canvas-tile `render` (pixels).
+- Google Slides filmstrip thumbnails filter synthetic clicks and synthetic keys. Always use hash navigation for `slideGoto`.
+
+## Recording Sessions
+
+The `slop monitor` family records every real user click, keystroke, form change, navigation, DOM mutation, and the network calls each action triggered — then exports the trace as either a pretty timeline or a runnable `slop` replay script. No CDP. No infobanner.
+
+```bash
+slop monitor start                              # Begin recording on the active slop tab
+slop monitor start --instruction "..."          # Annotate with task intent
+slop monitor stop                               # End recording, print summary
+slop monitor status                             # Active session(s)
+slop monitor pause                              # Stop emitting without ending
+slop monitor resume                             # Resume a paused session
+slop monitor list                               # All sessions in the event log
+slop monitor tail [--raw]                       # Live tail of the current session
+slop monitor export <sessionId>                 # Aligned text rendering
+slop monitor export <sessionId> --json          # Raw JSONL
+slop monitor export <sessionId> --plan          # Replay script (slop ... lines)
+```
+
+Event records are sparse — short keys (`t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `v`, `cause`) so a 30-minute session reads in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <seq>`. Real user events have `tr: true`; slop's own synthetic clicks have `tr: false` so the replay-plan generator can ignore them.
+
+The replay plan uses semantic selectors that survive DOM churn:
+```
+slop tab new "https://example.com/"
+slop wait-stable
+slop click "button:Search"
+slop type "textbox:Query" "bun docs"
+slop keys "Enter"
+slop wait-stable
+```
+
+When the user runs the replay, slop's `find_and_click` / `find_and_type` re-resolves each selector against the live DOM — no stale ref problems.
+
+The monitor stores sessions in `/tmp/slop-browser-events.jsonl` (the same file `slop events` already tails). Sessions are delimited by `mon_start` / `mon_stop` events with the same `sid`. Multiple sessions coexist historically and `slop monitor list` shows them all.
+
 ## Screenshots
 
 ```bash
@@ -197,13 +266,58 @@ slop text                              # Read results
 slop tab close
 ```
 
+### Read and write a Google Doc
+```bash
+slop tab new "https://docs.google.com/document/d/<id>/edit"
+sleep 5
+slop scene profile                     # → google-docs
+slop scene text                        # Full document text (from hidden iframe mirror)
+slop scene text --with-html            # Include inline HTML + data-ri offsets
+slop scene insert "hello from slop"    # Insert at cursor position
+slop keys "Meta+z"                     # Undo the insert (execCommand writes are undoable)
+```
+
+### Navigate a Google Slides deck
+```bash
+slop tab new "https://docs.google.com/presentation/d/<id>/edit"
+sleep 6
+slop scene slide list                  # Every slide with stable IDs + blob URLs
+slop scene slide goto 5                # Navigate via URL fragment (synthetic clicks/keys do not work)
+slop scene slide current               # Verify new index
+slop scene notes                       # Read speaker notes
+slop scene render <slide-id> --save    # Save slide as PNG
+```
+
+### Hit Canva objects by stable layer ID
+```bash
+slop tab new "https://www.canva.com/design/<id>/edit"
+sleep 6
+slop scene profile                     # → canva
+slop scene list --type shape           # Every LB layer classified as a shape
+slop scene hit 537,516                 # Identify what's at a viewport coordinate
+slop scene click LBKfjtRwQHt7D0Cf      # Click by stable id
+slop scene zoom                        # Current editor zoom factor
+```
+
+### Record a user session and replay it
+```bash
+slop monitor start --instruction "search for bun docs, open first result"
+# ... user interacts for 30–60 seconds ...
+slop monitor stop                      # Summary: evt / mut / net / nav counts + duration
+slop monitor list                      # All sessions in /tmp/slop-browser-events.jsonl
+slop monitor export <sessionId>        # Pretty-aligned timeline
+slop monitor export <sessionId> --plan # Replayable script (one slop cmd per line)
+```
+
 ## What NOT to Do
 
-- Don't use screenshots to understand pages — use `slop tree` and `slop text`
+- Don't use screenshots to understand pages — use `slop tree`, `slop text`, or `slop scene list` / `slop scene text`
 - Don't start the daemon manually — it auto-starts on first command
 - Don't chain commands without `sleep` — the extension needs time to process
 - Don't interact with tabs outside the slop group without `--any-tab`
 - Don't use `slop network on` (CDP) unless you specifically need raw debugger capture — it shows a yellow bar and can be detected
+- Don't confuse `slop canvas` (HTMLCanvasElement pixel access — `list` / `read` / `diff`) with `slop scene` (DOM / SVG / iframe scene-graph access in visual editors)
+- Don't synthetic-click Google Slides filmstrip thumbnails — use `slop scene slide goto <n>` which navigates via the URL fragment
 
 ## Reference
 
@@ -213,12 +327,18 @@ Run `slop help` for the complete command list. Key commands not covered above:
 slop cookies example.com              # List cookies for domain
 slop storage                          # Read localStorage
 slop eval "document.title"            # Run JS (isolated world)
-slop eval "window.foo" --main         # Run JS (page context)
+slop eval "window.foo" --main         # Run JS (page context, awaits promises)
+slop eval --main "fetch(url).then(r => r.json())"  # Async eval returns resolved value
 slop history "search"                 # Search browser history
 slop bookmarks "query"                # Search bookmarks
 slop batch '[{"type":"click","ref":"e5"},{"type":"wait","ms":500}]'  # Batch actions
 slop status                           # Daemon status (local check)
+slop canvas list                      # Discover HTMLCanvasElement nodes (NOT `slop scene`)
+slop canvas read 0 --format png       # Read canvas bytes as data URL
+slop canvas diff a.png b.png          # Pixel diff between two images
 ```
+
+For deeper notes, see `Notes/monitor.md` and `Notes/scene.md` in this repo.
 
 ---
 

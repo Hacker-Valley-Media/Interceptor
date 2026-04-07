@@ -7,3 +7,5 @@ daemon/.generated/
 *.log
 /tmp/
 .DS_Store
+slop-screenshot-*.jpg
+slop-screenshot-*.png

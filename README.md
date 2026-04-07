@@ -25,6 +25,10 @@ The daemon auto-starts on first command. No setup needed.
 
 **Passive Network** — All `fetch()` and `XMLHttpRequest` traffic on every page is captured automatically. No debugger, no infobanner. Query it with `slop net log`.
 
+**Scene Graph** — Profile-driven access to visual editors that don't render to the DOM normally: Canva, Google Docs, Google Slides. Enumerate objects by stable ID, click shapes, read full document text, navigate slide decks, render pages to PNG. `slop scene` — no CDP, no vision, no screenshots needed.
+
+**Session Monitor** — Record a user's real interactions (clicks, keystrokes, form changes, DOM mutations, network calls) as a sparse JSONL log that replays as a `slop` script. `slop monitor start` / `slop monitor stop` / `slop monitor export --plan`.
+
 **Stealth** — Passes all major bot detection: BrowserScan (Normal), Pixelscan ("Definitely Human"), Sannysoft (all pass), CreepJS (0% headless), Fingerprint.com (notDetected), AreyouHeadless (not headless). Zero automation fingerprint.
 
 ## Commands
@@ -104,6 +108,70 @@ slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*eventAttending*","
 
 # Clear all overrides
 slop raw '{"type":"net_override_clear"}'
+```
+
+### Scene Graph (Canva, Google Docs, Google Slides)
+Read and manipulate visual editors whose "canvas" is actually a DOM / SVG / hidden-iframe structure. No CDP, no debugger, no detection risk. Profile-driven — each editor has its own detection and capability set. Works today on canva.com/design/, docs.google.com/document/, and docs.google.com/presentation/.
+
+```bash
+slop scene profile                     # Detect active editor profile
+slop scene profile --verbose           # Include capabilities list
+slop scene list                        # Enumerate scene objects on current page
+slop scene list --type shape           # Filter by type (image|shape|text|page|slide|embed)
+slop scene click <id>                  # Click a scene object by stable id (Canva: LBxxxxxxxxxxxxxx)
+slop scene dblclick <id>               # Double-click to enter text edit
+slop scene hit <x>,<y>                 # Identify the scene object at viewport coordinates
+slop scene selected                    # Read current selection (host-aware)
+slop scene zoom                        # Read editor zoom factor
+
+slop scene text                        # Read full document text (Google Docs hidden iframe mirror)
+slop scene text --with-html            # Include inline HTML with data-ri offsets
+slop scene insert "<text>"             # Insert text at cursor position (Google Docs)
+
+slop scene slide list                  # List all slides in a Google Slides deck
+slop scene slide current               # Show current slide index and id
+slop scene slide goto <n>              # Navigate to slide <n> (URL fragment method)
+slop scene slide <n>                   # Shorthand for slide goto <n>
+slop scene notes                       # Read speaker notes of current slide
+
+slop scene render <id>                 # Render a scene object as PNG data URL
+slop scene render <id> --save          # Save the PNG to disk
+```
+
+**How it works per editor:**
+
+- **Canva**: every object on the canvas is a `<div id="LB…">` with `style.transform: translate(x, y)` and `style.width/height`. The IDs are stable per-document (they survive page reloads). `scene list` enumerates them; `scene click` computes the viewport center from `getBoundingClientRect()` and dispatches a click through `elementFromPoint`.
+- **Google Docs**: the page is rendered to `<canvas>` but the full document HTML lives inside a hidden iframe at `.docs-texteventtarget-iframe > [role=textbox]`, complete with `<p>` / `<span>` elements carrying `data-ri` range-index offsets. `scene text` reads it, `scene insert` writes via `document.execCommand('insertText')` on the iframe's contenteditable.
+- **Google Slides**: each slide is a SVG `<g id="filmstrip-slide-N-gd…">` with a pre-rendered PNG blob URL on the child `<image>`. The real slide-navigation page ID lives on the `data-slide-page-id` attribute of the parent `.punch-filmstrip-thumbnail`. `scene slide goto` navigates by setting `window.location.hash = "#slide=id." + pageId`.
+
+### Recording (Session Monitor)
+Record every real user click, keystroke, form change, navigation, DOM mutation, and the network calls each action triggered — then export the trace as either a pretty timeline or a runnable `slop` replay script. No CDP, no infobanner, no detection.
+
+```bash
+slop monitor start                              # Begin recording on the active slop tab
+slop monitor start --instruction "..."          # Annotate with task intent
+slop monitor stop                               # End recording, print summary
+slop monitor status                             # Show active session(s)
+slop monitor pause                              # Stop emitting events without ending
+slop monitor resume                             # Resume a paused session
+slop monitor list                               # All sessions in the event log
+slop monitor tail                               # Live tail current session (pretty)
+slop monitor tail --raw                         # Live tail (raw JSONL)
+slop monitor export <sessionId>                 # Aligned text rendering
+slop monitor export <sessionId> --json          # Raw JSONL for that session
+slop monitor export <sessionId> --plan          # Emit slop ... replay script
+```
+
+Each event line is sparse JSON (short keys: `t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `cause`) so an agent can read a 30-minute session in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <action_seq>`. Real user events have `tr: true`; slop's own synthetic clicks have `tr: false` so the replay generator can ignore them.
+
+The replay script uses the existing semantic-selector path:
+```
+slop tab new "https://example.com/"
+slop wait-stable
+slop click "button:Search"
+slop type "textbox:Query" "bun docs"
+slop keys "Enter"
+slop wait-stable
 ```
 
 ### Screenshots
@@ -226,6 +294,57 @@ sleep 2
 slop tree
 slop click e5 --os                     # OS-level CGEvent click (genuinely trusted)
 slop type e3 "text" --os               # OS-level keystrokes
+```
+
+### Read a Google Doc programmatically
+```bash
+slop tab new "https://docs.google.com/document/d/<id>/edit"
+sleep 5
+slop scene profile                     # -> google-docs
+slop scene text                        # Full document text from hidden iframe mirror
+slop scene text --with-html            # Full HTML model with data-ri offsets
+slop scene insert "new paragraph at cursor"
+slop keys "Meta+z"                     # Undo the insert
+```
+
+### Manipulate a Canva design
+```bash
+slop tab new "https://www.canva.com/design/<id>/edit"
+sleep 6
+slop scene profile                     # -> canva
+slop scene list --type shape           # Every LB layer that's a shape
+slop scene zoom                        # Current editor zoom factor
+slop scene hit 537,516                 # What's at this viewport coord?
+slop scene click LBKfjtRwQHt7D0Cf      # Click a layer by stable id
+```
+
+### Navigate and render Google Slides
+```bash
+slop tab new "https://docs.google.com/presentation/d/<id>/edit"
+sleep 6
+slop scene slide list                  # All slides with stable IDs + blob URLs
+slop scene slide goto 5                # Navigate via URL fragment
+slop scene slide current               # Verify index 5 is now active
+slop scene notes                       # Read speaker notes for current slide
+slop scene render filmstrip-slide-3-gd02e148143_0_6 --save  # PNG of slide 3
+```
+
+### Record a user session and replay it
+```bash
+# With Ron at the keyboard:
+slop monitor start --instruction "search bun docs, open first result, copy paragraph"
+# ... Ron interacts for 60 seconds ...
+slop monitor stop                      # Prints session summary
+slop monitor list                      # Shows all historical sessions
+slop monitor export <sessionId>        # Aligned text rendering
+slop monitor export <sessionId> --plan # Replayable script of slop commands
+```
+
+### Diff canvas pixels between two renders (the OTHER `slop canvas`)
+```bash
+slop canvas list                       # Discover <canvas> elements (HTMLCanvasElement)
+slop canvas read 0 --format png        # Read canvas as data URL
+slop canvas diff url1.png url2.png     # Pixel diff between images
 ```
 
 ## What NOT to Do

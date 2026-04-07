@@ -14,6 +14,8 @@ import { parseDataCommand } from "./commands/data"
 import { parseMetaCommand } from "./commands/meta"
 import { parseEvalCommand } from "./commands/eval"
 import { parseBatchCommand } from "./commands/batch"
+import { parseMonitorCommand } from "./commands/monitor"
+import { parseSceneCommand } from "./commands/scene"
 
 // Command → module routing
 const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
@@ -27,9 +29,14 @@ const DATA_CMDS = new Set(["cookies", "storage", "history", "bookmarks", "downlo
 const META_CMDS = new Set(["status", "reload", "meta", "links", "images", "forms", "info", "page_info", "query", "exists", "count", "table", "attr", "style", "events", "search", "notify", "sessions", "capabilities", "modals", "panels"])
 const EVAL_CMDS = new Set(["eval"])
 const BATCH_CMDS = new Set(["batch", "raw"])
+const MONITOR_CMDS = new Set(["monitor"])
+const SCENE_CMDS = new Set(["scene"])
 
 // Commands that don't require a daemon connection
 const NO_DAEMON = new Set(["status", "help", "events", "session"])
+
+// Monitor subcommands that are handled locally (no daemon needed)
+const MONITOR_LOCAL_SUBCOMMANDS = new Set(["tail", "list", "export"])
 
 async function main() {
   const args = process.argv.slice(2)
@@ -50,7 +57,10 @@ async function main() {
   }
 
   const cmd = filtered[0]
-  const needsDaemon = !NO_DAEMON.has(cmd)
+  let needsDaemon = !NO_DAEMON.has(cmd)
+  if (cmd === "monitor" && filtered[1] && MONITOR_LOCAL_SUBCOMMANDS.has(filtered[1])) {
+    needsDaemon = false
+  }
 
   if (needsDaemon && !useWs) {
     await ensureDaemon()
@@ -70,6 +80,8 @@ async function main() {
   else if (META_CMDS.has(cmd))   action = await parseMetaCommand(filtered, jsonMode)
   else if (EVAL_CMDS.has(cmd))   action = parseEvalCommand(filtered)
   else if (BATCH_CMDS.has(cmd))  action = parseBatchCommand(filtered)
+  else if (MONITOR_CMDS.has(cmd)) action = await parseMonitorCommand(filtered, jsonMode)
+  else if (SCENE_CMDS.has(cmd))   action = await parseSceneCommand(filtered, jsonMode)
   else {
     console.error(`error: unknown command '${cmd}'. Run 'slop help' for usage.`)
     process.exit(1)
