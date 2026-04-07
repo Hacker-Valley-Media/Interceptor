@@ -85,7 +85,7 @@ Headers:
   slop headers clear                  Clear all rules
 
 Canvas:
-  slop canvas list                    Discover canvas elements
+  slop canvas list                    Discover <canvas> elements
   slop canvas read N                  Read canvas as data URL
   slop canvas read N --format png     PNG format
   slop canvas read N --region X,Y,W,H  Read pixel region
@@ -106,6 +106,42 @@ Batch:
   slop wait-stable                    Wait for DOM stability (200ms default)
   slop wait-stable --ms 500           Custom debounce duration
   slop wait-stable --timeout 3000     Custom hard timeout
+
+Scene Graph (Canva, Google Docs, Google Slides):
+  slop scene profile                    Detect active editor profile (canva/google-docs/google-slides/generic)
+  slop scene profile --verbose          Include the list of supported capabilities
+  slop scene list                       List scene objects on current editor
+  slop scene list --type shape          Filter by type (image|shape|text|page|embed|slide)
+  slop scene click <id>                 Click a scene object by its stable id
+  slop scene dblclick <id>              Double-click a scene object
+  slop scene select <id>                Click + verify selection change
+  slop scene hit <x> <y>                Identify the scene object at viewport coordinates
+  slop scene selected                   Read current selection (host-aware)
+  slop scene text                       Read document text (Google Docs)
+  slop scene text --with-html           Include inline HTML + data-ri offsets
+  slop scene insert "<text>"            Insert text at cursor (Google Docs)
+  slop scene cursor-to <x> <y>          Move cursor to viewport coordinates
+  slop scene slide list                 List all slides in a Google Slides deck
+  slop scene slide current              Show the currently-displayed slide
+  slop scene slide goto <index>         Navigate to slide N (0-indexed)
+  slop scene notes [--slide N]          Read speaker notes for a slide
+  slop scene render <id> [--save]       Render a scene object as PNG
+  slop scene zoom                       Read current editor zoom factor
+  slop scene ... --profile <name>       Force a profile (bypasses detection)
+
+Recording (Session Monitor):
+  slop monitor start ["<instruction>"]   Start recording user actions on active tab
+    --instruction "..."                  Annotate with task intent for replay
+  slop monitor stop                      End recording and emit summary
+  slop monitor pause                     Stop emitting events without ending session
+  slop monitor resume                    Resume an active paused session
+  slop monitor status [--all]            Show status of current/all monitor sessions
+  slop monitor list                      List all sessions in the event log
+  slop monitor tail [--raw] [--current]  Live tail current session (pretty by default)
+  slop monitor export <sessionId>        Render a session as aligned text
+    --json                               Raw JSONL for the session
+    --plan                               Emit a 'slop ...' replay script
+    --with-bodies                        (P1) Merge cached response bodies
 
 Meta:
   slop status                         Check daemon status (local — no connection needed)

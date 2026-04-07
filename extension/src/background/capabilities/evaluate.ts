@@ -13,9 +13,21 @@ export async function handleEvaluateActions(
     target: { tabId },
     world: world as "MAIN" | "ISOLATED",
     args: [code],
-    func: (c: string) => {
+    func: async (c: string) => {
+      function clone(v: unknown): unknown {
+        if (v === null || v === undefined) return v
+        const t = typeof v
+        if (t === "string" || t === "number" || t === "boolean") return v
+        if (t === "bigint") return (v as bigint).toString()
+        try {
+          return JSON.parse(JSON.stringify(v))
+        } catch {
+          try { return String(v) } catch { return null }
+        }
+      }
       try {
         const w = window as any
+        let source = c
         if (w.trustedTypes) {
           if (!w.__slop_tt_policy) {
             try {
@@ -31,15 +43,16 @@ export async function handleEvaluateActions(
             }
           }
           if (w.__slop_tt_policy) {
-            const trusted = w.__slop_tt_policy.createScript(c)
-            const r = (0, eval)(trusted)
-            return { success: true, data: (typeof r === "object" && r !== null) ? JSON.parse(JSON.stringify(r)) : r }
+            source = w.__slop_tt_policy.createScript(c)
           }
         }
-        const r = (0, eval)(c)
-        return { success: true, data: (typeof r === "object" && r !== null) ? JSON.parse(JSON.stringify(r)) : r }
+        let r: unknown = (0, eval)(source as string)
+        if (r && typeof (r as any).then === "function") {
+          r = await (r as Promise<unknown>)
+        }
+        return { success: true, data: clone(r) }
       } catch (e: any) {
-        return { success: false, error: e.message }
+        return { success: false, error: e?.message || String(e) }
       }
     }
   })

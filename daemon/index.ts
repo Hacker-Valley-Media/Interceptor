@@ -471,6 +471,12 @@ try {
           return
         }
 
+        if (request.type === "event") {
+          // Extension-originated event stream (monitor, keepalive_ping, etc.)
+          handleNativeMessage(request as any)
+          return
+        }
+
         if ((request as any).id && (request as any).result !== undefined) {
           handleNativeMessage(request as any)
           return
