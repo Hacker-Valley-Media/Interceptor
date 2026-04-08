@@ -25,7 +25,6 @@
     "clipboardRead",
     "clipboardWrite",
     "alarms",
-    "dom",
     "offscreen",
     "tabCapture",
     "debugger"
