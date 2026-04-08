@@ -1,5 +1,10 @@
 # slop-browser
 
+## To install it:
+  1. Go to chrome://extensions
+  2. Enable "Developer mode"
+  3. Click "Load unpacked"
+  4. Select the extension/dist/ directory
 Browser control for AI agents. No CDP, no MCP, no API keys. The agent calls `slop` CLI commands, reads the output, decides what to do next.
 
 **Binary:** `dist/slop`
