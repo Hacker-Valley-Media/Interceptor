@@ -1,6 +1,14 @@
 # slop-browser
 
-Browser control for AI agents. No CDP, no MCP, no API keys. The agent calls `slop` CLI commands, reads the output, decides what to do next.
+**slop-browser is a browser automation CLI that doesn't use CDP.**
+
+Most browser automation tools (Playwright, Puppeteer, agent-browser) control Chrome through the DevTools Protocol. Every site that cares can detect this. slop takes a different approach: it's a Chrome extension that controls your actual browser from the inside. No debugger. No automation flags. No separate browser instance.
+
+You stay logged in. You pass bot detection. Your agent sees exactly what you see.
+
+---
+
+The agent calls `slop` CLI commands, reads the output, decides what to do next. No MCP, no API keys.
 
 ## To install it:
 1. Go to chrome://extensions
