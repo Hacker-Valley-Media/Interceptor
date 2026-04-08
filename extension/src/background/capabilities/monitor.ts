@@ -88,6 +88,7 @@ function registerWebNavListenersOnce(): void {
       tq: details.transitionQualifiers
     })
     session.url = details.url
+    sendArmToTab(details.tabId, session.sessionId, session.startedAt)
   })
 
   chrome.webNavigation.onReferenceFragmentUpdated.addListener((details) => {
@@ -101,6 +102,7 @@ function registerWebNavListenersOnce(): void {
       tq: details.transitionQualifiers
     })
     session.url = details.url
+    sendArmToTab(details.tabId, session.sessionId, session.startedAt)
   })
 
   chrome.webNavigation.onCompleted.addListener((details) => {

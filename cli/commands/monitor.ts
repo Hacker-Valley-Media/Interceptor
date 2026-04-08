@@ -59,7 +59,7 @@ const MON_KINDS = new Set([
   "mon_start", "mon_stop", "mon_pause", "mon_resume",
   "click", "dblclick", "rclick", "input", "change", "submit",
   "key", "scroll", "focus", "blur", "copy", "paste",
-  "mut", "fetch", "xhr", "nav", "reload", "error"
+  "mut", "fetch", "xhr", "sse", "nav", "reload", "error"
 ])
 
 function flagValue(args: string[], flag: string): string | undefined {
@@ -206,6 +206,12 @@ export function renderEvent(ev: MonEvent, base: number): string {
       const u = ev.u ? shortUrl(ev.u) : "?"
       const sz = ev.bz ? `${(ev.bz / 1024).toFixed(1)}kB` : ""
       return `  ${rel}  ${k}  ${ev.m || "GET"} ${u} ${ev.st || 0}  ${sz}  ${cause}`
+    }
+    case "sse": {
+      const cause = ev.cause !== undefined ? `(cause: #${ev.cause})` : "(autonomous)"
+      const u = ev.u ? shortUrl(ev.u) : "?"
+      const sz = ev.bz ? `${(ev.bz / 1024).toFixed(1)}kB` : ""
+      return `  ${rel}  ${k}  SSE ${u} ${sz}  ${cause}`
     }
     case "nav": {
       const cause = ev.cause !== undefined ? `(cause: #${ev.cause})` : ""

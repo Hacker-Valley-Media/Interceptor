@@ -75,6 +75,11 @@ Passive Network (always-on, no CDP):
   slop net headers                    Show captured request headers (CSRF, auth)
   slop net headers --filter <pattern> Filter headers by URL
 
+SSE Stream Capture:
+  slop sse log [--filter <pattern>] [--limit N]   Show completed SSE streams
+  slop sse streams                                  List active SSE streams
+  slop sse tail [--filter <pattern>]                Live tail SSE stream chunks
+
 LinkedIn:
   slop linkedin event [url]           Extract LinkedIn event + post data via network and DOM validation
   slop linkedin attendees [url]       Extract LinkedIn event attendees with request override, batching, and enrichment
@@ -142,6 +147,16 @@ Recording (Session Monitor):
     --json                               Raw JSONL for the session
     --plan                               Emit a 'slop ...' replay script
     --with-bodies                        (P1) Merge cached response bodies
+
+ChatGPT Agentic Bridge:
+  slop chatgpt send "<prompt>"           Send a message, read response
+    --stream                             Print tokens as they stream
+  slop chatgpt read                      Read current conversation from DOM
+  slop chatgpt status                    Show streaming state and model
+  slop chatgpt conversations             List recent conversations
+  slop chatgpt switch <conversation-id>  Navigate to conversation
+  slop chatgpt model [name]              Read or change the active model
+  slop chatgpt stop                      Stop current generation
 
 Meta:
   slop status                         Check daemon status (local — no connection needed)

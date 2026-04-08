@@ -88,6 +88,90 @@ if ((window as any).__slop_net_installed) {
     } catch {}
 
     return originalFetch.call(this, input, init).then((response) => {
+      if (reqHeaders) {
+        try {
+          document.dispatchEvent(new CustomEvent("__slop_headers", {
+            detail: { url, method, headers: reqHeaders, type: "fetch", timestamp: Date.now() }
+          }))
+        } catch {}
+      }
+
+      const contentType = (response.headers.get("content-type") || "").toLowerCase()
+      const acceptHeader = (reqHeaders?.accept || reqHeaders?.Accept || "").toLowerCase()
+      const isSse = contentType.includes("text/event-stream") || acceptHeader.includes("text/event-stream")
+
+      if (isSse && response.body && !response.bodyUsed) {
+        try {
+          const reader = response.body.getReader()
+          const decoder = new TextDecoder("utf-8")
+          const chunks: string[] = []
+          let chunkSeq = 0
+          const streamStart = Date.now()
+          const MAX_ACCUMULATE = 10 * 1024 * 1024
+          let totalBytes = 0
+          let truncated = false
+
+          const passThrough = new ReadableStream({
+            start(controller) {
+              function pump(): void {
+                reader.read().then(({ done, value }) => {
+                  if (done) {
+                    try {
+                      const fullBody = chunks.join("")
+                      document.dispatchEvent(new CustomEvent("__slop_net", {
+                        detail: { url, method, status: response.status, body: fullBody, type: "fetch", timestamp: Date.now(), truncated }
+                      }))
+                      document.dispatchEvent(new CustomEvent("__slop_sse_done", {
+                        detail: { url, method, status: response.status, totalChunks: chunkSeq, totalBytes, duration: Date.now() - streamStart }
+                      }))
+                    } catch {}
+                    controller.close()
+                    return
+                  }
+
+                  try {
+                    const text = decoder.decode(value, { stream: true })
+                    totalBytes += value.byteLength
+                    if (!truncated) {
+                      if (totalBytes <= MAX_ACCUMULATE) {
+                        chunks.push(text)
+                      } else {
+                        truncated = true
+                      }
+                    }
+                    document.dispatchEvent(new CustomEvent("__slop_sse", {
+                      detail: { url, method, status: response.status, chunk: text, seq: chunkSeq++, timestamp: Date.now() }
+                    }))
+                  } catch {}
+
+                  controller.enqueue(value)
+                  pump()
+                }).catch((err) => {
+                  try {
+                    document.dispatchEvent(new CustomEvent("__slop_sse_error", {
+                      detail: { url, error: err?.message || String(err) }
+                    }))
+                  } catch {}
+                  controller.error(err)
+                })
+              }
+              pump()
+            },
+            cancel(reason) {
+              reader.cancel(reason).catch(() => {})
+            }
+          })
+
+          return new Response(passThrough, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers
+          })
+        } catch {
+          return response
+        }
+      }
+
       try {
         const clone = response.clone()
         clone.text().then((body) => {
@@ -103,14 +187,6 @@ if ((window as any).__slop_net_installed) {
           }))
         }).catch(() => {})
       } catch {}
-
-      if (reqHeaders) {
-        try {
-          document.dispatchEvent(new CustomEvent("__slop_headers", {
-            detail: { url, method, headers: reqHeaders, type: "fetch", timestamp: Date.now() }
-          }))
-        } catch {}
-      }
 
       return response
     }).catch((err) => {
@@ -177,5 +253,86 @@ if ((window as any).__slop_net_installed) {
     })
 
     return origSend.apply(this, arguments as any)
+  }
+
+  const OriginalEventSource = (window as any).EventSource as typeof EventSource | undefined
+  if (OriginalEventSource) {
+    const SlopEventSource = function (this: EventSource, url: string | URL, init?: EventSourceInit) {
+      const resolvedUrl = typeof url === "string" ? url : url.toString()
+      const real = new OriginalEventSource(url, init) as EventSource
+
+      try {
+        document.dispatchEvent(new CustomEvent("__slop_sse_open", {
+          detail: { url: resolvedUrl, withCredentials: init?.withCredentials || false, source: "eventsource", timestamp: Date.now() }
+        }))
+      } catch {}
+
+      const origAddEventListener = real.addEventListener.bind(real)
+
+      real.addEventListener = function (type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions): void {
+        if (type === "message" && listener) {
+          const wrapped = function (this: EventSource, ev: MessageEvent) {
+            try {
+              document.dispatchEvent(new CustomEvent("__slop_sse", {
+                detail: { url: resolvedUrl, chunk: ev.data, seq: -1, event: ev.type, lastEventId: ev.lastEventId, source: "eventsource", timestamp: Date.now() }
+              }))
+            } catch {}
+            if (typeof listener === "function") listener.call(this, ev)
+            else if (listener && typeof listener.handleEvent === "function") listener.handleEvent(ev)
+          }
+          origAddEventListener(type, wrapped as EventListener, options)
+          return
+        }
+        origAddEventListener(type, listener, options)
+      } as typeof real.addEventListener
+
+      const origOnMessage = Object.getOwnPropertyDescriptor(OriginalEventSource.prototype, "onmessage")
+      if (origOnMessage) {
+        let userOnMessage: ((ev: MessageEvent) => void) | null = null
+        Object.defineProperty(real, "onmessage", {
+          get() { return userOnMessage },
+          set(fn: ((ev: MessageEvent) => void) | null) {
+            userOnMessage = fn
+            if (origOnMessage.set) {
+              origOnMessage.set.call(real, fn ? function (this: EventSource, ev: MessageEvent) {
+                try {
+                  document.dispatchEvent(new CustomEvent("__slop_sse", {
+                    detail: { url: resolvedUrl, chunk: ev.data, seq: -1, event: "message", lastEventId: ev.lastEventId, source: "eventsource", timestamp: Date.now() }
+                  }))
+                } catch {}
+                fn.call(this, ev)
+              } : null)
+            }
+          },
+          configurable: true
+        })
+      }
+
+      const origClose = real.close.bind(real)
+      real.close = function () {
+        try {
+          document.dispatchEvent(new CustomEvent("__slop_sse_close", {
+            detail: { url: resolvedUrl, source: "eventsource", timestamp: Date.now() }
+          }))
+        } catch {}
+        origClose()
+      }
+
+      real.addEventListener("error", () => {
+        try {
+          document.dispatchEvent(new CustomEvent("__slop_sse_error", {
+            detail: { url: resolvedUrl, error: "EventSource error", source: "eventsource" }
+          }))
+        } catch {}
+      })
+
+      return real as unknown as EventSource
+    } as unknown as typeof EventSource
+
+    SlopEventSource.prototype = OriginalEventSource.prototype
+    SlopEventSource.CONNECTING = OriginalEventSource.CONNECTING
+    SlopEventSource.OPEN = OriginalEventSource.OPEN
+    SlopEventSource.CLOSED = OriginalEventSource.CLOSED
+    ;(window as any).EventSource = SlopEventSource
   }
 }

@@ -110,6 +110,34 @@ slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*eventAttending*","
 slop raw '{"type":"net_override_clear"}'
 ```
 
+### SSE Stream Capture
+
+slop intercepts Server-Sent Events (text/event-stream) in real-time, chunk by chunk.
+
+```bash
+slop sse streams                                  # List active SSE streams
+slop sse log [--filter <pattern>] [--limit N]     # Show completed SSE streams
+slop sse tail [--filter <pattern>]                # Live tail SSE chunks
+```
+
+Works automatically on any site using fetch-based SSE or EventSource. No CDP. No setup.
+
+### ChatGPT Agentic Bridge
+
+Drive ChatGPT's web UI programmatically — send prompts, read streamed responses via the API wire protocol, iterate.
+
+```bash
+slop chatgpt send "What is 2+2?"                  # Send and read response
+slop chatgpt send "Write hello world" --stream     # Stream tokens live
+slop chatgpt read                                   # Read conversation from DOM
+slop chatgpt status                                 # Streaming state + model
+slop chatgpt conversations                          # List recent conversations
+slop chatgpt switch <conversation-id>               # Navigate to conversation
+slop chatgpt stop                                   # Stop generation
+```
+
+No API keys needed. Uses your existing ChatGPT session. Auth tokens, sentinel challenges, and conduit routing are all handled by the browser automatically.
+
 ### Scene Graph (Canva, Google Docs, Google Slides)
 Read and manipulate visual editors whose "canvas" is actually a DOM / SVG / hidden-iframe structure. No CDP, no debugger, no detection risk. Profile-driven — each editor has its own detection and capability set. Works today on canva.com/design/, docs.google.com/document/, and docs.google.com/presentation/.
 

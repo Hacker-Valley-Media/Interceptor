@@ -92,6 +92,34 @@ slop raw '{"type":"net_override_clear"}'
 
 This is how `slop linkedin attendees` changes LinkedIn's page size from 20→50 — the page's own JavaScript fetches attendees, but slop rewrites the request in-flight to ask for more results.
 
+## SSE Stream Capture
+
+slop intercepts Server-Sent Events (text/event-stream) in real-time, chunk by chunk.
+
+```bash
+slop sse streams                                  # List active SSE streams
+slop sse log [--filter <pattern>] [--limit N]     # Show completed SSE streams
+slop sse tail [--filter <pattern>]                # Live tail SSE chunks
+```
+
+Works automatically on any site using fetch-based SSE or EventSource. No CDP. No setup.
+
+## ChatGPT Agentic Bridge
+
+Drive ChatGPT's web UI programmatically — send prompts, read streamed responses via the API wire protocol, iterate.
+
+```bash
+slop chatgpt send "What is 2+2?"                  # Send and read response
+slop chatgpt send "Write hello world" --stream     # Stream tokens live
+slop chatgpt read                                   # Read conversation from DOM
+slop chatgpt status                                 # Streaming state + model
+slop chatgpt conversations                          # List recent conversations
+slop chatgpt switch <conversation-id>               # Navigate to conversation
+slop chatgpt stop                                   # Stop generation
+```
+
+No API keys needed. Uses your existing ChatGPT session. Auth tokens, sentinel challenges, and conduit routing are all handled by the browser automatically.
+
 ## Scene-Graph Access (Canva, Google Docs, Google Slides)
 
 `slop scene` exposes editor objects by stable identifier so an agent can click, read, and write inside visual editors without screenshots or vision. Profile-driven: per-host detection picks the right resolver.
