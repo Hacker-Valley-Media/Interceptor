@@ -37,6 +37,32 @@ export async function handlePassiveNetActions(
       if (!result.success) return { success: false, error: result.error || "failed to get captured headers" }
       return { success: true, data: result.data }
     }
+
+    case "sse_log": {
+      const result = await sendNetDirect(tabId, {
+        type: "get_sse_log",
+        filter: action.filter as string | undefined,
+        limit: action.limit as number | undefined
+      }) as { success: boolean; data?: unknown[]; error?: string }
+      if (!result.success) return { success: false, error: result.error || "failed to get SSE log" }
+      return { success: true, data: result.data || [] }
+    }
+    case "sse_streams": {
+      const result = await sendNetDirect(tabId, {
+        type: "get_sse_streams"
+      }) as { success: boolean; data?: unknown[]; error?: string }
+      if (!result.success) return { success: false, error: result.error || "failed to get SSE streams" }
+      return { success: true, data: result.data || [] }
+    }
+    case "sse_chunk": {
+      const result = await sendNetDirect(tabId, {
+        type: "get_sse_chunk",
+        filter: action.filter as string | undefined,
+        since: action.since as number | undefined
+      }) as { success: boolean; data?: unknown; error?: string }
+      if (!result.success) return { success: false, error: result.error || "failed to get SSE chunk" }
+      return { success: true, data: result.data }
+    }
   }
   return { success: false, error: `unknown passive-net action: ${action.type}` }
 }

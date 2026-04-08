@@ -397,6 +397,32 @@ function onSlopNet(e: Event) {
 }
 
 // -----------------------------------------------------------------------------
+// __slop_sse subscription (SSE stream correlation)
+// -----------------------------------------------------------------------------
+
+function onSlopSse(e: Event) {
+  if (!armed) return
+  try {
+    const detail = (e as CustomEvent).detail as {
+      url: string
+      chunk: string
+      seq: number
+      timestamp: number
+    }
+    if (!detail) return
+    const chunkLen = typeof detail.chunk === "string" ? detail.chunk.length : 0
+    const now = Date.now()
+    const cause = findCause(now)
+    emit({
+      k: "sse",
+      u: truncate(detail.url || "", 512),
+      bz: chunkLen,
+      ...(cause !== undefined ? { cause } : {}),
+    })
+  } catch {}
+}
+
+// -----------------------------------------------------------------------------
 // arm / disarm
 // -----------------------------------------------------------------------------
 
@@ -435,6 +461,7 @@ export function arm(newSessionId: string, _startedAt: number): void {
 
   // __slop_net events from the MAIN-world inject script
   document.addEventListener("__slop_net", onSlopNet as EventListener)
+  document.addEventListener("__slop_sse", onSlopSse as EventListener)
 
   // MutationObserver on documentElement so <html> attribute changes are seen
   mutationObserver = new MutationObserver(onMutations)
@@ -459,6 +486,7 @@ export function disarm(): { evt: number; mut: number; net: number } {
   attachedListeners.length = 0
 
   try { document.removeEventListener("__slop_net", onSlopNet as EventListener) } catch {}
+  try { document.removeEventListener("__slop_sse", onSlopSse as EventListener) } catch {}
 
   if (mutationObserver) {
     try { mutationObserver.disconnect() } catch {}
