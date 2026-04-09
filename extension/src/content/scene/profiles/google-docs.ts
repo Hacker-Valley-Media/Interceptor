@@ -3,7 +3,8 @@ import type {
   SceneObject,
   SceneSelection,
   SceneText,
-  SceneRenderResult
+  SceneRenderResult,
+  SceneResolvedTarget
 } from "../types"
 import { boundingBox, clickAtViewport } from "../ops"
 
@@ -79,16 +80,18 @@ export const googleDocsProfile: SceneProfile = {
     return out
   },
 
-  resolve(id: string): Element | null {
+  resolve(id: string): SceneResolvedTarget | null {
     const pageMatch = id.match(/^page-(\d+)$/)
     if (pageMatch) {
       const idx = parseInt(pageMatch[1])
-      return kixPages()[idx] || null
+      const el = kixPages()[idx]
+      return el ? { id, element: el, rect: boundingBox(el), extras: { pageIndex: idx } } : null
     }
     const embedMatch = id.match(/^embed-(\d+)$/)
     if (embedMatch) {
       const idx = parseInt(embedMatch[1])
-      return kixEmbeds()[idx] || null
+      const el = kixEmbeds()[idx]
+      return el ? { id, element: el, rect: boundingBox(el), extras: { embedIndex: idx } } : null
     }
     return null
   },
@@ -177,6 +180,20 @@ export const googleDocsProfile: SceneProfile = {
       }
     } catch (err) {
       throw new Error(`render failed: ${(err as Error).message}`)
+    }
+  },
+
+  describe() {
+    return {
+      name: "google-docs",
+      capabilities: ["list", "resolve", "selected", "text", "writeAtCursor", "cursorTo", "render", "trustedInput"],
+      strategies: ["profile:google-docs", "hidden-iframe-textbox", "canvas-page-render"],
+      geometryAddressable: true,
+      focusAddressable: true,
+      textWritable: true,
+      modelProbe: false,
+      trustedInput: true,
+      notes: ["Uses the hidden text-event-target iframe for text read/write"]
     }
   }
 }

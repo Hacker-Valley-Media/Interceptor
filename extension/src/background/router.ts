@@ -103,16 +103,39 @@ export async function routeAction(
     tabId, action, action.frameId as number | undefined
   ) as { success: boolean; error?: string; data?: unknown; warning?: string }
 
-  if (action.type === "click" && contentResult.success &&
-      contentResult.warning?.includes("no DOM change") && activeTransport !== "none") {
-    console.log("auto-escalating click to OS-level input")
-    const osResult = await handleOsInputActions({ ...action, type: "os_click" }, tabId)
+  const shouldSceneEscalate =
+    action.type === "scene_click" &&
+    contentResult.success &&
+    ((action.os === true) || contentResult.warning?.includes("no DOM change")) &&
+    activeTransport !== "none"
+
+  const shouldClickEscalate =
+    action.type === "click" &&
+    contentResult.success &&
+    contentResult.warning?.includes("no DOM change") &&
+    activeTransport !== "none"
+
+  if (shouldClickEscalate || shouldSceneEscalate) {
+    const resolvedAt = typeof contentResult.data === "object" && contentResult.data
+      ? (contentResult.data as { at?: { x?: number; y?: number } }).at
+      : undefined
+    console.log(`auto-escalating ${action.type} to OS-level input`)
+    const osResult = await handleOsInputActions({
+      ...action,
+      type: "os_click",
+      x: resolvedAt?.x ?? action.x,
+      y: resolvedAt?.y ?? action.y
+    }, tabId)
     if (osResult.success) {
       return {
         success: true,
         data: {
           ...((typeof osResult.data === "object" && osResult.data) || {}),
-          escalated: { from: "synthetic", to: "os_click", reason: "no DOM mutation after synthetic click" }
+          escalated: {
+            from: action.os === true ? "explicit" : "synthetic",
+            to: "os_click",
+            reason: action.os === true ? "scene click requested trusted input" : "no DOM mutation after synthetic click"
+          }
         },
         tabId
       }
@@ -123,7 +146,9 @@ export async function routeAction(
       data: {
         diagnostics: {
           layers_tried: ["synthetic", "os_click"],
-          reason: "synthetic produced no DOM change, os_click failed",
+          reason: action.os === true
+            ? "trusted scene click failed"
+            : "synthetic produced no DOM change, os_click failed",
           suggestion: "verify element is interactive and Chrome window is visible"
         }
       }
@@ -138,6 +163,8 @@ export async function routeAction(
         reason: contentResult.error,
         suggestion: action.type === "click"
           ? "try: slop click --os " + (action.ref || action.index || "")
+          : action.type === "scene_click"
+            ? "try: slop scene click --os " + (action.id || "")
           : undefined
       }
     }

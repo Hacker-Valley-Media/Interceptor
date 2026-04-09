@@ -1,8 +1,16 @@
-import type { SceneProfile, SceneObject, SceneEngineResult, SceneRenderResult } from "./types"
+import type {
+  SceneProfile,
+  SceneObject,
+  SceneEngineResult,
+  SceneProfileDescription,
+  SceneRenderResult,
+  SceneResolvedTarget
+} from "./types"
 import { genericProfile } from "./profiles/generic"
 import { canvaProfile } from "./profiles/canva"
 import { googleDocsProfile } from "./profiles/google-docs"
 import { googleSlidesProfile } from "./profiles/google-slides"
+import { waitForMutation } from "../input-simulation"
 
 const profiles: SceneProfile[] = []
 let genericRegistered = false
@@ -35,7 +43,9 @@ export function detectProfile(override?: string): SceneProfile {
   }
   for (const p of profiles) {
     try {
-      if (p !== genericProfile && p.detect()) return p
+      if (p === genericProfile) continue
+      if (p.autoDetect === false) continue
+      if (p.detect()) return p
     } catch {}
   }
   return genericProfile
@@ -65,8 +75,7 @@ async function wrapAsync<T>(profile: SceneProfile, fn: () => Promise<T | null | 
   }
 }
 
-export function canvasProfileName(override?: string): SceneEngineResult<{ name: string; capabilities: string[] }> {
-  const p = detectProfile(override)
+function inferDescription(p: SceneProfile): SceneProfileDescription {
   const caps: string[] = []
   if (p.list) caps.push("list")
   if (p.resolve) caps.push("resolve")
@@ -81,7 +90,23 @@ export function canvasProfileName(override?: string): SceneEngineResult<{ name: 
   if (p.slideGoto) caps.push("slideGoto")
   if (p.notes) caps.push("notes")
   if (p.hitTest) caps.push("hitTest")
-  return { success: true, data: { name: p.name, capabilities: caps }, profile: p.name }
+  caps.push("trustedInput")
+  return {
+    name: p.name,
+    capabilities: caps,
+    strategies: [`profile:${p.name}`],
+    geometryAddressable: !!(p.list || p.resolve || p.hitTest),
+    focusAddressable: !!p.selected,
+    textWritable: !!p.writeAtCursor,
+    modelProbe: false,
+    trustedInput: true
+  }
+}
+
+export function canvasProfileName(override?: string): SceneEngineResult<SceneProfileDescription> {
+  const p = detectProfile(override)
+  const data = p.describe ? p.describe() : inferDescription(p)
+  return { success: true, data, profile: p.name }
 }
 
 export function canvasList(opts?: { type?: string; profile?: string }): SceneEngineResult<SceneObject[]> {
@@ -90,17 +115,12 @@ export function canvasList(opts?: { type?: string; profile?: string }): SceneEng
   return wrap(p, () => p.list!({ type: opts?.type }))
 }
 
-export function canvasResolve(id: string, profileOverride?: string): SceneEngineResult<{ id: string; rect: DOMRect }> {
+export function canvasResolve(id: string, profileOverride?: string): SceneEngineResult<SceneResolvedTarget> {
   const p = detectProfile(profileOverride)
   if (!p.resolve) return { success: false, error: `profile '${p.name}' does not support resolve()`, profile: p.name }
-  const el = p.resolve(id)
-  if (!el) return { success: false, error: `no element matches id '${id}'`, profile: p.name }
-  const r = el.getBoundingClientRect()
-  return {
-    success: true,
-    data: { id, rect: { x: r.left, y: r.top, width: r.width, height: r.height, top: r.top, left: r.left, right: r.right, bottom: r.bottom, toJSON: () => ({}) } as DOMRect },
-    profile: p.name
-  }
+  const resolved = p.resolve(id)
+  if (!resolved) return { success: false, error: `no element matches id '${id}'`, profile: p.name }
+  return { success: true, data: resolved, profile: p.name }
 }
 
 export function canvasSelected(profileOverride?: string): SceneEngineResult<unknown> {
@@ -126,7 +146,16 @@ export function canvasInsertText(text: string, profileOverride?: string): SceneE
   if (!p.writeAtCursor) return { success: false, error: `profile '${p.name}' does not support writeAtCursor()`, profile: p.name }
   const r = p.writeAtCursor(text)
   if (!r.success) return { success: false, error: r.error || "writeAtCursor failed", profile: p.name }
-  return { success: true, data: { inserted: text.length }, profile: p.name }
+  return {
+    success: true,
+    data: {
+      inserted: text.length,
+      method: r.method || "dom",
+      verified: r.verified !== false,
+      text: r.text
+    },
+    profile: p.name
+  }
 }
 
 export function canvasCursorTo(x: number, y: number, profileOverride?: string): SceneEngineResult<{ x: number; y: number }> {
@@ -188,6 +217,14 @@ export function canvasHit(x: number, y: number, profileOverride?: string): Scene
 type Action = { type: string; [key: string]: unknown }
 type ContentResult = { success: boolean; error?: string; data?: unknown; warning?: string }
 
+function selectionChanged(before: unknown, after: unknown): boolean {
+  try {
+    return JSON.stringify(before) !== JSON.stringify(after)
+  } catch {
+    return before !== after
+  }
+}
+
 export async function handleCanvasAction(action: Action): Promise<ContentResult> {
   const profileOverride = action.profile as string | undefined
   try {
@@ -210,24 +247,47 @@ export async function handleCanvasAction(action: Action): Promise<ContentResult>
         if (!id) return { success: false, error: "missing id" }
         const resolved = canvasResolve(id, profileOverride)
         if (!resolved.success) return resolved as ContentResult
-        const el = document.getElementById(id)
-        if (!el) return { success: false, error: `element '${id}' not in DOM at click time` }
         const { clickElementCenter, dblclickElementCenter } = await import("./ops")
-        if (action.type === "scene_dblclick") dblclickElementCenter(el)
-        else clickElementCenter(el)
-        const rect = el.getBoundingClientRect()
-        const cx = Math.round(rect.left + rect.width / 2)
-        const cy = Math.round(rect.top + rect.height / 2)
-        // Include the absolute viewport coordinates so the background layer can
-        // escalate to an OS-level trusted click when Canva-style editors ignore
-        // the synthetic dispatch. The router's existing synthetic→os_click
-        // escalation path checks for "no DOM change" warnings; scene clicks
-        // return `warning: no DOM change` when Canva's selection model didn't
-        // update, which triggers the same fallback.
+        const target = resolved.data as SceneResolvedTarget
+        const beforeSelection = canvasSelected(profileOverride)
+        const cx = Math.round(target.rect.cx)
+        const cy = Math.round(target.rect.cy)
+        if (action.type === "scene_click" && action.os) {
+          return {
+            success: true,
+            data: {
+              id,
+              clicked: false,
+              at: { x: cx, y: cy },
+              method: "os_click"
+            }
+          }
+        }
+        if (action.type === "scene_dblclick") {
+          if (target.element) dblclickElementCenter(target.element)
+          else {
+            const clicked = document.elementFromPoint(cx, cy)
+            if (clicked) dblclickElementCenter(clicked)
+          }
+          return {
+            success: true,
+            data: { id, clicked: true, at: { x: cx, y: cy }, method: "synthetic" }
+          }
+        }
+        if (target.element) clickElementCenter(target.element)
+        else {
+          const { clickAtViewport } = await import("./ops")
+          clickAtViewport(cx, cy)
+        }
+        const mutated = await waitForMutation(200)
+        const afterSelection = canvasSelected(profileOverride)
+        const changed = mutated || selectionChanged(beforeSelection.data, afterSelection.data)
         return {
           success: true,
-          data: { id, clicked: true, at: { x: cx, y: cy } },
-          warning: action.escalate === false ? undefined : "scene_click dispatched synthetically — rerun with --os if the editor does not respond"
+          data: { id, clicked: true, at: { x: cx, y: cy }, method: "synthetic" },
+          warning: changed || action.escalate === false
+            ? undefined
+            : "no DOM change after scene click — try: slop scene click --os " + id
         }
       }
       case "scene_selected":
