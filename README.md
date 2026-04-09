@@ -10,13 +10,58 @@ You stay logged in. You pass bot detection. Your agent sees exactly what you see
 
 The agent calls `slop` CLI commands, reads the output, decides what to do next. No MCP, no API keys.
 
-## To install it:
-1. Go to chrome://extensions
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the extension/dist/ directory
+## Installation
 
-**Binary:** `dist/slop`
+### Prerequisites
+
+- [Bun](https://bun.sh/) runtime
+- Chrome or Brave browser
+
+### Build
+
+```bash
+git clone https://github.com/Hacker-Valley-Media/slop-browser.git
+cd slop-browser
+bash scripts/build.sh
+```
+
+This produces three artifacts:
+
+| Artifact | Path |
+|----------|------|
+| CLI binary | `dist/slop` |
+| Background daemon | `daemon/slop-daemon` |
+| Chrome extension | `extension/dist/` |
+
+### Install the CLI
+
+Add the binary to your PATH:
+
+```bash
+cp dist/slop /usr/local/bin/
+```
+
+### Install the Chrome Extension
+
+1. Open Chrome or Brave and navigate to `chrome://extensions`
+2. Enable **Developer mode** (toggle in the top-right corner)
+3. Click **Load unpacked**
+4. Select the `extension/dist/` directory from this repo
+5. The slop extension icon should appear in your toolbar
+
+### Register Native Messaging (macOS)
+
+The CLI communicates with the extension via Chrome's native messaging protocol. Run the install script to register the manifest:
+
+```bash
+bash scripts/install.sh
+```
+
+### Verify
+
+```bash
+slop status    # Should report daemon status
+```
 
 ## Quick Start
 
@@ -29,7 +74,7 @@ slop type e2 "hello world"            # Type into a field
 slop text                             # Read visible text
 ```
 
-The daemon auto-starts on first command. No setup needed.
+Once installed, the daemon auto-starts on first command. No manual launch needed.
 
 ## Core Concepts
 
