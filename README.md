@@ -10,14 +10,6 @@ You stay logged in. You pass bot detection. Your agent sees exactly what you see
 
 The agent calls `slop` CLI commands, reads the output, decides what to do next. No MCP, no API keys.
 
-## To install it:
-1. Go to chrome://extensions
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the extension/dist/ directory
-
-**Binary:** `dist/slop`
-
 ## Installation
 
 ### Prerequisites
@@ -71,8 +63,6 @@ bash scripts/install.sh
 slop status    # Should report daemon status
 ```
 
-The daemon auto-starts on first command — no manual launch needed.
-
 ## Quick Start
 
 ```bash
@@ -84,7 +74,7 @@ slop type e2 "hello world"            # Type into a field
 slop text                             # Read visible text
 ```
 
-The daemon auto-starts on first command. No setup needed.
+Once installed, the daemon auto-starts on first command. No manual launch needed.
 
 ## Core Concepts
 
