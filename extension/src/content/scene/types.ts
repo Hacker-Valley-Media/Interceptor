@@ -25,6 +25,14 @@ export interface SceneObject {
   extras?: Record<string, unknown>
 }
 
+export interface SceneResolvedTarget {
+  id: string
+  rect: SceneRect
+  element?: Element | null
+  text?: string
+  extras?: Record<string, unknown>
+}
+
 export interface SceneSelection {
   has: boolean
   label?: string
@@ -53,17 +61,39 @@ export interface SceneSlideInfo {
   rect: SceneRect
   blobUrl?: string
   current?: boolean
+  pageId?: string
+}
+
+export interface SceneWriteResult {
+  success: boolean
+  error?: string
+  method?: "dom" | "os_type"
+  text?: string
+  verified?: boolean
+}
+
+export interface SceneProfileDescription {
+  name: string
+  capabilities: string[]
+  strategies: string[]
+  geometryAddressable: boolean
+  focusAddressable: boolean
+  textWritable: boolean
+  modelProbe: boolean
+  trustedInput: boolean
+  notes?: string[]
 }
 
 export interface SceneProfile {
   name: string
+  autoDetect?: boolean
   detect(): boolean
   list?(opts?: { type?: string }): SceneObject[]
-  resolve?(id: string): Element | null
+  resolve?(id: string): SceneResolvedTarget | null
   selected?(): SceneSelection
   zoom?(): number
   text?(opts?: { withHtml?: boolean }): SceneText | null
-  writeAtCursor?(text: string): { success: boolean; error?: string }
+  writeAtCursor?(text: string): SceneWriteResult
   cursorTo?(opts: { x: number; y: number }): { success: boolean; error?: string }
   render?(id: string): Promise<SceneRenderResult | null>
   slides?(): SceneSlideInfo[]
@@ -71,6 +101,7 @@ export interface SceneProfile {
   slideGoto?(index: number): { success: boolean; error?: string }
   notes?(slideIndex?: number): string | null
   hitTest?(x: number, y: number): SceneObject | null
+  describe?(): SceneProfileDescription
 }
 
 export interface SceneEngineResult<T = unknown> {

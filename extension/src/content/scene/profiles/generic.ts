@@ -1,5 +1,14 @@
-import type { SceneProfile, SceneObject, SceneSelection } from "../types"
-import { boundingBox } from "../ops"
+import type { SceneProfile } from "../types"
+import {
+  cursorToAdaptiveScene,
+  describeAdaptiveProfile,
+  discoverAdaptiveSceneObjects,
+  hitTestAdaptiveScene,
+  readFocusedWritableText,
+  resolveAdaptiveSceneTarget,
+  selectedAdaptiveScene,
+  writeToFocusedWritableSurface
+} from "../adaptive"
 
 export const genericProfile: SceneProfile = {
   name: "generic",
@@ -8,46 +17,38 @@ export const genericProfile: SceneProfile = {
     return true
   },
 
-  list(): SceneObject[] {
-    const out: SceneObject[] = []
-    const selectors = [
-      { sel: "[role=application]", type: "group" as const },
-      { sel: "[role=main]", type: "page" as const },
-      { sel: "[role=document]", type: "page" as const }
-    ]
-    for (const { sel, type } of selectors) {
-      const els = Array.from(document.querySelectorAll(sel))
-      for (const el of els) {
-        const rect = el.getBoundingClientRect()
-        if (rect.width < 2 || rect.height < 2) continue
-        const id = el.id || `${sel.replace(/[[\]=]/g, "")}-${out.length}`
-        const text = (el.getAttribute("aria-label") || "").slice(0, 80)
-        out.push({
-          id,
-          type,
-          rect: boundingBox(el),
-          text: text || undefined
-        })
-      }
-    }
-    return out
+  list(opts): ReturnType<typeof discoverAdaptiveSceneObjects> {
+    return discoverAdaptiveSceneObjects({ type: opts?.type, profileName: "generic" })
   },
 
-  resolve(id: string): Element | null {
-    if (!id) return null
-    try {
-      return document.getElementById(id) || document.querySelector(`[id="${CSS.escape(id)}"]`)
-    } catch {
-      return null
-    }
+  resolve(id: string) {
+    return resolveAdaptiveSceneTarget(id)
   },
 
-  selected(): SceneSelection {
-    const app = document.querySelector("[role=application]")
-    const label = app?.getAttribute("aria-label") || undefined
-    return {
-      has: !!label,
-      label
-    }
+  selected() {
+    return selectedAdaptiveScene()
+  },
+
+  text() {
+    return readFocusedWritableText()
+  },
+
+  writeAtCursor(text: string) {
+    return writeToFocusedWritableSurface(text)
+  },
+
+  cursorTo(opts: { x: number; y: number }) {
+    return cursorToAdaptiveScene(opts.x, opts.y)
+  },
+
+  hitTest(x: number, y: number) {
+    return hitTestAdaptiveScene(x, y)
+  },
+
+  describe() {
+    return describeAdaptiveProfile("generic", [
+      "Capability-driven fallback profile",
+      "Uses semantics, geometry, focus, and writable-surface detection"
+    ])
   }
 }

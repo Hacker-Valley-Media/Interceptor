@@ -1,4 +1,4 @@
-import type { SceneProfile, SceneObject, SceneSelection, SceneSlideInfo, SceneRenderResult } from "../types"
+import type { SceneProfile, SceneObject, SceneSelection, SceneSlideInfo, SceneRenderResult, SceneResolvedTarget } from "../types"
 import { boundingBox, clickAtViewport } from "../ops"
 
 const FILMSTRIP_ID = /^filmstrip-slide-(\d+)-(gd[a-z0-9_-]+)$/i
@@ -79,8 +79,9 @@ export const googleSlidesProfile: SceneProfile = {
     }))
   },
 
-  resolve(id: string): Element | null {
-    return document.getElementById(id)
+  resolve(id: string): SceneResolvedTarget | null {
+    const el = document.getElementById(id)
+    return el ? { id, element: el, rect: boundingBox(el) } : null
   },
 
   selected(): SceneSelection {
@@ -171,6 +172,20 @@ export const googleSlidesProfile: SceneProfile = {
       return { id, width: bitmap.width, height: bitmap.height, dataUrl, format: "png" }
     } catch {
       return null
+    }
+  },
+
+  describe() {
+    return {
+      name: "google-slides",
+      capabilities: ["list", "resolve", "selected", "slides", "slideCurrent", "slideGoto", "notes", "render", "text", "trustedInput"],
+      strategies: ["profile:google-slides", "filmstrip-svg", "hash-navigation", "notes-dom"],
+      geometryAddressable: true,
+      focusAddressable: true,
+      textWritable: false,
+      modelProbe: false,
+      trustedInput: true,
+      notes: ["Slide navigation uses the URL hash/page-id model rather than synthetic thumbnail clicks"]
     }
   }
 }

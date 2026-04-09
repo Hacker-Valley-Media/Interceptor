@@ -149,20 +149,20 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
   return null
 }
 
-const CANVAS_HELP = `slop scene — scene-graph access for DOM-rendered editors
+const CANVAS_HELP = `slop scene — adaptive scene access for rich editors
 
 Usage:
-  slop scene profile [--verbose]        Show detected profile (canva, google-docs, google-slides, generic)
-  slop scene list [--type <t>]          Enumerate scene objects on current page
-  slop scene click <id>                 Click a scene object by stable id
+  slop scene profile [--verbose]        Show the detected strategy/profile and capabilities
+  slop scene list [--type <t>]          Enumerate scene objects on the current editor surface
+  slop scene click <id>                 Click a scene object by scene id
   slop scene dblclick <id>              Double-click a scene object (enters text edit on Canva/Slides)
   slop scene select <id>                Click + verify selection changed
   slop scene selected                   Read the current selection label
   slop scene hit <x>,<y>                Identify what scene object is at viewport X,Y
   slop scene zoom                       Read current editor zoom factor (1.0 = 100%)
 
-  slop scene text [--with-html]         Read document text (Google Docs; empty when canvas is opaque)
-  slop scene insert "<text>"            Insert text at cursor (Google Docs / Slides text edit mode)
+  slop scene text [--with-html]         Read editor text when the active surface supports it
+  slop scene insert "<text>"            Insert text into the focused editor-owned writable surface
   slop scene cursor                     Read cursor state
   slop scene cursor <x>,<y>             Move cursor by clicking at viewport X,Y
 
@@ -177,7 +177,7 @@ Usage:
   slop scene render <id> [--save]       Render a scene object as PNG data URL (Docs pages, Slides thumbnails)
 
 Flags:
-  --profile <name>                       Force a profile (canva | google-docs | google-slides | generic)
+  --profile <name>                       Force a profile/strategy (google-docs | google-slides | canva | generic)
   --type <t>                             Filter 'list' by type (image | shape | text | page | slide | embed)
   --with-html                            Include full HTML model with data-ri offsets (Docs only)
   --slide <n>                            Override slide index for notes/render

@@ -112,19 +112,19 @@ Batch:
   slop wait-stable --ms 500           Custom debounce duration
   slop wait-stable --timeout 3000     Custom hard timeout
 
-Scene Graph (Canva, Google Docs, Google Slides):
-  slop scene profile                    Detect active editor profile (canva/google-docs/google-slides/generic)
-  slop scene profile --verbose          Include the list of supported capabilities
-  slop scene list                       List scene objects on current editor
+Scene Graph (Rich Editors):
+  slop scene profile                    Detect the active editor strategy/profile
+  slop scene profile --verbose          Include active capabilities and strategy details
+  slop scene list                       List scene objects on the current editor surface
   slop scene list --type shape          Filter by type (image|shape|text|page|embed|slide)
-  slop scene click <id>                 Click a scene object by its stable id
+  slop scene click <id>                 Click a scene object by its scene id
   slop scene dblclick <id>              Double-click a scene object
   slop scene select <id>                Click + verify selection change
   slop scene hit <x> <y>                Identify the scene object at viewport coordinates
   slop scene selected                   Read current selection (host-aware)
-  slop scene text                       Read document text (Google Docs)
-  slop scene text --with-html           Include inline HTML + data-ri offsets
-  slop scene insert "<text>"            Insert text at cursor (Google Docs)
+  slop scene text                       Read text from the active editor surface when supported
+  slop scene text --with-html           Include inline HTML when supported
+  slop scene insert "<text>"            Insert text into the focused editor-owned writable surface
   slop scene cursor-to <x> <y>          Move cursor to viewport coordinates
   slop scene slide list                 List all slides in a Google Slides deck
   slop scene slide current              Show the currently-displayed slide
