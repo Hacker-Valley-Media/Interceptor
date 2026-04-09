@@ -1,7 +1,7 @@
 # Use Case: Rich Editor Workflows (Canva, Google Docs, Google Slides)
 
-**Date:** 2026-04-09  
-**Agent:** Codex  
+**Date:** 2026-04-09
+**Agent:** Codex
 **Target:** Rich browser editors driven through `slop` with no CDP.
 
 ---
@@ -289,4 +289,3 @@ These are the gaps future engineering work should target:
    - native row/column table growth
    - `scene insert` into table cells
    - a clean geometry path for the dimension picker
-
