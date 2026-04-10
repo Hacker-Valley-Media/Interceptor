@@ -1,14 +1,12 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ESNext", "DOM", "DOM.Iterable", "WebWorker"],
-    "types": ["bun", "chrome"]
+    "types": ["bun"]
   },
   "include": [
     "cli/**/*.ts",
     "daemon/**/*.ts",
     "shared/**/*.ts",
-    "extension/src/**/*.ts",
     "scripts/**/*.ts",
     "test/**/*.ts"
   ]

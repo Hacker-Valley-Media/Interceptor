@@ -52,7 +52,7 @@ if ((window as any).__slop_net_installed) {
 
   const originalFetch = window.fetch
 
-  window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const patchedFetch = Object.assign(function (this: typeof window, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     let url: string
     try {
       if (typeof input === "string") url = input
@@ -192,7 +192,9 @@ if ((window as any).__slop_net_installed) {
     }).catch((err) => {
       throw err
     })
-  }
+  }, originalFetch)
+
+  window.fetch = patchedFetch
 
   const XHR = XMLHttpRequest.prototype
 
@@ -283,6 +285,7 @@ if ((window as any).__slop_net_installed) {
           origAddEventListener(type, wrapped as EventListener, options)
           return
         }
+        if (!listener) return
         origAddEventListener(type, listener, options)
       } as typeof real.addEventListener
 
@@ -329,10 +332,12 @@ if ((window as any).__slop_net_installed) {
       return real as unknown as EventSource
     } as unknown as typeof EventSource
 
-    SlopEventSource.prototype = OriginalEventSource.prototype
-    SlopEventSource.CONNECTING = OriginalEventSource.CONNECTING
-    SlopEventSource.OPEN = OriginalEventSource.OPEN
-    SlopEventSource.CLOSED = OriginalEventSource.CLOSED
-    ;(window as any).EventSource = SlopEventSource
+      SlopEventSource.prototype = OriginalEventSource.prototype
+      Object.defineProperties(SlopEventSource, {
+        CONNECTING: { value: OriginalEventSource.CONNECTING },
+        OPEN: { value: OriginalEventSource.OPEN },
+        CLOSED: { value: OriginalEventSource.CLOSED }
+      })
+      ;(window as any).EventSource = SlopEventSource
   }
 }

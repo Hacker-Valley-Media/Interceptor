@@ -10,7 +10,7 @@ export async function handleWindowActions(
     case "window_create": {
       const win = await chrome.windows.create({
         url: action.url as string | undefined,
-        type: (action.windowType as chrome.windows.createTypeEnum) || "normal",
+        type: (action.windowType as chrome.windows.CreateData["type"]) || "normal",
         width: action.width as number | undefined,
         height: action.height as number | undefined,
         left: action.left as number | undefined,
@@ -18,6 +18,7 @@ export async function handleWindowActions(
         incognito: !!action.incognito,
         focused: action.focused !== false
       })
+      if (!win) return { success: false, error: "window creation returned no window" }
       const firstTab = win.tabs?.[0]
       let groupId: number | undefined
       if (firstTab?.id && !action.incognito) {
@@ -39,12 +40,13 @@ export async function handleWindowActions(
 
     case "window_resize": {
       const targetId = (action.windowId as number) || (await chrome.windows.getCurrent()).id
+      if (targetId === undefined) return { success: false, error: "no target window id available" }
       await chrome.windows.update(targetId, {
         width: action.width as number | undefined,
         height: action.height as number | undefined,
         left: action.left as number | undefined,
         top: action.top as number | undefined,
-        state: action.state as chrome.windows.windowStateEnum | undefined
+        state: action.state as chrome.windows.UpdateInfo["state"]
       })
       return { success: true }
     }

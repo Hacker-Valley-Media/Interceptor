@@ -49,7 +49,7 @@ export function waitForTabLoad(
       resolve({ ready: probeResult, elapsed: Date.now() - start })
     }, timeoutMs)
 
-    function listener(updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) {
+    function listener(updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
         clearTimeout(hardTimer)
         chrome.tabs.onUpdated.removeListener(listener)

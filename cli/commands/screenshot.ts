@@ -10,12 +10,12 @@ export function parseScreenshotCommand(filtered: string[]): Action {
   switch (cmd) {
     case "screenshot": {
       if (filtered.includes("--background")) {
-        const bgAction: Record<string, unknown> = { type: "screenshot_background" }
+        const bgAction: Action = { type: "screenshot_background" }
         if (filtered.includes("--format")) bgAction.format = filtered[filtered.indexOf("--format") + 1]
         if (filtered.includes("--quality")) bgAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
         return bgAction
       }
-      const ssAction: Record<string, unknown> = { type: "screenshot" }
+      const ssAction: Action = { type: "screenshot" }
       if (filtered.includes("--save")) ssAction.save = true
       if (filtered.includes("--format")) ssAction.format = filtered[filtered.indexOf("--format") + 1]
       if (filtered.includes("--quality")) ssAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
@@ -33,7 +33,7 @@ export function parseScreenshotCommand(filtered: string[]): Action {
         case "list":
           return { type: "canvas_list" }
         case "read": {
-          const crAction: Record<string, unknown> = { type: "canvas_read", canvasIndex: parseInt(filtered[2]) }
+          const crAction: Action = { type: "canvas_read", canvasIndex: parseInt(filtered[2]) }
           if (filtered.includes("--format")) crAction.format = filtered[filtered.indexOf("--format") + 1]
           if (filtered.includes("--quality")) crAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
           if (filtered.includes("--webgl")) crAction.webgl = true
@@ -44,7 +44,7 @@ export function parseScreenshotCommand(filtered: string[]): Action {
           return crAction
         }
         case "diff": {
-          const cdAction: Record<string, unknown> = { type: "canvas_diff", image1: filtered[2], image2: filtered[3] }
+          const cdAction: Action = { type: "canvas_diff", image1: filtered[2], image2: filtered[3] }
           if (filtered.includes("--threshold")) cdAction.threshold = parseInt(filtered[filtered.indexOf("--threshold") + 1])
           if (filtered.includes("--image")) cdAction.returnImage = true
           return cdAction
@@ -60,7 +60,7 @@ export function parseScreenshotCommand(filtered: string[]): Action {
         case "start":
           return { type: "capture_start" }
         case "frame": {
-          const cfAction: Record<string, unknown> = { type: "capture_frame" }
+          const cfAction: Action = { type: "capture_frame" }
           if (filtered.includes("--format")) cfAction.format = filtered[filtered.indexOf("--format") + 1]
           if (filtered.includes("--quality")) cfAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
           return cfAction

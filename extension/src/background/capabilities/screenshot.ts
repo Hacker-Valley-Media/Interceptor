@@ -70,7 +70,7 @@ export async function handleScreenshotActions(
           const scrollTo = i * viewportHeight
           await sendToContentScript(tabId, { type: "scroll_absolute", y: scrollTo })
           await new Promise(r => setTimeout(r, 150))
-          const stripUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality })
+          const stripUrl = await chrome.tabs.captureVisibleTab({ format, quality })
           strips.push({ dataUrl: stripUrl, y: Math.round(scrollTo * devicePixelRatio) })
           if (i < stripCount - 1) await new Promise(r => setTimeout(r, 500))
         }
@@ -97,7 +97,7 @@ export async function handleScreenshotActions(
 
       let dataUrl: string
       try {
-        dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format, quality })
+        dataUrl = await chrome.tabs.captureVisibleTab({ format, quality })
       } catch {
         const fallback = await handleScreenshotBackground(
           { type: "screenshot_background", format: action.format, quality: action.quality },

@@ -111,7 +111,7 @@ function truncate(s: string, max: number): string {
 function targetFromEvent(e: Event): EventTarget | null {
   try {
     const path = (e.composedPath && e.composedPath()) || []
-    if (path.length > 0) return path[0]
+    if (path.length > 0) return path[0] ?? null
   } catch {}
   return e.target
 }

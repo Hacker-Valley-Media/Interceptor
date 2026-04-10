@@ -1,7 +1,7 @@
 import { HELP } from "./help"
 import { parseTabFlag } from "./parse"
 import { formatState, formatTabs, formatCookies, formatResult } from "./format"
-import { sendCommand, sendCommandWs } from "./transport"
+import { sendCommand, sendCommandWs, type DaemonResult, type DaemonResponse } from "./transport"
 import { ensureDaemon } from "./daemon-spawn"
 import { parseStateCommand } from "./commands/state"
 import { parseActionsCommand } from "./commands/actions"
@@ -41,6 +41,10 @@ const NO_DAEMON = new Set(["status", "help", "events", "session"])
 
 // Monitor subcommands that are handled locally (no daemon needed)
 const MONITOR_LOCAL_SUBCOMMANDS = new Set(["tail", "list", "export"])
+
+function unwrapResult(response: DaemonResponse): DaemonResult {
+  return response.result
+}
 
 async function main() {
   const args = process.argv.slice(2)
@@ -109,7 +113,7 @@ async function main() {
         const resp = useWs
           ? await sendCommandWs(chunkAction, globalTabId)
           : await sendCommand(chunkAction, globalTabId)
-        const result = resp?.result || resp
+        const result = unwrapResult(resp)
         if (result?.success && result.data) {
           const d = result.data as { active: boolean; text?: string; offset?: number }
           if (d.text) {
@@ -136,7 +140,7 @@ async function main() {
     const treeResp = useWs
       ? await sendCommandWs({ type: "get_a11y_tree", filter: "interactive" }, globalTabId)
       : await sendCommand({ type: "get_a11y_tree", filter: "interactive" }, globalTabId)
-    const tree = (treeResp?.result?.data || treeResp?.data || "") as string
+    const tree = (unwrapResult(treeResp).data || "") as string
     const match = tree.match(/\[(e\d+)\]\s+textbox\s+"Chat with ChatGPT"/)
     if (!match) {
       console.error("error: could not find ChatGPT input textbox. Is chatgpt.com open in a slop tab?")
@@ -171,7 +175,7 @@ async function main() {
         const resp = useWs
           ? await sendCommandWs(chunkAction, globalTabId)
           : await sendCommand(chunkAction, globalTabId)
-        const result = resp?.result || resp
+        const result = unwrapResult(resp)
         if (result?.success && result.data) {
           const d = result.data as { active: boolean; text?: string; offset?: number }
           if (d.text) {
@@ -223,7 +227,7 @@ async function main() {
     const resp = useWs
       ? await sendCommandWs(textAction, globalTabId)
       : await sendCommand(textAction, globalTabId)
-    const result = resp?.result || resp
+    const result = unwrapResult(resp)
     if (result?.success) {
       const text = result.data as string
       const chatMarker = text.indexOf("ChatGPT said:")
@@ -242,7 +246,7 @@ async function main() {
     const streamsResp = useWs
       ? await sendCommandWs({ type: "sse_streams" }, globalTabId)
       : await sendCommand({ type: "sse_streams" }, globalTabId)
-    const streams = (streamsResp?.result?.data || streamsResp?.data || []) as any[]
+    const streams = (unwrapResult(streamsResp).data || []) as any[]
     const active = streams.filter((s: any) => s.url?.includes("backend-api"))
 
     console.log(JSON.stringify({
@@ -258,7 +262,7 @@ async function main() {
     const resp = useWs
       ? await sendCommandWs(netAction, globalTabId)
       : await sendCommand(netAction, globalTabId)
-    const result = resp?.result || resp
+    const result = unwrapResult(resp)
     if (result?.success && Array.isArray(result.data) && result.data.length > 0) {
       try {
         const body = JSON.parse(result.data[result.data.length - 1].body)
@@ -289,7 +293,7 @@ async function main() {
     const treeResp = useWs
       ? await sendCommandWs({ type: "get_a11y_tree", filter: "interactive" }, globalTabId)
       : await sendCommand({ type: "get_a11y_tree", filter: "interactive" }, globalTabId)
-    const tree = (treeResp?.result?.data || treeResp?.data || "") as string
+    const tree = (unwrapResult(treeResp).data || "") as string
     const stopMatch = tree.match(/\[(e\d+)\]\s+button\s+"Stop"/)
     if (stopMatch) {
       await (useWs
@@ -308,7 +312,7 @@ async function main() {
       const treeResp = useWs
         ? await sendCommandWs({ type: "get_a11y_tree", filter: "interactive" }, globalTabId)
         : await sendCommand({ type: "get_a11y_tree", filter: "interactive" }, globalTabId)
-      const tree = (treeResp?.result?.data || treeResp?.data || "") as string
+      const tree = (unwrapResult(treeResp).data || "") as string
       const modelMatch = tree.match(/\[(e\d+)\]\s+button\s+"Model selector"/)
       if (modelMatch) {
         console.log("Model selector found at", modelMatch[1])
@@ -333,46 +337,41 @@ async function main() {
     const response = useWs
       ? await sendCommandWs(action, globalTabId)
       : await sendCommand(action, globalTabId)
+    const result = unwrapResult(response)
 
-    if (response.result) {
-      const result = response.result
-
-      // Screenshot save-to-disk post-processing
-      if (result.success && result.data && typeof result.data === "object" &&
-          (result.data as Record<string, unknown>).save &&
-          (result.data as Record<string, unknown>).dataUrl) {
-        const d = result.data as Record<string, unknown>
-        const dataUrl = d.dataUrl as string
-        const base64 = dataUrl.split(",")[1]
-        const ext = (d.format as string) === "png" ? "png" : "jpg"
-        const filename = `slop-screenshot-${Date.now()}.${ext}`
-        const bytes = Buffer.from(base64, "base64")
-        await Bun.write(filename, bytes)
-        d.filePath = `${process.cwd()}/${filename}`
-        delete d.save
-        process.stderr.write(`saved: ${d.filePath}\n`)
-      }
-
-      // Pretty-print known result types
-      if (!jsonMode && result.success) {
-        if (action.type === "get_state") {
-          console.log(formatState(result.data as Parameters<typeof formatState>[0]))
-          return
-        }
-        if (action.type === "tab_list") {
-          console.log(formatTabs(result.data as Parameters<typeof formatTabs>[0]))
-          return
-        }
-        if (action.type === "cookies_get") {
-          console.log(formatCookies(result.data as Parameters<typeof formatCookies>[0]))
-          return
-        }
-      }
-
-      console.log(formatResult(result, jsonMode))
-    } else {
-      console.log(formatResult(response as unknown as { success: boolean; error?: string; data?: unknown }, jsonMode))
+    // Screenshot save-to-disk post-processing
+    if (result.success && result.data && typeof result.data === "object" &&
+        (result.data as Record<string, unknown>).save &&
+        (result.data as Record<string, unknown>).dataUrl) {
+      const d = result.data as Record<string, unknown>
+      const dataUrl = d.dataUrl as string
+      const base64 = dataUrl.split(",")[1]
+      const ext = (d.format as string) === "png" ? "png" : "jpg"
+      const filename = `slop-screenshot-${Date.now()}.${ext}`
+      const bytes = Buffer.from(base64, "base64")
+      await Bun.write(filename, bytes)
+      d.filePath = `${process.cwd()}/${filename}`
+      delete d.save
+      process.stderr.write(`saved: ${d.filePath}\n`)
     }
+
+    // Pretty-print known result types
+    if (!jsonMode && result.success) {
+      if (action.type === "get_state") {
+        console.log(formatState(result.data as Parameters<typeof formatState>[0]))
+        return
+      }
+      if (action.type === "tab_list") {
+        console.log(formatTabs(result.data as Parameters<typeof formatTabs>[0]))
+        return
+      }
+      if (action.type === "cookies_get") {
+        console.log(formatCookies(result.data as Parameters<typeof formatCookies>[0]))
+        return
+      }
+    }
+
+    console.log(formatResult(result, jsonMode))
   } catch (err) {
     console.error(`error: ${(err as Error).message}`)
     process.exit(1)

@@ -72,7 +72,7 @@ export async function handleTabActions(
       if (action.title || action.color) {
         await chrome.tabGroups.update(groupId, {
           title: action.title as string | undefined,
-          color: action.color as chrome.tabGroups.ColorEnum | undefined
+          color: action.color as chrome.tabGroups.UpdateProperties["color"]
         })
       }
       return { success: true, data: { groupId } }
