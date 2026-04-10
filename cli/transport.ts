@@ -26,7 +26,7 @@ export function sendCommand(action: Action, tabId?: number): Promise<DaemonRespo
       if (!resolved) {
         resolved = true
         if (socketRef) try { socketRef.end() } catch {}
-        reject(new Error("timeout: no response from daemon after " + (SLOP_TIMEOUT_MS / 1000) + "s. Ensure Chrome/Brave is open with the slop-browser extension loaded."))
+        reject(new Error(`timeout: no response for '${action.type}' after ${SLOP_TIMEOUT_MS / 1000}s. Ensure Chrome/Brave is open with the slop-browser extension loaded.`))
       }
     }, SLOP_TIMEOUT_MS)
 
@@ -88,7 +88,7 @@ export function sendCommandWs(action: Action, tabId?: number): Promise<DaemonRes
     process.stderr.write(`[${shortId}] →ws ${action.type}\n`)
 
     const timer = setTimeout(() => {
-      reject(new Error("timeout: no response from daemon after " + (SLOP_TIMEOUT_MS / 1000) + "s via WebSocket."))
+      reject(new Error(`timeout: no response for '${action.type}' after ${SLOP_TIMEOUT_MS / 1000}s via WebSocket.`))
     }, SLOP_TIMEOUT_MS)
 
     const ws = new WebSocket(`ws://localhost:${WS_PORT}`)

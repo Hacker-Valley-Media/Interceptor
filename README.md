@@ -101,7 +101,7 @@ Once installed, the daemon auto-starts on first command. No manual launch needed
 
 **Scene Graph** — Profile-driven access to visual editors that don't render to the DOM normally: Canva, Google Docs, Google Slides. Enumerate objects by stable ID, click shapes, read full document text, navigate slide decks, render pages to PNG. `slop scene` — no CDP, no vision, no screenshots needed.
 
-**Session Monitor** — Record a user's real interactions (clicks, keystrokes, form changes, DOM mutations, network calls) as a sparse JSONL log that replays as a `slop` script. `slop monitor start` / `slop monitor stop` / `slop monitor export --plan`.
+**Session Monitor** — Record a user's real interactions (clicks, keystrokes, form changes, DOM mutations, network calls) as a sparse JSONL log that replays as a `slop` script. `slop monitor start` / `slop monitor stop` / `slop monitor export --plan`. Monitor auto-resolves the active slop-managed tab when called without `--tab`, and automatically re-injects the content script if the port is disconnected (common on long-lived SPA tabs).
 
 **Stealth** — Passes all major bot detection: BrowserScan (Normal), Pixelscan ("Definitely Human"), Sannysoft (all pass), CreepJS (0% headless), Fingerprint.com (notDetected), AreyouHeadless (not headless). Zero automation fingerprint.
 
@@ -250,6 +250,8 @@ slop scene render <id> --save          # Save the PNG to disk
 
 ### Recording (Session Monitor)
 Record every real user click, keystroke, form change, navigation, DOM mutation, and the network calls each action triggered — then export the trace as either a pretty timeline or a runnable `slop` replay script. No CDP, no infobanner, no detection.
+
+Monitor commands (`start`, `stop`, `pause`, `resume`) auto-resolve the target tab from the slop group when `--tab` is omitted. If the content script port is disconnected (e.g. after a service worker restart or long SPA session), the extension automatically re-injects `content.js` and retries — no `slop reload` needed.
 
 ```bash
 slop monitor start                              # Begin recording on the active slop tab

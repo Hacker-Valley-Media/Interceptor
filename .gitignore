@@ -9,3 +9,4 @@ daemon/.generated/
 .DS_Store
 slop-screenshot-*.jpg
 slop-screenshot-*.png
+prd/
