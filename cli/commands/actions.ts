@@ -60,7 +60,7 @@ export function parseActionsCommand(filtered: string[]): Action {
       return { type: "blur" }
 
     case "hover": {
-      const hoverAction: Record<string, unknown> = { type: "hover", ...parseElementTarget(filtered[1]) }
+      const hoverAction: Action = { type: "hover", ...parseElementTarget(filtered[1]) }
       if (filtered.includes("--from")) {
         const fromParts = filtered[filtered.indexOf("--from") + 1].split(",").map(Number)
         hoverAction.fromX = fromParts[0]
@@ -73,7 +73,7 @@ export function parseActionsCommand(filtered: string[]): Action {
     }
 
     case "drag": {
-      const dragAction: Record<string, unknown> = { type: "drag", ...parseElementTarget(filtered[1]) }
+      const dragAction: Action = { type: "drag", ...parseElementTarget(filtered[1]) }
       if (filtered.includes("--from")) {
         const fromParts = filtered[filtered.indexOf("--from") + 1].split(",").map(Number)
         dragAction.fromX = fromParts[0]

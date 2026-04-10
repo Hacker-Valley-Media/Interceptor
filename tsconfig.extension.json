@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "WebWorker"],
+    "types": ["chrome"]
+  },
+  "include": [
+    "extension/src/**/*.ts"
+  ]
+}

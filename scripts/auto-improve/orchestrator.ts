@@ -9,6 +9,14 @@ import { join } from "path";
 import { mkdirSync } from "fs";
 import { $ } from "bun";
 
+type BunCronApi = {
+  (schedule: string, handler: () => void | Promise<void>): Disposable;
+  (path: string, schedule: string, title: string): Promise<void>;
+  remove(title: string): Promise<void>;
+};
+
+const BunWithCron = Bun as typeof Bun & { cron: BunCronApi };
+
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
 const disable = args.includes("--disable");
@@ -16,7 +24,7 @@ const enable = args.includes("--enable");
 
 if (disable) {
   try {
-    await Bun.cron.remove("slop-auto-improve");
+    await BunWithCron.cron.remove("slop-auto-improve");
     console.log("Cron job removed.");
   } catch {
     console.log("No cron job to remove.");
@@ -25,7 +33,7 @@ if (disable) {
 }
 
 if (enable) {
-  await Bun.cron(
+  await BunWithCron.cron(
     join(import.meta.dir, "orchestrator.ts"),
     config.cron,
     "slop-auto-improve"

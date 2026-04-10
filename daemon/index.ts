@@ -160,6 +160,7 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
   if (msg.id) {
     const pending = pendingRequests.get(msg.id)
     if (pending) {
+      const requestId = msg.id
       clearTimeout(pending.timer)
       const duration = Date.now() - pending.startTime
       const result = (msg as { result?: { success?: boolean; data?: Record<string, unknown> } }).result
@@ -189,12 +190,12 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
             enrichedAction.path = data.path
             enrichedAction.duration = data.duration
           }
-          log(`[${msg.id.slice(0, 8)}] posting OS event for ${pending.actionType}`)
-          handleOsAction(msg.id, enrichedAction).then((osResult) => {
+          log(`[${requestId.slice(0, 8)}] posting OS event for ${pending.actionType}`)
+          handleOsAction(requestId, enrichedAction).then((osResult) => {
             const finalResult = osResult || { success: false, error: "os action failed" }
-            emitEvent("request_complete", { requestId: msg.id, action: pending.actionType, duration: Date.now() - pending.startTime, success: finalResult.success })
-            pending.resolve(JSON.stringify({ id: msg.id, result: finalResult }))
-            pendingRequests.delete(msg.id)
+            emitEvent("request_complete", { requestId, action: pending.actionType, duration: Date.now() - pending.startTime, success: finalResult.success })
+            pending.resolve(JSON.stringify({ id: requestId, result: finalResult }))
+            pendingRequests.delete(requestId)
           })
           return
         }
@@ -336,20 +337,15 @@ async function handleOsAction(
   }
 }
 
-let socketServer: ReturnType<typeof Bun.listen> | null = null
+let socketServer: Bun.TCPSocketListener<undefined> | Bun.UnixSocketListener<undefined> | null = null
 
 try {
-  const listenOpts = IS_WIN
-    ? { hostname: "127.0.0.1", port: IPC_PORT }
-    : { unix: SOCKET_PATH }
-  socketServer = Bun.listen({
-    ...listenOpts,
-    socket: {
-      open(socket) {
+  const socketHandlers: Bun.SocketHandler<undefined> = {
+      open(socket: Bun.Socket<undefined>) {
         socketBuffers.set(socket, Buffer.alloc(0))
         log("cli connected via socket")
       },
-      data(socket, raw) {
+      data(socket: Bun.Socket<undefined>, raw: Buffer<ArrayBufferLike>) {
         let buf = Buffer.concat([socketBuffers.get(socket) || Buffer.alloc(0), Buffer.from(raw)])
 
         while (buf.length >= 4) {
@@ -413,19 +409,23 @@ try {
 
         socketBuffers.set(socket, buf)
       },
-      drain(socket) {
+      drain(socket: Bun.Socket<undefined>) {
         drainSocketQueue(socket)
       },
-      close(socket) {
+      close(socket: Bun.Socket<undefined>) {
         socketBuffers.delete(socket)
         socketWriteQueues.delete(socket)
         log("cli disconnected")
       },
-      error(_socket, err) {
+      error(_socket: Bun.Socket<undefined>, err: Error) {
         log(`socket error: ${err.message}`)
       }
     }
-  })
+  if (IS_WIN) {
+    socketServer = Bun.listen({ hostname: "127.0.0.1", port: IPC_PORT, socket: socketHandlers })
+  } else {
+    socketServer = Bun.listen({ unix: SOCKET_PATH, socket: socketHandlers })
+  }
   log(`socket listening on ${transportLabel()}`)
 } catch (err) {
   log(`socket listen failed: ${(err as Error).message}`)
@@ -437,10 +437,10 @@ log(`pid file written: ${process.pid}`)
 
 let wsServer: ReturnType<typeof Bun.serve> | null = null
 try {
-  wsServer = Bun.serve({
+  wsServer = Bun.serve<undefined>({
     port: WS_PORT,
     fetch(req, server) {
-      if (server.upgrade(req)) return
+      if (server.upgrade(req, {})) return
       return new Response("slop-browser daemon", { status: 200 })
     },
     websocket: {

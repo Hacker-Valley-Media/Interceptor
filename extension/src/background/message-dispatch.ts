@@ -88,7 +88,7 @@ export async function handleDaemonMessage(msg: {
   let tabId = msg.tabId
 
   if (!tabId && needsTab(action.type)) {
-    const stored = await chrome.storage.session.get("activeTabId")
+    const stored = await chrome.storage.session.get("activeTabId") as { activeTabId?: number }
     tabId = stored.activeTabId
   }
 

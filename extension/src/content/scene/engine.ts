@@ -4,7 +4,8 @@ import type {
   SceneEngineResult,
   SceneProfileDescription,
   SceneRenderResult,
-  SceneResolvedTarget
+  SceneResolvedTarget,
+  SceneInsertResult
 } from "./types"
 import { genericProfile } from "./profiles/generic"
 import { canvaProfile } from "./profiles/canva"
@@ -141,7 +142,7 @@ export function canvasText(opts?: { withHtml?: boolean; profile?: string }): Sce
   return wrap(p, () => p.text!({ withHtml: opts?.withHtml }))
 }
 
-export function canvasInsertText(text: string, profileOverride?: string): SceneEngineResult<{ inserted: number }> {
+export function canvasInsertText(text: string, profileOverride?: string): SceneEngineResult<SceneInsertResult> {
   const p = detectProfile(profileOverride)
   if (!p.writeAtCursor) return { success: false, error: `profile '${p.name}' does not support writeAtCursor()`, profile: p.name }
   const r = p.writeAtCursor(text)

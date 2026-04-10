@@ -63,6 +63,21 @@ bash scripts/install.sh
 slop status    # Should report daemon status
 ```
 
+## Development Verification
+
+Use the verification command that matches the kind of change you made:
+
+```bash
+bun run typecheck    # Static typing across Bun host code and extension code
+bun test             # Runtime tests and CLI/parser coverage
+bash scripts/build.sh # Build compiled host binaries and extension bundles
+```
+
+- Run `bun run typecheck` when you change TypeScript types, runtime wiring, Chrome API usage, Bun socket usage, or any code that crosses host/extension boundaries.
+- Run `bun test` when you change parser behavior, monitor/scene helpers, or any logic already covered by the repo test suite.
+- Run `bash scripts/build.sh` when you need to verify the actual host binaries and extension bundles still compile.
+- For changes that affect browser behavior or shared infrastructure, run all three.
+
 ## Quick Start
 
 ```bash

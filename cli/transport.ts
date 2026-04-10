@@ -2,14 +2,15 @@
  * cli/transport.ts — sendCommand (Unix socket / TCP) and sendCommandWs (WebSocket)
  */
 
-import { connectOptions, WS_PORT } from "../shared/platform"
+import { IPC_PORT, IS_WIN, SOCKET_PATH, WS_PORT } from "../shared/platform"
 
 export const SLOP_TIMEOUT_MS = parseInt(process.env.SLOP_TIMEOUT || "15000")
 
 export type Action = { type: string; [key: string]: unknown }
+export type DaemonResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 export type DaemonResponse = {
   id: string
-  result: { success: boolean; error?: string; data?: unknown; tabId?: number }
+  result: DaemonResult
 }
 
 export function sendCommand(action: Action, tabId?: number): Promise<DaemonResponse> {
@@ -19,7 +20,7 @@ export function sendCommand(action: Action, tabId?: number): Promise<DaemonRespo
     process.stderr.write(`[${shortId}] → ${action.type}\n`)
     let buffer = Buffer.alloc(0)
     let resolved = false
-    let socketRef: ReturnType<Awaited<ReturnType<typeof Bun.connect>>> | null = null
+    let socketRef: Bun.Socket<undefined> | null = null
 
     const timer = setTimeout(() => {
       if (!resolved) {
@@ -29,8 +30,8 @@ export function sendCommand(action: Action, tabId?: number): Promise<DaemonRespo
       }
     }, SLOP_TIMEOUT_MS)
 
-    Bun.connect(connectOptions({
-      open(socket) {
+    const socketHandlers: Bun.SocketHandler<undefined> = {
+      open(socket: Bun.Socket<undefined>) {
         socketRef = socket
         const payload = JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }) })
         const encoded = Buffer.from(payload, "utf-8")
@@ -38,7 +39,7 @@ export function sendCommand(action: Action, tabId?: number): Promise<DaemonRespo
         header.writeUInt32LE(encoded.byteLength, 0)
         socket.write(Buffer.concat([header, encoded]))
       },
-      data(_socket, raw) {
+      data(socket: Bun.Socket<undefined>, raw: Buffer<ArrayBufferLike>) {
         buffer = Buffer.concat([buffer, Buffer.from(raw)])
         if (buffer.length >= 4) {
           const msgLen = buffer.readUInt32LE(0)
@@ -47,30 +48,36 @@ export function sendCommand(action: Action, tabId?: number): Promise<DaemonRespo
             clearTimeout(timer)
             try {
               resolved = true
-              resolve(JSON.parse(json))
+              resolve(JSON.parse(json) as DaemonResponse)
             } catch {
               resolved = true
               reject(new Error("invalid response from daemon"))
             }
-            _socket.end()
+            socket.end()
           }
         }
       },
-      close() {
+      close(_socket: Bun.Socket<undefined>) {
         clearTimeout(timer)
         if (!resolved) {
           reject(new Error("connection closed before response"))
         }
       },
-      connectError(_socket, _err) {
+      connectError(_socket: Bun.Socket<undefined>, _err: Error) {
         clearTimeout(timer)
         reject(new Error("daemon not running. Open Chrome with the slop-browser extension loaded."))
       },
-      error(_socket, err) {
+      error(_socket: Bun.Socket<undefined>, err: Error) {
         clearTimeout(timer)
         reject(err)
       }
-    }))
+    }
+
+    const connectPromise = IS_WIN
+      ? Bun.connect({ hostname: "127.0.0.1", port: IPC_PORT, socket: socketHandlers })
+      : Bun.connect({ unix: SOCKET_PATH, socket: socketHandlers })
+
+    void connectPromise.catch(() => {})
   })
 }
 
@@ -91,7 +98,7 @@ export function sendCommandWs(action: Action, tabId?: number): Promise<DaemonRes
     ws.onmessage = (event) => {
       clearTimeout(timer)
       try {
-        resolve(JSON.parse(typeof event.data === "string" ? event.data : ""))
+        resolve(JSON.parse(typeof event.data === "string" ? event.data : "") as DaemonResponse)
       } catch {
         reject(new Error("invalid response from daemon via WebSocket"))
       }

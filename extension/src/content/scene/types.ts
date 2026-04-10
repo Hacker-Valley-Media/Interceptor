@@ -72,6 +72,13 @@ export interface SceneWriteResult {
   verified?: boolean
 }
 
+export interface SceneInsertResult {
+  inserted: number
+  method: "dom" | "os_type"
+  verified: boolean
+  text?: string
+}
+
 export interface SceneProfileDescription {
   name: string
   capabilities: string[]
