@@ -163,6 +163,8 @@ slop scene render <id> [--save]       # Render a scene object to PNG
 
 The `slop monitor` family records every real user click, keystroke, form change, navigation, DOM mutation, and the network calls each action triggered — then exports the trace as either a pretty timeline or a runnable `slop` replay script. No CDP. No infobanner.
 
+Monitor commands (`start`, `stop`, `pause`, `resume`) auto-resolve the target tab from the slop group when `--tab` is omitted. If the content script port is disconnected (e.g. after a service worker restart or long SPA session), the extension automatically re-injects `content.js` and retries.
+
 ```bash
 slop monitor start                              # Begin recording on the active slop tab
 slop monitor start --instruction "..."          # Annotate with task intent

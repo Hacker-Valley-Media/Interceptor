@@ -1,4 +1,5 @@
 import { sendToHost } from "../transport"
+import { ensureSlopGroup, isTabInSlopGroup, slopGroupId } from "../tab-group"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -45,16 +46,42 @@ function getActiveSessionForTab(tabId: number): SessionRecord | undefined {
   return sessions.get(sid)
 }
 
-async function sendArmToTab(tabId: number, sessionId: string, startedAt: number): Promise<void> {
+async function ensureContentScript(tabId: number): Promise<{ connected: boolean; error?: string }> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "monitor_ping" })
+    return { connected: true }
+  } catch {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] })
+    } catch (injectErr) {
+      return { connected: false, error: `content script could not be re-injected on tab ${tabId} — try 'slop reload': ${(injectErr as Error).message}` }
+    }
+    await new Promise(r => setTimeout(r, 200))
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: "monitor_ping" })
+      return { connected: true }
+    } catch (retryErr) {
+      return { connected: false, error: `content script re-injected but still not responding on tab ${tabId} — try 'slop reload': ${(retryErr as Error).message}` }
+    }
+  }
+}
+
+async function sendArmToTab(tabId: number, sessionId: string, startedAt: number): Promise<{ success: boolean; error?: string }> {
+  const check = await ensureContentScript(tabId)
+  if (!check.connected) return { success: false, error: check.error }
   try {
     await chrome.tabs.sendMessage(tabId, { type: "monitor_arm", sessionId, startedAt })
-  } catch {}
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: (err as Error).message }
+  }
 }
 
 async function sendDisarmToTab(tabId: number): Promise<unknown> {
   try {
     return await chrome.tabs.sendMessage(tabId, { type: "monitor_disarm" })
-  } catch {
+  } catch (err) {
+    console.error(`sendDisarmToTab failed for tab ${tabId}:`, (err as Error).message)
     return null
   }
 }
@@ -88,7 +115,9 @@ function registerWebNavListenersOnce(): void {
       tq: details.transitionQualifiers
     })
     session.url = details.url
-    sendArmToTab(details.tabId, session.sessionId, session.startedAt)
+    sendArmToTab(details.tabId, session.sessionId, session.startedAt).then(res => {
+      if (!res.success) console.error(`re-arm after history nav failed on tab ${details.tabId}:`, res.error)
+    })
   })
 
   chrome.webNavigation.onReferenceFragmentUpdated.addListener((details) => {
@@ -102,14 +131,18 @@ function registerWebNavListenersOnce(): void {
       tq: details.transitionQualifiers
     })
     session.url = details.url
-    sendArmToTab(details.tabId, session.sessionId, session.startedAt)
+    sendArmToTab(details.tabId, session.sessionId, session.startedAt).then(res => {
+      if (!res.success) console.error(`re-arm after fragment nav failed on tab ${details.tabId}:`, res.error)
+    })
   })
 
   chrome.webNavigation.onCompleted.addListener((details) => {
     if (details.frameId !== 0) return
     const session = getActiveSessionForTab(details.tabId)
     if (!session || session.paused) return
-    sendArmToTab(details.tabId, session.sessionId, session.startedAt)
+    sendArmToTab(details.tabId, session.sessionId, session.startedAt).then(res => {
+      if (!res.success) console.error(`re-arm after navigation completed failed on tab ${details.tabId}:`, res.error)
+    })
   })
 
   chrome.tabs.onRemoved.addListener((tabId) => {
@@ -182,17 +215,49 @@ function monitorRuntimeMessageListener(msg: any, sender: chrome.runtime.MessageS
   return true
 }
 
+async function resolveTabForMonitor(): Promise<{ tabId?: number; error?: string }> {
+  const groupId = await ensureSlopGroup()
+  if (groupId !== -1) {
+    const tabs = await chrome.tabs.query({ groupId })
+    if (tabs.length > 0) {
+      const active = tabs.find(t => t.active) || tabs[0]
+      if (active.id) return { tabId: active.id }
+    }
+  }
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (activeTab?.id) {
+    const inGroup = await isTabInSlopGroup(activeTab.id)
+    if (inGroup) return { tabId: activeTab.id }
+  }
+  return { error: "no slop-managed tab found — use 'slop tab new' or pass --tab" }
+}
+
+function resolveSessionWithoutTab(): { tabId: number; sessionId: string } | undefined {
+  for (const [tid, sid] of activeSessionByTab) {
+    return { tabId: tid, sessionId: sid }
+  }
+  return undefined
+}
+
 export async function handleMonitorActions(
   action: { type: string; [key: string]: unknown },
   tabId: number
 ): Promise<ActionResult> {
   switch (action.type) {
     case "monitor_start": {
-      if (activeSessionByTab.has(tabId)) {
-        const existingSid = activeSessionByTab.get(tabId)!
+      let resolvedTabId = tabId
+      if (!resolvedTabId) {
+        const resolved = await resolveTabForMonitor()
+        if (resolved.error || !resolved.tabId) {
+          return { success: false, error: resolved.error || "no slop-managed tab found" }
+        }
+        resolvedTabId = resolved.tabId
+      }
+      if (activeSessionByTab.has(resolvedTabId)) {
+        const existingSid = activeSessionByTab.get(resolvedTabId)!
         return {
           success: false,
-          error: `monitor already active on tab ${tabId} (session ${existingSid.slice(0, 8)})`,
+          error: `monitor already active on tab ${resolvedTabId} (session ${existingSid.slice(0, 8)})`,
           data: { sessionId: existingSid }
         }
       }
@@ -201,12 +266,12 @@ export async function handleMonitorActions(
       const instruction = (action.instruction as string) || undefined
       let url: string | undefined
       try {
-        const tab = await chrome.tabs.get(tabId)
+        const tab = await chrome.tabs.get(resolvedTabId)
         url = tab.url
       } catch {}
       const session: SessionRecord = {
         sessionId,
-        tabId,
+        tabId: resolvedTabId,
         startedAt,
         instruction,
         paused: false,
@@ -215,28 +280,38 @@ export async function handleMonitorActions(
         url
       }
       sessions.set(sessionId, session)
-      activeSessionByTab.set(tabId, sessionId)
+      activeSessionByTab.set(resolvedTabId, sessionId)
       sendToHost({
         type: "event",
         event: "mon_start",
         sid: sessionId,
         s: nextSeq(session),
         t: startedAt,
-        tid: tabId,
+        tid: resolvedTabId,
         url,
         ins: instruction
       })
-      await sendArmToTab(tabId, sessionId, startedAt)
-      return { success: true, data: { sessionId, tabId, startedAt, url, instruction } }
+      const armResult = await sendArmToTab(resolvedTabId, sessionId, startedAt)
+      if (!armResult.success) {
+        sessions.delete(sessionId)
+        activeSessionByTab.delete(resolvedTabId)
+        return { success: false, error: armResult.error, tabId: resolvedTabId }
+      }
+      return { success: true, data: { sessionId, tabId: resolvedTabId, startedAt, url, instruction } }
     }
 
     case "monitor_stop": {
-      const sid = activeSessionByTab.get(tabId)
+      let resolvedTabId = tabId
+      let sid = activeSessionByTab.get(resolvedTabId)
       if (!sid) {
-        return { success: false, error: `no active monitor session on tab ${tabId}` }
+        const found = resolveSessionWithoutTab()
+        if (found) { resolvedTabId = found.tabId; sid = found.sessionId }
+      }
+      if (!sid) {
+        return { success: false, error: `no active monitor session on tab ${resolvedTabId || "(none)"}` }
       }
       const session = sessions.get(sid)!
-      const disarmRes = await sendDisarmToTab(tabId) as { success?: boolean; counts?: { evt: number; mut: number; net: number } } | null
+      const disarmRes = await sendDisarmToTab(resolvedTabId) as { success?: boolean; counts?: { evt: number; mut: number; net: number } } | null
       const dur = Date.now() - session.startedAt
       sendToHost({
         type: "event",
@@ -252,12 +327,12 @@ export async function handleMonitorActions(
         dur
       })
       sessions.delete(sid)
-      activeSessionByTab.delete(tabId)
+      activeSessionByTab.delete(resolvedTabId)
       return {
         success: true,
         data: {
           sessionId: sid,
-          tabId,
+          tabId: resolvedTabId,
           dur,
           evt: session.counts.evt,
           mut: session.counts.mut,
@@ -302,8 +377,13 @@ export async function handleMonitorActions(
     }
 
     case "monitor_pause": {
-      const sid = activeSessionByTab.get(tabId)
-      if (!sid) return { success: false, error: `no active monitor session on tab ${tabId}` }
+      let resolvedTabId = tabId
+      let sid = activeSessionByTab.get(resolvedTabId)
+      if (!sid) {
+        const found = resolveSessionWithoutTab()
+        if (found) { resolvedTabId = found.tabId; sid = found.sessionId }
+      }
+      if (!sid) return { success: false, error: `no active monitor session on tab ${resolvedTabId || "(none)"}` }
       const session = sessions.get(sid)!
       session.paused = true
       sendToHost({
@@ -317,8 +397,13 @@ export async function handleMonitorActions(
     }
 
     case "monitor_resume": {
-      const sid = activeSessionByTab.get(tabId)
-      if (!sid) return { success: false, error: `no active monitor session on tab ${tabId}` }
+      let resolvedTabId = tabId
+      let sid = activeSessionByTab.get(resolvedTabId)
+      if (!sid) {
+        const found = resolveSessionWithoutTab()
+        if (found) { resolvedTabId = found.tabId; sid = found.sessionId }
+      }
+      if (!sid) return { success: false, error: `no active monitor session on tab ${resolvedTabId || "(none)"}` }
       const session = sessions.get(sid)!
       session.paused = false
       sendToHost({
@@ -328,7 +413,10 @@ export async function handleMonitorActions(
         s: nextSeq(session),
         t: Date.now()
       })
-      await sendArmToTab(tabId, sid, session.startedAt)
+      const armResult = await sendArmToTab(resolvedTabId, sid, session.startedAt)
+      if (!armResult.success) {
+        console.error(`re-arm after resume failed on tab ${resolvedTabId}:`, armResult.error)
+      }
       return { success: true, data: { sessionId: sid, paused: false } }
     }
   }
