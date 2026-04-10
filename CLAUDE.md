@@ -19,7 +19,7 @@ The daemon auto-starts. No setup needed.
 
 ## Use Cases
 
-The [`use-cases/`](/Volumes/VRAM/00-09_System/01_Tools/slop-browser/use-cases) folder is where proven browser workflows get turned into reusable documentation. When you figure out how to do something reliably on a live site, add a compact use-case there so later agents can follow the path instead of burning tokens rediscovering it.
+The [`use-cases/`](use-cases/) folder is where proven browser workflows get turned into reusable documentation. When you figure out how to do something reliably on a live site, add a compact use-case there so later agents can follow the path instead of burning tokens rediscovering it.
 
 ## Reading Pages
 

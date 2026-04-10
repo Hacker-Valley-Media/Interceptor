@@ -105,7 +105,7 @@ Once installed, the daemon auto-starts on first command. No manual launch needed
 
 **Stealth** — Passes all major bot detection: BrowserScan (Normal), Pixelscan ("Definitely Human"), Sannysoft (all pass), CreepJS (0% headless), Fingerprint.com (notDetected), AreyouHeadless (not headless). Zero automation fingerprint.
 
-**Use Cases** — The [`use-cases/`](/Volumes/VRAM/00-09_System/01_Tools/slop-browser/use-cases) folder is the cookbook for workflows we have already proven in live pages. When a browser workflow is discovered or stabilized, document the exact path there so future agents can reuse it instead of rediscovering it.
+**Use Cases** — The [`use-cases/`](use-cases/) folder is the cookbook for workflows we have already proven in live pages. When a browser workflow is discovered or stabilized, document the exact path there so future agents can reuse it instead of rediscovering it.
 
 ## Commands
 

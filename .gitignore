@@ -10,3 +10,4 @@ daemon/.generated/
 slop-screenshot-*.jpg
 slop-screenshot-*.png
 prd/
+scripts/auto-improve/
