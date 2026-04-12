@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "./scripts/build.sh",
-    "typecheck": "bunx tsc -p tsconfig.host.json && bunx tsc -p tsconfig.extension.json",
+    "typecheck": "bunx tsc -p tsconfig.host.json && bunx tsc -p tsconfig.extension.json && bunx tsc -p tsconfig.json",
     "daemon": "bun run daemon/index.ts",
     "cli": "bun run cli/index.ts"
   },

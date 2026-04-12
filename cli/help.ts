@@ -1,5 +1,24 @@
 export const HELP = `slop — browser control CLI
 
+Compound (agent-optimized):
+  slop open <url>                     Open URL, wait, return tree + text
+  slop open <url> --tree-only         Skip text, return only tree
+  slop open <url> --text-only         Skip tree, return only text
+  slop open <url> --full              Full text instead of 2000-char summary
+  slop open <url> --timeout <ms>      Override wait-stable timeout (default 5000)
+  slop open <url> --no-wait           Return immediately after tab creation
+  slop read                           Tree + text for active tab
+  slop read <ref>                     Tree + text for element subtree
+  slop read --tree-only               Skip text
+  slop read --text-only               Skip tree
+  slop act <ref>                      Click + wait + return updated tree + diff
+  slop act <ref> "value"              Type into field + wait + return updated tree
+  slop act <ref> --os                 Use OS-level trusted input
+  slop act <ref> --keys "Enter"       Send keyboard shortcut instead
+  slop act <ref> --no-read            Skip post-action tree read
+  slop inspect                        Tree + text + network log + headers
+  slop inspect --net-only             Skip tree/text, return only network data
+
 State:
   slop state                          Current page DOM tree + metadata
   slop state --full                   Include static text content
