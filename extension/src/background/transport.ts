@@ -165,6 +165,23 @@ export function connectWsChannel(): void {
   } catch {}
 }
 
+// --- SW Keepalive responder (content script heartbeat) ---
+let lastSwKeepalive = 0
+
+export function registerSwKeepaliveListener(): void {
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type !== "sw_keepalive") return false
+    const now = Date.now()
+    if (now - lastSwKeepalive < 20_000) {
+      sendResponse({ leader: false })
+    } else {
+      lastSwKeepalive = now
+      sendResponse({ leader: true })
+    }
+    return false
+  })
+}
+
 export function registerAlarmListener(): void {
   chrome.alarms.create("keepalive", { periodInMinutes: 0.5 })
   chrome.alarms.onAlarm.addListener((alarm) => {

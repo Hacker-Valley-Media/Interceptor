@@ -7,6 +7,18 @@ Browser control CLI for AI agents. No CDP, no MCP, no API keys. You call `slop`,
 ## Start Here
 
 ```bash
+slop open "https://example.com"        # Open, wait, return tree + text (1 command)
+slop act e1                            # Click element, return updated tree + diff
+slop act e2 "hello"                    # Type into field, return updated tree
+slop read                              # Re-read current page (tree + text)
+slop inspect                           # Tree + text + network log + headers
+```
+
+The daemon auto-starts. No setup needed.
+
+### Legacy (still works, but prefer compound commands above)
+
+```bash
 slop tab new "https://example.com"    # Open managed tab
 sleep 2                                # Wait for load
 slop tree                              # See interactive elements
@@ -15,11 +27,34 @@ slop type e2 "hello"                   # Type into field
 slop text                              # Read visible text
 ```
 
-The daemon auto-starts. No setup needed.
-
 ## Use Cases
 
 The [`use-cases/`](use-cases/) folder is where proven browser workflows get turned into reusable documentation. When you figure out how to do something reliably on a live site, add a compact use-case there so later agents can follow the path instead of burning tokens rediscovering it.
+
+## Compound Commands (Agent-Optimized)
+
+These collapse multi-step patterns into single CLI invocations. Prefer these over the individual commands below.
+
+```bash
+slop open "https://example.com"        # tab new + wait + tree + text in one call
+slop open "https://example.com" --tree-only   # Skip text
+slop open "https://example.com" --text-only   # Skip tree
+slop open "https://example.com" --full        # Full text (no 2000-char limit)
+slop open "https://example.com" --timeout 10000  # Custom wait timeout
+slop open "https://example.com" --no-wait     # Don't wait for load
+slop read                              # Tree + text for current page
+slop read e5                           # Tree + text for element subtree
+slop read --tree-only                  # Just tree
+slop read --text-only                  # Just text
+slop act e5                            # Click + wait + return updated tree + diff
+slop act e3 "hello"                    # Type + wait + return updated tree
+slop act e5 --os                       # OS-level trusted click
+slop act e5 --keys "Enter"             # Send keyboard shortcut instead
+slop act e5 --no-read                  # Skip post-action tree read
+slop inspect                           # Tree + text + net log + headers
+slop inspect --net-only                # Just network data
+slop inspect --filter api              # Filter network entries
+```
 
 ## Reading Pages
 
@@ -257,46 +292,34 @@ Pass `--any-tab` to operate on any tab.
 
 ### Fill out a form
 ```bash
-slop tab new "https://app.example.com/signup"
-sleep 3
-slop tree
-slop type e5 "user@example.com"
-slop type e7 "password123"
-slop click e9                          # Submit button
-sleep 2
-slop text                              # Read result
+slop open "https://app.example.com/signup"
+slop act e5 "user@example.com"
+slop act e7 "password123"
+slop act e9                            # Submit button
+slop read                              # Read result
 ```
 
 ### Extract API data from an SPA
 ```bash
-slop tab new "https://app.example.com/dashboard"
-sleep 5
-slop net log --filter api              # See what APIs the page called
-slop net headers --filter api          # See auth headers / tokens
+slop open "https://app.example.com/dashboard"
+slop inspect --filter api              # Tree + text + API network calls + headers
 ```
 
 ### Monitor a page for changes
 ```bash
-slop tab new "https://example.com/status"
-sleep 3
-slop tree                              # Baseline
+slop open "https://example.com/status"
 # ... time passes ...
 slop diff                              # What changed
-slop text                              # Current state
+slop read                              # Current state
 ```
 
 ### Navigate a multi-step flow
 ```bash
-slop tab new "https://example.com"
-sleep 2
-slop tree                              # See what's on page
-slop click e12                         # Click "Next"
-sleep 1
-slop tree                              # See new page
-slop type e5 "search query"            # Fill field
-slop click e8                          # Submit
-sleep 2
-slop text                              # Read results
+slop open "https://example.com"
+slop act e12                           # Click "Next", get updated tree
+slop act e5 "search query"             # Fill field
+slop act e8                            # Submit
+slop read                              # Read results
 slop tab close
 ```
 

@@ -209,3 +209,16 @@ async function executeAction(action: Action): Promise<ActionResult> {
     return { success: false, error: (err as Error).message }
   }
 }
+
+// --- SW Keepalive Heartbeat (leader-elected, zero network) ---
+let _swKeepaliveLeader = true
+setInterval(() => {
+  if (!_swKeepaliveLeader) return
+  try {
+    chrome.runtime.sendMessage({ type: "sw_keepalive" })
+      .then((resp: { leader?: boolean } | undefined) => {
+        if (resp && resp.leader === false) _swKeepaliveLeader = false
+      })
+      .catch(() => {})
+  } catch {}
+}, 25_000)

@@ -18,6 +18,7 @@ import { parseMonitorCommand } from "./commands/monitor"
 import { parseSceneCommand } from "./commands/scene"
 import { parseSseCommand } from "./commands/sse"
 import { parseChatgptCommand } from "./commands/chatgpt"
+import { runCompoundCommand } from "./commands/compound"
 
 // Command → module routing
 const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
@@ -35,6 +36,7 @@ const MONITOR_CMDS = new Set(["monitor"])
 const SCENE_CMDS = new Set(["scene"])
 const SSE_CMDS = new Set(["sse"])
 const CHATGPT_CMDS = new Set(["chatgpt"])
+const COMPOUND_CMDS = new Set(["open", "read", "act", "inspect"])
 
 // Commands that don't require a daemon connection
 const NO_DAEMON = new Set(["status", "help", "events", "session"])
@@ -76,6 +78,11 @@ async function main() {
 
   // Dispatch to command module
   let action: { type: string; [key: string]: unknown } | null
+
+  if (COMPOUND_CMDS.has(cmd)) {
+    await runCompoundCommand(cmd, filtered, { jsonMode, useWs, globalTabId, anyTab })
+    return
+  }
 
   if (STATE_CMDS.has(cmd))       action = parseStateCommand(filtered)
   else if (ACTION_CMDS.has(cmd)) action = parseActionsCommand(filtered)

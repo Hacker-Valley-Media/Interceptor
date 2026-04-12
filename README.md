@@ -81,15 +81,16 @@ bash scripts/build.sh # Build compiled host binaries and extension bundles
 ## Quick Start
 
 ```bash
-slop tab new "https://example.com"   # Open a managed tab
-sleep 2                               # Wait for load
-slop tree                             # See what's interactive
-slop click e1                         # Click element by ref
-slop type e2 "hello world"            # Type into a field
-slop text                             # Read visible text
+slop open "https://example.com"       # Open, wait, return tree + text (1 command)
+slop act e1                            # Click element, return updated tree + diff
+slop act e2 "hello world"              # Type into field, return updated tree
+slop read                              # Re-read current page (tree + text)
+slop inspect                           # Tree + text + network log + headers
 ```
 
 Once installed, the daemon auto-starts on first command. No manual launch needed.
+
+The legacy individual commands (`slop tab new`, `slop tree`, `slop click`, etc.) still work, but the compound commands above are preferred — they reduce round-trips and agent deliberation time.
 
 ## Core Concepts
 
@@ -108,6 +109,29 @@ Once installed, the daemon auto-starts on first command. No manual launch needed
 **Use Cases** — The [`use-cases/`](use-cases/) folder is the cookbook for workflows we have already proven in live pages. When a browser workflow is discovered or stabilized, document the exact path there so future agents can reuse it instead of rediscovering it.
 
 ## Commands
+
+### Compound Commands (Agent-Optimized)
+
+These collapse multi-step patterns into single CLI invocations:
+
+```bash
+slop open "https://example.com"        # Open URL, wait, return tree + text
+slop open "https://example.com" --tree-only   # Skip text
+slop open "https://example.com" --text-only   # Skip tree
+slop open "https://example.com" --full        # Full text (no 2000-char limit)
+slop open "https://example.com" --no-wait     # Don't wait for load
+slop read                              # Tree + text for current page
+slop read e5                           # Tree + text for element subtree
+slop read --tree-only                  # Just tree
+slop act e5                            # Click + wait + return updated tree + diff
+slop act e3 "hello"                    # Type + wait + return updated tree
+slop act e5 --os                       # OS-level trusted click
+slop act e5 --keys "Enter"             # Send keyboard shortcut instead
+slop act e5 --no-read                  # Skip post-action tree read
+slop inspect                           # Tree + text + network log + headers
+slop inspect --net-only                # Just network data
+slop inspect --filter api              # Filter network entries
+```
 
 ### Read the Page
 ```bash

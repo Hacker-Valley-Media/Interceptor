@@ -1,4 +1,4 @@
-import { connectToHost, connectWsChannel, registerAlarmListener } from "./background/transport"
+import { connectToHost, connectWsChannel, registerAlarmListener, registerSwKeepaliveListener } from "./background/transport"
 import { registerCdpListeners } from "./background/cdp"
 import { registerTabGroupListeners, ensureSlopGroup } from "./background/tab-group"
 
@@ -6,6 +6,7 @@ import { registerTabGroupListeners, ensureSlopGroup } from "./background/tab-gro
 registerCdpListeners()
 registerTabGroupListeners()
 registerAlarmListener()
+registerSwKeepaliveListener()
 
 // Startup connections
 chrome.runtime.onInstalled.addListener(() => {
