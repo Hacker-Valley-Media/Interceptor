@@ -63,6 +63,25 @@ export async function handlePassiveNetActions(
       if (!result.success) return { success: false, error: result.error || "failed to get SSE chunk" }
       return { success: true, data: result.data }
     }
+
+    case "set_net_overrides": {
+      const result = await sendNetDirect(tabId, {
+        type: "set_net_overrides",
+        rules: action.rules as unknown[]
+      }) as { success: boolean; error?: string }
+      return result.success
+        ? { success: true, data: { overrides: "set", ruleCount: Array.isArray(action.rules) ? (action.rules as unknown[]).length : 0 } }
+        : { success: false, error: result.error || "failed to set net overrides" }
+    }
+
+    case "clear_net_overrides": {
+      const result = await sendNetDirect(tabId, {
+        type: "clear_net_overrides"
+      }) as { success: boolean; error?: string }
+      return result.success
+        ? { success: true, data: "net overrides cleared" }
+        : { success: false, error: result.error || "failed to clear net overrides" }
+    }
   }
   return { success: false, error: `unknown passive-net action: ${action.type}` }
 }

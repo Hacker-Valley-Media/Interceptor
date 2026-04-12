@@ -247,7 +247,7 @@ export function escapeArg(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
 }
 
-export function buildPlan(sid: string): string {
+export function buildPlan(sid: string, includeSynthetic = false): string {
   const events = readMonEvents(sid)
   if (events.length === 0) return `# (no events for session ${sid})`
   const start = events.find((e) => e.event === "mon_start")
@@ -261,6 +261,11 @@ export function buildPlan(sid: string): string {
     lines.push(`slop tab new "${escapeArg(start.url)}"`)
     lines.push(`slop wait-stable`)
   }
+
+  // If no real user events exist, include synthetic clicks automatically
+  const actionKinds = new Set(["click", "dblclick", "rclick", "input", "change", "key", "submit"])
+  const hasRealUserEvents = events.some((e) => e.tr !== false && actionKinds.has(e.event || ""))
+  const emitSynthetic = includeSynthetic || !hasRealUserEvents
 
   type IndexedEvent = { ev: MonEvent; idx: number }
   const evList: IndexedEvent[] = events.map((ev, idx) => ({ ev, idx }))
@@ -285,7 +290,7 @@ export function buildPlan(sid: string): string {
     const k = ev.event
     if (k === "mon_start" || k === "mon_stop" || k === "mon_pause" || k === "mon_resume") continue
     if (k === "scroll" || k === "focus" || k === "blur") continue
-    if (ev.tr === false) {
+    if (ev.tr === false && !emitSynthetic) {
       lines.push(`# skipped synthetic ${k} (slop-injected)`)
       continue
     }
@@ -470,7 +475,8 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
         return null
       }
       if (plan) {
-        let text = buildPlan(sid)
+        const inclSynthetic = flagPresent(filtered, "--include-synthetic")
+        let text = buildPlan(sid, inclSynthetic)
         if (wb) text = withBodies(text, sid)
         console.log(text)
         return null

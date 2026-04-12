@@ -204,10 +204,13 @@ slop net headers --filter linkedin    # Filter by URL
 Modify outgoing requests at the JavaScript level. No CDP, no debugger.
 ```bash
 # Change a query parameter on matching URLs
-slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*eventAttending*","queryAddOrReplace":{"count":50}}]}'
+slop override "*eventAttending*" count=50
+
+# Multiple params
+slop override "*api/search*" limit=50 offset=0
 
 # Clear all overrides
-slop raw '{"type":"net_override_clear"}'
+slop override clear
 ```
 
 ### SSE Stream Capture
@@ -292,7 +295,7 @@ slop monitor export <sessionId> --json          # Raw JSONL for that session
 slop monitor export <sessionId> --plan          # Emit slop ... replay script
 ```
 
-Each event line is sparse JSON (short keys: `t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `cause`) so an agent can read a 30-minute session in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <action_seq>`. Real user events have `tr: true`; slop's own synthetic clicks have `tr: false` so the replay generator can ignore them.
+Each event line is sparse JSON (short keys: `t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `cause`) so an agent can read a 30-minute session in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <action_seq>`. Real user events have `tr: true`; slop's own synthetic clicks have `tr: false`. The replay-plan generator automatically includes synthetic clicks when no real user events exist in the session (common when an agent drove the browser). Use `--include-synthetic` to force inclusion regardless.
 
 The replay script uses the existing semantic-selector path:
 ```
@@ -401,12 +404,12 @@ slop net log --filter api --limit 5    # See latest calls
 slop tab new "https://app.example.com"
 sleep 2
 # Push override: change page_size to 100 on any matching URL
-slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*api/list*","queryAddOrReplace":{"page_size":100}}]}'
+slop override "*api/list*" page_size=100
 # Now interact — when the page fetches, the URL is rewritten before it fires
 slop click e5                          # Trigger a load
 sleep 2
 slop net log --filter api/list         # See the rewritten request + response
-slop raw '{"type":"net_override_clear"}'  # Clean up
+slop override clear                    # Clean up
 ```
 
 ### LinkedIn event extraction (full flow, no CDP)

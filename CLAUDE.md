@@ -123,10 +123,13 @@ Override rules rewrite URLs before the page's JavaScript sends them. The page se
 
 ```bash
 # Change a query parameter on matching requests
-slop raw '{"type":"net_override_set","rules":[{"urlPattern":"*eventAttending*","queryAddOrReplace":{"count":50}}]}'
+slop override "*eventAttending*" count=50
+
+# Multiple params
+slop override "*api/search*" limit=50 offset=0
 
 # Clear overrides
-slop raw '{"type":"net_override_clear"}'
+slop override clear
 ```
 
 This is how `slop linkedin attendees` changes LinkedIn's page size from 20→50 — the page's own JavaScript fetches attendees, but slop rewrites the request in-flight to ask for more results.
@@ -212,9 +215,10 @@ slop monitor tail [--raw]                       # Live tail of the current sessi
 slop monitor export <sessionId>                 # Aligned text rendering
 slop monitor export <sessionId> --json          # Raw JSONL
 slop monitor export <sessionId> --plan          # Replay script (slop ... lines)
+slop monitor export <sessionId> --plan --include-synthetic  # Include agent-driven clicks in plan
 ```
 
-Event records are sparse — short keys (`t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `v`, `cause`) so a 30-minute session reads in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <seq>`. Real user events have `tr: true`; slop's own synthetic clicks have `tr: false` so the replay-plan generator can ignore them.
+Event records are sparse — short keys (`t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `v`, `cause`) so a 30-minute session reads in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <seq>`. Real user events have `tr: true`; slop's own synthetic clicks have `tr: false`. The replay-plan generator automatically includes synthetic clicks when no real user events exist in the session (common when an agent drove the browser). Use `--include-synthetic` to force inclusion regardless.
 
 The replay plan uses semantic selectors that survive DOM churn:
 ```
