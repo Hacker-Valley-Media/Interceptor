@@ -19,6 +19,7 @@ import { parseSceneCommand } from "./commands/scene"
 import { parseSseCommand } from "./commands/sse"
 import { parseChatgptCommand } from "./commands/chatgpt"
 import { runCompoundCommand } from "./commands/compound"
+import { runOverride } from "./commands/override"
 
 // Command → module routing
 const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
@@ -37,6 +38,7 @@ const SCENE_CMDS = new Set(["scene"])
 const SSE_CMDS = new Set(["sse"])
 const CHATGPT_CMDS = new Set(["chatgpt"])
 const COMPOUND_CMDS = new Set(["open", "read", "act", "inspect"])
+const OVERRIDE_CMDS = new Set(["override"])
 
 // Commands that don't require a daemon connection
 const NO_DAEMON = new Set(["status", "help", "events", "session"])
@@ -81,6 +83,11 @@ async function main() {
 
   if (COMPOUND_CMDS.has(cmd)) {
     await runCompoundCommand(cmd, filtered, { jsonMode, useWs, globalTabId, anyTab })
+    return
+  }
+
+  if (OVERRIDE_CMDS.has(cmd)) {
+    await runOverride(filtered, { jsonMode, useWs, globalTabId })
     return
   }
 

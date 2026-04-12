@@ -85,6 +85,11 @@ Network (CDP — explicit opt-in):
   slop network override on '<json>'   Rewrite matching requests before they leave the browser
   slop network override off           Disable request rewriting
 
+Request Override (passive, no CDP):
+  slop override "*pattern*" key=value   Override query param on matching requests
+  slop override "*api*" limit=50 offset=0  Multiple params
+  slop override clear                  Remove all overrides
+
 Passive Network (always-on, no CDP):
   slop net log                        Passively captured fetch/XHR traffic
   slop net log --filter <pattern>     Filter by URL substring
