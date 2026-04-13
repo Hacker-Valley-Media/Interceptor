@@ -39,8 +39,8 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
       statusLines.push(`transport: ${transport}`)
       if (!daemonAlive) {
         statusLines.push("")
-        statusLines.push("hint: run any slop command and the daemon will auto-start.")
-        statusLines.push("ensure Chrome/Brave has the slop-browser extension loaded for browser control.")
+        statusLines.push("hint: run any interceptor command and the daemon will auto-start.")
+        statusLines.push("ensure Chrome/Brave has the Interceptor extension loaded for browser control.")
       }
       if (jsonMode) {
         console.log(JSON.stringify({ daemon: daemonAlive, pid: daemonPid, socket: sockExists ? SOCKET_PATH : null, transport }, null, 2))
@@ -51,7 +51,7 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
     }
 
     case "events": {
-      const eventsPath = "/tmp/slop-browser-events.jsonl"
+      const eventsPath = "/tmp/interceptor-events.jsonl"
       if (!existsSync(eventsPath)) {
         console.log("no events yet")
         return null

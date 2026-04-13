@@ -2,7 +2,7 @@
 
 ## Top-Level Flow
 
-`slop` follows a four-layer path:
+`interceptor` follows a four-layer path:
 
 1. `cli/` parses commands, global flags, and output formatting.
 2. `extension/src/background/` owns routing, Chrome APIs, tab policy, transport selection, and background-only capability modules.
@@ -52,9 +52,9 @@ This split restores real static checking without excluding the extension surface
 
 - `extension/src/background.ts` - startup wiring
 - `extension/src/background/transport.ts` - native messaging plus websocket fallback
-- `extension/src/background/message-dispatch.ts` - request lifecycle, active-tab lookup, slop-group enforcement
+- `extension/src/background/message-dispatch.ts` - request lifecycle, active-tab lookup, interceptor-group enforcement
 - `extension/src/background/router.ts` - action routing to background capabilities or content script
-- `extension/src/background/tab-group.ts` - slop tab-group policy
+- `extension/src/background/tab-group.ts` - interceptor tab-group policy
 - `extension/src/background/linkedin-orchestration.ts` - LinkedIn event and attendees flows
 - `extension/src/background/capabilities/*.ts` - Chrome API and background-only capability handlers
 
@@ -91,6 +91,6 @@ For changes that cross host/extension boundaries, touch transport, or modify Chr
 ## Build Outputs
 
 - `scripts/build.sh` builds the extension plus host binaries
-- `dist/slop` is the compiled CLI on host and macOS target builds
-- `daemon/slop-daemon` is the compiled daemon on host and macOS target builds
+- `dist/interceptor` is the compiled CLI on host and macOS target builds
+- `daemon/interceptor-daemon` is the compiled daemon on host and macOS target builds
 - `extension/dist/` is the unpacked extension directory to load or reload in Chrome/Brave

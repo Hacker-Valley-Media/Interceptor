@@ -1,6 +1,6 @@
 import { connectToHost, connectWsChannel, registerAlarmListener, registerSwKeepaliveListener } from "./background/transport"
 import { registerCdpListeners } from "./background/cdp"
-import { registerTabGroupListeners, ensureSlopGroup } from "./background/tab-group"
+import { registerTabGroupListeners, ensureInterceptorGroup } from "./background/tab-group"
 
 // Register all event listeners
 registerCdpListeners()
@@ -12,12 +12,12 @@ registerSwKeepaliveListener()
 chrome.runtime.onInstalled.addListener(() => {
   connectToHost()
   connectWsChannel()
-  ensureSlopGroup()
+  ensureInterceptorGroup()
 })
 chrome.runtime.onStartup.addListener(() => {
   connectToHost()
   connectWsChannel()
-  ensureSlopGroup()
+  ensureInterceptorGroup()
 })
 
 connectToHost()

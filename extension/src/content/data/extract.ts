@@ -6,7 +6,7 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 export async function handleExtractText(action: Action): Promise<ActionResult> {
   if (action.index !== undefined) {
     const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-    if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+    if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
     return { success: true, data: (el.textContent || "").trim() }
   }
   return { success: true, data: document.body.innerText.slice(0, 10000) }
@@ -15,7 +15,7 @@ export async function handleExtractText(action: Action): Promise<ActionResult> {
 export async function handleExtractHtml(action: Action): Promise<ActionResult> {
   if (action.index !== undefined) {
     const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-    if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+    if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
     return { success: true, data: el.outerHTML.slice(0, 10000) }
   }
   return { success: true, data: document.documentElement.outerHTML.slice(0, 50000) }

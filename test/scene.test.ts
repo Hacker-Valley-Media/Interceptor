@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { parseSceneCommand } from "../cli/commands/scene"
 
-describe("slop scene CLI parser", () => {
+describe("interceptor scene CLI parser", () => {
   test("scene profile returns the right action", async () => {
     const a = await parseSceneCommand(["scene", "profile"], false)
     expect(a).not.toBeNull()
@@ -43,10 +43,10 @@ describe("slop scene CLI parser", () => {
   })
 
   test("scene insert joins text arguments", async () => {
-    const a = await parseSceneCommand(["scene", "insert", "hello", "from", "slop"], false)
+    const a = await parseSceneCommand(["scene", "insert", "hello", "from", "interceptor"], false)
     expect(a).not.toBeNull()
     expect(a!.type).toBe("scene_insert")
-    expect(a!.text).toBe("hello from slop")
+    expect(a!.text).toBe("hello from interceptor")
   })
 
   test("scene slide list returns slide_list action", async () => {

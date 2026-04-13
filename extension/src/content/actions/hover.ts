@@ -5,7 +5,7 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 
 export async function handleHover(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   const hoverFromX = action.fromX as number | undefined
   const hoverFromY = action.fromY as number | undefined
   if (hoverFromX !== undefined && hoverFromY !== undefined) {

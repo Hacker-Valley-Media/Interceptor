@@ -6,7 +6,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { IS_WIN, SOCKET_PATH, PID_PATH } from "../shared/platform"
 
-const DAEMON_BINARY = IS_WIN ? "slop-daemon.exe" : "slop-daemon"
+const DAEMON_BINARY = IS_WIN ? "interceptor-daemon.exe" : "interceptor-daemon"
 
 export function findDaemonBinary(): string | null {
   const candidates: string[] = []
@@ -16,7 +16,7 @@ export function findDaemonBinary(): string | null {
   candidates.push(join(exeDir, DAEMON_BINARY))
   candidates.push(join(exeDir, "daemon", DAEMON_BINARY))
   candidates.push(resolve("daemon", DAEMON_BINARY))
-  candidates.push(resolve("daemon", "slop-daemon"))
+  candidates.push(resolve("daemon", "interceptor-daemon"))
   for (const c of candidates) {
     if (existsSync(c)) return c
   }
@@ -61,11 +61,11 @@ export async function ensureDaemon(): Promise<void> {
       }
 
       if (!IS_WIN && !existsSync(SOCKET_PATH)) {
-        console.error("error: daemon failed to start. Check /tmp/slop-browser.log")
+        console.error("error: daemon failed to start. Check /tmp/interceptor.log")
         process.exit(1)
       }
     } else {
-      console.error("error: daemon not running and slop-daemon binary not found. Open Chrome with the slop-browser extension loaded, or build the daemon.")
+      console.error("error: daemon not running and interceptor-daemon binary not found. Open Chrome with the Interceptor extension loaded, or build the daemon.")
       process.exit(1)
     }
   }

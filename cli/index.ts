@@ -107,7 +107,7 @@ async function main() {
   else if (SSE_CMDS.has(cmd))     action = parseSseCommand(filtered)
   else if (CHATGPT_CMDS.has(cmd)) action = await parseChatgptCommand(filtered, jsonMode)
   else {
-    console.error(`error: unknown command '${cmd}'. Run 'slop help' for usage.`)
+    console.error(`error: unknown command '${cmd}'. Run 'interceptor help' for usage.`)
     process.exit(1)
   }
 
@@ -157,7 +157,7 @@ async function main() {
     const tree = (unwrapResult(treeResp).data || "") as string
     const match = tree.match(/\[(e\d+)\]\s+textbox\s+"Chat with ChatGPT"/)
     if (!match) {
-      console.error("error: could not find ChatGPT input textbox. Is chatgpt.com open in a slop tab?")
+      console.error("error: could not find ChatGPT input textbox. Is chatgpt.com open in an interceptor tab?")
       process.exit(1)
     }
     const inputRef = match[1]
@@ -361,7 +361,7 @@ async function main() {
       const dataUrl = d.dataUrl as string
       const base64 = dataUrl.split(",")[1]
       const ext = (d.format as string) === "png" ? "png" : "jpg"
-      const filename = `slop-screenshot-${Date.now()}.${ext}`
+      const filename = `interceptor-screenshot-${Date.now()}.${ext}`
       const bytes = Buffer.from(base64, "base64")
       await Bun.write(filename, bytes)
       d.filePath = `${process.cwd()}/${filename}`

@@ -30,7 +30,7 @@ export function cacheSnapshot() {
 
 export function computeSnapshotDiff(): { success: boolean; error?: string; data?: unknown } {
   if (lastSnapshot.length === 0) {
-    return { success: false, error: "no previous snapshot — run 'slop tree' first" }
+    return { success: false, error: "no previous snapshot — run 'interceptor tree' first" }
   }
 
   const oldMap = new Map(lastSnapshot.map(e => [e.refId, e]))

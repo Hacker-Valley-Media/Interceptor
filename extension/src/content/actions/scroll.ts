@@ -22,7 +22,7 @@ export async function handleScrollAbsolute(action: Action): Promise<ActionResult
 
 export async function handleScrollTo(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   el.scrollIntoView({ block: "center", behavior: "instant" })
   return { success: true }
 }

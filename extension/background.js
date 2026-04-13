@@ -45,7 +45,7 @@ function connectToHost() {
   if (nativePort || isConnecting)
     return;
   isConnecting = true;
-  const port = chrome.runtime.connectNative("com.slopbrowser.host");
+  const port = chrome.runtime.connectNative("com.interceptorbrowser.host");
   const handshakeTimer = setTimeout(() => {
     console.error("native host handshake timeout (10s)");
     port.disconnect();
@@ -156,11 +156,11 @@ async function handleDaemonMessage(msg) {
     chrome.storage.session.set({ activeTabId: tabId });
   }
   if (tabId && needsTab(action.type) && !action.anyTab) {
-    const inGroup = await isTabInSlopGroup(tabId);
-    if (!inGroup && slopGroupId !== null) {
+    const inGroup = await isTabInInterceptorGroup(tabId);
+    if (!inGroup && interceptorGroupId !== null) {
       clearTimeout(requestTimer);
       pendingRequests.delete(msg.id);
-      sendToHost({ id: msg.id, result: { success: false, error: `tab ${tabId} is not in the slop group — use 'slop tab new' to create managed tabs` } });
+      sendToHost({ id: msg.id, result: { success: false, error: `tab ${tabId} is not in the interceptor group — use 'interceptor tab new' to create managed tabs` } });
       return;
     }
   }
@@ -212,39 +212,39 @@ function needsTab(type) {
   ]);
   return !noTabActions.has(type);
 }
-var slopGroupId = null;
-async function ensureSlopGroup() {
-  if (slopGroupId !== null) {
+var interceptorGroupId = null;
+async function ensureInterceptorGroup() {
+  if (interceptorGroupId !== null) {
     try {
-      await chrome.tabGroups.get(slopGroupId);
-      return slopGroupId;
+      await chrome.tabGroups.get(interceptorGroupId);
+      return interceptorGroupId;
     } catch {
-      slopGroupId = null;
+      interceptorGroupId = null;
     }
   }
-  const groups = await chrome.tabGroups.query({ title: "slop" });
+  const groups = await chrome.tabGroups.query({ title: "interceptor" });
   if (groups.length > 0) {
-    slopGroupId = groups[0].id;
-    return slopGroupId;
+    interceptorGroupId = groups[0].id;
+    return interceptorGroupId;
   }
   return -1;
 }
-async function addTabToSlopGroup(tabId) {
-  let groupId = await ensureSlopGroup();
+async function addTabToInterceptorGroup(tabId) {
+  let groupId = await ensureInterceptorGroup();
   if (groupId === -1) {
     groupId = await chrome.tabs.group({ tabIds: tabId });
-    await chrome.tabGroups.update(groupId, { title: "slop", color: "cyan" });
-    slopGroupId = groupId;
+    await chrome.tabGroups.update(groupId, { title: "interceptor", color: "cyan" });
+    interceptorGroupId = groupId;
   } else {
     await chrome.tabs.group({ tabIds: tabId, groupId });
   }
   return groupId;
 }
-async function isTabInSlopGroup(tabId) {
+async function isTabInInterceptorGroup(tabId) {
   const tab = await chrome.tabs.get(tabId);
-  if (slopGroupId === null)
-    await ensureSlopGroup();
-  return slopGroupId !== null && tab.groupId === slopGroupId;
+  if (interceptorGroupId === null)
+    await ensureInterceptorGroup();
+  return interceptorGroupId !== null && tab.groupId === interceptorGroupId;
 }
 var SENSITIVE_ACTIONS = new Set(["evaluate", "cookies_get", "cookies_set", "cookies_delete", "storage_read", "storage_write", "storage_delete"]);
 async function verifyTabUrl(tabId, expectedUrl) {
@@ -479,7 +479,7 @@ async function routeAction(action, tabId) {
     case "tab_create": {
       const newTab = await chrome.tabs.create({ url: action.url || "about:blank" });
       if (newTab.id) {
-        const groupId = await addTabToSlopGroup(newTab.id);
+        const groupId = await addTabToInterceptorGroup(newTab.id);
         return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId } };
       }
       return { success: true, data: { tabId: newTab.id, url: newTab.url } };
@@ -492,7 +492,7 @@ async function routeAction(action, tabId) {
       return { success: true };
     case "tab_list": {
       const tabs = await chrome.tabs.query({});
-      await ensureSlopGroup();
+      await ensureInterceptorGroup();
       const tabData = tabs.map((t) => ({
         id: t.id,
         url: t.url,
@@ -502,7 +502,7 @@ async function routeAction(action, tabId) {
         muted: t.mutedInfo?.muted,
         pinned: t.pinned,
         groupId: t.groupId,
-        managed: slopGroupId !== null && t.groupId === slopGroupId
+        managed: interceptorGroupId !== null && t.groupId === interceptorGroupId
       }));
       return { success: true, data: tabData };
     }
@@ -736,7 +736,7 @@ async function routeAction(action, tabId) {
     case "notification_create": {
       const notifId = await chrome.notifications.create(action.notifId || "", {
         type: "basic",
-        title: action.title || "slop-browser",
+        title: action.title || "interceptor-browser",
         message: action.message || "",
         iconUrl: action.iconUrl || "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
       });
@@ -947,12 +947,12 @@ async function routeAction(action, tabId) {
           try {
             const w = window;
             if (w.trustedTypes) {
-              if (!w.__slop_tt_policy) {
-                w.__slop_tt_policy = w.trustedTypes.createPolicy("slop-eval", {
+              if (!w.__interceptor_tt_policy) {
+                w.__interceptor_tt_policy = w.trustedTypes.createPolicy("interceptor-eval", {
                   createScript: (s) => s
                 });
               }
-              const trusted = w.__slop_tt_policy.createScript(c);
+              const trusted = w.__interceptor_tt_policy.createScript(c);
               const r2 = (0, eval)(trusted);
               return { success: true, data: typeof r2 === "object" && r2 !== null ? JSON.parse(JSON.stringify(r2)) : r2 };
             }
@@ -976,7 +976,7 @@ async function routeAction(action, tabId) {
         return { success: false, error: "click failed at all layers", data: { diagnostics: { layers_tried: ["synthetic", "os_click"], reason: "synthetic produced no DOM change, os_click failed", suggestion: "verify element is interactive and Chrome window is visible" } } };
       }
       if (!contentResult.success && contentResult.error) {
-        contentResult.data = { ...typeof contentResult.data === "object" && contentResult.data ? contentResult.data : {}, diagnostics: { layer_tried: "content_script", reason: contentResult.error, suggestion: action.type === "click" ? "try: slop click --os " + (action.ref || action.index || "") : undefined } };
+        contentResult.data = { ...typeof contentResult.data === "object" && contentResult.data ? contentResult.data : {}, diagnostics: { layer_tried: "content_script", reason: contentResult.error, suggestion: action.type === "click" ? "try: interceptor click --os " + (action.ref || action.index || "") : undefined } };
       }
       return contentResult;
     }
@@ -1107,26 +1107,26 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 chrome.tabs.onRemoved.addListener(async (removedTabId) => {
-  if (slopGroupId === null)
+  if (interceptorGroupId === null)
     return;
   try {
-    const tabs = await chrome.tabs.query({ groupId: slopGroupId });
+    const tabs = await chrome.tabs.query({ groupId: interceptorGroupId });
     if (tabs.length === 0) {
-      slopGroupId = null;
+      interceptorGroupId = null;
     }
   } catch {
-    slopGroupId = null;
+    interceptorGroupId = null;
   }
 });
 chrome.runtime.onInstalled.addListener(() => {
   connectToHost();
   connectWsChannel();
-  ensureSlopGroup();
+  ensureInterceptorGroup();
 });
 chrome.runtime.onStartup.addListener(() => {
   connectToHost();
   connectWsChannel();
-  ensureSlopGroup();
+  ensureInterceptorGroup();
 });
 connectToHost();
 connectWsChannel();

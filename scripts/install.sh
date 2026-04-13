@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DAEMON_PATH="$ROOT/daemon/slop-daemon"
-TEMPLATE_PATH="$ROOT/daemon/com.slopbrowser.host.json"
+DAEMON_PATH="$ROOT/daemon/interceptor-daemon"
+TEMPLATE_PATH="$ROOT/daemon/com.interceptor.host.json"
 GENERATED_DIR="$ROOT/daemon/.generated"
-GENERATED_MANIFEST="$GENERATED_DIR/com.slopbrowser.host.json"
+GENERATED_MANIFEST="$GENERATED_DIR/com.interceptor.host.json"
 
 mkdir -p "$GENERATED_DIR"
 python3 - <<'PY' "$TEMPLATE_PATH" "$GENERATED_MANIFEST" "$DAEMON_PATH"
@@ -21,9 +21,9 @@ for dir in \
   "$HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"
 do
   mkdir -p "$dir"
-  ln -sfn "$GENERATED_MANIFEST" "$dir/com.slopbrowser.host.json"
+  ln -sfn "$GENERATED_MANIFEST" "$dir/com.interceptor.host.json"
 done
 
 echo "Installed manifest symlinks:"
-echo "  Chrome: $HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.slopbrowser.host.json"
-echo "  Brave:  $HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.slopbrowser.host.json"
+echo "  Chrome: $HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.interceptor.host.json"
+echo "  Brave:  $HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.interceptor.host.json"

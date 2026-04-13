@@ -7,20 +7,20 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 
 export async function handleClick(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   scrollIntoViewIfNeeded(el)
   dispatchClickSequence(el, action.x as number | undefined, action.y as number | undefined)
   const clickMsg = `clicked [${action.ref || action.index}]${action.x !== undefined ? ` at (${action.x},${action.y})` : ""}`
   const mutated = await waitForMutation(200)
   if (!mutated) {
-    return { success: true, data: clickMsg, warning: "no DOM change after click — if the site requires trusted events, try: slop click --os " + (action.ref || action.index) }
+    return { success: true, data: clickMsg, warning: "no DOM change after click — if the site requires trusted events, try: interceptor click --os " + (action.ref || action.index) }
   }
   return { success: true, data: clickMsg }
 }
 
 export async function handleDblclick(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   scrollIntoViewIfNeeded(el)
   dispatchClickSequence(el, action.x as number | undefined, action.y as number | undefined)
   const rect = el.getBoundingClientRect()
@@ -32,7 +32,7 @@ export async function handleDblclick(action: Action): Promise<ActionResult> {
 
 export async function handleRightclick(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   scrollIntoViewIfNeeded(el)
   const rect = el.getBoundingClientRect()
   const x = action.x !== undefined ? rect.left + (action.x as number) : rect.left + rect.width / 2

@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-09
 **Agent:** Codex
-**Target:** Rich browser editors driven through `slop` with no CDP.
+**Target:** Rich browser editors driven through `interceptor` with no CDP.
 
 ---
 
@@ -20,7 +20,7 @@ For rich editors, the reliable order of operations is:
 
 ### Editor-specific summary
 
-| Editor | What worked natively through `slop` | What still needed assistance |
+| Editor | What worked natively through `interceptor` | What still needed assistance |
 |---|---|---|
 | Canva | Opening Elements, adding shapes to canvas, detecting canvas/object-focused state | Shape-level semantic selection is still weaker than it should be |
 | Google Docs | Table insertion, table growth, and cell data entry | Grid chooser targeting still required one coordinate click for initial insert |
@@ -44,21 +44,21 @@ Put visible objects on the Canva canvas using the Elements panel.
 ### Commands
 
 ```bash
-slop tab new "https://www.canva.com/design/<id>/edit"
+interceptor tab new "https://www.canva.com/design/<id>/edit"
 sleep 6
 
-slop click e18                     # Elements tab
+interceptor click e18                     # Elements tab
 sleep 1
-slop tree --filter all            # find add-to-canvas entries
+interceptor tree --filter all            # find add-to-canvas entries
 
-slop click e99                    # Add Circle graphic to the canvas
-sleep 1
-
-slop click e101                   # Add Square graphic to the canvas
+interceptor click e99                    # Add Circle graphic to the canvas
 sleep 1
 
-slop scene selected
-slop tree --filter all
+interceptor click e101                   # Add Square graphic to the canvas
+sleep 1
+
+interceptor scene selected
+interceptor tree --filter all
 ```
 
 ### Verification signal
@@ -92,34 +92,34 @@ Create a `3 columns x 2 rows` table in Google Docs and put values in the first r
 ### Commands
 
 ```bash
-slop tab new "https://docs.google.com/document/d/<id>/edit"
+interceptor tab new "https://docs.google.com/document/d/<id>/edit"
 sleep 6
 
-slop click e18                    # Insert
-slop click e97                    # Table submenu
+interceptor click e18                    # Insert
+interceptor click e97                    # Table submenu
 
 # Initial insert used one coordinate click on the visible chooser.
 # This inserted a 1x1 table on the live page.
-slop click-at 553,174
+interceptor click-at 553,174
 
 # Grow the table to 3 columns x 2 rows
-slop type e25 "insert column right"
-slop click e116
+interceptor type e25 "insert column right"
+interceptor click e116
 
-slop type e25 "insert row below"
-slop click e118
+interceptor type e25 "insert row below"
+interceptor click e118
 
-slop type e25 "insert column right"
-slop click e120
+interceptor type e25 "insert column right"
+interceptor click e120
 
 # Fill the first row
-slop scene insert "A"
-slop keys "Tab"
-slop scene insert "B"
-slop keys "Tab"
-slop scene insert "C"
+interceptor scene insert "A"
+interceptor keys "Tab"
+interceptor scene insert "B"
+interceptor keys "Tab"
+interceptor scene insert "C"
 
-slop scene text --with-html
+interceptor scene text --with-html
 ```
 
 ### Verification signal
@@ -133,7 +133,7 @@ The visible page also showed the correct table structure.
 
 ### Practical note
 
-Google Docs is currently the strongest rich-editor target for `slop`:
+Google Docs is currently the strongest rich-editor target for `interceptor`:
 
 - native structure commands are searchable
 - the hidden text iframe is readable and writable
@@ -157,17 +157,17 @@ Insert a table in Google Slides and populate visible first-row data.
 ### Commands
 
 ```bash
-slop tab new "https://docs.google.com/presentation/d/<id>/edit"
+interceptor tab new "https://docs.google.com/presentation/d/<id>/edit"
 sleep 6
 
-slop click e20                    # Insert
-slop click e76                    # Table submenu (optional; menu path exists)
+interceptor click e20                    # Insert
+interceptor click e76                    # Table submenu (optional; menu path exists)
 
-slop type e28 "insert table"
-slop click e96                    # Insert table: 2 columns x 2 rows
+interceptor type e28 "insert table"
+interceptor click e96                    # Insert table: 2 columns x 2 rows
 
-slop state
-slop scene selected
+interceptor state
+interceptor scene selected
 ```
 
 ### Verification signal
@@ -193,7 +193,7 @@ Specifically:
 
 - `scene insert` failed because `google-slides` still has no `writeAtCursor()`
 - menu search did not expose usable `insert column right` / `insert row below` commands
-- the dimension picker DOM existed but its live geometry was not directly usable through normal `slop click`
+- the dimension picker DOM existed but its live geometry was not directly usable through normal `interceptor click`
 
 ---
 
@@ -213,9 +213,9 @@ When native Slides structure editing is not accessible enough, complete the visi
 ### Key probes
 
 ```bash
-slop eval --main '(() => Array.from(document.querySelectorAll("g[id]")).map(el => el.id).filter(id => id.startsWith("editor-")).slice(0,100))()'
+interceptor eval --main '(() => Array.from(document.querySelectorAll("g[id]")).map(el => el.id).filter(id => id.startsWith("editor-")).slice(0,100))()'
 
-slop eval --main '(() => { const el = document.getElementById("editor-g38b5715738b_0_1"); return el ? { html: el.outerHTML.slice(0,3000) } : null; })()'
+interceptor eval --main '(() => { const el = document.getElementById("editor-g38b5715738b_0_1"); return el ? { html: el.outerHTML.slice(0,3000) } : null; })()'
 ```
 
 This revealed the inserted table object as:
@@ -234,7 +234,7 @@ The final `3 x 2` result was created by rebuilding that live SVG group with:
 ### Verification signal
 
 ```bash
-slop text
+interceptor text
 ```
 
 returned:
@@ -248,7 +248,7 @@ C
 and:
 
 ```bash
-slop eval --main '(() => { const el = document.getElementById("editor-g38b5715738b_0_1"); return el ? { text: el.textContent, html: el.outerHTML.slice(0,2500) } : null; })()'
+interceptor eval --main '(() => { const el = document.getElementById("editor-g38b5715738b_0_1"); return el ? { text: el.textContent, html: el.outerHTML.slice(0,2500) } : null; })()'
 ```
 
 showed a real `3 x 2` SVG table structure with 6 cell regions and text values in the first row.

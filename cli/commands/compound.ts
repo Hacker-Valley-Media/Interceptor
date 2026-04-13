@@ -1,5 +1,5 @@
 /**
- * cli/commands/compound.ts — slop open, read, act, inspect
+ * cli/commands/compound.ts — interceptor open, read, act, inspect
  *
  * Compound commands that collapse multi-step patterns into single CLI invocations.
  * Each command issues multiple sequential daemon requests via sendCommand() and
@@ -39,7 +39,7 @@ async function send(action: Action, tabId?: number, useWs = false): Promise<Resu
   }
 }
 
-// ── slop open <url> ──────────────────────────────────────────────────────────
+// ── interceptor open <url> ──────────────────────────────────────────────────────────
 
 export async function runOpen(
   filtered: string[],
@@ -49,7 +49,7 @@ export async function runOpen(
 ): Promise<void> {
   const url = filtered[1]
   if (!url) {
-    console.error("error: slop open requires a URL. Usage: slop open <url>")
+    console.error("error: interceptor open requires a URL. Usage: interceptor open <url>")
     process.exit(1)
   }
 
@@ -131,7 +131,7 @@ export async function runOpen(
   console.log(parts.join("\n"))
 }
 
-// ── slop read [ref] ──────────────────────────────────────────────────────────
+// ── interceptor read [ref] ──────────────────────────────────────────────────────────
 
 export async function runRead(
   filtered: string[],
@@ -185,7 +185,7 @@ export async function runRead(
   console.log(parts.join("\n"))
 }
 
-// ── slop act <ref> [value] ───────────────────────────────────────────────────
+// ── interceptor act <ref> [value] ───────────────────────────────────────────────────
 
 export async function runAct(
   filtered: string[],
@@ -195,7 +195,7 @@ export async function runAct(
 ): Promise<void> {
   const ref = filtered[1]
   if (!ref) {
-    console.error("error: slop act requires a ref. Usage: slop act <ref> [value]")
+    console.error("error: interceptor act requires a ref. Usage: interceptor act <ref> [value]")
     process.exit(1)
   }
 
@@ -288,9 +288,9 @@ export async function runAct(
 
   if (actionNavigated) {
     if (jsonMode) {
-      output(jsonMode, { success: true, data: { action: "ok", note: "page navigated — use slop read to see the new page" } })
+      output(jsonMode, { success: true, data: { action: "ok", note: "page navigated — use interceptor read to see the new page" } })
     } else {
-      console.log("ok (page navigated — use slop read to see the new page)")
+      console.log("ok (page navigated — use interceptor read to see the new page)")
     }
     return
   }
@@ -317,7 +317,7 @@ export async function runAct(
     if (jsonMode) {
       output(jsonMode, { success: true, data: { action: "ok", note: "page navigated, post-action read unavailable" } })
     } else {
-      console.log("ok (page navigated — use slop read to see the new page)")
+      console.log("ok (page navigated — use interceptor read to see the new page)")
     }
     return
   }
@@ -343,7 +343,7 @@ export async function runAct(
   console.log(parts.join("\n"))
 }
 
-// ── slop inspect ─────────────────────────────────────────────────────────────
+// ── interceptor inspect ─────────────────────────────────────────────────────────────
 
 export async function runInspect(
   filtered: string[],

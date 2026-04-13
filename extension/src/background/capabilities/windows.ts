@@ -1,4 +1,4 @@
-import { addTabToSlopGroup } from "../tab-group"
+import { addTabToInterceptorGroup } from "../tab-group"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -22,7 +22,7 @@ export async function handleWindowActions(
       const firstTab = win.tabs?.[0]
       let groupId: number | undefined
       if (firstTab?.id && !action.incognito) {
-        groupId = await addTabToSlopGroup(firstTab.id)
+        groupId = await addTabToInterceptorGroup(firstTab.id)
       }
       return {
         success: true,

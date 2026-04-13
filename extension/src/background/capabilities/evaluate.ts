@@ -29,21 +29,21 @@ export async function handleEvaluateActions(
         const w = window as any
         let source = c
         if (w.trustedTypes) {
-          if (!w.__slop_tt_policy) {
+          if (!w.__interceptor_tt_policy) {
             try {
-              w.__slop_tt_policy = w.trustedTypes.createPolicy("slop-eval", {
+              w.__interceptor_tt_policy = w.trustedTypes.createPolicy("interceptor-eval", {
                 createScript: (s: string) => s
               })
             } catch {
               try {
-                w.__slop_tt_policy = w.trustedTypes.createPolicy("slop-eval-" + Date.now(), {
+                w.__interceptor_tt_policy = w.trustedTypes.createPolicy("interceptor-eval-" + Date.now(), {
                   createScript: (s: string) => s
                 })
               } catch {}
             }
           }
-          if (w.__slop_tt_policy) {
-            source = w.__slop_tt_policy.createScript(c)
+          if (w.__interceptor_tt_policy) {
+            source = w.__interceptor_tt_policy.createScript(c)
           }
         }
         let r: unknown = (0, eval)(source as string)

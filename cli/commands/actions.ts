@@ -114,7 +114,7 @@ export function parseActionsCommand(filtered: string[]): Action {
     case "click-at": {
       const coords = filtered[1]?.split(",").map(Number)
       if (!coords || coords.length !== 2 || coords.some(isNaN)) {
-        console.error("error: click-at requires X,Y coordinates. Usage: slop click-at 500,300")
+        console.error("error: click-at requires X,Y coordinates. Usage: interceptor click-at 500,300")
         process.exit(1)
       }
       return { type: "click_at", x: coords[0], y: coords[1] }
@@ -123,7 +123,7 @@ export function parseActionsCommand(filtered: string[]): Action {
     case "what-at": {
       const coords = filtered[1]?.split(",").map(Number)
       if (!coords || coords.length !== 2 || coords.some(isNaN)) {
-        console.error("error: what-at requires X,Y coordinates. Usage: slop what-at 500,300")
+        console.error("error: what-at requires X,Y coordinates. Usage: interceptor what-at 500,300")
         process.exit(1)
       }
       return { type: "what_at", x: coords[0], y: coords[1] }

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "slop-browser",
+      "name": "interceptor-browser",
       "devDependencies": {
         "@types/bun": "latest",
         "@types/chrome": "latest",

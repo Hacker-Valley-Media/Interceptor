@@ -1,8 +1,8 @@
 /**
- * cli/commands/override.ts — slop override <urlPattern> key=value [...]
+ * cli/commands/override.ts — interceptor override <urlPattern> key=value [...]
  *
  * Clean CLI surface for passive request overrides.
- * Replaces the need for: slop raw '{"type":"net_override_set",...}'
+ * Replaces the need for: interceptor raw '{"type":"net_override_set",...}'
  */
 
 import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
@@ -35,7 +35,7 @@ export async function runOverride(
   const sub = filtered[1]
 
   if (!sub) {
-    console.error("error: slop override requires a URL pattern or 'clear'. Usage: slop override \"*pattern*\" key=value")
+    console.error("error: interceptor override requires a URL pattern or 'clear'. Usage: interceptor override \"*pattern*\" key=value")
     process.exit(1)
   }
 
@@ -69,7 +69,7 @@ export async function runOverride(
   }
 
   if (Object.keys(queryAddOrReplace).length === 0) {
-    console.error("error: slop override requires at least one key=value pair. Usage: slop override \"*pattern*\" count=5")
+    console.error("error: interceptor override requires at least one key=value pair. Usage: interceptor override \"*pattern*\" count=5")
     process.exit(1)
   }
 

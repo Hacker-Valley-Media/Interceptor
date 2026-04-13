@@ -6,7 +6,7 @@ type CapturedHeaderEntry = { url: string; method: string; headers: Record<string
 const capturedHeaders: CapturedHeaderEntry[] = []
 const HEADER_CAP = 200
 
-document.addEventListener("__slop_net", ((e: CustomEvent) => {
+document.addEventListener("__interceptor_net", ((e: CustomEvent) => {
   try {
     const entry: PassiveCapturedEntry = { ...e.detail, tabUrl: location.href }
     if (netBuffer.length >= NET_BUFFER_CAP) netBuffer.shift()
@@ -14,7 +14,7 @@ document.addEventListener("__slop_net", ((e: CustomEvent) => {
   } catch {}
 }) as EventListener)
 
-document.addEventListener("__slop_headers", ((e: CustomEvent) => {
+document.addEventListener("__interceptor_headers", ((e: CustomEvent) => {
   try {
     const entry: CapturedHeaderEntry = e.detail
     if (capturedHeaders.length >= HEADER_CAP) capturedHeaders.shift()
@@ -30,7 +30,7 @@ const activeStreams = new Map<string, SseStreamEntry>()
 const completedStreams: CompletedSseEntry[] = []
 const COMPLETED_SSE_CAP = 50
 
-document.addEventListener("__slop_sse", ((e: CustomEvent) => {
+document.addEventListener("__interceptor_sse", ((e: CustomEvent) => {
   try {
     const d = e.detail as { url: string; method?: string; status?: number; chunk: string; seq: number; timestamp: number }
     if (!d || !d.url) return
@@ -46,7 +46,7 @@ document.addEventListener("__slop_sse", ((e: CustomEvent) => {
   } catch {}
 }) as EventListener)
 
-document.addEventListener("__slop_sse_done", ((e: CustomEvent) => {
+document.addEventListener("__interceptor_sse_done", ((e: CustomEvent) => {
   try {
     const d = e.detail as { url: string; method?: string; status?: number; totalChunks: number; totalBytes: number; duration: number }
     if (!d || !d.url) return
@@ -70,7 +70,7 @@ document.addEventListener("__slop_sse_done", ((e: CustomEvent) => {
   } catch {}
 }) as EventListener)
 
-document.addEventListener("__slop_sse_close", ((e: CustomEvent) => {
+document.addEventListener("__interceptor_sse_close", ((e: CustomEvent) => {
   try {
     const d = e.detail as { url: string }
     if (d?.url) {
@@ -128,7 +128,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === "set_net_overrides") {
     try {
-      document.dispatchEvent(new CustomEvent("__slop_set_overrides", { detail: msg.rules || [] }))
+      document.dispatchEvent(new CustomEvent("__interceptor_set_overrides", { detail: msg.rules || [] }))
       sendResponse({ success: true })
     } catch (err) {
       sendResponse({ success: false, error: (err as Error).message })
@@ -137,7 +137,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === "clear_net_overrides") {
     try {
-      document.dispatchEvent(new CustomEvent("__slop_set_overrides", { detail: [] }))
+      document.dispatchEvent(new CustomEvent("__interceptor_set_overrides", { detail: [] }))
       sendResponse({ success: true })
     } catch (err) {
       sendResponse({ success: false, error: (err as Error).message })

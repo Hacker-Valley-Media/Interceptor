@@ -1,11 +1,11 @@
-if ((window as any).__slop_net_installed) {
+if ((window as any).__interceptor_net_installed) {
   // already patched — skip
 } else {
-  (window as any).__slop_net_installed = true
+  (window as any).__interceptor_net_installed = true
 
   if ((window as any).trustedTypes?.createPolicy) {
     try {
-      (window as any).trustedTypes.createPolicy("slop-net", {
+      (window as any).trustedTypes.createPolicy("interceptor-net", {
         createHTML: (input: string) => input,
         createScriptURL: (input: string) => input,
         createScript: (input: string) => input,
@@ -14,9 +14,9 @@ if ((window as any).__slop_net_installed) {
   }
 
   type OverrideRule = { urlPattern: string; queryAddOrReplace?: Record<string, string | number | boolean>; queryRemove?: string[] }
-  const overrideRules: OverrideRule[] = (window as any).__slop_override_rules = []
+  const overrideRules: OverrideRule[] = (window as any).__interceptor_override_rules = []
 
-  document.addEventListener("__slop_set_overrides", ((e: CustomEvent) => {
+  document.addEventListener("__interceptor_set_overrides", ((e: CustomEvent) => {
     overrideRules.length = 0
     if (Array.isArray(e.detail)) {
       for (const rule of e.detail) overrideRules.push(rule)
@@ -90,7 +90,7 @@ if ((window as any).__slop_net_installed) {
     return originalFetch.call(this, input, init).then((response) => {
       if (reqHeaders) {
         try {
-          document.dispatchEvent(new CustomEvent("__slop_headers", {
+          document.dispatchEvent(new CustomEvent("__interceptor_headers", {
             detail: { url, method, headers: reqHeaders, type: "fetch", timestamp: Date.now() }
           }))
         } catch {}
@@ -118,10 +118,10 @@ if ((window as any).__slop_net_installed) {
                   if (done) {
                     try {
                       const fullBody = chunks.join("")
-                      document.dispatchEvent(new CustomEvent("__slop_net", {
+                      document.dispatchEvent(new CustomEvent("__interceptor_net", {
                         detail: { url, method, status: response.status, body: fullBody, type: "fetch", timestamp: Date.now(), truncated }
                       }))
-                      document.dispatchEvent(new CustomEvent("__slop_sse_done", {
+                      document.dispatchEvent(new CustomEvent("__interceptor_sse_done", {
                         detail: { url, method, status: response.status, totalChunks: chunkSeq, totalBytes, duration: Date.now() - streamStart }
                       }))
                     } catch {}
@@ -139,7 +139,7 @@ if ((window as any).__slop_net_installed) {
                         truncated = true
                       }
                     }
-                    document.dispatchEvent(new CustomEvent("__slop_sse", {
+                    document.dispatchEvent(new CustomEvent("__interceptor_sse", {
                       detail: { url, method, status: response.status, chunk: text, seq: chunkSeq++, timestamp: Date.now() }
                     }))
                   } catch {}
@@ -148,7 +148,7 @@ if ((window as any).__slop_net_installed) {
                   pump()
                 }).catch((err) => {
                   try {
-                    document.dispatchEvent(new CustomEvent("__slop_sse_error", {
+                    document.dispatchEvent(new CustomEvent("__interceptor_sse_error", {
                       detail: { url, error: err?.message || String(err) }
                     }))
                   } catch {}
@@ -175,7 +175,7 @@ if ((window as any).__slop_net_installed) {
       try {
         const clone = response.clone()
         clone.text().then((body) => {
-          document.dispatchEvent(new CustomEvent("__slop_net", {
+          document.dispatchEvent(new CustomEvent("__interceptor_net", {
             detail: {
               url,
               method,
@@ -198,42 +198,42 @@ if ((window as any).__slop_net_installed) {
 
   const XHR = XMLHttpRequest.prototype
 
-  interface XHRWithSlop extends XMLHttpRequest {
-    _slop_url?: string
-    _slop_method?: string
-    _slop_headers?: Record<string, string>
+  interface XHRWithInterceptor extends XMLHttpRequest {
+    _interceptor_url?: string
+    _interceptor_method?: string
+    _interceptor_headers?: Record<string, string>
   }
 
   const origOpen = XHR.open
   const origSend = XHR.send
   const origSetHeader = XHR.setRequestHeader
 
-  XHR.open = function (this: XHRWithSlop, method: string, url: string | URL, ...rest: any[]): void {
+  XHR.open = function (this: XHRWithInterceptor, method: string, url: string | URL, ...rest: any[]): void {
     const rawUrl = url.toString()
     const overriddenUrl = applyOverrides(rawUrl)
-    this._slop_url = overriddenUrl
-    this._slop_method = method
-    this._slop_headers = {}
+    this._interceptor_url = overriddenUrl
+    this._interceptor_method = method
+    this._interceptor_headers = {}
     if (overriddenUrl !== rawUrl) {
       return origOpen.apply(this, [method, overriddenUrl, ...rest] as any)
     }
     return origOpen.apply(this, arguments as any)
   }
 
-  XHR.setRequestHeader = function (this: XHRWithSlop, header: string, value: string): void {
-    if (this._slop_headers) this._slop_headers[header] = value
+  XHR.setRequestHeader = function (this: XHRWithInterceptor, header: string, value: string): void {
+    if (this._interceptor_headers) this._interceptor_headers[header] = value
     return origSetHeader.apply(this, arguments as any)
   }
 
-  XHR.send = function (this: XHRWithSlop, body?: Document | XMLHttpRequestBodyInit | null): void {
-    const xhrUrl = this._slop_url
-    const xhrMethod = this._slop_method || "GET"
-    const xhrHeaders = this._slop_headers
+  XHR.send = function (this: XHRWithInterceptor, body?: Document | XMLHttpRequestBodyInit | null): void {
+    const xhrUrl = this._interceptor_url
+    const xhrMethod = this._interceptor_method || "GET"
+    const xhrHeaders = this._interceptor_headers
 
-    this.addEventListener("load", function (this: XHRWithSlop) {
+    this.addEventListener("load", function (this: XHRWithInterceptor) {
       try {
         const responseText = this.responseText
-        document.dispatchEvent(new CustomEvent("__slop_net", {
+        document.dispatchEvent(new CustomEvent("__interceptor_net", {
           detail: {
             url: xhrUrl,
             method: xhrMethod,
@@ -247,7 +247,7 @@ if ((window as any).__slop_net_installed) {
 
       if (xhrHeaders && Object.keys(xhrHeaders).length > 0) {
         try {
-          document.dispatchEvent(new CustomEvent("__slop_headers", {
+          document.dispatchEvent(new CustomEvent("__interceptor_headers", {
             detail: { url: xhrUrl, method: xhrMethod, headers: xhrHeaders, type: "xhr", timestamp: Date.now() }
           }))
         } catch {}
@@ -259,12 +259,12 @@ if ((window as any).__slop_net_installed) {
 
   const OriginalEventSource = (window as any).EventSource as typeof EventSource | undefined
   if (OriginalEventSource) {
-    const SlopEventSource = function (this: EventSource, url: string | URL, init?: EventSourceInit) {
+    const InterceptorEventSource = function (this: EventSource, url: string | URL, init?: EventSourceInit) {
       const resolvedUrl = typeof url === "string" ? url : url.toString()
       const real = new OriginalEventSource(url, init) as EventSource
 
       try {
-        document.dispatchEvent(new CustomEvent("__slop_sse_open", {
+        document.dispatchEvent(new CustomEvent("__interceptor_sse_open", {
           detail: { url: resolvedUrl, withCredentials: init?.withCredentials || false, source: "eventsource", timestamp: Date.now() }
         }))
       } catch {}
@@ -275,7 +275,7 @@ if ((window as any).__slop_net_installed) {
         if (type === "message" && listener) {
           const wrapped = function (this: EventSource, ev: MessageEvent) {
             try {
-              document.dispatchEvent(new CustomEvent("__slop_sse", {
+              document.dispatchEvent(new CustomEvent("__interceptor_sse", {
                 detail: { url: resolvedUrl, chunk: ev.data, seq: -1, event: ev.type, lastEventId: ev.lastEventId, source: "eventsource", timestamp: Date.now() }
               }))
             } catch {}
@@ -299,7 +299,7 @@ if ((window as any).__slop_net_installed) {
             if (origOnMessage.set) {
               origOnMessage.set.call(real, fn ? function (this: EventSource, ev: MessageEvent) {
                 try {
-                  document.dispatchEvent(new CustomEvent("__slop_sse", {
+                  document.dispatchEvent(new CustomEvent("__interceptor_sse", {
                     detail: { url: resolvedUrl, chunk: ev.data, seq: -1, event: "message", lastEventId: ev.lastEventId, source: "eventsource", timestamp: Date.now() }
                   }))
                 } catch {}
@@ -314,7 +314,7 @@ if ((window as any).__slop_net_installed) {
       const origClose = real.close.bind(real)
       real.close = function () {
         try {
-          document.dispatchEvent(new CustomEvent("__slop_sse_close", {
+          document.dispatchEvent(new CustomEvent("__interceptor_sse_close", {
             detail: { url: resolvedUrl, source: "eventsource", timestamp: Date.now() }
           }))
         } catch {}
@@ -323,7 +323,7 @@ if ((window as any).__slop_net_installed) {
 
       real.addEventListener("error", () => {
         try {
-          document.dispatchEvent(new CustomEvent("__slop_sse_error", {
+          document.dispatchEvent(new CustomEvent("__interceptor_sse_error", {
             detail: { url: resolvedUrl, error: "EventSource error", source: "eventsource" }
           }))
         } catch {}
@@ -332,12 +332,12 @@ if ((window as any).__slop_net_installed) {
       return real as unknown as EventSource
     } as unknown as typeof EventSource
 
-      SlopEventSource.prototype = OriginalEventSource.prototype
-      Object.defineProperties(SlopEventSource, {
+      InterceptorEventSource.prototype = OriginalEventSource.prototype
+      Object.defineProperties(InterceptorEventSource, {
         CONNECTING: { value: OriginalEventSource.CONNECTING },
         OPEN: { value: OriginalEventSource.OPEN },
         CLOSED: { value: OriginalEventSource.CLOSED }
       })
-      ;(window as any).EventSource = SlopEventSource
+      ;(window as any).EventSource = InterceptorEventSource
   }
 }

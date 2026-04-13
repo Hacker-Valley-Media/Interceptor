@@ -1,4 +1,4 @@
-import { addTabToSlopGroup, ensureSlopGroup, slopGroupId } from "../tab-group"
+import { addTabToInterceptorGroup, ensureInterceptorGroup, interceptorGroupId } from "../tab-group"
 import { waitForTabLoad } from "../content-bridge"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
@@ -11,7 +11,7 @@ export async function handleTabActions(
     case "tab_create": {
       const newTab = await chrome.tabs.create({ url: (action.url as string) || "about:blank" })
       if (newTab.id) {
-        const groupId = await addTabToSlopGroup(newTab.id)
+        const groupId = await addTabToInterceptorGroup(newTab.id)
         return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId } }
       }
       return { success: true, data: { tabId: newTab.id, url: newTab.url } }
@@ -27,12 +27,12 @@ export async function handleTabActions(
 
     case "tab_list": {
       const tabs = await chrome.tabs.query({})
-      await ensureSlopGroup()
+      await ensureInterceptorGroup()
       const tabData = tabs.map(t => ({
         id: t.id, url: t.url, title: t.title, active: t.active,
         windowId: t.windowId, muted: t.mutedInfo?.muted, pinned: t.pinned,
         groupId: t.groupId,
-        managed: slopGroupId !== null && t.groupId === slopGroupId
+        managed: interceptorGroupId !== null && t.groupId === interceptorGroupId
       }))
       return { success: true, data: tabData }
     }

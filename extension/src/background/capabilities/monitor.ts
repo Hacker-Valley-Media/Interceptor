@@ -1,5 +1,5 @@
 import { sendToHost } from "../transport"
-import { ensureSlopGroup, isTabInSlopGroup, slopGroupId } from "../tab-group"
+import { ensureInterceptorGroup, isTabInInterceptorGroup, interceptorGroupId } from "../tab-group"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -54,14 +54,14 @@ async function ensureContentScript(tabId: number): Promise<{ connected: boolean;
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] })
     } catch (injectErr) {
-      return { connected: false, error: `content script could not be re-injected on tab ${tabId} — try 'slop reload': ${(injectErr as Error).message}` }
+      return { connected: false, error: `content script could not be re-injected on tab ${tabId} — try 'interceptor reload': ${(injectErr as Error).message}` }
     }
     await new Promise(r => setTimeout(r, 200))
     try {
       await chrome.tabs.sendMessage(tabId, { type: "monitor_ping" })
       return { connected: true }
     } catch (retryErr) {
-      return { connected: false, error: `content script re-injected but still not responding on tab ${tabId} — try 'slop reload': ${(retryErr as Error).message}` }
+      return { connected: false, error: `content script re-injected but still not responding on tab ${tabId} — try 'interceptor reload': ${(retryErr as Error).message}` }
     }
   }
 }
@@ -216,7 +216,7 @@ function monitorRuntimeMessageListener(msg: any, sender: chrome.runtime.MessageS
 }
 
 async function resolveTabForMonitor(): Promise<{ tabId?: number; error?: string }> {
-  const groupId = await ensureSlopGroup()
+  const groupId = await ensureInterceptorGroup()
   if (groupId !== -1) {
     const tabs = await chrome.tabs.query({ groupId })
     if (tabs.length > 0) {
@@ -226,10 +226,10 @@ async function resolveTabForMonitor(): Promise<{ tabId?: number; error?: string 
   }
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (activeTab?.id) {
-    const inGroup = await isTabInSlopGroup(activeTab.id)
+    const inGroup = await isTabInInterceptorGroup(activeTab.id)
     if (inGroup) return { tabId: activeTab.id }
   }
-  return { error: "no slop-managed tab found — use 'slop tab new' or pass --tab" }
+  return { error: "no interceptor-managed tab found — use 'interceptor tab new' or pass --tab" }
 }
 
 function resolveSessionWithoutTab(): { tabId: number; sessionId: string } | undefined {
@@ -249,7 +249,7 @@ export async function handleMonitorActions(
       if (!resolvedTabId) {
         const resolved = await resolveTabForMonitor()
         if (resolved.error || !resolved.tabId) {
-          return { success: false, error: resolved.error || "no slop-managed tab found" }
+          return { success: false, error: resolved.error || "no interceptor-managed tab found" }
         }
         resolvedTabId = resolved.tabId
       }

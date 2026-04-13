@@ -4,7 +4,7 @@
 
 import { IPC_PORT, IS_WIN, SOCKET_PATH, WS_PORT } from "../shared/platform"
 
-export const SLOP_TIMEOUT_MS = parseInt(process.env.SLOP_TIMEOUT || "15000")
+export const INTERCEPTOR_TIMEOUT_MS = parseInt(process.env.INTERCEPTOR_TIMEOUT || "15000")
 
 export type Action = { type: string; [key: string]: unknown }
 export type DaemonResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
@@ -26,9 +26,9 @@ export function sendCommand(action: Action, tabId?: number): Promise<DaemonRespo
       if (!resolved) {
         resolved = true
         if (socketRef) try { socketRef.end() } catch {}
-        reject(new Error(`timeout: no response for '${action.type}' after ${SLOP_TIMEOUT_MS / 1000}s. Ensure Chrome/Brave is open with the slop-browser extension loaded.`))
+        reject(new Error(`timeout: no response for '${action.type}' after ${INTERCEPTOR_TIMEOUT_MS / 1000}s. Ensure Chrome/Brave is open with the Interceptor extension loaded.`))
       }
-    }, SLOP_TIMEOUT_MS)
+    }, INTERCEPTOR_TIMEOUT_MS)
 
     const socketHandlers: Bun.SocketHandler<undefined> = {
       open(socket: Bun.Socket<undefined>) {
@@ -65,7 +65,7 @@ export function sendCommand(action: Action, tabId?: number): Promise<DaemonRespo
       },
       connectError(_socket: Bun.Socket<undefined>, _err: Error) {
         clearTimeout(timer)
-        reject(new Error("daemon not running. Open Chrome with the slop-browser extension loaded."))
+        reject(new Error("daemon not running. Open Chrome with the Interceptor extension loaded."))
       },
       error(_socket: Bun.Socket<undefined>, err: Error) {
         clearTimeout(timer)
@@ -88,8 +88,8 @@ export function sendCommandWs(action: Action, tabId?: number): Promise<DaemonRes
     process.stderr.write(`[${shortId}] →ws ${action.type}\n`)
 
     const timer = setTimeout(() => {
-      reject(new Error(`timeout: no response for '${action.type}' after ${SLOP_TIMEOUT_MS / 1000}s via WebSocket.`))
-    }, SLOP_TIMEOUT_MS)
+      reject(new Error(`timeout: no response for '${action.type}' after ${INTERCEPTOR_TIMEOUT_MS / 1000}s via WebSocket.`))
+    }, INTERCEPTOR_TIMEOUT_MS)
 
     const ws = new WebSocket(`ws://localhost:${WS_PORT}`)
     ws.onopen = () => {

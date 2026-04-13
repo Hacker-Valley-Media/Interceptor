@@ -5,7 +5,7 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 
 export async function handleDrag(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   scrollIntoViewIfNeeded(el)
   const dragRect = el.getBoundingClientRect()
   const fromX = dragRect.left + (action.fromX as number)

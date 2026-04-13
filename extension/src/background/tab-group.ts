@@ -1,38 +1,38 @@
-export let slopGroupId: number | null = null
+export let interceptorGroupId: number | null = null
 
-export async function ensureSlopGroup(): Promise<number> {
-  if (slopGroupId !== null) {
+export async function ensureInterceptorGroup(): Promise<number> {
+  if (interceptorGroupId !== null) {
     try {
-      await chrome.tabGroups.get(slopGroupId)
-      return slopGroupId
+      await chrome.tabGroups.get(interceptorGroupId)
+      return interceptorGroupId
     } catch {
-      slopGroupId = null
+      interceptorGroupId = null
     }
   }
-  const groups = await chrome.tabGroups.query({ title: "slop" })
+  const groups = await chrome.tabGroups.query({ title: "interceptor" })
   if (groups.length > 0) {
-    slopGroupId = groups[0].id
-    return slopGroupId
+    interceptorGroupId = groups[0].id
+    return interceptorGroupId
   }
   return -1
 }
 
-export async function addTabToSlopGroup(tabId: number): Promise<number> {
-  let groupId = await ensureSlopGroup()
+export async function addTabToInterceptorGroup(tabId: number): Promise<number> {
+  let groupId = await ensureInterceptorGroup()
   if (groupId === -1) {
     groupId = await chrome.tabs.group({ tabIds: tabId })
-    await chrome.tabGroups.update(groupId, { title: "slop", color: "cyan" })
-    slopGroupId = groupId
+    await chrome.tabGroups.update(groupId, { title: "interceptor", color: "cyan" })
+    interceptorGroupId = groupId
   } else {
     await chrome.tabs.group({ tabIds: tabId, groupId })
   }
   return groupId
 }
 
-export async function isTabInSlopGroup(tabId: number): Promise<boolean> {
+export async function isTabInInterceptorGroup(tabId: number): Promise<boolean> {
   const tab = await chrome.tabs.get(tabId)
-  if (slopGroupId === null) await ensureSlopGroup()
-  return slopGroupId !== null && tab.groupId === slopGroupId
+  if (interceptorGroupId === null) await ensureInterceptorGroup()
+  return interceptorGroupId !== null && tab.groupId === interceptorGroupId
 }
 
 export const SENSITIVE_ACTIONS = new Set([
@@ -51,12 +51,12 @@ export async function verifyTabUrl(tabId: number, expectedUrl?: string): Promise
 
 export function registerTabGroupListeners(): void {
   chrome.tabs.onRemoved.addListener(async (_removedTabId) => {
-    if (slopGroupId === null) return
+    if (interceptorGroupId === null) return
     try {
-      const tabs = await chrome.tabs.query({ groupId: slopGroupId })
-      if (tabs.length === 0) slopGroupId = null
+      const tabs = await chrome.tabs.query({ groupId: interceptorGroupId })
+      if (tabs.length === 0) interceptorGroupId = null
     } catch {
-      slopGroupId = null
+      interceptorGroupId = null
     }
   })
 }

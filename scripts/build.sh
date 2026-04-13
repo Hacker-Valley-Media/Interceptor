@@ -26,23 +26,23 @@ build_extension() {
 
 build_host() {
   echo "Building CLI (host)..."
-  bun build cli/index.ts --compile --outfile=dist/slop
+  bun build cli/index.ts --compile --outfile=dist/interceptor
   echo "Building daemon (host)..."
-  bun build daemon/index.ts --compile --outfile=daemon/slop-daemon
+  bun build daemon/index.ts --compile --outfile=daemon/interceptor-daemon
 }
 
 build_macos() {
   echo "Building CLI (macOS arm64)..."
-  bun build cli/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/slop
+  bun build cli/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/interceptor
   echo "Building daemon (macOS arm64)..."
-  bun build daemon/index.ts --compile --target=bun-darwin-arm64 --outfile=daemon/slop-daemon
+  bun build daemon/index.ts --compile --target=bun-darwin-arm64 --outfile=daemon/interceptor-daemon
 }
 
 build_windows() {
   echo "Building CLI (Windows x64)..."
-  bun build cli/index.ts --compile --target=bun-windows-x64 --outfile=dist/slop.exe
+  bun build cli/index.ts --compile --target=bun-windows-x64 --outfile=dist/interceptor.exe
   echo "Building daemon (Windows x64)..."
-  bun build daemon/index.ts --compile --target=bun-windows-x64 --outfile=daemon/slop-daemon.exe
+  bun build daemon/index.ts --compile --target=bun-windows-x64 --outfile=daemon/interceptor-daemon.exe
 }
 
 build_extension
@@ -65,16 +65,16 @@ fi
 echo "Build complete."
 echo "  Extension: extension/dist/"
 if [[ "$BUILD_ALL" == "1" ]]; then
-  echo "  Host CLI:   dist/slop"
-  echo "  Host Daemon: daemon/slop-daemon"
-  echo "  macOS CLI:  dist/slop"
-  echo "  macOS Daemon: daemon/slop-daemon"
-  echo "  Windows CLI: dist/slop.exe"
-  echo "  Windows Daemon: daemon/slop-daemon.exe"
+  echo "  Host CLI:   dist/interceptor"
+  echo "  Host Daemon: daemon/interceptor-daemon"
+  echo "  macOS CLI:  dist/interceptor"
+  echo "  macOS Daemon: daemon/interceptor-daemon"
+  echo "  Windows CLI: dist/interceptor.exe"
+  echo "  Windows Daemon: daemon/interceptor-daemon.exe"
 elif [[ "$TARGET" == "windows" ]]; then
-  echo "  CLI:       dist/slop.exe"
-  echo "  Daemon:    daemon/slop-daemon.exe"
+  echo "  CLI:       dist/interceptor.exe"
+  echo "  Daemon:    daemon/interceptor-daemon.exe"
 else
-  echo "  CLI:       dist/slop"
-  echo "  Daemon:    daemon/slop-daemon"
+  echo "  CLI:       dist/interceptor"
+  echo "  Daemon:    daemon/interceptor-daemon"
 fi

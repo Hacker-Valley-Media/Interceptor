@@ -1,5 +1,5 @@
 /**
- * cli/commands/monitor.ts — slop monitor start/stop/status/pause/resume/tail/list/export
+ * cli/commands/monitor.ts — interceptor monitor start/stop/status/pause/resume/tail/list/export
  *
  * Subcommands that hit the daemon return an Action object.
  * Subcommands that read EVENTS_PATH directly (tail, list, export) return null
@@ -258,8 +258,8 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
   lines.push("")
 
   if (start?.url) {
-    lines.push(`slop tab new "${escapeArg(start.url)}"`)
-    lines.push(`slop wait-stable`)
+    lines.push(`interceptor tab new "${escapeArg(start.url)}"`)
+    lines.push(`interceptor wait-stable`)
   }
 
   // If no real user events exist, include synthetic clicks automatically
@@ -291,7 +291,7 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
     if (k === "mon_start" || k === "mon_stop" || k === "mon_pause" || k === "mon_resume") continue
     if (k === "scroll" || k === "focus" || k === "blur") continue
     if (ev.tr === false && !emitSynthetic) {
-      lines.push(`# skipped synthetic ${k} (slop-injected)`)
+      lines.push(`# skipped synthetic ${k} (interceptor-injected)`)
       continue
     }
     switch (k) {
@@ -302,11 +302,11 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
         const name = ev.n || ""
         if (role && name) {
           const cmd = k === "click" ? "click" : k === "dblclick" ? "dblclick" : "rightclick"
-          lines.push(`slop ${cmd} "${escapeArg(role)}:${escapeArg(name)}"`)
+          lines.push(`interceptor ${cmd} "${escapeArg(role)}:${escapeArg(name)}"`)
         } else if (ev.ref) {
           const cmd = k === "click" ? "click" : k === "dblclick" ? "dblclick" : "rightclick"
           lines.push(`# ref ${ev.ref} (no accessible name) — falling back to ref id, may be stale`)
-          lines.push(`slop ${cmd} ${ev.ref}`)
+          lines.push(`interceptor ${cmd} ${ev.ref}`)
         } else {
           lines.push(`# ${k} with no ref or name — skipped`)
         }
@@ -322,15 +322,15 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
         }
         const value = (ev.v as string) || ""
         if (role && name) {
-          lines.push(`slop type "${escapeArg(role)}:${escapeArg(name)}" "${escapeArg(value)}"`)
+          lines.push(`interceptor type "${escapeArg(role)}:${escapeArg(name)}" "${escapeArg(value)}"`)
         } else if (ev.ref) {
           lines.push(`# ref ${ev.ref} (no accessible name)`)
-          lines.push(`slop type ${ev.ref} "${escapeArg(value)}"`)
+          lines.push(`interceptor type ${ev.ref} "${escapeArg(value)}"`)
         }
         break
       }
       case "key":
-        if (ev.kc) lines.push(`slop keys "${escapeArg(ev.kc)}"`)
+        if (ev.kc) lines.push(`interceptor keys "${escapeArg(ev.kc)}"`)
         break
       case "submit":
         lines.push(`# form submit on ${ev.ref || "?"} (usually triggered by Enter or click — covered above)`)
@@ -343,7 +343,7 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
         if (ev.cause !== undefined) {
           const u = ev.u ? shortUrl(ev.u) : ""
           lines.push(`#   correlated ${k} ${ev.m || "GET"} ${u} ${ev.st || 0}  cause:#${ev.cause}`)
-          if (u) lines.push(`# slop net log --filter "${escapeArg(u)}" --limit 1`)
+          if (u) lines.push(`# interceptor net log --filter "${escapeArg(u)}" --limit 1`)
         } else {
           lines.push(`# autonomous ${k} ${ev.m || "GET"} ${ev.u || ""} (polling/timer)`)
         }
@@ -352,8 +352,8 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
       case "nav": {
         if (ev.typ === "hard" || ev.typ === "reload") {
           if (ev.u) {
-            lines.push(`slop navigate "${escapeArg(ev.u)}"`)
-            lines.push(`slop wait-stable`)
+            lines.push(`interceptor navigate "${escapeArg(ev.u)}"`)
+            lines.push(`interceptor wait-stable`)
           }
         } else {
           lines.push(`# nav (${ev.typ}) -> ${ev.u || ""}  (caused by previous click)`)
@@ -365,7 +365,7 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
     // Insert wait-stable after this action if a mutation follows before the next action
     const nextIdx = nextActionIdx(i)
     if (nextMutBetween(i, nextIdx)) {
-      lines.push(`slop wait-stable`)
+      lines.push(`interceptor wait-stable`)
     }
   }
 
@@ -373,11 +373,11 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
 }
 
 function withBodies(planText: string, sid: string): string {
-  // For v1, --with-bodies emits the same plan but expands every commented `slop net log` line
-  // into an actual `slop net log` invocation. The agent runs the plan and the net log entries
+  // For v1, --with-bodies emits the same plan but expands every commented `interceptor net log` line
+  // into an actual `interceptor net log` invocation. The agent runs the plan and the net log entries
   // surface inline. Bodies themselves live in the live tab's net-buffer (cap 500); if rotated,
-  // the agent will see (no entries) — same as the existing slop net log behavior.
-  return planText.replace(/^# slop net log /gm, "slop net log ")
+  // the agent will see (no entries) — same as the existing interceptor net log behavior.
+  return planText.replace(/^# interceptor net log /gm, "interceptor net log ")
 }
 
 export async function parseMonitorCommand(filtered: string[], jsonMode = false): Promise<Action | null> {
@@ -407,7 +407,7 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
       const sidFilter = flagValue(filtered, "--session")
       const raw = flagPresent(filtered, "--raw")
       if (!existsSync(EVENTS_PATH)) {
-        console.log("(no events file yet — start a session first with: slop monitor start)")
+        console.log("(no events file yet — start a session first with: interceptor monitor start)")
         return null
       }
       const proc = Bun.spawn(["tail", "-f", "-n", "0", EVENTS_PATH], { stdout: "pipe", stderr: "inherit" })
@@ -463,7 +463,7 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
     case "export": {
       const sid = filtered[2]
       if (!sid || sid.startsWith("--")) {
-        console.error("error: slop monitor export requires a sessionId. Use 'slop monitor list' to find one.")
+        console.error("error: interceptor monitor export requires a sessionId. Use 'interceptor monitor list' to find one.")
         process.exit(1)
       }
       const json = flagPresent(filtered, "--json")
@@ -491,19 +491,19 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
   }
 }
 
-const MONITOR_HELP = `slop monitor — record user sessions for agent replay
+const MONITOR_HELP = `interceptor monitor — record user sessions for agent replay
 
 Usage:
-  slop monitor start [--instruction "<text>"]
-  slop monitor stop
-  slop monitor status
-  slop monitor pause
-  slop monitor resume
-  slop monitor tail [--session <sid>] [--raw]
-  slop monitor list
-  slop monitor export <sessionId> [--json|--plan] [--with-bodies]
+  interceptor monitor start [--instruction "<text>"]
+  interceptor monitor stop
+  interceptor monitor status
+  interceptor monitor pause
+  interceptor monitor resume
+  interceptor monitor tail [--session <sid>] [--raw]
+  interceptor monitor list
+  interceptor monitor export <sessionId> [--json|--plan] [--with-bodies]
 
-start    Begin recording on the active slop-group tab.
+start    Begin recording on the active interceptor-group tab.
 stop     End the active session and emit a summary.
 status   Show active sessions and counts.
 pause    Pause emission temporarily (does not unhook listeners).
@@ -511,5 +511,5 @@ resume   Resume emission.
 tail     Live tail of recorded events. Pretty by default; --raw for JSONL.
 list     List all sessions historically present in the event log.
 export   Render a session as text, JSON (--json), or replay plan (--plan).
-         --with-bodies turns commented 'slop net log' cues into live invocations.
+         --with-bodies turns commented 'interceptor net log' cues into live invocations.
 `
