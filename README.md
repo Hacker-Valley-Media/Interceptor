@@ -495,3 +495,9 @@ interceptor canvas diff url1.png url2.png     # Pixel diff between images
 - **Don't interact with tabs outside the interceptor group** without `--any-tab`.
 - **Don't use CDP commands** (`interceptor network on`) unless you have a specific reason. Passive capture (`interceptor net log`) sees everything without the debugger infobanner.
 - **Don't start the daemon manually** — it auto-starts on first command.
+
+## Credits
+
+- [Ron Eddings](https://github.com/ronaldeddings/) created Interceptor.
+- [Pedram Amini](https://github.com/pedramamini/) provided early feedback on the project. Pedram's platform, Maestro, was used as part of developing this project.
+- [Daniel Miessler](https://github.com/danielmiessler/) was building an AI community, and through that community I learned about his tool PAI and got support from fellow AI tinkerers and engineers to finish the initial build of this project.
