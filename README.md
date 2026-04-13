@@ -499,5 +499,5 @@ interceptor canvas diff url1.png url2.png     # Pixel diff between images
 ## Credits
 
 - [Ron Eddings](https://github.com/ronaldeddings/) created Interceptor.
-- [Pedram Amini](https://github.com/pedramamini/) provided early feedback on the project. Pedram's platform, Maestro, was used as part of developing this project.
-- [Daniel Miessler](https://github.com/danielmiessler/) was building an AI community, and through that community I learned about his tool PAI and got support from fellow AI tinkerers and engineers to finish the initial build of this project.
+- [Pedram Amini](https://github.com/pedramamini/) provided early feedback on the project. Pedram's platform, [Maestro](https://runmaestro.ai), was used as part of developing this project.
+- [Daniel Miessler](https://github.com/danielmiessler/) for graciously coming up with the name `Interceptor` and EPIC project, [PAI](https://github.com/danielmiessler/PAI))
