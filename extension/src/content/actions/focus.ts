@@ -7,7 +7,7 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 
 export async function handleFocus(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   el.focus()
   return { success: true }
 }

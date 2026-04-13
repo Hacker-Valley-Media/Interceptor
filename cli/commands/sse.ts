@@ -33,12 +33,12 @@ export function parseSseCommand(filtered: string[]): Action | null {
   }
 }
 
-const SSE_HELP = `slop sse — inspect SSE (Server-Sent Events) streams
+const SSE_HELP = `interceptor sse — inspect SSE (Server-Sent Events) streams
 
 Usage:
-  slop sse log [--filter <pattern>] [--limit N]   Show completed SSE streams
-  slop sse streams                                  List active SSE streams
-  slop sse tail [--filter <pattern>]                Live tail of SSE stream chunks
+  interceptor sse log [--filter <pattern>] [--limit N]   Show completed SSE streams
+  interceptor sse streams                                  List active SSE streams
+  interceptor sse tail [--filter <pattern>]                Live tail of SSE stream chunks
 
 log       Show completed SSE streams from the buffer (up to 50 most recent).
 streams   List currently active SSE streams with URL, chunk count, byte count.

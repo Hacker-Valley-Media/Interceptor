@@ -1,9 +1,9 @@
 {
-  "name": "slop-browser",
+  "name": "interceptor",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "slop": "./dist/slop"
+    "interceptor": "./dist/interceptor"
   },
   "scripts": {
     "build": "./scripts/build.sh",

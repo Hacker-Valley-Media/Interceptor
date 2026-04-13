@@ -97,7 +97,7 @@ describe("monitor sparse format + renderer + plan generator", () => {
     expect(out).toContain("ended after")
   })
 
-  test("buildPlan emits valid slop replay script", () => {
+  test("buildPlan emits valid interceptor replay script", () => {
     writeFixture([
       { event: "mon_start", sid: "alpha", s: 0, t: 1000, tid: 1, url: "https://example.com/" },
       { event: "click", sid: "alpha", s: 1, t: 1100, ref: "e1", r: "button", n: "Search", tr: true },
@@ -108,12 +108,12 @@ describe("monitor sparse format + renderer + plan generator", () => {
       { event: "mon_stop", sid: "alpha", s: 6, t: 1500, evt: 6, mut: 1, net: 1, dur: 500 },
     ])
     const plan = buildPlan("alpha")
-    expect(plan).toContain('slop tab new "https://example.com/"')
-    expect(plan).toContain("slop wait-stable")
-    expect(plan).toContain('slop click "button:Search"')
-    expect(plan).toContain('slop type "textbox:Query" "bun docs"')
-    expect(plan).toContain('slop keys "Enter"')
-    expect(plan).toContain("slop net log")
+    expect(plan).toContain('interceptor tab new "https://example.com/"')
+    expect(plan).toContain("interceptor wait-stable")
+    expect(plan).toContain('interceptor click "button:Search"')
+    expect(plan).toContain('interceptor type "textbox:Query" "bun docs"')
+    expect(plan).toContain('interceptor keys "Enter"')
+    expect(plan).toContain("interceptor net log")
     // Plan must end with comments referencing the cued fetch
     expect(plan).toMatch(/api\/search/)
   })
@@ -151,10 +151,10 @@ describe("monitor sparse format + renderer + plan generator", () => {
       { event: "mon_stop", sid: "alpha", s: 5, t: 1500, evt: 5, mut: 0, net: 0, dur: 500 },
     ])
     const plan = buildPlan("alpha")
-    // history nav must NOT emit slop navigate (already implicit in click)
-    expect(plan).not.toContain('slop navigate "https://example.com/next"')
-    // hard nav SHOULD emit slop navigate
-    expect(plan).toContain('slop navigate "https://other.example.com/"')
+    // history nav must NOT emit interceptor navigate (already implicit in click)
+    expect(plan).not.toContain('interceptor navigate "https://example.com/next"')
+    // hard nav SHOULD emit interceptor navigate
+    expect(plan).toContain('interceptor navigate "https://other.example.com/"')
   })
 
   test("renderEvent omits empty fields and right-aligns time", () => {

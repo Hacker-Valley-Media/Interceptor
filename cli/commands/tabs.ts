@@ -56,7 +56,7 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
       return { type: "frames_list" }
 
     case "session": {
-      const sessionPath = "/tmp/slop-browser-session.pid"
+      const sessionPath = "/tmp/interceptor-session.pid"
       if (filtered[1] === "start") {
         writeFileSync(sessionPath, `${process.pid}\n${Date.now()}`)
         console.log(`session started (pid: ${process.pid})`)
@@ -68,7 +68,7 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
         console.log("session ended")
         return null
       }
-      console.error("error: usage: slop session start|end")
+      console.error("error: usage: interceptor session start|end")
       process.exit(1)
     }
 

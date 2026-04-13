@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "slop-browser",
+  "name": "Interceptor",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
   "description": "Browser bridge",

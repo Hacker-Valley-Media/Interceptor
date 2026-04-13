@@ -1,6 +1,6 @@
 {
-  "name": "com.slopbrowser.host",
-  "description": "slop-browser daemon bridge",
+  "name": "com.interceptor.host",
+  "description": "Interceptor daemon bridge",
   "path": "__DAEMON_PATH__",
   "type": "stdio",
   "allowed_origins": [

@@ -10,7 +10,7 @@ export function parseBatchCommand(filtered: string[]): Action {
   switch (cmd) {
     case "batch": {
       if (!filtered[1]) {
-        console.error("error: batch requires a JSON array of actions. Usage: slop batch '[{\"type\":\"click\",\"ref\":\"e5\"}, ...]'")
+        console.error("error: batch requires a JSON array of actions. Usage: interceptor batch '[{\"type\":\"click\",\"ref\":\"e5\"}, ...]'")
         process.exit(1)
       }
       try {

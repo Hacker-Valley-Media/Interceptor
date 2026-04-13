@@ -1,5 +1,5 @@
 import { sendToHost, activeTransport, connectToHost, connectWsChannel } from "./transport"
-import { isTabInSlopGroup, slopGroupId, ensureSlopGroup, SENSITIVE_ACTIONS, verifyTabUrl } from "./tab-group"
+import { isTabInInterceptorGroup, interceptorGroupId, ensureInterceptorGroup, SENSITIVE_ACTIONS, verifyTabUrl } from "./tab-group"
 import { routeAction } from "./router"
 
 export const MESSAGE_QUEUE_CAP = 50
@@ -109,15 +109,15 @@ export async function handleDaemonMessage(msg: {
   if (tabId) chrome.storage.session.set({ activeTabId: tabId })
 
   if (tabId && needsTab(action.type) && !action.anyTab) {
-    const inGroup = await isTabInSlopGroup(tabId)
-    if (!inGroup && slopGroupId !== null) {
+    const inGroup = await isTabInInterceptorGroup(tabId)
+    if (!inGroup && interceptorGroupId !== null) {
       clearTimeout(requestTimer)
       pendingRequests.delete(msg.id)
       sendToHost({
         id: msg.id,
         result: {
           success: false,
-          error: `tab ${tabId} is not in the slop group — use 'slop tab new' to create managed tabs`
+          error: `tab ${tabId} is not in the interceptor group — use 'interceptor tab new' to create managed tabs`
         }
       }, respondViaWs)
       return

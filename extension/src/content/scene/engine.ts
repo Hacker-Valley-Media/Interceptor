@@ -288,7 +288,7 @@ export async function handleCanvasAction(action: Action): Promise<ContentResult>
           data: { id, clicked: true, at: { x: cx, y: cy }, method: "synthetic" },
           warning: changed || action.escalate === false
             ? undefined
-            : "no DOM change after scene click — try: slop scene click --os " + id
+            : "no DOM change after scene click — try: interceptor scene click --os " + id
         }
       }
       case "scene_selected":

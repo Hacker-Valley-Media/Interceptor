@@ -20,7 +20,7 @@ export async function handleSelectionGet(_action: Action): Promise<ActionResult>
 
 export async function handleSelectionSet(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLInputElement | HTMLTextAreaElement | null
-  if (!el) return { success: false, error: `stale element [${action.index}] — run slop state to refresh` }
+  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
   el.setSelectionRange(action.start as number, action.end as number)
   return { success: true }
 }

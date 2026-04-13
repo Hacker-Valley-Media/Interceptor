@@ -8,7 +8,7 @@ export async function handleNotificationActions(
     case "notification_create": {
       const notifId = await chrome.notifications.create(action.notifId as string || "", {
         type: "basic",
-        title: (action.title as string) || "slop-browser",
+        title: (action.title as string) || "Interceptor",
         message: (action.message as string) || "",
         iconUrl: (action.iconUrl as string) ||
           "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="

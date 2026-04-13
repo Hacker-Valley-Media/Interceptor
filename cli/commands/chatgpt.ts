@@ -1,5 +1,5 @@
 /**
- * cli/commands/chatgpt.ts — slop chatgpt: drive ChatGPT as an agentic system
+ * cli/commands/chatgpt.ts — interceptor chatgpt: drive ChatGPT as an agentic system
  *
  * Subcommands that need the daemon return an Action object.
  * Orchestration (chatgpt_send, etc.) is handled in cli/index.ts after dispatch.
@@ -22,7 +22,7 @@ export async function parseChatgptCommand(filtered: string[], jsonMode = false):
     case "send": {
       const prompt = filtered.slice(2).filter(a => !a.startsWith("--")).join(" ")
       if (!prompt) {
-        console.error('error: slop chatgpt send requires a prompt. Example: slop chatgpt send "What is 2+2?"')
+        console.error('error: interceptor chatgpt send requires a prompt. Example: interceptor chatgpt send "What is 2+2?"')
         process.exit(1)
       }
       const stream = flagPresent(filtered, "--stream")
@@ -37,7 +37,7 @@ export async function parseChatgptCommand(filtered: string[], jsonMode = false):
     case "switch": {
       const id = filtered[2]
       if (!id) {
-        console.error("error: slop chatgpt switch requires a conversation ID.")
+        console.error("error: interceptor chatgpt switch requires a conversation ID.")
         process.exit(1)
       }
       return { type: "chatgpt_switch", conversationId: id }
@@ -54,17 +54,17 @@ export async function parseChatgptCommand(filtered: string[], jsonMode = false):
   }
 }
 
-const CHATGPT_HELP = `slop chatgpt — drive ChatGPT as an agentic system
+const CHATGPT_HELP = `interceptor chatgpt — drive ChatGPT as an agentic system
 
 Usage:
-  slop chatgpt send "<prompt>"           Send a message and read the response
+  interceptor chatgpt send "<prompt>"           Send a message and read the response
     --stream                             Print tokens as they stream
-  slop chatgpt read                      Read current conversation from DOM
-  slop chatgpt status                    Streaming state, model, conversation ID
-  slop chatgpt conversations             List recent conversations
-  slop chatgpt switch <id>               Navigate to a conversation
-  slop chatgpt model [name]              Read or change the active model
-  slop chatgpt stop                      Stop current generation
+  interceptor chatgpt read                      Read current conversation from DOM
+  interceptor chatgpt status                    Streaming state, model, conversation ID
+  interceptor chatgpt conversations             List recent conversations
+  interceptor chatgpt switch <id>               Navigate to a conversation
+  interceptor chatgpt model [name]              Read or change the active model
+  interceptor chatgpt stop                      Stop current generation
 
 send      Types the prompt into ChatGPT, presses Enter, reads the SSE response.
           With --stream, prints tokens as they arrive.

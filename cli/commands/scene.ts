@@ -1,7 +1,7 @@
 /**
  * cli/commands/scene.ts — scene-graph access for DOM-rendered editors.
  *
- * User-facing command: `slop scene <sub>`
+ * User-facing command: `interceptor scene <sub>`
  * Internal action types: `scene_*` (to avoid collision with existing HTML Canvas actions)
  */
 
@@ -45,7 +45,7 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
 
     case "click": {
       const id = filtered[2]
-      if (!id) { console.error("error: slop scene click requires an element id"); process.exit(1) }
+      if (!id) { console.error("error: interceptor scene click requires an element id"); process.exit(1) }
       const useOs = flagPresent(filtered, "--os")
       const a: Action = { type: "scene_click", id }
       if (useOs) a.os = true
@@ -54,20 +54,20 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
 
     case "dblclick": {
       const id = filtered[2]
-      if (!id) { console.error("error: slop scene dblclick requires an element id"); process.exit(1) }
+      if (!id) { console.error("error: interceptor scene dblclick requires an element id"); process.exit(1) }
       return withProfile({ type: "scene_dblclick", id }, filtered)
     }
 
     case "select": {
       const id = filtered[2]
-      if (!id) { console.error("error: slop scene select requires an element id"); process.exit(1) }
+      if (!id) { console.error("error: interceptor scene select requires an element id"); process.exit(1) }
       return withProfile({ type: "scene_select", id }, filtered)
     }
 
     case "hit": {
       const coords = filtered[2]?.split(",").map(Number)
       if (!coords || coords.length !== 2 || coords.some(isNaN)) {
-        console.error("error: slop scene hit requires X,Y coordinates. Usage: slop scene hit 500,300")
+        console.error("error: interceptor scene hit requires X,Y coordinates. Usage: interceptor scene hit 500,300")
         process.exit(1)
       }
       return withProfile({ type: "scene_hit", x: coords[0], y: coords[1] }, filtered)
@@ -83,7 +83,7 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
 
     case "insert": {
       const text = filtered.slice(2).filter((a) => !a.startsWith("--") && a !== flagValue(filtered, "--profile")).join(" ")
-      if (!text) { console.error("error: slop scene insert requires text"); process.exit(1) }
+      if (!text) { console.error("error: interceptor scene insert requires text"); process.exit(1) }
       return withProfile({ type: "scene_insert", text }, filtered)
     }
 
@@ -94,7 +94,7 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
       }
       const coords = coordArg.split(",").map(Number)
       if (coords.length !== 2 || coords.some(isNaN)) {
-        console.error("error: slop scene cursor requires X,Y coordinates or no args")
+        console.error("error: interceptor scene cursor requires X,Y coordinates or no args")
         process.exit(1)
       }
       return withProfile({ type: "scene_cursor_to", x: coords[0], y: coords[1] }, filtered)
@@ -108,7 +108,7 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
 
     case "render": {
       const id = filtered[2]
-      if (!id) { console.error("error: slop scene render requires an id"); process.exit(1) }
+      if (!id) { console.error("error: interceptor scene render requires an id"); process.exit(1) }
       const save = flagPresent(filtered, "--save")
       const a: Action = { type: "scene_render", id }
       if (save) a.save = true
@@ -121,12 +121,12 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
       if (action === "current" || action === "at") return withProfile({ type: "scene_slide_current" }, filtered)
       if (action === "goto" || action === "switch") {
         const idx = parseInt(filtered[3] || "")
-        if (isNaN(idx)) { console.error("error: slop scene slide goto requires an index"); process.exit(1) }
+        if (isNaN(idx)) { console.error("error: interceptor scene slide goto requires an index"); process.exit(1) }
         return withProfile({ type: "scene_slide_goto", index: idx }, filtered)
       }
       if (action === "next") return withProfile({ type: "scene_slide_goto", index: -1, relative: "next" }, filtered)
       if (action === "prev") return withProfile({ type: "scene_slide_goto", index: -1, relative: "prev" }, filtered)
-      // numeric shorthand: `slop scene slide 5`
+      // numeric shorthand: `interceptor scene slide 5`
       const idx = parseInt(action)
       if (!isNaN(idx)) return withProfile({ type: "scene_slide_goto", index: idx }, filtered)
       console.error(`error: unknown slide subcommand '${action}'. Try: list, current, goto <n>, next, prev, <n>.`)
@@ -143,38 +143,38 @@ export function parseSceneCommand(filtered: string[], jsonMode = false): Action 
     }
 
     default:
-      console.error(`error: unknown canvas subcommand '${sub}'. Run 'slop scene help' for usage.`)
+      console.error(`error: unknown canvas subcommand '${sub}'. Run 'interceptor scene help' for usage.`)
       process.exit(1)
   }
   return null
 }
 
-const CANVAS_HELP = `slop scene — adaptive scene access for rich editors
+const CANVAS_HELP = `interceptor scene — adaptive scene access for rich editors
 
 Usage:
-  slop scene profile [--verbose]        Show the detected strategy/profile and capabilities
-  slop scene list [--type <t>]          Enumerate scene objects on the current editor surface
-  slop scene click <id>                 Click a scene object by scene id
-  slop scene dblclick <id>              Double-click a scene object (enters text edit on Canva/Slides)
-  slop scene select <id>                Click + verify selection changed
-  slop scene selected                   Read the current selection label
-  slop scene hit <x>,<y>                Identify what scene object is at viewport X,Y
-  slop scene zoom                       Read current editor zoom factor (1.0 = 100%)
+  interceptor scene profile [--verbose]        Show the detected strategy/profile and capabilities
+  interceptor scene list [--type <t>]          Enumerate scene objects on the current editor surface
+  interceptor scene click <id>                 Click a scene object by scene id
+  interceptor scene dblclick <id>              Double-click a scene object (enters text edit on Canva/Slides)
+  interceptor scene select <id>                Click + verify selection changed
+  interceptor scene selected                   Read the current selection label
+  interceptor scene hit <x>,<y>                Identify what scene object is at viewport X,Y
+  interceptor scene zoom                       Read current editor zoom factor (1.0 = 100%)
 
-  slop scene text [--with-html]         Read editor text when the active surface supports it
-  slop scene insert "<text>"            Insert text into the focused editor-owned writable surface
-  slop scene cursor                     Read cursor state
-  slop scene cursor <x>,<y>             Move cursor by clicking at viewport X,Y
+  interceptor scene text [--with-html]         Read editor text when the active surface supports it
+  interceptor scene insert "<text>"            Insert text into the focused editor-owned writable surface
+  interceptor scene cursor                     Read cursor state
+  interceptor scene cursor <x>,<y>             Move cursor by clicking at viewport X,Y
 
-  slop scene slide list                 List all slides (Google Slides)
-  slop scene slide current              Show current slide
-  slop scene slide goto <n>             Navigate to slide <n>
-  slop scene slide next                 Navigate to next slide
-  slop scene slide prev                 Navigate to previous slide
-  slop scene slide <n>                  Shorthand for goto <n>
-  slop scene notes [--slide <n>]        Read speaker notes (current slide or specific)
+  interceptor scene slide list                 List all slides (Google Slides)
+  interceptor scene slide current              Show current slide
+  interceptor scene slide goto <n>             Navigate to slide <n>
+  interceptor scene slide next                 Navigate to next slide
+  interceptor scene slide prev                 Navigate to previous slide
+  interceptor scene slide <n>                  Shorthand for goto <n>
+  interceptor scene notes [--slide <n>]        Read speaker notes (current slide or specific)
 
-  slop scene render <id> [--save]       Render a scene object as PNG data URL (Docs pages, Slides thumbnails)
+  interceptor scene render <id> [--save]       Render a scene object as PNG data URL (Docs pages, Slides thumbnails)
 
 Flags:
   --profile <name>                       Force a profile/strategy (google-docs | google-slides | canva | generic)

@@ -1,5 +1,5 @@
 import { handleDaemonMessage, drainMessageQueue, pendingRequests } from "./message-dispatch"
-import { ensureSlopGroup } from "./tab-group"
+import { ensureInterceptorGroup } from "./tab-group"
 
 type ActiveTransport = "none" | "native" | "websocket"
 
@@ -44,7 +44,7 @@ export function connectToHost(): void {
   if (nativePort || isConnecting) return
   isConnecting = true
 
-  const port = chrome.runtime.connectNative("com.slopbrowser.host")
+  const port = chrome.runtime.connectNative("com.interceptor.host")
 
   const handshakeTimer = setTimeout(() => {
     console.error("native host handshake timeout (10s)")

@@ -456,7 +456,7 @@ function cacheSnapshot() {
 }
 function computeSnapshotDiff() {
   if (lastSnapshot.length === 0) {
-    return { success: false, error: "no previous snapshot — run 'slop tree' first" };
+    return { success: false, error: "no previous snapshot — run 'interceptor tree' first" };
   }
   const oldMap = new Map(lastSnapshot.map((e) => [e.refId, e]));
   const current = [];
@@ -521,20 +521,20 @@ async function executeAction(action) {
       case "click": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         scrollIntoViewIfNeeded(el);
         dispatchClickSequence(el, action.x, action.y);
         const clickMsg = `clicked [${action.ref || action.index}]${action.x !== undefined ? ` at (${action.x},${action.y})` : ""}`;
         const mutated = await waitForMutation(200);
         if (!mutated) {
-          return { success: true, data: clickMsg, warning: "no DOM change after click — if the site requires trusted events, try: slop click --os " + (action.ref || action.index) };
+          return { success: true, data: clickMsg, warning: "no DOM change after click — if the site requires trusted events, try: interceptor click --os " + (action.ref || action.index) };
         }
         return { success: true, data: clickMsg };
       }
       case "dblclick": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         scrollIntoViewIfNeeded(el);
         dispatchClickSequence(el, action.x, action.y);
         const rect = el.getBoundingClientRect();
@@ -546,7 +546,7 @@ async function executeAction(action) {
       case "rightclick": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         scrollIntoViewIfNeeded(el);
         const rect = el.getBoundingClientRect();
         const x = action.x !== undefined ? rect.left + action.x : rect.left + rect.width / 2;
@@ -557,7 +557,7 @@ async function executeAction(action) {
       case "drag": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         scrollIntoViewIfNeeded(el);
         const dragRect = el.getBoundingClientRect();
         const fromX = dragRect.left + action.fromX;
@@ -607,7 +607,7 @@ async function executeAction(action) {
       case "input_text": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         el.focus();
         const text = action.text;
         const tag = el.tagName;
@@ -659,7 +659,7 @@ async function executeAction(action) {
       case "select_option": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         el.value = action.value;
         el.dispatchEvent(new Event("change", { bubbles: true }));
         return { success: true };
@@ -667,7 +667,7 @@ async function executeAction(action) {
       case "check": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         const target = action.checked !== undefined ? !!action.checked : !el.checked;
         if (el.checked !== target) {
           el.checked = target;
@@ -719,7 +719,7 @@ async function executeAction(action) {
       case "scroll_to": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         el.scrollIntoView({ block: "center", behavior: "instant" });
         return { success: true };
       }
@@ -742,7 +742,7 @@ async function executeAction(action) {
         if (action.index !== undefined) {
           const el = resolveElement(action.index, action.ref);
           if (!el)
-            return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+            return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
           return { success: true, data: (el.textContent || "").trim() };
         }
         return { success: true, data: document.body.innerText.slice(0, 1e4) };
@@ -751,7 +751,7 @@ async function executeAction(action) {
         if (action.index !== undefined) {
           const el = resolveElement(action.index, action.ref);
           if (!el)
-            return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+            return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
           return { success: true, data: el.outerHTML.slice(0, 1e4) };
         }
         return { success: true, data: document.documentElement.outerHTML.slice(0, 50000) };
@@ -759,7 +759,7 @@ async function executeAction(action) {
       case "focus": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         el.focus();
         return { success: true };
       }
@@ -770,7 +770,7 @@ async function executeAction(action) {
       case "hover": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         const hoverFromX = action.fromX;
         const hoverFromY = action.fromY;
         if (hoverFromX !== undefined && hoverFromY !== undefined) {
@@ -946,7 +946,7 @@ async function executeAction(action) {
       case "selection_set": {
         const el = resolveElement(action.index, action.ref);
         if (!el)
-          return { success: false, error: `stale element [${action.index}] — run slop state to refresh` };
+          return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
         el.setSelectionRange(action.start, action.end);
         return { success: true };
       }

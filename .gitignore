@@ -1,13 +1,13 @@
 node_modules/
 dist/
 extension/dist/
-daemon/slop-daemon
+daemon/interceptor-daemon
 daemon/*.exe
 daemon/.generated/
 *.log
 /tmp/
 .DS_Store
-slop-screenshot-*.jpg
-slop-screenshot-*.png
+interceptor-screenshot-*.jpg
+interceptor-screenshot-*.png
 prd/
 scripts/auto-improve/

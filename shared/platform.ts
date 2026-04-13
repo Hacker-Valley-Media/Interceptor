@@ -17,12 +17,12 @@ export function resolvePlatformConfig(platform: PlatformName = process.platform,
   const isWin = platform === "win32"
   const temp = isWin ? (tempOverride || "C:\\Temp") : "/tmp"
   const sep = isWin ? "\\" : "/"
-  const socketPath = `${temp}${sep}slop-browser.sock`
-  const ipcPort = parseInt(process.env.SLOP_IPC_PORT || "19221")
-  const wsPort = parseInt(process.env.SLOP_WS_PORT || "19222")
-  const pidPath = `${temp}${sep}slop-browser.pid`
-  const logPath = `${temp}${sep}slop-browser.log`
-  const eventsPath = `${temp}${sep}slop-browser-events.jsonl`
+  const socketPath = `${temp}${sep}interceptor.sock`
+  const ipcPort = parseInt(process.env.INTERCEPTOR_IPC_PORT || "19221")
+  const wsPort = parseInt(process.env.INTERCEPTOR_WS_PORT || "19222")
+  const pidPath = `${temp}${sep}interceptor.pid`
+  const logPath = `${temp}${sep}interceptor.log`
+  const eventsPath = `${temp}${sep}interceptor-events.jsonl`
   const transportLabel = isWin ? `tcp:127.0.0.1:${ipcPort}` : `unix:${socketPath}`
   return { isWin, temp, sep, socketPath, ipcPort, wsPort, pidPath, logPath, eventsPath, transportLabel }
 }
