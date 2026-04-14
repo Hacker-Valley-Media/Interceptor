@@ -1,0 +1,11 @@
+{
+  "defaultRepeats": 1,
+  "publishedRepeats": 5,
+  "timeoutSeconds": 180,
+  "randomizeOrder": true,
+  "freshStatePerRun": true,
+  "sameWorkstationRequired": true,
+  "sameBrowserRequired": true,
+  "sameNetworkRequired": true,
+  "suitesReportedSeparately": true
+}

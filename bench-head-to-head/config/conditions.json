@@ -1,0 +1,48 @@
+{
+  "conditions": {
+    "interceptor": {
+      "id": "interceptor",
+      "name": "interceptor-browser",
+      "tool": "interceptor",
+      "toolCommand": "interceptor",
+      "agentsMd": "# interceptor Browser Tool\n\nYou have the `interceptor` CLI for browser automation. Use it for ALL browser work.\n\n## Read a page (1 command)\ninterceptor open <url>              # Opens URL, waits for load, returns tree + text\n\n## Read current page (1 command)\ninterceptor read                     # Returns tree + text for active tab\n\n## Interact (1 command)\ninterceptor act <ref>                # Click element, returns updated tree + diff\ninterceptor act <ref> \"value\"        # Type into element, returns updated tree\ninterceptor act <ref> --os           # Trusted click (for isTrusted gates)\n\n## Investigate network (1 command)\ninterceptor inspect                  # Tree + text + network log + headers\n\n## Find elements\ninterceptor find \"text\"              # Find elements by visible text\ninterceptor find \"text\" --role button  # Filter by ARIA role\n\n## Advanced\ninterceptor net log                  # Network traffic captured by page\ninterceptor scene profile            # Check for rich editor (Canva/Docs/Slides)\ninterceptor batch '[...]'            # Multiple actions in one round-trip\n\n## Rules\n- Do NOT call interceptor status, interceptor tabs, or interceptor tab switch — tab targeting is automatic.\n- Do NOT use interceptor wait <ms> or sleep — page load waiting is built into interceptor open and interceptor act.\n- Do NOT read README, SKILL.md, or interceptor help — this prompt has everything you need.\n- Do NOT use curl, wget, python requests, or direct API fetches.\n- Use interceptor open instead of interceptor tab new + sleep + interceptor tree + interceptor text.\n- Use interceptor act instead of interceptor click + interceptor wait-stable + interceptor tree.\n- Prefer interceptor find over interceptor tree when looking for a specific element.\n- Screenshots are allowed ONLY when the task explicitly requires them.\n\n## Recovery rules\n- If interceptor open + interceptor find gives you the answer, respond immediately. Do NOT keep exploring.\n- If the first approach doesn't work after 2 attempts, try interceptor eval --main with a targeted JS query.\n- Never use more than 8 commands total. If you haven't found the answer by command 8, give your best answer with what you have.\n- Use interceptor override (not interceptor network override or interceptor raw) for request interception.\n- Use interceptor monitor start/stop/export --plan for recording. Synthetic clicks ARE included in replay plans.\n",
+      "daemon": "auto",
+      "healthCommand": "interceptor status",
+      "commandPolicy": {
+        "requireAnyPrefix": ["interceptor"],
+        "forbidAnyPrefix": ["chrome-devtools-axi", "curl", "wget", "python", "python3"]
+      },
+      "preflight": {
+        "commands": [
+          "interceptor status",
+          "interceptor tab new https://example.com",
+          "sleep 3",
+          "interceptor tree",
+          "interceptor tab close"
+        ]
+      }
+    },
+    "axi": {
+      "id": "axi",
+      "name": "chrome-devtools-axi",
+      "tool": "chrome-devtools-axi",
+      "toolCommand": "chrome-devtools-axi",
+      "agentsMd": "# Tools\n\nYou have the `chrome-devtools-axi` CLI installed for browser automation. Use it for all browser work in this run. Do NOT use curl, wget, python requests, or direct API fetches outside the browser. Use `chrome-devtools-axi` commands only unless the benchmark task explicitly allows another command.\n",
+      "daemon": "explicit",
+      "daemonStart": "chrome-devtools-axi start",
+      "daemonStop": "chrome-devtools-axi stop",
+      "healthCommand": "chrome-devtools-axi pages",
+      "commandPolicy": {
+        "requireAnyPrefix": ["chrome-devtools-axi"],
+        "forbidAnyPrefix": ["interceptor", "curl", "wget", "python", "python3"]
+      },
+      "preflight": {
+        "commands": [
+          "chrome-devtools-axi pages",
+          "chrome-devtools-axi open https://example.com",
+          "chrome-devtools-axi pages"
+        ]
+      }
+    }
+  }
+}

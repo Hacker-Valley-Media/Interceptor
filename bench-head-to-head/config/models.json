@@ -1,0 +1,24 @@
+{
+  "agent": {
+    "provider": "codex",
+    "model": "gpt-5.4",
+    "reasoningEffort": "high",
+    "sandbox": "danger-full-access",
+    "approvalPolicy": "never",
+    "outputSchema": "schemas/agent-final.schema.json",
+    "lockMode": "explicit_config"
+  },
+  "judge": {
+    "provider": "codex",
+    "model": "gpt-5.4",
+    "reasoningEffort": "high",
+    "sandbox": "read-only",
+    "approvalPolicy": "never",
+    "outputSchema": "schemas/judge.schema.json",
+    "lockMode": "explicit_config"
+  },
+  "costModel": {
+    "enabled": false,
+    "reason": "No verified local pricing source for gpt-5.4 was available during implementation; benchmark reports token usage and leaves total_cost_usd null unless configured later."
+  }
+}

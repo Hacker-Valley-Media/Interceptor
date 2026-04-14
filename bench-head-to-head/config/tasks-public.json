@@ -1,0 +1,115 @@
+{
+  "suite": "public_parity",
+  "tasks": [
+    {
+      "id": "P1",
+      "name": "Static Heading Read",
+      "category": "single_step",
+      "kind": "public",
+      "prompt": "Navigate to https://example.com and report the main heading of the page exactly.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["Example Domain"]
+      }
+    },
+    {
+      "id": "P2",
+      "name": "Wikipedia Fact Lookup",
+      "category": "single_step",
+      "kind": "public",
+      "prompt": "Navigate to https://en.wikipedia.org/wiki/Moon and report the Moon's average orbital speed from the infobox.",
+      "validator": {
+        "type": "text_any_of_in_answer",
+        "expected": ["1.022 km/s", "2,286 mph"]
+      }
+    },
+    {
+      "id": "P3",
+      "name": "GitHub Repo Metadata",
+      "category": "single_step",
+      "kind": "public",
+      "prompt": "Navigate to https://github.com/torvalds/linux and report the repository's approximate star count, primary language, and license.",
+      "judgeHint": "Language should be C and the answer must include a star count and a license value pulled from the page.",
+      "validator": {
+        "type": "requires_judge"
+      }
+    },
+    {
+      "id": "P4",
+      "name": "Wikipedia Table Read",
+      "category": "single_step",
+      "kind": "public",
+      "prompt": "Navigate to https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population and report the top 3 countries by population.",
+      "validator": {
+        "type": "text_all_of_in_answer",
+        "expected": ["India", "China", "United States"]
+      }
+    },
+    {
+      "id": "P5",
+      "name": "Link Follow Extract",
+      "category": "multi_step",
+      "kind": "public",
+      "prompt": "Navigate to https://en.wikipedia.org/wiki/Ada_Lovelace, follow the link to Charles Babbage, and report his birth date.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["26 December 1791"]
+      }
+    },
+    {
+      "id": "P6",
+      "name": "Repo File Navigate",
+      "category": "multi_step",
+      "kind": "public",
+      "prompt": "Navigate to https://github.com/torvalds/linux, open the root Makefile, and report the VERSION and PATCHLEVEL values defined near the top.",
+      "judgeHint": "The answer must include both VERSION and PATCHLEVEL values and should clearly indicate they came from the Makefile.",
+      "validator": {
+        "type": "requires_judge"
+      }
+    },
+    {
+      "id": "P7",
+      "name": "Multi-Page Comparison",
+      "category": "multi_step",
+      "kind": "public",
+      "prompt": "Navigate to the Wikipedia articles for Python (programming language) and JavaScript and report who designed each language.",
+      "validator": {
+        "type": "text_all_of_in_answer",
+        "expected": ["Guido van Rossum", "Brendan Eich"]
+      }
+    },
+    {
+      "id": "P8",
+      "name": "Public Search Then Click",
+      "category": "multi_step",
+      "kind": "public",
+      "prompt": "Navigate to https://en.wikipedia.org/wiki/Main_Page, use the search box to find 'Turing Award', and report the first recipient of the Turing Award.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["Alan Perlis"]
+      }
+    },
+    {
+      "id": "P9",
+      "name": "Deep Public Extraction",
+      "category": "investigation",
+      "kind": "public",
+      "prompt": "Navigate to https://en.wikipedia.org/wiki/List_of_Nobel_laureates_in_Physics and report the winners for the 3 most recent years listed.",
+      "judgeHint": "Pass only if all co-laureates are included for each of the 3 most recent years.",
+      "validator": {
+        "type": "requires_judge"
+      }
+    },
+    {
+      "id": "P10",
+      "name": "Error Recovery",
+      "category": "error_recovery",
+      "kind": "public",
+      "prompt": "Navigate to https://httpbin.org/status/404 and report the error encountered. Then navigate to https://httpbin.org/html and report the page content.",
+      "validator": {
+        "type": "text_all_of_in_answer",
+        "expected": ["404", "Herman Melville", "Moby-Dick"]
+      }
+    }
+  ]
+}

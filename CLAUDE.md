@@ -403,6 +403,174 @@ For deeper notes, see `Notes/monitor.md` and `Notes/scene.md` in this repo.
 
 ---
 
+## macOS Native Control
+
+`interceptor macos` gives agents the same structured control over native macOS applications that `interceptor` gives over the browser. No screenshots, no vision models, no coordinate guessing. Structured accessibility trees, real-time audio/speech, on-device intelligence, and OS-level trusted input.
+
+The native bridge (`interceptor-bridge`) runs as a LaunchAgent and communicates with the daemon over Unix socket. Same CLI, same wire format, same ref system.
+
+### Quick Start (macOS)
+
+```bash
+interceptor macos open "Finder"                  # Activate + tree + window info
+interceptor macos read                           # Tree for frontmost app
+interceptor macos act e5                         # Click + wait + updated tree
+interceptor macos act e3 "hello"                 # Type + wait + updated tree
+interceptor macos inspect                        # Tree + apps + frontmost info
+```
+
+### Accessibility (AX Tree)
+
+```bash
+interceptor macos tree                           # AX tree for frontmost app
+interceptor macos tree --app "Finder"            # Specific app
+interceptor macos tree --filter interactive      # Only actionable elements (default)
+interceptor macos tree --depth 5                 # Limit depth
+interceptor macos find "Save" --role button      # Find elements by name/role
+interceptor macos inspect e5                     # All attributes + actions for ref
+interceptor macos value e5                       # Read element value
+interceptor macos value e5 "new text"            # Set element value
+interceptor macos action e5 press                # Perform AX action
+interceptor macos focused                        # Current focused element
+interceptor macos windows                        # All windows with frames
+interceptor macos windows --app "Finder"         # Specific app
+```
+
+Refs (`e1`, `e2`, ...) work the same as browser refs. AXObserver auto-invalidates when the tree changes.
+
+### Apps & Windows
+
+```bash
+interceptor macos apps                           # List running apps (name, pid, bundle ID)
+interceptor macos app activate "Finder"          # Bring to front
+interceptor macos app hide "Finder"              # Hide
+interceptor macos app quit "Finder"              # Quit
+interceptor macos app launch "com.apple.finder"  # Launch by bundle ID
+interceptor macos frontmost                      # Current frontmost app
+interceptor macos move e1 --x 0 --y 25           # Move window
+interceptor macos resize e1 --width 672 --height 983  # Resize window
+```
+
+### Input (CGEvent — OS-level trusted)
+
+```bash
+interceptor macos click e5                       # Click AX element by ref
+interceptor macos click 500,300                  # Click at coordinates
+interceptor macos click e5 --double              # Double-click
+interceptor macos click e5 --right               # Right-click
+interceptor macos type e5 "hello world"          # Focus + type
+interceptor macos type "hello world"             # Type at current focus
+interceptor macos keys "Meta+C"                  # Keyboard shortcut
+interceptor macos scroll e5 --down 300           # Scroll
+interceptor macos drag e5 e8                     # Drag between elements
+```
+
+When AX actions fail, interceptor auto-escalates to CGEvent click using the element's frame coordinates.
+
+### Menu Traversal
+
+```bash
+interceptor macos menu                           # Frontmost app's full menu tree
+interceptor macos menu --app "Finder"            # Specific app
+interceptor macos menu "File" "New Folder"       # Invoke menu item by path
+```
+
+### Screen Capture (ScreenCaptureKit)
+
+```bash
+interceptor macos screenshot                     # Frontmost window
+interceptor macos screenshot --app "Finder"      # Specific app
+interceptor macos screenshot --save              # Save to disk
+interceptor macos capture start                  # Start continuous 30fps capture
+interceptor macos capture frame                  # Get latest frame
+interceptor macos capture stop                   # Stop
+```
+
+### Speech & Audio
+
+```bash
+interceptor macos listen start                   # Start speech recognition
+interceptor macos listen stop                    # Stop + return transcript
+interceptor macos listen transcript              # Current transcript
+interceptor macos listen tail                    # Poll-friendly transcript stream
+interceptor macos vad start                      # Voice activity detection
+interceptor macos vad status                     # Is someone speaking? + RMS level
+interceptor macos sounds start                   # Sound classification (300+ types)
+interceptor macos sounds status                  # Current detected sounds
+interceptor macos audio output start             # Capture system audio
+interceptor macos audio input start              # Capture microphone
+```
+
+### Vision & NLP (on-device)
+
+```bash
+interceptor macos vision faces                   # Detect faces in frontmost window
+interceptor macos vision text                    # OCR
+interceptor macos vision hands                   # Hand pose detection
+interceptor macos vision bodies                  # Body pose detection
+interceptor macos nlp entities "Ron in Austin"   # Named entity recognition
+interceptor macos nlp sentiment "great product"  # Sentiment analysis
+interceptor macos nlp language "bonjour"         # Language detection
+```
+
+### Monitor (macOS)
+
+```bash
+interceptor macos monitor start                  # Record all user interactions
+interceptor macos monitor start --instruction "Show me how you file expenses"
+interceptor macos monitor stop                   # Stop + summary
+interceptor macos monitor tail                   # Live event stream
+interceptor macos monitor export <sid>           # Pretty timeline
+interceptor macos monitor export <sid> --plan    # Replayable interceptor macos script
+```
+
+Captures clicks, keystrokes, scrolls, app switches with timestamps and AX element annotations. Same sparse JSON format as browser monitor.
+
+### Display & Streaming
+
+```bash
+interceptor macos display list                   # All displays (physical + virtual)
+interceptor macos display create 1920x1080       # Create virtual display
+interceptor macos display remove <id>            # Remove virtual display
+interceptor macos stream start --app "Finder"    # Start screen stream
+interceptor macos stream frame                   # Latest frame
+interceptor macos stream fps                     # Current FPS
+interceptor macos stream stop                    # Stop
+```
+
+### Other Domains
+
+```bash
+interceptor macos trust                          # Check all permissions with System Settings paths
+interceptor macos clipboard read                 # Read clipboard
+interceptor macos clipboard tail                 # Monitor clipboard changes
+interceptor macos files watch ~/Desktop          # Watch directory for changes
+interceptor macos notifications tail             # Live notification stream
+interceptor macos ai prompt "Summarize this"     # On-device LLM (macOS 26+, Apple Intelligence)
+```
+
+### Typical macOS Flows
+
+```bash
+# Resize browser and open a URL
+interceptor macos app activate "Brave Browser"
+interceptor macos windows --app "Brave Browser"
+interceptor macos move e1 --x 0 --y 25
+interceptor macos resize e1 --width 672 --height 983
+interceptor macos keys "Meta+t"
+interceptor macos keys "Meta+l"
+interceptor macos type "https://example.com"
+interceptor macos keys "Return"
+
+# Watch a user, learn the workflow, replay it
+interceptor macos monitor start --instruction "file an expense"
+# ... user works ...
+interceptor macos monitor stop
+interceptor macos monitor export <sid> --plan    # Get replayable script
+```
+
+---
+
 ## Development Reference
 
 ### Build

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Editor Lab</title>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #111827; color: #e5e7eb; }
+    main { max-width: 1000px; margin: 0 auto; padding: 32px; }
+    button { padding: 10px 14px; border: 0; border-radius: 10px; margin-right: 10px; cursor: pointer; background: #2563eb; color: white; }
+    .panel { margin-top: 18px; padding: 16px; border-radius: 14px; background: rgba(255,255,255,0.05); }
+    .notes { min-height: 120px; padding: 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.18); }
+    #hidden-editor { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0.01; }
+    .muted { color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Editor Lab</h1>
+    <p class="muted">This page exposes a hidden writable surface plus a generic scene/notes region.</p>
+    <button id="focus-hidden">Focus Hidden Editor</button>
+    <button id="focus-notes">Focus Notes Region</button>
+
+    <div class="panel">
+      <h2>Mirror</h2>
+      <p id="mirror">Editor Lab baseline text</p>
+    </div>
+
+    <div class="panel">
+      <h2>Scene Notes</h2>
+      <div id="notes-region" class="notes" role="application" aria-label="Scene Notes Region" tabindex="0">Scene note: generic profile benchmark note</div>
+    </div>
+
+    <div id="hidden-editor" contenteditable="true" aria-label="Hidden Editor Surface">Editor Lab baseline text</div>
+  </main>
+  <script>
+    const hidden = document.getElementById('hidden-editor');
+    const mirror = document.getElementById('mirror');
+    const notes = document.getElementById('notes-region');
+    function syncMirror() {
+      mirror.textContent = hidden.textContent || '';
+    }
+    hidden.addEventListener('input', syncMirror);
+    document.getElementById('focus-hidden').addEventListener('click', () => {
+      hidden.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(hidden);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    document.getElementById('focus-notes').addEventListener('click', () => {
+      notes.focus();
+    });
+    syncMirror();
+  </script>
+</body>
+</html>

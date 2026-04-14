@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trusted Input Lab</title>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1220; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; }
+    .card { padding: 28px; border-radius: 18px; background: rgba(255,255,255,0.06); width: 480px; }
+    button { padding: 12px 16px; border: 0; border-radius: 12px; cursor: pointer; background: #7c3aed; color: white; }
+    #status { margin-top: 16px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Trusted Input Lab</h1>
+    <p>Only a trusted click should unlock the success state.</p>
+    <button id="gate">Trusted Gate</button>
+    <div id="status">Trusted success: false</div>
+  </div>
+  <script>
+    document.getElementById('gate').addEventListener('click', (event) => {
+      const status = document.getElementById('status');
+      if (event.isTrusted) {
+        status.textContent = 'Trusted success: true';
+      } else {
+        status.textContent = 'Trusted success: false';
+      }
+    });
+  </script>
+</body>
+</html>

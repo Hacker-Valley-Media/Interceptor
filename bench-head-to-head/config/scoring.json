@@ -1,0 +1,30 @@
+{
+  "primaryMetrics": [
+    "task_success",
+    "wall_clock_seconds",
+    "turn_count",
+    "command_count",
+    "input_tokens",
+    "output_tokens",
+    "error_count"
+  ],
+  "secondaryMetrics": [
+    "judge_score",
+    "first_attempt_success",
+    "recovery_quality",
+    "evidence_quality"
+  ],
+  "interceptorTelemetry": [
+    "tree_count",
+    "text_count",
+    "state_count",
+    "diff_count",
+    "net_log_count",
+    "net_headers_count",
+    "scene_count",
+    "os_input_count",
+    "monitor_count",
+    "replay_generated",
+    "replay_used"
+  ]
+}

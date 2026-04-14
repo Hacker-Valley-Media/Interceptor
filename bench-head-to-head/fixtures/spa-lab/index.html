@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SPA Lab</title>
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #0b1020; color: #e5ecff; }
+    .app { display: grid; grid-template-columns: 260px 220px 1fr; height: 100vh; }
+    .rail, .middle, .detail-wrap { border-right: 1px solid rgba(255,255,255,0.12); }
+    .rail { padding: 16px; overflow: auto; background: #0d1429; }
+    .middle { padding: 16px; background: #101936; }
+    .detail-wrap { padding: 16px; background: #111a38; }
+    .detail-scroll { height: calc(100vh - 32px); overflow: auto; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 16px; background: rgba(255,255,255,0.03); }
+    .rail-item { padding: 12px 14px; margin-bottom: 10px; border-radius: 12px; background: rgba(255,255,255,0.05); cursor: pointer; }
+    .rail-item.active { background: #2d57ff; }
+    .tab { display: block; width: 100%; padding: 10px 12px; margin-bottom: 10px; border: 0; border-radius: 10px; color: white; background: rgba(255,255,255,0.08); cursor: pointer; }
+    .tab.active { background: #16a34a; }
+    .section { margin-bottom: 18px; padding: 14px; border-radius: 12px; background: rgba(255,255,255,0.04); }
+    h1, h2, h3, p { margin-top: 0; }
+    .muted { color: #99a7d1; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="rail" id="rail"></div>
+    <div class="middle">
+      <h2>Panel Tabs</h2>
+      <p class="muted">Select an item, then inspect the right panel.</p>
+      <button class="tab active" data-tab="summary">Summary</button>
+      <button class="tab" data-tab="details">Details</button>
+      <button class="tab" data-tab="activity">Activity</button>
+    </div>
+    <div class="detail-wrap">
+      <div class="detail-scroll" id="detail-scroll"></div>
+    </div>
+  </div>
+  <script>
+    const items = {
+      cedar: {
+        label: 'Cedar',
+        summary: 'Cedar summary: nested panel benchmark target',
+        sections: [
+          'Cedar overview block',
+          'Cedar context block',
+          'Cedar metrics block',
+          'Cedar appendix block'
+        ]
+      },
+      maple: {
+        label: 'Maple',
+        summary: 'Maple summary: scroll deeper for the benchmark target',
+        sections: [
+          ...Array.from({ length: 14 }, (_, i) => `Maple filler section ${i + 1}`),
+          'Benchmark Target: Maple reached nested scroll checkpoint',
+          'Maple post-target section'
+        ]
+      },
+      birch: {
+        label: 'Birch',
+        summary: 'Birch summary: neutral control item',
+        sections: [
+          'Birch details A',
+          'Birch details B',
+          'Birch details C'
+        ]
+      }
+    };
+
+    let currentItem = 'cedar';
+    let currentTab = 'summary';
+
+    function renderRail() {
+      const rail = document.getElementById('rail');
+      rail.innerHTML = '<h1>SPA Lab</h1><p class="muted">Left rail items are clickable cards with nested panel details.</p>';
+      Object.entries(items).forEach(([id, item]) => {
+        const card = document.createElement('div');
+        card.className = 'rail-item' + (id === currentItem ? ' active' : '');
+        card.tabIndex = 0;
+        card.dataset.item = id;
+        card.innerHTML = `<strong>${item.label}</strong><div class="muted">Session-like entry</div>`;
+        card.addEventListener('click', () => {
+          currentItem = id;
+          renderRail();
+          renderDetail();
+        });
+        card.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            card.click();
+          }
+        });
+        rail.appendChild(card);
+      });
+    }
+
+    function renderDetail() {
+      document.querySelectorAll('.tab').forEach((button) => {
+        button.classList.toggle('active', button.dataset.tab === currentTab);
+      });
+      const detail = document.getElementById('detail-scroll');
+      const item = items[currentItem];
+      const pieces = [`<h2>${item.label}</h2>`, `<div class="section"><strong>${item.summary}</strong></div>`];
+      if (currentTab === 'summary') {
+        pieces.push(`<div class="section">Summary tab for ${item.label}. Use this for the exact summary extract.</div>`);
+      }
+      if (currentTab === 'details') {
+        item.sections.forEach((section, index) => {
+          pieces.push(`<div class="section" id="section-${index + 1}"><h3>Section ${index + 1}</h3><p>${section}</p></div>`);
+        });
+      }
+      if (currentTab === 'activity') {
+        pieces.push(`<div class="section">${item.label} activity stream checkpoint.</div>`);
+      }
+      detail.innerHTML = pieces.join('');
+      detail.scrollTop = 0;
+    }
+
+    document.querySelectorAll('.tab').forEach((button) => {
+      button.addEventListener('click', () => {
+        currentTab = button.dataset.tab;
+        renderDetail();
+      });
+    });
+
+    renderRail();
+    renderDetail();
+  </script>
+</body>
+</html>
