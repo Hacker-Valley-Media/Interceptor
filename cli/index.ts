@@ -20,6 +20,7 @@ import { parseSseCommand } from "./commands/sse"
 import { parseChatgptCommand } from "./commands/chatgpt"
 import { runCompoundCommand } from "./commands/compound"
 import { runOverride } from "./commands/override"
+import { runMacosCommand } from "./commands/macos"
 
 // Command → module routing
 const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
@@ -39,6 +40,7 @@ const SSE_CMDS = new Set(["sse"])
 const CHATGPT_CMDS = new Set(["chatgpt"])
 const COMPOUND_CMDS = new Set(["open", "read", "act", "inspect"])
 const OVERRIDE_CMDS = new Set(["override"])
+const MACOS_CMDS = new Set(["macos"])
 
 // Commands that don't require a daemon connection
 const NO_DAEMON = new Set(["status", "help", "events", "session"])
@@ -80,6 +82,11 @@ async function main() {
 
   // Dispatch to command module
   let action: { type: string; [key: string]: unknown } | null
+
+  if (MACOS_CMDS.has(cmd)) {
+    await runMacosCommand(filtered, { jsonMode, useWs, globalTabId })
+    return
+  }
 
   if (COMPOUND_CMDS.has(cmd)) {
     await runCompoundCommand(cmd, filtered, { jsonMode, useWs, globalTabId, anyTab })

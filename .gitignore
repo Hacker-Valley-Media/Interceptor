@@ -11,3 +11,7 @@ interceptor-screenshot-*.jpg
 interceptor-screenshot-*.png
 prd/
 scripts/auto-improve/
+signing.env
+notarization.env
+interceptor-bridge/.build/
+keys/

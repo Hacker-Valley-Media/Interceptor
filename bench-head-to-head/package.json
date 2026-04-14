@@ -1,0 +1,10 @@
+{
+  "name": "interceptor-axi-head-to-head",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "bench": "bun run src/cli.ts",
+    "report": "bun run src/cli.ts report"
+  }
+}

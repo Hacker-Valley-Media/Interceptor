@@ -1,0 +1,114 @@
+{
+  "suite": "interceptor_differentiation",
+  "tasks": [
+    {
+      "id": "S1",
+      "name": "Nested SPA Panel Read",
+      "category": "spa",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/spa-lab/",
+      "prompt": "Open the SPA lab, select the 'Cedar' item in the left rail, switch to the Summary tab if needed, and report the exact right-panel summary text.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["Cedar summary: nested panel benchmark target"]
+      }
+    },
+    {
+      "id": "S2",
+      "name": "Nested Scroll Target",
+      "category": "spa",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/spa-lab/",
+      "prompt": "Open the SPA lab, select 'Maple', scroll the nested detail panel to the Benchmark Target section, and report the exact target section text.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["Benchmark Target: Maple reached nested scroll checkpoint"]
+      }
+    },
+    {
+      "id": "S3",
+      "name": "XHR Table Investigation",
+      "category": "network",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/network-lab/",
+      "prompt": "Open the Network Lab, trigger the table load, and report the names of all rows returned by the network response.",
+      "validator": {
+        "type": "text_all_of_in_answer",
+        "expected": ["Alpha", "Bravo", "Charlie"]
+      }
+    },
+    {
+      "id": "S4",
+      "name": "Header Inspection",
+      "category": "network",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/network-lab/",
+      "prompt": "Open the Network Lab, trigger a request, and report the exact X-Bench-Token header value sent by the page.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["bench-token-42"]
+      }
+    },
+    {
+      "id": "S5",
+      "name": "Request Override",
+      "category": "network",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/network-lab/",
+      "prompt": "Open the Network Lab, change the rows request from the default count to 5 using the browser tool's request interception or override capability if available, then report the resulting row count.",
+      "judgeHint": "For interceptor, strong preference is to use request override. For axi, use whatever browser-supported path exists. Pass if the final answer correctly reports 5 and the trajectory shows a credible browser-mediated approach.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["5"]
+      }
+    },
+    {
+      "id": "S6",
+      "name": "Hidden Surface Read Write",
+      "category": "editor",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/editor-lab/",
+      "prompt": "Open the Editor Lab, focus the hidden writable editor surface, report the current document text, then append the exact text ' + inserted benchmark text' and confirm the updated content.",
+      "validator": {
+        "type": "text_all_of_in_answer",
+        "expected": ["Editor Lab baseline text", "inserted benchmark text"]
+      }
+    },
+    {
+      "id": "S7",
+      "name": "Scene Notes Read",
+      "category": "editor",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/editor-lab/",
+      "prompt": "Open the Editor Lab, use scene-style inspection if available to identify the focused slide/scene notes region, and report the exact note text.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["Scene note: generic profile benchmark note"]
+      }
+    },
+    {
+      "id": "S8",
+      "name": "Trusted Input Gate",
+      "category": "trusted_input",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/trusted-input-lab/",
+      "prompt": "Open the Trusted Input Lab and complete the gate so the page reports success. Then report the success text.",
+      "validator": {
+        "type": "text_in_answer",
+        "expected": ["Trusted success: true"]
+      }
+    },
+    {
+      "id": "S9",
+      "name": "Record And Replay",
+      "category": "replay",
+      "kind": "fixture",
+      "url": "http://127.0.0.1:3241/replay-lab/",
+      "prompt": "Open the Replay Lab, complete the three-step flow to reach the success state, and if your browser tool supports session recording or replay planning, use it and report the success phrase.",
+      "validator": {
+        "type": "text_any_of_in_answer",
+        "expected": ["Replay success phrase: benchmark replay complete", "benchmark replay complete", "replay complete"]
+      }
+    }
+  ]
+}

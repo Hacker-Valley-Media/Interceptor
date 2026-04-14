@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "answer": { "type": "string" },
+    "evidence": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["answer", "evidence"],
+  "additionalProperties": false
+}

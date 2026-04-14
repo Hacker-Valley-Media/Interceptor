@@ -1,0 +1,14 @@
+seq	event	ref	role	name_or_target	value_or_note
+107	click	e11	span	unnamed nested control under Create a design launcher	raw trace target
+206	click	e55	button	Custom size	open custom-size form
+262	click	e59	spinbutton	Width	focus width field
+267	input	e59	spinbutton	Width	6
+287	input	e59	spinbutton	Width	64
+293	input	e59	spinbutton	Width	640
+301	change	e59	spinbutton	Width	640 committed via Tab
+314	input	e60	spinbutton	Height	3
+317	input	e60	spinbutton	Height	32
+322	input	e60	spinbutton	Height	320
+329	change	e60	spinbutton	Height	320 committed via Tab
+379	click	e80	span	Create new design	submit custom-size create
+380	submit	e66	form	custom-size form	new editor tab opened

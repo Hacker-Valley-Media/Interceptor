@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Replay Lab</title>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #111827; color: #f3f4f6; }
+    main { max-width: 860px; margin: 0 auto; padding: 32px; }
+    button { padding: 12px 16px; border: 0; border-radius: 12px; cursor: pointer; background: #059669; color: white; margin-right: 12px; }
+    .hidden { display: none; }
+    #success { margin-top: 20px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Replay Lab</h1>
+    <p>Complete the three-step flow to reach the benchmark success phrase.</p>
+    <button id="step-1">Step 1</button>
+    <button id="step-2" class="hidden">Step 2</button>
+    <button id="step-3" class="hidden">Step 3</button>
+    <div id="success"></div>
+  </main>
+  <script>
+    const step1 = document.getElementById('step-1');
+    const step2 = document.getElementById('step-2');
+    const step3 = document.getElementById('step-3');
+    const success = document.getElementById('success');
+    step1.addEventListener('click', () => {
+      step2.classList.remove('hidden');
+    });
+    step2.addEventListener('click', () => {
+      step3.classList.remove('hidden');
+    });
+    step3.addEventListener('click', () => {
+      success.textContent = 'Replay success phrase: benchmark replay complete';
+    });
+  </script>
+</body>
+</html>

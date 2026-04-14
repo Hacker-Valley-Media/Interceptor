@@ -1,6 +1,163 @@
 import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
+import { execSync, spawn } from "node:child_process"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
+
+// ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
+const BRIDGE_SOCKET_PATH = "/tmp/interceptor-bridge.sock"
+const BRIDGE_PID_PATH = "/tmp/interceptor-bridge.pid"
+const BRIDGE_RECONNECT_MS = 2000
+const BRIDGE_CONNECT_TIMEOUT_MS = 5000
+
+let bridgeSocket: ReturnType<typeof Bun.connect> extends Promise<infer T> ? T | null : never = null as any
+let bridgeBuffer = Buffer.alloc(0)
+let bridgeConnecting = false
+let bridgeSpawnAttempted = false
+const bridgePending = new Map<string, {
+  resolve: (response: string) => void
+  timer: ReturnType<typeof setTimeout>
+  cliSocket: { write: (data: Buffer | string) => number }
+  startTime: number
+  actionType: string
+}>()
+
+function isBridgeAlive(): boolean {
+  try {
+    const pid = parseInt(readFileSync(BRIDGE_PID_PATH, "utf-8").trim())
+    if (isNaN(pid)) return false
+    process.kill(pid, 0)
+    return true
+  } catch { return false }
+}
+
+function spawnBridge(): void {
+  if (bridgeSpawnAttempted) return
+  bridgeSpawnAttempted = true
+  const bridgeBin = new URL("../interceptor-bridge/.build/debug/interceptor-bridge", import.meta.url).pathname
+  const releaseBin = new URL("../interceptor-bridge/.build/release/interceptor-bridge", import.meta.url).pathname
+  const distBin = new URL("../dist/interceptor-bridge", import.meta.url).pathname
+  let bin = ""
+  if (existsSync(distBin)) bin = distBin
+  else if (existsSync(releaseBin)) bin = releaseBin
+  else if (existsSync(bridgeBin)) bin = bridgeBin
+  else {
+    log("bridge binary not found — cannot auto-spawn")
+    return
+  }
+  log(`spawning bridge: ${bin}`)
+  const child = spawn(bin, [], { detached: true, stdio: "ignore" })
+  child.unref()
+  // Give it time to start
+  setTimeout(() => { bridgeSpawnAttempted = false }, 10000)
+}
+
+async function connectBridge(): Promise<boolean> {
+  if (bridgeConnecting) return false
+  if (!existsSync(BRIDGE_SOCKET_PATH)) {
+    if (!isBridgeAlive()) spawnBridge()
+    return false
+  }
+  bridgeConnecting = true
+  try {
+    const sock = await Bun.connect({
+      unix: BRIDGE_SOCKET_PATH,
+      socket: {
+        open(socket) {
+          log("bridge connected")
+          bridgeSocket = socket as any
+          bridgeBuffer = Buffer.alloc(0)
+          bridgeConnecting = false
+        },
+        data(_socket, raw) {
+          bridgeBuffer = Buffer.concat([bridgeBuffer, Buffer.from(raw)])
+          processBridgeBuffer()
+        },
+        close() {
+          log("bridge disconnected")
+          bridgeSocket = null as any
+          bridgeConnecting = false
+          // Schedule reconnect
+          setTimeout(() => connectBridge(), BRIDGE_RECONNECT_MS)
+        },
+        error(_socket, err) {
+          log(`bridge socket error: ${err.message}`)
+          bridgeConnecting = false
+        }
+      }
+    })
+    bridgeSocket = sock as any
+    return true
+  } catch (err) {
+    log(`bridge connect failed: ${(err as Error).message}`)
+    bridgeConnecting = false
+    if (!isBridgeAlive()) spawnBridge()
+    return false
+  }
+}
+
+function processBridgeBuffer(): void {
+  while (bridgeBuffer.length >= 4) {
+    const msgLen = bridgeBuffer.readUInt32LE(0)
+    if (msgLen === 0 || msgLen > 10 * 1024 * 1024) {
+      log(`bridge: invalid message length: ${msgLen}`)
+      bridgeBuffer = Buffer.alloc(0)
+      return
+    }
+    if (bridgeBuffer.length < 4 + msgLen) return
+    const jsonBuf = bridgeBuffer.subarray(4, 4 + msgLen)
+    bridgeBuffer = bridgeBuffer.subarray(4 + msgLen)
+    try {
+      const msg = JSON.parse(jsonBuf.toString("utf-8")) as { id?: string; result?: unknown }
+      if (msg.id) {
+        const pending = bridgePending.get(msg.id)
+        if (pending) {
+          clearTimeout(pending.timer)
+          const duration = Date.now() - pending.startTime
+          const result = msg.result as { success?: boolean } | undefined
+          log(`bridge resp [${msg.id.slice(0, 8)}] ${result?.success ? "ok" : "err"} ${pending.actionType} ${duration}ms`)
+          emitEvent("request_complete", { requestId: msg.id, action: pending.actionType, duration, success: result?.success ?? false })
+          pending.resolve(JSON.stringify(msg))
+          bridgePending.delete(msg.id)
+        }
+      }
+    } catch (err) {
+      log(`bridge: json parse error: ${(err as Error).message}`)
+    }
+  }
+}
+
+function sendToBridge(id: string, action: Record<string, unknown>, cliSocket: { write: (data: Buffer | string) => number }, actionType: string): void {
+  const payload = JSON.stringify({ id, action })
+  const encoded = Buffer.from(payload, "utf-8")
+  const header = Buffer.alloc(4)
+  header.writeUInt32LE(encoded.byteLength, 0)
+  const frame = Buffer.concat([header, encoded])
+  try {
+    ;(bridgeSocket as any).write(frame)
+  } catch (err) {
+    log(`bridge write error: ${(err as Error).message}`)
+    socketWriteFramed(cliSocket, JSON.stringify({ id, result: { success: false, error: "bridge connection lost" } }))
+    return
+  }
+  const timer = setTimeout(() => {
+    bridgePending.delete(id)
+    log(`bridge request timeout: ${id}`)
+    socketWriteFramed(cliSocket, JSON.stringify({ id, result: { success: false, error: "bridge timeout" } }))
+  }, REQUEST_TIMEOUT_MS)
+  bridgePending.set(id, {
+    resolve: (response: string) => {
+      clearTimeout(timer)
+      socketWriteFramed(cliSocket, response)
+    },
+    timer,
+    cliSocket: cliSocket,
+    startTime: Date.now(),
+    actionType
+  })
+}
+
+// Start bridge connection on daemon startup
+setTimeout(() => connectBridge(), 500)
 
 function log(msg: string) {
   const line = `[${new Date().toISOString()}] ${msg}\n`
@@ -385,6 +542,23 @@ try {
             continue
           }
 
+          // Route macos_ actions to the native bridge
+          if (action?.type?.startsWith("macos_")) {
+            if (bridgeSocket) {
+              sendToBridge(id, action, socket, actionType)
+            } else {
+              // Try to connect (async), respond when done
+              connectBridge().then((connected) => {
+                if (connected && bridgeSocket) {
+                  sendToBridge(id, action, socket, actionType)
+                } else {
+                  socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "interceptor-bridge not running. Start it with: interceptor-bridge or grant Accessibility permission." } }))
+                }
+              })
+            }
+            continue
+          }
+
           const timer = setTimeout(() => {
             pendingRequests.delete(id)
             timedOutRequests.add(id)
@@ -441,7 +615,7 @@ try {
     port: WS_PORT,
     fetch(req, server) {
       if (server.upgrade(req, {})) return
-      return new Response("slop-browser daemon", { status: 200 })
+      return new Response("interceptor daemon", { status: 200 })
     },
     websocket: {
       open(ws) {

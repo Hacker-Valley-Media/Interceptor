@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Network Lab</title>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    main { max-width: 980px; margin: 0 auto; padding: 32px; }
+    button { padding: 10px 14px; border: 0; border-radius: 10px; margin-right: 10px; cursor: pointer; }
+    #load-rows { background: #2563eb; color: white; }
+    #ping-header { background: #16a34a; color: white; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    td, th { border: 1px solid rgba(255,255,255,0.14); padding: 10px; }
+    code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 6px; }
+    .muted { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Network Lab</h1>
+    <p class="muted">This page issues XHR/fetch requests with a benchmark header. Default row count is 3 unless a browser-mediated override changes it.</p>
+    <button id="load-rows">Load Rows</button>
+    <button id="ping-header">Ping Header Echo</button>
+    <p>Default request count: <code id="count-display">3</code></p>
+    <p>Last header echo: <code id="header-value">none</code></p>
+    <table>
+      <thead><tr><th>ID</th><th>Name</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </main>
+  <script>
+    const token = 'bench-token-42';
+    window.__benchCount = 3;
+    window.setBenchCount = (count) => {
+      window.__benchCount = Number(count);
+      document.getElementById('count-display').textContent = String(window.__benchCount);
+    };
+    async function loadRows() {
+      const response = await fetch(`/api/network/rows?count=${window.__benchCount}`, {
+        headers: { 'X-Bench-Token': token }
+      });
+      const data = await response.json();
+      const body = document.getElementById('rows');
+      body.innerHTML = '';
+      data.rows.forEach((row) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${row.id}</td><td>${row.name}</td>`;
+        body.appendChild(tr);
+      });
+      document.getElementById('count-display').textContent = String(data.count);
+    }
+    async function pingHeader() {
+      const response = await fetch('/api/network/header-echo', {
+        headers: { 'X-Bench-Token': token }
+      });
+      const data = await response.json();
+      document.getElementById('header-value').textContent = data.token || 'missing';
+    }
+    document.getElementById('load-rows').addEventListener('click', loadRows);
+    document.getElementById('ping-header').addEventListener('click', pingHeader);
+  </script>
+</body>
+</html>

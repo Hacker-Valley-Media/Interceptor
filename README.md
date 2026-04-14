@@ -12,7 +12,9 @@ Interceptor doesn't use CDP. It doesn't launch a separate browser. It runs as a 
 
 It intercepts the DOM tree so your agent can read what's on the page. It intercepts network traffic so your agent can see the APIs behind the UI. It intercepts your workflows so your agent can learn what you do and repeat it without you.
 
-No detection. No separate instance. No starting from zero. Your browser, your data, your workflows -- intercepted and handed to the agent.
+And now it does the same thing for macOS itself. `interceptor macos` gives agents structured accessibility trees, OS-level input, real-time speech recognition, on-device vision, sound classification, and system-wide event monitoring for native applications. The same CLI, the same ref system, the same teach-and-replay pattern -- extended from browser tabs to the entire desktop.
+
+No detection. No separate instance. No starting from zero. Your browser, your apps, your workflows -- intercepted and handed to the agent.
 
 ---
 
@@ -28,8 +30,8 @@ The agent calls `interceptor` CLI commands, reads the output, decides what to do
 ### Build
 
 ```bash
-git clone https://github.com/Hacker-Valley-Media/interceptor.git
-cd interceptor
+git clone https://github.com/Hacker-Valley-Media/Interceptor.git
+cd Interceptor
 bash scripts/build.sh
 ```
 
@@ -85,6 +87,45 @@ bash scripts/build.sh # Build compiled host binaries and extension bundles
 - Run `bun test` when you change parser behavior, monitor/scene helpers, or any logic already covered by the repo test suite.
 - Run `bash scripts/build.sh` when you need to verify the actual host binaries and extension bundles still compile.
 - For changes that affect browser behavior or shared infrastructure, run all three.
+
+## macOS Bridge (optional)
+
+The macOS bridge (`interceptor-bridge`) extends interceptor with native macOS control — accessibility trees, screen capture, speech recognition, vision, NLP, and more. It gives agents the same depth of control over macOS applications that interceptor gives over the browser.
+
+### Quick Install (pre-built, signed & notarized)
+
+```bash
+bash scripts/install-bridge.sh
+```
+
+Downloads the latest signed binary from GitHub Releases, verifies the code signature, and installs it. No Xcode required.
+
+### Build From Source (requires Xcode)
+
+```bash
+bash scripts/build-bridge.sh
+bash scripts/install-bridge.sh --local
+```
+
+Requires full Xcode (not just Command Line Tools) — the bridge links 12 Apple frameworks including ScreenCaptureKit, Speech, Vision, and NaturalLanguage.
+
+### Permissions
+
+After installing, check and grant required permissions:
+
+```bash
+interceptor macos trust
+```
+
+| Permission | Required | What It Enables |
+|-----------|----------|-----------------|
+| Accessibility | Yes | UI element inspection, clicking, typing, window management |
+| Screen Recording | No | Screenshots, screen capture, vision analysis |
+| Microphone | No | Speech recognition, voice activity detection |
+
+Grant permissions in: System Settings → Privacy & Security → [Permission] → interceptor-bridge
+
+---
 
 ## Quick Start
 
@@ -487,6 +528,99 @@ interceptor canvas list                       # Discover <canvas> elements (HTML
 interceptor canvas read 0 --format png        # Read canvas as data URL
 interceptor canvas diff url1.png url2.png     # Pixel diff between images
 ```
+
+## macOS Native Control
+
+`interceptor macos` extends the same agent-first pattern to native macOS applications. No screenshots, no vision models. Structured AX trees, trusted input, real-time audio intelligence, and system-wide event monitoring.
+
+### How It Works
+
+A Swift native bridge (`interceptor-bridge`) runs as a LaunchAgent alongside the daemon. The daemon routes `macos_` commands to the bridge over Unix socket. Same CLI binary, same wire format, same ref convention (`e1`, `e2`, ...).
+
+```
+CLI ──unix──▸ Daemon ──native-msg──▸ Chrome Extension (web commands)
+                    ──unix──▸ Native Bridge (macOS commands)
+```
+
+### Agent Quick Start (macOS)
+
+```bash
+interceptor macos tree                           # AX tree for frontmost app (like interceptor tree for the browser)
+interceptor macos find "Save" --role button      # Find elements
+interceptor macos click e5                       # Click by ref (CGEvent — OS-level trusted)
+interceptor macos type e3 "hello"                # Type into element
+interceptor macos keys "Meta+S"                  # Keyboard shortcut
+interceptor macos apps                           # List running apps
+interceptor macos app activate "Finder"          # Bring app to front
+interceptor macos move e1 --x 0 --y 25           # Move window
+interceptor macos resize e1 --width 672 --height 983  # Resize window
+```
+
+### Compound Commands
+
+```bash
+interceptor macos open "Finder"                  # Activate + tree + windows (one call)
+interceptor macos read                           # Tree + frontmost app info
+interceptor macos act e5                         # Click + wait + updated tree
+interceptor macos act e3 "hello"                 # Type + wait + updated tree
+interceptor macos inspect                        # Tree + apps + frontmost info
+```
+
+### Audio Intelligence
+
+```bash
+interceptor macos listen start                   # Real-time speech recognition
+interceptor macos listen transcript              # Get current transcript
+interceptor macos vad start                      # Voice activity detection (RMS-based)
+interceptor macos sounds start                   # Sound classification (300+ built-in types)
+interceptor macos audio output start             # Capture system audio
+```
+
+### On-Device Vision & NLP
+
+```bash
+interceptor macos vision text                    # OCR frontmost window
+interceptor macos vision faces                   # Face detection
+interceptor macos vision hands                   # Hand pose (21-joint model)
+interceptor macos nlp entities "Ron in Austin"   # Named entity recognition
+interceptor macos nlp sentiment "great product"  # Sentiment analysis
+interceptor macos ai prompt "Summarize this"     # On-device LLM (macOS 26+)
+```
+
+### macOS Monitor (Teach and Replay)
+
+Same pattern as the browser monitor. Record what the user does across native apps, export a replayable script.
+
+```bash
+interceptor macos monitor start --instruction "Show me how you file expenses"
+# ... user works in native apps ...
+interceptor macos monitor stop                   # Summary: 230 events, 2 minutes
+interceptor macos monitor export <sid>           # Pretty timeline with timestamps
+interceptor macos monitor export <sid> --plan    # Replayable interceptor macos commands
+```
+
+Captures clicks, keystrokes, scrolls, app switches — annotated with AX element roles and names. Same sparse JSON format as the browser monitor.
+
+### Virtual Displays & Streaming
+
+```bash
+interceptor macos display list                   # Physical + virtual displays
+interceptor macos display create 1920x1080       # Create virtual display (CGVirtualDisplay)
+interceptor macos stream start --app "Finder"    # Continuous screen stream
+interceptor macos stream frame                   # Latest frame as JPEG data URL
+```
+
+### Permissions
+
+```bash
+interceptor macos trust                          # Check all permissions with exact System Settings paths
+```
+
+| Permission | Required | Enables |
+|-----------|----------|---------|
+| Accessibility | Yes | AX tree, input, window management |
+| Screen Recording | No | Screenshots, capture, vision |
+| Microphone | No | Speech recognition, VAD, sound classification |
 
 ## What NOT to Do
 

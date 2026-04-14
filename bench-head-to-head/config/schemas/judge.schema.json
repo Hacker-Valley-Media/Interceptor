@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "pass": { "type": "boolean" },
+    "score": { "type": "number" },
+    "reason": { "type": "string" },
+    "confidence": { "type": "string" }
+  },
+  "required": ["pass", "score", "reason", "confidence"],
+  "additionalProperties": false
+}

@@ -4,6 +4,7 @@
   "path": "__DAEMON_PATH__",
   "type": "stdio",
   "allowed_origins": [
+    "chrome-extension://hkjbaciefhhgekldhncknbjkofbpenng/",
     "chrome-extension://clcflogdlhfnlibdiahigikhpnlmhnpl/",
     "chrome-extension://icbmachoifbaiepkgmkdmiomnhmbgigi/"
   ]
