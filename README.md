@@ -24,12 +24,36 @@ The agent calls `interceptor` CLI commands, reads the output, decides what to do
 
 ## Installation
 
-### Prerequisites
+### Option 1: DMG Installer (Recommended)
+
+The simplest way to install Interceptor. Download the DMG, double-click the installer, pick your browser and profile — done.
+
+1. Download `Interceptor-v0.6.0-macOS.dmg` from the [latest release](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest)
+2. Open the DMG and double-click **Install Interceptor**
+3. Select your browser (Chrome or Brave)
+4. Select your profile (Default, or whichever you use)
+5. Click **Install** — the browser will close, install silently, and relaunch
+
+The installer copies binaries to `~/.interceptor/bin/`, injects the extension into your browser's Secure Preferences with valid HMAC signatures, and registers the native messaging host. No `chrome://extensions`, no developer mode, no manual steps.
+
+#### Build the DMG yourself
+
+```bash
+git clone https://github.com/Hacker-Valley-Media/Interceptor.git
+cd Interceptor
+bash scripts/build.sh
+bash scripts/build-dmg.sh
+# Output: dist/Interceptor-v0.6.0-macOS.dmg
+```
+
+### Option 2: Manual Install (Developer)
+
+#### Prerequisites
 
 - [Bun](https://bun.sh/) runtime
 - Chrome or Brave browser
 
-### Build
+#### Build
 
 ```bash
 git clone https://github.com/Hacker-Valley-Media/Interceptor.git
@@ -45,7 +69,7 @@ This produces three artifacts:
 | Background daemon | `daemon/interceptor-daemon` |
 | Chrome extension | `extension/dist/` |
 
-### Install the CLI
+#### Install the CLI
 
 Add the binary to your PATH:
 
@@ -53,7 +77,7 @@ Add the binary to your PATH:
 cp dist/interceptor /usr/local/bin/
 ```
 
-### Install the Chrome Extension
+#### Install the Chrome Extension
 
 1. Open Chrome or Brave and navigate to `chrome://extensions`
 2. Enable **Developer mode** (toggle in the top-right corner)
@@ -61,7 +85,7 @@ cp dist/interceptor /usr/local/bin/
 4. Select the `extension/dist/` directory from this repo
 5. The interceptor extension icon should appear in your toolbar
 
-### Register Native Messaging (macOS)
+#### Register Native Messaging (macOS)
 
 The CLI communicates with the extension via Chrome's native messaging protocol. Run the install script to register the manifest:
 
