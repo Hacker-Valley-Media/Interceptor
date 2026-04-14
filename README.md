@@ -16,6 +16,8 @@ And now it does the same thing for macOS itself. `interceptor macos` gives agent
 
 No detection. No separate instance. No starting from zero. Your browser, your apps, your workflows -- intercepted and handed to the agent.
 
+**Interceptor uses extensive browser permissions and gives the agent real autonomy and agency. This isn't an assistant — it's an agent. It can act just like you. Use at your own risk and have a lot of fun!** 🔥
+
 ---
 
 The agent calls `interceptor` CLI commands, reads the output, decides what to do next. No MCP, no API keys.
