@@ -28,7 +28,7 @@ The agent calls `interceptor` CLI commands, reads the output, decides what to do
 
 The simplest way to install Interceptor. Download the DMG, double-click the installer, pick your browser and profile — done.
 
-1. Download `Interceptor-v0.6.0-macOS.dmg` from the [latest release](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest)
+1. Download the macOS DMG attached to the [latest release](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest)
 2. Open the DMG and double-click **Install Interceptor**
 3. Select your browser (Chrome or Brave)
 4. Select your profile (Default, or whichever you use)
@@ -43,7 +43,7 @@ git clone https://github.com/Hacker-Valley-Media/Interceptor.git
 cd Interceptor
 bash scripts/build.sh
 bash scripts/build-dmg.sh
-# Output: dist/Interceptor-v0.6.0-macOS.dmg
+# Output: dist/Interceptor-v<version>-macOS.dmg
 ```
 
 ### Option 2: Manual Install (Developer)
@@ -177,7 +177,7 @@ The legacy individual commands (`interceptor tab new`, `interceptor tree`, `inte
 
 **Scene Graph** — Profile-driven access to visual editors that don't render to the DOM normally: Canva, Google Docs, Google Slides. Enumerate objects by stable ID, click shapes, read full document text, navigate slide decks, render pages to PNG. `interceptor scene` — no CDP, no vision, no screenshots needed.
 
-**Session Monitor** — Record a user's real interactions (clicks, keystrokes, form changes, DOM mutations, network calls) as a sparse JSONL log that replays as a `interceptor` script. `interceptor monitor start` / `interceptor monitor stop` / `interceptor monitor export --plan`. Monitor auto-resolves the active interceptor-managed tab when called without `--tab`, and automatically re-injects the content script if the port is disconnected (common on long-lived SPA tabs).
+**Session Monitor** — Record a user's real interactions (clicks, keystrokes, form changes, DOM mutations, network calls) as a sparse event stream that replays as a `interceptor` script. `interceptor monitor start` / `interceptor monitor stop` / `interceptor monitor export --plan`. Monitor auto-resolves the active interceptor-managed tab when called without `--tab`, automatically re-injects the content script if the port is disconnected, and prefers session-local export artifacts when they are available.
 
 **Stealth** — Passes all major bot detection: BrowserScan (Normal), Pixelscan ("Definitely Human"), Sannysoft (all pass), CreepJS (0% headless), Fingerprint.com (notDetected), AreyouHeadless (not headless). Zero automation fingerprint.
 
@@ -368,9 +368,15 @@ interceptor monitor tail --raw                         # Live tail (raw JSONL)
 interceptor monitor export <sessionId>                 # Aligned text rendering
 interceptor monitor export <sessionId> --json          # Raw JSONL for that session
 interceptor monitor export <sessionId> --plan          # Emit interceptor ... replay script
+interceptor monitor export <sessionId> --with-bodies   # Include persisted net-body context when available
+interceptor monitor export <sessionId> --with-bodies   # Include persisted net-body context when available
 ```
 
 Each event line is sparse JSON (short keys: `t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `cause`) so an agent can read a 30-minute session in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <action_seq>`. Real user events have `tr: true`; interceptor's own synthetic clicks have `tr: false`. The replay-plan generator automatically includes synthetic clicks when no real user events exist in the session (common when an agent drove the browser). Use `--include-synthetic` to force inclusion regardless.
+
+The rolling live event stream lives in `/tmp/interceptor-events.jsonl`. Export prefers per-session artifacts under `/tmp/interceptor-monitor-sessions/<sessionId>/` when available and falls back to the rolling event log for legacy sessions. `--with-bodies` uses persisted net-body artifacts when present and otherwise leaves `interceptor net log` hints in the replay output.
+
+The rolling live event stream lives in `/tmp/interceptor-events.jsonl`. Export prefers per-session artifacts under `/tmp/interceptor-monitor-sessions/<sessionId>/` when available and falls back to the rolling event log for legacy sessions. `--with-bodies` uses persisted net-body artifacts when present and otherwise leaves `interceptor net log` hints in the replay output.
 
 The replay script uses the existing semantic-selector path:
 ```

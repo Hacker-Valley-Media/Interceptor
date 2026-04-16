@@ -10,21 +10,24 @@ export type PlatformConfig = {
   pidPath: string
   logPath: string
   eventsPath: string
+  monitorSessionsDir: string
   transportLabel: string
 }
 
 export function resolvePlatformConfig(platform: PlatformName = process.platform, tempOverride = process.env.TEMP): PlatformConfig {
   const isWin = platform === "win32"
-  const temp = isWin ? (tempOverride || "C:\\Temp") : "/tmp"
+  const explicitTemp = process.env.INTERCEPTOR_TEMP
+  const temp = explicitTemp || (isWin ? (tempOverride || "C:\\Temp") : "/tmp")
   const sep = isWin ? "\\" : "/"
-  const socketPath = `${temp}${sep}interceptor.sock`
+  const socketPath = process.env.INTERCEPTOR_SOCKET_PATH || `${temp}${sep}interceptor.sock`
   const ipcPort = parseInt(process.env.INTERCEPTOR_IPC_PORT || "19221")
   const wsPort = parseInt(process.env.INTERCEPTOR_WS_PORT || "19222")
-  const pidPath = `${temp}${sep}interceptor.pid`
-  const logPath = `${temp}${sep}interceptor.log`
-  const eventsPath = `${temp}${sep}interceptor-events.jsonl`
+  const pidPath = process.env.INTERCEPTOR_PID_PATH || `${temp}${sep}interceptor.pid`
+  const logPath = process.env.INTERCEPTOR_LOG_PATH || `${temp}${sep}interceptor.log`
+  const eventsPath = process.env.INTERCEPTOR_EVENTS_PATH || `${temp}${sep}interceptor-events.jsonl`
+  const monitorSessionsDir = process.env.INTERCEPTOR_MONITOR_SESSIONS_DIR || `${temp}${sep}interceptor-monitor-sessions`
   const transportLabel = isWin ? `tcp:127.0.0.1:${ipcPort}` : `unix:${socketPath}`
-  return { isWin, temp, sep, socketPath, ipcPort, wsPort, pidPath, logPath, eventsPath, transportLabel }
+  return { isWin, temp, sep, socketPath, ipcPort, wsPort, pidPath, logPath, eventsPath, monitorSessionsDir, transportLabel }
 }
 
 const current = resolvePlatformConfig()
@@ -38,6 +41,7 @@ export const WS_PORT = current.wsPort
 export const PID_PATH = current.pidPath
 export const LOG_PATH = current.logPath
 export const EVENTS_PATH = current.eventsPath
+export const MONITOR_SESSIONS_DIR = current.monitorSessionsDir
 export const EVENTS_MAX_SIZE = 10 * 1024 * 1024
 
 export function listenOptions(socketHandlers: Record<string, unknown>) {

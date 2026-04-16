@@ -1,5 +1,15 @@
 const NET_BUFFER_CAP = 500
-type PassiveCapturedEntry = { url: string; method: string; status: number; body: string; type: string; timestamp: number; tabUrl: string }
+type PassiveCapturedEntry = {
+  url: string
+  method: string
+  status: number
+  body: string
+  type: string
+  timestamp: number
+  tabUrl: string
+  contentType?: string
+  truncated?: boolean
+}
 const netBuffer: PassiveCapturedEntry[] = []
 
 type CapturedHeaderEntry = { url: string; method: string; headers: Record<string, string>; type: string; timestamp: number }

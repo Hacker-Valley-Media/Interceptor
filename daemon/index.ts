@@ -2,6 +2,15 @@ import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFi
 import { execSync, spawn } from "node:child_process"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
+import {
+  MONITOR_EVENT_NAMES,
+  appendSessionEvent,
+  appendSessionNetArtifact,
+  type MonitorAttachmentMeta,
+  type MonitorEvent,
+  type MonitorSessionMeta,
+  updateSessionMeta,
+} from "../shared/monitor-artifacts"
 import { chooseOutboundTransport } from "./outbound-routing"
 
 // ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
@@ -166,7 +175,8 @@ function log(msg: string) {
 }
 
 function emitEvent(event: string, data: Record<string, unknown> = {}) {
-  const entry = JSON.stringify({ timestamp: new Date().toISOString(), event, ...data })
+  const eventObj = { timestamp: new Date().toISOString(), event, ...data }
+  const entry = JSON.stringify(eventObj)
   try {
     appendFileSync(EVENTS_PATH, entry + "\n")
     const stat = statSync(EVENTS_PATH)
@@ -177,6 +187,127 @@ function emitEvent(event: string, data: Record<string, unknown> = {}) {
       writeFileSync(EVENTS_PATH, half)
     }
   } catch {}
+
+  const sid = typeof data.sid === "string" ? data.sid : undefined
+  if (sid && MONITOR_EVENT_NAMES.has(event)) {
+    try {
+      appendSessionEvent(sid, eventObj as MonitorEvent)
+      syncSessionMetaFromEvent(eventObj as MonitorEvent)
+    } catch {}
+  }
+}
+
+function attachmentFromEvent(ev: MonitorEvent): MonitorAttachmentMeta | null {
+  const tabId = typeof ev.tid === "number" ? ev.tid : undefined
+  if (tabId === undefined) return null
+  const doc = typeof ev.doc === "string" ? ev.doc : undefined
+  return {
+    key: `${tabId}:${doc || "unknown"}`,
+    tabId,
+    documentId: doc,
+    frameId: typeof ev.fid === "number" ? ev.fid : 0,
+    url: typeof ev.u === "string" ? ev.u : undefined,
+    openerTabId: typeof ev.openerTid === "number" ? ev.openerTid : undefined,
+    attachedAt: typeof ev.t === "number" ? ev.t : Date.now(),
+    detachedAt: undefined,
+    lifecycle: typeof ev.lif === "string" ? ev.lif : undefined,
+    reason: typeof ev.reason === "string" ? ev.reason : undefined
+  }
+}
+
+function syncSessionMetaFromEvent(ev: MonitorEvent): void {
+  if (!ev.sid) return
+
+  updateSessionMeta(ev.sid, (current): MonitorSessionMeta => {
+    const base: MonitorSessionMeta = current || {
+      artifactVersion: 2,
+      sessionId: ev.sid!,
+      startedAt: typeof ev.t === "number" ? ev.t : Date.now(),
+      status: ev.event === "mon_stop" ? "stopped" : "active",
+      paused: false,
+      rootTabId: typeof ev.tid === "number" ? ev.tid : undefined,
+      instruction: typeof ev.ins === "string" ? ev.ins : undefined,
+      url: typeof ev.url === "string" ? ev.url : (typeof ev.u === "string" ? ev.u : undefined),
+      activeAttachmentKey: undefined,
+      counts: undefined,
+      stopReason: undefined,
+      attachments: []
+    }
+
+    if (ev.event === "mon_start") {
+      base.startedAt = typeof ev.t === "number" ? ev.t : base.startedAt
+      base.status = "active"
+      base.paused = false
+      base.rootTabId = typeof ev.tid === "number" ? ev.tid : base.rootTabId
+      base.instruction = typeof ev.ins === "string" ? ev.ins : base.instruction
+      base.url = typeof ev.url === "string" ? ev.url : base.url
+    } else if (ev.event === "mon_pause") {
+      base.paused = true
+    } else if (ev.event === "mon_resume") {
+      base.paused = false
+    } else if (ev.event === "mon_stop") {
+      base.status = "stopped"
+      base.paused = false
+      base.endedAt = typeof ev.t === "number" ? ev.t : base.endedAt
+      base.stopReason = typeof ev.reason === "string" ? ev.reason : base.stopReason
+      base.counts = {
+        evt: typeof ev.evt === "number" ? ev.evt : base.counts?.evt || 0,
+        mut: typeof ev.mut === "number" ? ev.mut : base.counts?.mut || 0,
+        net: typeof ev.net === "number" ? ev.net : base.counts?.net || 0,
+        nav: typeof ev.nav === "number" ? ev.nav : base.counts?.nav || 0,
+      }
+    } else if (ev.event === "mon_attach") {
+      const attachment = attachmentFromEvent(ev)
+      if (attachment) {
+        const idx = base.attachments.findIndex((item) => item.key === attachment.key)
+        if (idx === -1) base.attachments.push(attachment)
+        else base.attachments[idx] = { ...base.attachments[idx], ...attachment }
+        base.activeAttachmentKey = attachment.key
+      }
+    } else if (ev.event === "mon_detach") {
+      const attachment = attachmentFromEvent(ev)
+      if (attachment) {
+        const idx = base.attachments.findIndex((item) => item.key === attachment.key)
+        if (idx === -1) {
+          base.attachments.push({ ...attachment, detachedAt: typeof ev.t === "number" ? ev.t : Date.now() })
+        } else {
+          base.attachments[idx] = {
+            ...base.attachments[idx],
+            detachedAt: typeof ev.t === "number" ? ev.t : Date.now(),
+            reason: attachment.reason || base.attachments[idx].reason,
+            lifecycle: attachment.lifecycle || base.attachments[idx].lifecycle,
+            url: attachment.url || base.attachments[idx].url,
+          }
+        }
+        if (base.activeAttachmentKey === attachment.key) base.activeAttachmentKey = undefined
+      }
+    }
+
+    return base
+  })
+}
+
+function persistNetArtifactFromEvent(ev: Record<string, unknown>): void {
+  if (typeof ev.sid !== "string") return
+  const kind = ev.event
+  if (kind !== "fetch" && kind !== "xhr" && kind !== "sse") return
+  if (typeof ev.bp !== "string" || !ev.bp) return
+
+  appendSessionNetArtifact(ev.sid, {
+    sid: ev.sid,
+    seq: typeof ev.s === "number" ? ev.s : undefined,
+    tid: typeof ev.tid === "number" ? ev.tid : undefined,
+    doc: typeof ev.doc === "string" ? ev.doc : undefined,
+    cause: typeof ev.cause === "number" ? ev.cause : undefined,
+    kind,
+    url: typeof ev.u === "string" ? ev.u : "",
+    method: typeof ev.m === "string" ? ev.m : undefined,
+    status: typeof ev.st === "number" ? ev.st : undefined,
+    contentType: typeof ev.ct === "string" ? ev.ct : undefined,
+    truncated: ev.trn === true,
+    bodyBytes: typeof ev.bt === "number" ? ev.bt : undefined,
+    bodyPreview: ev.bp
+  })
 }
 
 const STANDALONE = process.argv.includes("--standalone")
@@ -379,7 +510,16 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
   }
 
   if (msg.type === "event") {
-    emitEvent(msg.event as string || "extension_event", msg as Record<string, unknown>)
+    const eventName = msg.event as string || "extension_event"
+    const eventPayload = { ...msg } as Record<string, unknown>
+    if (typeof eventPayload.sid === "string") {
+      try { persistNetArtifactFromEvent({ event: eventName, ...eventPayload }) } catch {}
+      delete eventPayload.bp
+      delete eventPayload.bt
+      delete eventPayload.trn
+      delete eventPayload.ct
+    }
+    emitEvent(eventName, eventPayload)
     return
   }
 
