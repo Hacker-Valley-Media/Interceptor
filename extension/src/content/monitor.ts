@@ -38,6 +38,8 @@ const SCROLL_THROTTLE_MS = 100
 
 let mutationObserver: MutationObserver | null = null
 
+const NET_BODY_PREVIEW_CAP = 64 * 1024
+
 type CapturedListener = { type: string; fn: EventListener; opts: AddEventListenerOptions }
 const attachedListeners: CapturedListener[] = []
 
@@ -106,6 +108,32 @@ function maskedValue(el: HTMLInputElement): string {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s
   return s.slice(0, max) + "…"
+}
+
+function shouldPersistBody(contentType: string, body: string): boolean {
+  const ct = (contentType || "").toLowerCase()
+  if (ct.includes("application/json")) return true
+  if (ct.includes("+json")) return true
+  if (ct.startsWith("text/")) return true
+  if (ct.includes("xml")) return true
+  if (ct.includes("javascript")) return true
+  if (!ct && /^[\[{]/.test(body.trim())) return true
+  return false
+}
+
+function redactSensitiveText(text: string): string {
+  return text
+    .replace(/("?(authorization|cookie|set-cookie|access[_-]?token|refresh[_-]?token|csrf|session(id)?|jwt)"?\s*[:=]\s*"?)([^"\s,&}]+)/gi, "$1[REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9._-]{20,}\b/g, "[REDACTED_JWT]")
+}
+
+function buildBodyPreview(contentType: string, body: string): { preview: string; bytes: number; truncated: boolean } | null {
+  if (!body) return null
+  if (!shouldPersistBody(contentType, body)) return null
+  const redacted = redactSensitiveText(body)
+  const truncated = redacted.length > NET_BODY_PREVIEW_CAP
+  const preview = truncated ? redacted.slice(0, NET_BODY_PREVIEW_CAP) : redacted
+  return { preview, bytes: body.length, truncated }
 }
 
 function targetFromEvent(e: Event): EventTarget | null {
@@ -380,17 +408,25 @@ function onInterceptorNet(e: Event) {
       body: string
       type: string
       timestamp: number
+      contentType?: string
+      truncated?: boolean
     }
     if (!detail) return
     const bodyLen = typeof detail.body === "string" ? detail.body.length : 0
     const now = Date.now()
     const cause = findCause(now)
+    const contentType = truncate(detail.contentType || "", 120)
+    const preview = cause !== undefined
+      ? buildBodyPreview(detail.contentType || "", detail.body || "")
+      : null
     emit({
       k: detail.type === "xhr" ? "xhr" : "fetch",
       u: truncate(detail.url || "", 512),
       m: detail.method || "GET",
       st: detail.status,
       bz: bodyLen,
+      ...(contentType ? { ct: contentType } : {}),
+      ...(preview ? { bp: preview.preview, bt: preview.bytes, trn: preview.truncated || detail.truncated === true } : {}),
       ...(cause !== undefined ? { cause } : {}),
     })
   } catch {}

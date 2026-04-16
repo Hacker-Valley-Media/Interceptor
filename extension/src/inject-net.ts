@@ -119,7 +119,16 @@ if ((window as any).__interceptor_net_installed) {
                     try {
                       const fullBody = chunks.join("")
                       document.dispatchEvent(new CustomEvent("__interceptor_net", {
-                        detail: { url, method, status: response.status, body: fullBody, type: "fetch", timestamp: Date.now(), truncated }
+                        detail: {
+                          url,
+                          method,
+                          status: response.status,
+                          body: fullBody,
+                          type: "fetch",
+                          timestamp: Date.now(),
+                          truncated,
+                          contentType
+                        }
                       }))
                       document.dispatchEvent(new CustomEvent("__interceptor_sse_done", {
                         detail: { url, method, status: response.status, totalChunks: chunkSeq, totalBytes, duration: Date.now() - streamStart }
@@ -182,7 +191,9 @@ if ((window as any).__interceptor_net_installed) {
               status: response.status,
               body,
               type: "fetch",
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              truncated: false,
+              contentType
             }
           }))
         }).catch(() => {})
@@ -240,7 +251,9 @@ if ((window as any).__interceptor_net_installed) {
             status: this.status,
             body: responseText,
             type: "xhr",
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            truncated: false,
+            contentType: (this.getResponseHeader("content-type") || "").toLowerCase()
           }
         }))
       } catch {}

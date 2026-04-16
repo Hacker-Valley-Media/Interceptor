@@ -1,5 +1,6 @@
 import { handleDaemonMessage, drainMessageQueue, pendingRequests } from "./message-dispatch"
 import { ensureInterceptorGroup } from "./tab-group"
+import { safePortPost } from "./safe-port-post"
 
 type ActiveTransport = "none" | "native" | "websocket"
 
@@ -18,22 +19,33 @@ function emitEvent(event: string, data: Record<string, unknown> = {}) {
   sendToHost({ type: "event", event, ...data })
 }
 
+function postNative(msg: unknown): boolean {
+  const port = nativePort
+  if (!port) return false
+  const res = safePortPost(port, msg)
+  if (res.posted) return true
+  console.error("nativePort.postMessage threw (port disconnected before onDisconnect fired):", res.error)
+  if (nativePort === port) nativePort = null
+  if (activeTransport === "native") activeTransport = "none"
+  return false
+}
+
 export function sendToHost(msg: unknown, forceWs?: boolean): void {
   if (forceWs && wsReady && wsChannel) {
     try { wsChannel.send(JSON.stringify(msg)) } catch {}
     return
   }
   if (activeTransport === "native" && nativePort) {
-    nativePort.postMessage(msg)
-    return
+    if (postNative(msg)) return
+    // fall through to ws channel if native postMessage failed
   }
   if (activeTransport === "websocket" && wsReady && wsChannel) {
     try { wsChannel.send(JSON.stringify(msg)) } catch {}
     return
   }
   if (nativePort) {
-    nativePort.postMessage(msg)
-    return
+    if (postNative(msg)) return
+    // fall through to ws channel if native postMessage failed
   }
   if (wsReady && wsChannel) {
     try { wsChannel.send(JSON.stringify(msg)) } catch {}

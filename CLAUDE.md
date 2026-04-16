@@ -14,7 +14,7 @@ interceptor read                              # Re-read current page (tree + tex
 interceptor inspect                           # Tree + text + network log + headers
 ```
 
-The daemon auto-starts. No setup needed.
+The daemon auto-starts. When working inside this repo, prefer `./dist/interceptor ...` if `interceptor` is not on `PATH`.
 
 ### Legacy (still works, but prefer compound commands above)
 
@@ -203,6 +203,8 @@ The `interceptor monitor` family records every real user click, keystroke, form 
 
 Monitor commands (`start`, `stop`, `pause`, `resume`) auto-resolve the target tab from the interceptor group when `--tab` is omitted. If the content script port is disconnected (e.g. after a service worker restart or long SPA session), the extension automatically re-injects `content.js` and retries.
 
+Active sessions automatically follow you across the interceptor tab group. If you switch focus to another tab in the cyan group, the monitor detaches from the previous tab and attaches to the new one (`mon_detach reason: focus_switch_handoff` + `mon_attach reason: focus_switch`). Tabs outside the interceptor group are never auto-attached. Child tabs opened by a trusted action on the monitored page (e.g. Canva's "Create new design") still take the dedicated child-tab handoff path (`reason: child_tab`).
+
 ```bash
 interceptor monitor start                              # Begin recording on the active interceptor tab
 interceptor monitor start --instruction "..."          # Annotate with task intent
@@ -216,6 +218,7 @@ interceptor monitor export <sessionId>                 # Aligned text rendering
 interceptor monitor export <sessionId> --json          # Raw JSONL
 interceptor monitor export <sessionId> --plan          # Replay script (interceptor ... lines)
 interceptor monitor export <sessionId> --plan --include-synthetic  # Include agent-driven clicks in plan
+interceptor monitor export <sessionId> --with-bodies   # Include persisted net-body context when available
 ```
 
 Event records are sparse — short keys (`t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `v`, `cause`) so a 30-minute session reads in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <seq>`. Real user events have `tr: true`; interceptor's own synthetic clicks have `tr: false`. The replay-plan generator automatically includes synthetic clicks when no real user events exist in the session (common when an agent drove the browser). Use `--include-synthetic` to force inclusion regardless.
@@ -232,7 +235,7 @@ interceptor wait-stable
 
 When the user runs the replay, interceptor's `find_and_click` / `find_and_type` re-resolves each selector against the live DOM — no stale ref problems.
 
-The monitor stores sessions in `/tmp/interceptor-events.jsonl` (the same file `interceptor events` already tails). Sessions are delimited by `mon_start` / `mon_stop` events with the same `sid`. Multiple sessions coexist historically and `interceptor monitor list` shows them all.
+The rolling live event stream lives in `/tmp/interceptor-events.jsonl` (the same file `interceptor events` tails). Export prefers per-session artifacts under `/tmp/interceptor-monitor-sessions/<sessionId>/` when available and falls back to the rolling event log for legacy sessions.
 
 ## Screenshots
 

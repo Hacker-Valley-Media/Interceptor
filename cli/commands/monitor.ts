@@ -8,6 +8,14 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import { EVENTS_PATH } from "../../shared/platform"
+import {
+  MONITOR_EVENT_NAMES,
+  hasSessionArtifacts,
+  listPersistedSessionIds,
+  readSessionEvents,
+  readSessionMeta,
+  readSessionNetArtifacts,
+} from "../../shared/monitor-artifacts"
 
 type Action = { type: string; [key: string]: unknown }
 
@@ -55,13 +63,6 @@ interface MonEvent {
   [key: string]: unknown
 }
 
-const MON_KINDS = new Set([
-  "mon_start", "mon_stop", "mon_pause", "mon_resume",
-  "click", "dblclick", "rclick", "input", "change", "submit",
-  "key", "scroll", "focus", "blur", "copy", "paste",
-  "mut", "fetch", "xhr", "sse", "nav", "reload", "error"
-])
-
 function flagValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag)
   if (i === -1) return undefined
@@ -72,7 +73,7 @@ function flagPresent(args: string[], flag: string): boolean {
   return args.indexOf(flag) !== -1
 }
 
-export function readMonEvents(filterSid?: string): MonEvent[] {
+function readGlobalMonEvents(filterSid?: string): MonEvent[] {
   if (!existsSync(EVENTS_PATH)) return []
   const content = readFileSync(EVENTS_PATH, "utf-8")
   if (!content.trim()) return []
@@ -81,7 +82,7 @@ export function readMonEvents(filterSid?: string): MonEvent[] {
     if (!line.trim()) continue
     try {
       const ev = JSON.parse(line) as MonEvent
-      if (!ev.event || !MON_KINDS.has(ev.event)) continue
+      if (!ev.event || !MONITOR_EVENT_NAMES.has(ev.event)) continue
       if (filterSid && ev.sid !== filterSid) continue
       out.push(ev)
     } catch {}
@@ -89,47 +90,74 @@ export function readMonEvents(filterSid?: string): MonEvent[] {
   return out
 }
 
+export function readMonEvents(filterSid?: string): MonEvent[] {
+  if (filterSid && hasSessionArtifacts(filterSid)) {
+    const sessionEvents = readSessionEvents(filterSid) as MonEvent[]
+    if (sessionEvents.length > 0) return sessionEvents
+  }
+  return readGlobalMonEvents(filterSid)
+}
+
+function summarizeEvents(
+  sid: string,
+  events: MonEvent[],
+  meta?: ReturnType<typeof readSessionMeta>
+): {
+  sid: string; tid?: number; url?: string; ins?: string;
+  startedAt: number; endedAt?: number; evt: number; mut: number;
+  net: number; dur?: number; status: "active" | "stopped"
+} {
+  const start = events.find((ev) => ev.event === "mon_start")
+  const stop = events.find((ev) => ev.event === "mon_stop")
+  let evtCount = 0
+  let mutCount = 0
+  let netCount = 0
+  for (const ev of events) {
+    evtCount += 1
+    if (ev.event === "mut") mutCount += 1
+    if (ev.event === "fetch" || ev.event === "xhr" || ev.event === "sse") netCount += 1
+  }
+  return {
+    sid,
+    tid: meta?.rootTabId ?? start?.tid,
+    url: meta?.url ?? start?.url,
+    ins: meta?.instruction ?? start?.ins,
+    startedAt: meta?.startedAt ?? start?.t ?? 0,
+    endedAt: meta?.endedAt ?? stop?.t,
+    evt: meta?.counts?.evt ?? evtCount,
+    mut: meta?.counts?.mut ?? mutCount,
+    net: meta?.counts?.net ?? netCount,
+    dur: stop?.dur ?? (meta?.endedAt && meta.startedAt ? meta.endedAt - meta.startedAt : undefined),
+    status: meta?.status ?? (stop ? "stopped" : "active")
+  }
+}
+
 export function listSessions(): Array<{
   sid: string; tid?: number; url?: string; ins?: string;
   startedAt: number; endedAt?: number; evt: number; mut: number;
   net: number; dur?: number; status: "active" | "stopped"
 }> {
-  const events = readMonEvents()
   const map = new Map<string, ReturnType<typeof listSessions>[number]>()
+  for (const sid of listPersistedSessionIds()) {
+    const events = readSessionEvents(sid) as MonEvent[]
+    const meta = readSessionMeta(sid)
+    if (!meta && events.length === 0) continue
+    map.set(sid, summarizeEvents(sid, events, meta))
+  }
+
+  const events = readGlobalMonEvents()
+  const grouped = new Map<string, MonEvent[]>()
   for (const ev of events) {
     if (!ev.sid) continue
-    let rec = map.get(ev.sid)
-    if (!rec) {
-      rec = {
-        sid: ev.sid,
-        tid: undefined,
-        url: undefined,
-        ins: undefined,
-        startedAt: ev.t || 0,
-        endedAt: undefined,
-        evt: 0,
-        mut: 0,
-        net: 0,
-        dur: undefined,
-        status: "active"
-      }
-      map.set(ev.sid, rec)
-    }
-    rec.evt += 1
-    if (ev.event === "mut") rec.mut += 1
-    if (ev.event === "fetch" || ev.event === "xhr") rec.net += 1
-    if (ev.event === "mon_start") {
-      rec.startedAt = ev.t || rec.startedAt
-      rec.tid = ev.tid
-      rec.url = ev.url
-      rec.ins = ev.ins
-    }
-    if (ev.event === "mon_stop") {
-      rec.endedAt = ev.t
-      rec.dur = ev.dur
-      rec.status = "stopped"
-    }
+    const bucket = grouped.get(ev.sid) || []
+    bucket.push(ev)
+    grouped.set(ev.sid, bucket)
   }
+  for (const [sid, group] of grouped) {
+    if (map.has(sid)) continue
+    map.set(sid, summarizeEvents(sid, group))
+  }
+
   return Array.from(map.values()).sort((a, b) => a.startedAt - b.startedAt)
 }
 
@@ -223,7 +251,22 @@ export function renderEvent(ev: MonEvent, base: number): string {
   }
 }
 
-export function renderSession(sid: string): string {
+function renderPersistedBodyComments(sid: string, cause: number | undefined): string[] {
+  if (cause === undefined) return []
+  const artifacts = readSessionNetArtifacts(sid).filter((artifact) => artifact.cause === cause)
+  const lines: string[] = []
+  for (const artifact of artifacts) {
+    lines.push(`            persisted body: ${artifact.kind.toUpperCase()} ${artifact.method || "GET"} ${artifact.url}`)
+    if (artifact.contentType) lines.push(`            content-type: ${artifact.contentType}`)
+    lines.push(`            bytes: ${artifact.bodyBytes || artifact.bodyPreview.length}${artifact.truncated ? " (truncated)" : ""}`)
+    for (const previewLine of artifact.bodyPreview.split("\n").slice(0, 12)) {
+      lines.push(`            ${previewLine}`)
+    }
+  }
+  return lines
+}
+
+export function renderSession(sid: string, includeBodies = false): string {
   const events = readMonEvents(sid)
   if (events.length === 0) return `(no events for session ${sid})`
   const start = events.find((e) => e.event === "mon_start")
@@ -239,6 +282,9 @@ export function renderSession(sid: string): string {
   for (const ev of events) {
     if (ev.event === "mon_start" || ev.event === "mon_stop") continue
     lines.push(renderEvent(ev, base))
+    if (includeBodies && (ev.event === "fetch" || ev.event === "xhr" || ev.event === "sse")) {
+      lines.push(...renderPersistedBodyComments(sid, typeof ev.cause === "number" ? ev.cause : undefined))
+    }
   }
   return lines.join("\n")
 }
@@ -247,7 +293,7 @@ export function escapeArg(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
 }
 
-export function buildPlan(sid: string, includeSynthetic = false): string {
+export function buildPlan(sid: string, includeSynthetic = false, includeBodies = false): string {
   const events = readMonEvents(sid)
   if (events.length === 0) return `# (no events for session ${sid})`
   const start = events.find((e) => e.event === "mon_start")
@@ -343,12 +389,40 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
         if (ev.cause !== undefined) {
           const u = ev.u ? shortUrl(ev.u) : ""
           lines.push(`#   correlated ${k} ${ev.m || "GET"} ${u} ${ev.st || 0}  cause:#${ev.cause}`)
-          if (u) lines.push(`# interceptor net log --filter "${escapeArg(u)}" --limit 1`)
+          const artifacts = includeBodies
+            ? readSessionNetArtifacts(sid).filter((artifact) => artifact.cause === ev.cause)
+            : []
+          if (artifacts.length > 0) {
+            for (const artifact of artifacts) {
+              lines.push(`#   persisted body ${artifact.kind.toUpperCase()} ${artifact.method || "GET"} ${artifact.url}`)
+              if (artifact.contentType) lines.push(`#   content-type: ${artifact.contentType}`)
+              lines.push(`#   bytes: ${artifact.bodyBytes || artifact.bodyPreview.length}${artifact.truncated ? " (truncated)" : ""}`)
+              for (const previewLine of artifact.bodyPreview.split("\n").slice(0, 12)) {
+                lines.push(`#   ${previewLine}`)
+              }
+            }
+          } else if (u) {
+            lines.push(`# interceptor net log --filter "${escapeArg(u)}" --limit 1`)
+          }
         } else {
           lines.push(`# autonomous ${k} ${ev.m || "GET"} ${ev.u || ""} (polling/timer)`)
         }
         break
       }
+      case "mon_attach": {
+        if (ev.reason === "child_tab" && ev.u) {
+          lines.push(`# handoff to child tab ${ev.tid || "?"}`)
+          lines.push(`interceptor tab new "${escapeArg(ev.u)}"`)
+          lines.push(`interceptor wait-stable`)
+        } else if (ev.reason === "focus_switch" && ev.tid) {
+          lines.push(`# focus-switch to tab ${ev.tid}${ev.u ? ` (${ev.u})` : ""}`)
+          lines.push(`interceptor tab switch ${ev.tid}`)
+          lines.push(`interceptor wait-stable`)
+        }
+        break
+      }
+      case "mon_detach":
+        break
       case "nav": {
         if (ev.typ === "hard" || ev.typ === "reload") {
           if (ev.u) {
@@ -373,10 +447,7 @@ export function buildPlan(sid: string, includeSynthetic = false): string {
 }
 
 function withBodies(planText: string, sid: string): string {
-  // For v1, --with-bodies emits the same plan but expands every commented `interceptor net log` line
-  // into an actual `interceptor net log` invocation. The agent runs the plan and the net log entries
-  // surface inline. Bodies themselves live in the live tab's net-buffer (cap 500); if rotated,
-  // the agent will see (no entries) — same as the existing interceptor net log behavior.
+  if (readSessionNetArtifacts(sid).length > 0) return planText
   return planText.replace(/^# interceptor net log /gm, "interceptor net log ")
 }
 
@@ -427,7 +498,7 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
           if (!line.trim()) continue
           try {
             const ev = JSON.parse(line) as MonEvent
-            if (!ev.event || !MON_KINDS.has(ev.event)) continue
+            if (!ev.event || !MONITOR_EVENT_NAMES.has(ev.event)) continue
             if (sidFilter && ev.sid !== sidFilter) continue
             if (raw || jsonMode) {
               console.log(line)
@@ -476,12 +547,12 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
       }
       if (plan) {
         const inclSynthetic = flagPresent(filtered, "--include-synthetic")
-        let text = buildPlan(sid, inclSynthetic)
+        let text = buildPlan(sid, inclSynthetic, wb)
         if (wb) text = withBodies(text, sid)
         console.log(text)
         return null
       }
-      console.log(renderSession(sid))
+      console.log(renderSession(sid, wb))
       return null
     }
 
