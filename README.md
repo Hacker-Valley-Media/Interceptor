@@ -177,7 +177,7 @@ The legacy individual commands (`interceptor tab new`, `interceptor tree`, `inte
 
 **Scene Graph** — Profile-driven access to visual editors that don't render to the DOM normally: Canva, Google Docs, Google Slides. Enumerate objects by stable ID, click shapes, read full document text, navigate slide decks, render pages to PNG. `interceptor scene` — no CDP, no vision, no screenshots needed.
 
-**Session Monitor** — Record a user's real interactions (clicks, keystrokes, form changes, DOM mutations, network calls) as a sparse event stream that replays as a `interceptor` script. `interceptor monitor start` / `interceptor monitor stop` / `interceptor monitor export --plan`. Monitor auto-resolves the active interceptor-managed tab when called without `--tab`, automatically re-injects the content script if the port is disconnected, and prefers session-local export artifacts when they are available.
+**Session Monitor** — Record a user's real interactions (clicks, keystrokes, form changes, DOM mutations, network calls) as a sparse event stream that replays as an `interceptor` script. Sessions are **document-scoped and tab-following**: a single recording survives refreshes and SPA navigation, automatically hands off to child tabs that the monitored page opens (e.g. Canva's "Create new design"), and follows you when you manually switch focus between tabs in the interceptor group. Personal tabs outside the cyan interceptor group are never auto-attached. Each session writes its own durable artifact directory (`/tmp/interceptor-monitor-sessions/<sid>/`) so exports don't depend on a rolling log, and `monitor stop` is transport-resilient — it cannot throw on a disconnected native port. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full monitor model.
 
 **Stealth** — Passes all major bot detection: BrowserScan (Normal), Pixelscan ("Definitely Human"), Sannysoft (all pass), CreepJS (0% headless), Fingerprint.com (notDetected), AreyouHeadless (not headless). Zero automation fingerprint.
 
@@ -355,6 +355,8 @@ Record every real user click, keystroke, form change, navigation, DOM mutation, 
 
 Monitor commands (`start`, `stop`, `pause`, `resume`) auto-resolve the target tab from the interceptor group when `--tab` is omitted. If the content script port is disconnected (e.g. after a service worker restart or long SPA session), the extension automatically re-injects `content.js` and retries — no `interceptor reload` needed.
 
+A session follows your focus across the interceptor tab group. Switch to another in-group tab and the monitor emits `mon_detach (reason: focus_switch_handoff)` + `mon_attach (reason: focus_switch)` and starts capturing there. Child tabs that the monitored page opens itself (via a trusted click) take the dedicated child-tab handoff path (`reason: child_tab`). Tabs outside the cyan interceptor group are never auto-attached. Reloads and SPA history/fragment navigations create new document-scoped attachments on the same tab (`reason: reload` / `history` / `fragment`).
+
 ```bash
 interceptor monitor start                              # Begin recording on the active interceptor tab
 interceptor monitor start --instruction "..."          # Annotate with task intent
@@ -369,23 +371,23 @@ interceptor monitor export <sessionId>                 # Aligned text rendering
 interceptor monitor export <sessionId> --json          # Raw JSONL for that session
 interceptor monitor export <sessionId> --plan          # Emit interceptor ... replay script
 interceptor monitor export <sessionId> --with-bodies   # Include persisted net-body context when available
-interceptor monitor export <sessionId> --with-bodies   # Include persisted net-body context when available
 ```
 
 Each event line is sparse JSON (short keys: `t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `cause`) so an agent can read a 30-minute session in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <action_seq>`. Real user events have `tr: true`; interceptor's own synthetic clicks have `tr: false`. The replay-plan generator automatically includes synthetic clicks when no real user events exist in the session (common when an agent drove the browser). Use `--include-synthetic` to force inclusion regardless.
 
-The rolling live event stream lives in `/tmp/interceptor-events.jsonl`. Export prefers per-session artifacts under `/tmp/interceptor-monitor-sessions/<sessionId>/` when available and falls back to the rolling event log for legacy sessions. `--with-bodies` uses persisted net-body artifacts when present and otherwise leaves `interceptor net log` hints in the replay output.
+The rolling live event stream lives in `/tmp/interceptor-events.jsonl`. Export prefers per-session artifacts under `/tmp/interceptor-monitor-sessions/<sessionId>/` (one directory per session containing `events.jsonl`, `session.json`, and `net.jsonl`) and falls back to the rolling event log for legacy sessions. `--with-bodies` uses persisted correlated net-body artifacts when present (body previews are capped at 64 KiB, redact `Authorization` / `Cookie` / token-shaped strings, and only persist JSON / text content types) and otherwise leaves `interceptor net log` hints in the replay output.
 
-The rolling live event stream lives in `/tmp/interceptor-events.jsonl`. Export prefers per-session artifacts under `/tmp/interceptor-monitor-sessions/<sessionId>/` when available and falls back to the rolling event log for legacy sessions. `--with-bodies` uses persisted net-body artifacts when present and otherwise leaves `interceptor net log` hints in the replay output.
-
-The replay script uses the existing semantic-selector path:
+The replay script uses semantic selectors that survive DOM churn, and for multi-tab sessions it emits explicit tab-handoff lines:
 ```
 interceptor tab new "https://example.com/"
 interceptor wait-stable
 interceptor click "button:Search"
 interceptor type "textbox:Query" "bun docs"
 interceptor keys "Enter"
+# focus-switch to tab 1729165117 (https://www.youtube.com/)
+interceptor tab switch 1729165117
 interceptor wait-stable
+interceptor click "button:Play"
 ```
 
 ### Screenshots

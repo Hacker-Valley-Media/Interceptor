@@ -223,15 +223,20 @@ interceptor monitor export <sessionId> --with-bodies   # Include persisted net-b
 
 Event records are sparse — short keys (`t`, `s`, `k`, `sid`, `ref`, `r`, `n`, `v`, `cause`) so a 30-minute session reads in a few KB. User actions get a session-monotonic `seq`; mutations and network calls fired within 500ms of an action carry `cause: <seq>`. Real user events have `tr: true`; interceptor's own synthetic clicks have `tr: false`. The replay-plan generator automatically includes synthetic clicks when no real user events exist in the session (common when an agent drove the browser). Use `--include-synthetic` to force inclusion regardless.
 
-The replay plan uses semantic selectors that survive DOM churn:
+The replay plan uses semantic selectors that survive DOM churn, and emits explicit tab-handoff lines for multi-tab sessions (`interceptor tab new "<url>"` for child-tab handoffs, `interceptor tab switch <tabId>` for focus-switch handoffs):
 ```
 interceptor tab new "https://example.com/"
 interceptor wait-stable
 interceptor click "button:Search"
 interceptor type "textbox:Query" "bun docs"
 interceptor keys "Enter"
+# focus-switch to tab 1729165117 (https://www.youtube.com/)
+interceptor tab switch 1729165117
 interceptor wait-stable
+interceptor click "button:Play"
 ```
+
+For the full monitor architecture (session vs attachment, document identity, child-tab handoff, focus-follow, durable artifacts, transport resilience), see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 When the user runs the replay, interceptor's `find_and_click` / `find_and_type` re-resolves each selector against the live DOM — no stale ref problems.
 
