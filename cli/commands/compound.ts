@@ -11,6 +11,13 @@ import { parseElementTarget } from "../parse"
 
 type Action = { type: string; [key: string]: unknown }
 type Result = { success: boolean; error?: string; data?: unknown; tabId?: number }
+type ReadAggregate = {
+  success: boolean
+  tree?: string
+  text?: string
+  error?: string
+  warnings?: string[]
+}
 
 function unwrap(resp: DaemonResponse): Result {
   return resp.result
@@ -37,6 +44,41 @@ async function send(action: Action, tabId?: number, useWs = false): Promise<Resu
   } catch (err) {
     return { success: false, error: (err as Error).message }
   }
+}
+
+export function aggregateReadResults(opts: {
+  treeRequested: boolean
+  textRequested: boolean
+  treeResult?: Result
+  textResult?: Result
+  full?: boolean
+}): ReadAggregate {
+  const warnings: string[] = []
+  let tree = ""
+  let text = ""
+
+  if (opts.treeRequested) {
+    if (opts.treeResult?.success) tree = textData(opts.treeResult)
+    else if (opts.treeResult?.error) warnings.push(`tree: ${opts.treeResult.error}`)
+  }
+
+  if (opts.textRequested) {
+    if (opts.textResult?.success) {
+      text = textData(opts.textResult)
+      if (!opts.full) text = truncateText(text, 2000)
+    } else if (opts.textResult?.error) {
+      warnings.push(`text: ${opts.textResult.error}`)
+    }
+  }
+
+  const anyRequested = opts.treeRequested || opts.textRequested
+  const anySucceeded = (!!tree && opts.treeRequested) || (!!text && opts.textRequested)
+
+  if (anyRequested && !anySucceeded && warnings.length > 0) {
+    return { success: false, error: warnings.join("; "), warnings }
+  }
+
+  return { success: true, tree: tree || undefined, text: text || undefined, warnings }
 }
 
 // ── interceptor open <url> ──────────────────────────────────────────────────────────
@@ -92,28 +134,46 @@ export async function runOpen(
   const parts: string[] = []
   let treeData = ""
   let textContent = ""
+  let treeResult: Result | undefined
+  let textResult: Result | undefined
 
   if (!textOnly) {
-    const treeResult = await send(
+    treeResult = await send(
       { type: "get_a11y_tree", depth: 15, filter: "interactive", maxChars: 50000 },
       tabId, useWs
     )
-    treeData = textData(treeResult)
   }
 
   if (!treeOnly) {
-    const textResult = await send({ type: "extract_text" }, tabId, useWs)
-    textContent = textData(textResult)
-    if (!full) textContent = truncateText(textContent, 2000)
+    textResult = await send({ type: "extract_text" }, tabId, useWs)
   }
 
-  if (jsonMode) {
-    output(jsonMode, {
-      success: true,
-      data: { tabId, url, tree: treeData || undefined, text: textContent || undefined }
-    })
+  const aggregate = aggregateReadResults({
+    treeRequested: !textOnly,
+    textRequested: !treeOnly,
+    treeResult,
+    textResult,
+    full
+  })
+
+  if (!aggregate.success) {
+    output(jsonMode, { success: false, error: aggregate.error || "could not read page" })
     return
   }
+  treeData = aggregate.tree || ""
+  textContent = aggregate.text || ""
+
+  if (jsonMode) {
+    const result: { success: boolean; data?: unknown; warning?: string } = {
+      success: true,
+      data: { tabId, url, tree: treeData || undefined, text: textContent || undefined }
+    }
+    if (aggregate.warnings?.length) result.warning = aggregate.warnings.join("; ")
+    output(jsonMode, result)
+    return
+  }
+
+  if (aggregate.warnings?.length) console.error(`warning: ${aggregate.warnings.join("; ")}`)
 
   // Pretty output
   parts.push(`Tab: ${tabId} | ${url}`)
@@ -152,29 +212,47 @@ export async function runRead(
   const parts: string[] = []
   let treeData = ""
   let textContent = ""
+  let treeResult: Result | undefined
+  let textResult: Result | undefined
 
   if (!textOnly) {
-    const treeResult = await send(
+    treeResult = await send(
       { type: "get_a11y_tree", depth: 15, filter: filterMode, maxChars: 50000 },
       globalTabId, useWs
     )
-    treeData = textData(treeResult)
   }
 
   if (!treeOnly) {
     const textAction: Action = { type: "extract_text", ...target }
-    const textResult = await send(textAction, globalTabId, useWs)
-    textContent = textData(textResult)
-    if (!full) textContent = truncateText(textContent, 2000)
+    textResult = await send(textAction, globalTabId, useWs)
   }
 
-  if (jsonMode) {
-    output(jsonMode, {
-      success: true,
-      data: { tree: treeData || undefined, text: textContent || undefined }
-    })
+  const aggregate = aggregateReadResults({
+    treeRequested: !textOnly,
+    textRequested: !treeOnly,
+    treeResult,
+    textResult,
+    full
+  })
+
+  if (!aggregate.success) {
+    output(jsonMode, { success: false, error: aggregate.error || "could not read page" })
     return
   }
+  treeData = aggregate.tree || ""
+  textContent = aggregate.text || ""
+
+  if (jsonMode) {
+    const result: { success: boolean; data?: unknown; warning?: string } = {
+      success: true,
+      data: { tree: treeData || undefined, text: textContent || undefined }
+    }
+    if (aggregate.warnings?.length) result.warning = aggregate.warnings.join("; ")
+    output(jsonMode, result)
+    return
+  }
+
+  if (aggregate.warnings?.length) console.error(`warning: ${aggregate.warnings.join("; ")}`)
 
   if (treeData) parts.push(treeData)
   if (textContent && treeData) {

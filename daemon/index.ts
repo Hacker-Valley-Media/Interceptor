@@ -2,6 +2,7 @@ import { unlinkSync, existsSync, appendFileSync, statSync, readFileSync, writeFi
 import { execSync, spawn } from "node:child_process"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
+import { chooseOutboundTransport } from "./outbound-routing"
 
 // ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
 const BRIDGE_SOCKET_PATH = "/tmp/interceptor-bridge.sock"
@@ -190,39 +191,43 @@ log(`daemon starting (mode: ${STANDALONE ? "standalone" : "native-messaging"})`)
 async function startNativeRelay(existingPid: number): Promise<never> {
   log(`relay mode: bridging native messaging to singleton (pid ${existingPid})`)
 
-  const connectOpts = IS_WIN
-    ? { hostname: "127.0.0.1", port: IPC_PORT }
-    : { unix: SOCKET_PATH }
-
   let singletonSocket: Bun.Socket<undefined> | null = null
 
   try {
-    singletonSocket = await Bun.connect<undefined>({
-      ...connectOpts,
-      socket: {
-        open(socket: Bun.Socket<undefined>) {
-          // Register as native relay — singleton routes traffic to handleNativeMessage
-          const reg = JSON.stringify({ type: "native-relay" })
-          const encoded = Buffer.from(reg, "utf-8")
-          const header = Buffer.alloc(4)
-          header.writeUInt32LE(encoded.byteLength, 0)
-          socket.write(Buffer.concat([header, encoded]))
-          log("relay: registered with singleton")
-        },
-        data(_socket: Bun.Socket<undefined>, raw: Buffer<ArrayBufferLike>) {
-          // Singleton → stdout (Chrome)
-          process.stdout.write(Buffer.from(raw))
-        },
-        close() {
-          log("relay: singleton disconnected — exiting")
-          process.exit(0)
-        },
-        error(_socket: Bun.Socket<undefined>, err: Error) {
-          log(`relay: socket error — ${err.message}`)
-          process.exit(1)
-        }
+    const relaySocketHandlers: Bun.SocketHandler<undefined> = {
+      open(socket: Bun.Socket<undefined>) {
+        // Register as native relay — singleton routes traffic to handleNativeMessage
+        const reg = JSON.stringify({ type: "native-relay" })
+        const encoded = Buffer.from(reg, "utf-8")
+        const header = Buffer.alloc(4)
+        header.writeUInt32LE(encoded.byteLength, 0)
+        socket.write(Buffer.concat([header, encoded]))
+        log("relay: registered with singleton")
+      },
+      data(_socket: Bun.Socket<undefined>, raw: Buffer<ArrayBufferLike>) {
+        // Singleton → stdout (Chrome)
+        process.stdout.write(Buffer.from(raw))
+      },
+      close() {
+        log("relay: singleton disconnected — exiting")
+        process.exit(0)
+      },
+      error(_socket: Bun.Socket<undefined>, err: Error) {
+        log(`relay: socket error — ${err.message}`)
+        process.exit(1)
       }
-    })
+    }
+
+    singletonSocket = IS_WIN
+      ? await Bun.connect<undefined>({
+        hostname: "127.0.0.1",
+        port: IPC_PORT,
+        socket: relaySocketHandlers
+      })
+      : await Bun.connect<undefined>({
+        unix: SOCKET_PATH,
+        socket: relaySocketHandlers
+      })
   } catch (err) {
     log(`relay: failed to connect to singleton — exiting: ${(err as Error).message}`)
     process.exit(1)
@@ -449,9 +454,24 @@ function drainWsOutboundQueue(): void {
 
 function sendNativeMessage(msg: unknown): void {
   const json = JSON.stringify(msg)
-  // Prefer native relay — ensures pong reaches Chrome via native messaging path
-  // (extensionWs drops pong because its handler only processes msg.id && msg.action)
-  if (nativeRelaySocket) {
+  const preferred = chooseOutboundTransport(msg, {
+    nativeRelayAvailable: !!nativeRelaySocket,
+    extensionWsAvailable: !!extensionWs,
+    stdinAlive,
+    standalone: STANDALONE
+  })
+
+  if (preferred === "ws" && extensionWs) {
+    log(`forwarding via ws: ${json.slice(0, 200)}`)
+    try {
+      extensionWs.send(json)
+      return
+    } catch (err) {
+      log(`ws send error: ${(err as Error).message}`)
+    }
+  }
+
+  if (preferred === "relay" && nativeRelaySocket) {
     log(`forwarding via relay: ${json.slice(0, 200)}`)
     try {
       socketWriteFramed(nativeRelaySocket, json)
@@ -461,27 +481,51 @@ function sendNativeMessage(msg: unknown): void {
       nativeRelaySocket = null
     }
   }
+
+  if (preferred === "native" && !STANDALONE && stdinAlive) {
+    log(`forwarding via native: ${json.slice(0, 200)}`)
+    const encoded = Buffer.from(json, "utf-8")
+    const header = Buffer.alloc(4)
+    header.writeUInt32LE(encoded.byteLength, 0)
+    const combined = Buffer.concat([header, encoded])
+    process.stdout.write(combined)
+    return
+  }
+
   if (extensionWs) {
-    log(`forwarding via ws: ${json.slice(0, 200)}`)
+    log(`fallback via ws: ${json.slice(0, 200)}`)
     try {
       extensionWs.send(json)
       return
     } catch (err) {
-      log(`ws send error: ${(err as Error).message}`)
+      log(`fallback ws send error: ${(err as Error).message}`)
     }
   }
-  if (STANDALONE || !stdinAlive) {
-    if (wsOutboundQueue.length >= WS_QUEUE_CAP) wsOutboundQueue.shift()
-    wsOutboundQueue.push(json)
-    log(`queued for ws (${wsOutboundQueue.length} pending): ${json.slice(0, 100)}`)
+
+  if (nativeRelaySocket) {
+    log(`fallback via relay: ${json.slice(0, 200)}`)
+    try {
+      socketWriteFramed(nativeRelaySocket, json)
+      return
+    } catch (err) {
+      log(`fallback relay send error: ${(err as Error).message}`)
+      nativeRelaySocket = null
+    }
+  }
+
+  if (!STANDALONE && stdinAlive) {
+    log(`fallback via native: ${json.slice(0, 200)}`)
+    const encoded = Buffer.from(json, "utf-8")
+    const header = Buffer.alloc(4)
+    header.writeUInt32LE(encoded.byteLength, 0)
+    const combined = Buffer.concat([header, encoded])
+    process.stdout.write(combined)
     return
   }
-  log(`forwarding via native: ${json.slice(0, 200)}`)
-  const encoded = Buffer.from(json, "utf-8")
-  const header = Buffer.alloc(4)
-  header.writeUInt32LE(encoded.byteLength, 0)
-  const combined = Buffer.concat([header, encoded])
-  process.stdout.write(combined)
+
+  if (wsOutboundQueue.length >= WS_QUEUE_CAP) wsOutboundQueue.shift()
+  wsOutboundQueue.push(json)
+  log(`queued for ws (${wsOutboundQueue.length} pending): ${json.slice(0, 100)}`)
 }
 
 let stdinAlive = !STANDALONE
