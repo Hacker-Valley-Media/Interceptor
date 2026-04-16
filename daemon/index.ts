@@ -182,14 +182,78 @@ const STANDALONE = process.argv.includes("--standalone")
 
 log(`daemon starting (mode: ${STANDALONE ? "standalone" : "native-messaging"})`)
 
+// ── Native Relay ─────────────────────────────────────────────────────────────
+// When Chrome spawns a new daemon (native-messaging mode) and a singleton is
+// already running, the new process becomes a transparent stdio↔IPC bridge
+// instead of exiting. This prevents the "native host disconnected" error cycle
+// that occurs every ~30s due to MV3 service worker reconnects.
+async function startNativeRelay(existingPid: number): Promise<never> {
+  log(`relay mode: bridging native messaging to singleton (pid ${existingPid})`)
+
+  const connectOpts = IS_WIN
+    ? { hostname: "127.0.0.1", port: IPC_PORT }
+    : { unix: SOCKET_PATH }
+
+  let singletonSocket: Bun.Socket<undefined> | null = null
+
+  try {
+    singletonSocket = await Bun.connect<undefined>({
+      ...connectOpts,
+      socket: {
+        open(socket: Bun.Socket<undefined>) {
+          // Register as native relay — singleton routes traffic to handleNativeMessage
+          const reg = JSON.stringify({ type: "native-relay" })
+          const encoded = Buffer.from(reg, "utf-8")
+          const header = Buffer.alloc(4)
+          header.writeUInt32LE(encoded.byteLength, 0)
+          socket.write(Buffer.concat([header, encoded]))
+          log("relay: registered with singleton")
+        },
+        data(_socket: Bun.Socket<undefined>, raw: Buffer<ArrayBufferLike>) {
+          // Singleton → stdout (Chrome)
+          process.stdout.write(Buffer.from(raw))
+        },
+        close() {
+          log("relay: singleton disconnected — exiting")
+          process.exit(0)
+        },
+        error(_socket: Bun.Socket<undefined>, err: Error) {
+          log(`relay: socket error — ${err.message}`)
+          process.exit(1)
+        }
+      }
+    })
+  } catch (err) {
+    log(`relay: failed to connect to singleton — exiting: ${(err as Error).message}`)
+    process.exit(1)
+  }
+
+  // Chrome stdin → singleton IPC socket
+  process.stdin.on("data", (chunk: Buffer) => {
+    if (singletonSocket) singletonSocket.write(chunk)
+  })
+  process.stdin.on("end", () => {
+    log("relay: stdin ended (Chrome disconnected) — exiting")
+    process.exit(0)
+  })
+  process.stdin.resume()
+
+  // Keep alive — Bun exits when event loop is empty
+  while (true) await Bun.sleep(30_000)
+}
+
 if (existsSync(PID_PATH)) {
   try {
     const existingPid = parseInt(readFileSync(PID_PATH, "utf-8").trim().split("\n")[0])
     if (!isNaN(existingPid) && existingPid !== process.pid) {
       try {
         process.kill(existingPid, 0)
-        log(`another daemon already running (pid ${existingPid}) — exiting`)
-        process.exit(0)
+        if (STANDALONE) {
+          log(`another daemon already running (pid ${existingPid}) — exiting`)
+          process.exit(0)
+        }
+        // Native-messaging mode: become a relay instead of exiting
+        await startNativeRelay(existingPid)
       } catch {
         log(`stale pid file for dead process ${existingPid} — taking over`)
       }
@@ -370,6 +434,7 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
 }
 
 let extensionWs: { send: (data: string) => void } | null = null
+let nativeRelaySocket: Bun.Socket<undefined> | null = null
 const wsOutboundQueue: string[] = []
 const WS_QUEUE_CAP = 50
 
@@ -384,6 +449,18 @@ function drainWsOutboundQueue(): void {
 
 function sendNativeMessage(msg: unknown): void {
   const json = JSON.stringify(msg)
+  // Prefer native relay — ensures pong reaches Chrome via native messaging path
+  // (extensionWs drops pong because its handler only processes msg.id && msg.action)
+  if (nativeRelaySocket) {
+    log(`forwarding via relay: ${json.slice(0, 200)}`)
+    try {
+      socketWriteFramed(nativeRelaySocket, json)
+      return
+    } catch (err) {
+      log(`relay send error: ${(err as Error).message}`)
+      nativeRelaySocket = null
+    }
+  }
   if (extensionWs) {
     log(`forwarding via ws: ${json.slice(0, 200)}`)
     try {
@@ -517,11 +594,25 @@ try {
           const jsonBuf = buf.subarray(4, 4 + msgLen)
           buf = buf.subarray(4 + msgLen)
 
-          let request: { id?: string; action?: unknown; tabId?: number }
+          let request: { id?: string; action?: unknown; tabId?: number; type?: string }
           try {
             request = JSON.parse(jsonBuf.toString("utf-8"))
           } catch {
             socketWriteFramed(socket, JSON.stringify({ error: "invalid JSON" }))
+            continue
+          }
+
+          // Native relay registration — relay process identifies itself
+          if (request.type === "native-relay") {
+            ;(socket as any).__nativeRelay = true
+            nativeRelaySocket = socket
+            log("native relay registered via IPC socket")
+            continue
+          }
+
+          // Native relay message forwarding — route to extension protocol handler
+          if ((socket as any).__nativeRelay) {
+            handleNativeMessage(request as any)
             continue
           }
 
@@ -587,6 +678,10 @@ try {
         drainSocketQueue(socket)
       },
       close(socket: Bun.Socket<undefined>) {
+        if ((socket as any).__nativeRelay) {
+          nativeRelaySocket = null
+          log("native relay disconnected")
+        }
         socketBuffers.delete(socket)
         socketWriteQueues.delete(socket)
         log("cli disconnected")
