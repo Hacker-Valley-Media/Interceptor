@@ -1,8 +1,26 @@
-export async function sendToContentScript(
+import { shouldRetryContentScript } from "../../../shared/content-script-retry"
+
+async function injectContentScript(
+  tabId: number,
+  frameId?: number
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const target = frameId !== undefined
+      ? { tabId, frameIds: [frameId] }
+      : { tabId }
+    await chrome.scripting.executeScript({ target, files: ["content.js"] })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: (err as Error).message }
+  }
+}
+
+async function sendToContentScriptOnce(
   tabId: number,
   action: { type: string; [key: string]: unknown },
   frameId?: number
-): Promise<unknown> {
+): Promise<{ success: boolean; error?: string; data?: unknown }> {
   return new Promise((resolve) => {
     const targetFrame = frameId !== undefined ? frameId : 0
     chrome.tabs.sendMessage(
@@ -18,6 +36,31 @@ export async function sendToContentScript(
       }
     )
   })
+}
+
+export async function sendToContentScript(
+  tabId: number,
+  action: { type: string; [key: string]: unknown },
+  frameId?: number
+): Promise<unknown> {
+  const first = await sendToContentScriptOnce(tabId, action, frameId)
+  if (first.success || !shouldRetryContentScript(first.error)) return first
+
+  const injected = await injectContentScript(tabId, frameId)
+  if (!injected.success) {
+    return {
+      success: false,
+      error: `content script unavailable on tab ${tabId} and reinjection failed: ${injected.error}`
+    }
+  }
+
+  const retried = await sendToContentScriptOnce(tabId, action, frameId)
+  if (retried.success) return retried
+
+  return {
+    success: false,
+    error: `content script re-injected on tab ${tabId} but action still failed: ${retried.error || "unknown error"}`
+  }
 }
 
 export async function sendNetDirect(
