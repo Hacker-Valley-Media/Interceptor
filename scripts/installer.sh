@@ -10,10 +10,12 @@ INJECT="$ROOT/scripts/inject.py"
 EXT_SRC="$ROOT/extension/dist"
 DAEMON_SRC="$ROOT/daemon/interceptor-daemon"
 CLI_SRC="$ROOT/dist/interceptor"
+BRIDGE_SRC="$ROOT/dist/interceptor-bridge"
+PLIST_SRC="$ROOT/launch/com.interceptor.bridge.plist"
 
 # ── Copy binaries to persistent location ──────────────────────────────────────
 INSTALL_DIR="$HOME/.interceptor"
-mkdir -p "$INSTALL_DIR/bin"
+mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/launch"
 cp -f "$DAEMON_SRC" "$INSTALL_DIR/bin/interceptor-daemon"
 chmod +x "$INSTALL_DIR/bin/interceptor-daemon"
 if [[ -f "$CLI_SRC" ]]; then
@@ -21,6 +23,31 @@ if [[ -f "$CLI_SRC" ]]; then
   chmod +x "$INSTALL_DIR/bin/interceptor"
 fi
 DAEMON="$INSTALL_DIR/bin/interceptor-daemon"
+
+# ── PRD-35: install the macOS bridge + LaunchAgent ───────────────────────────
+# The bridge powers all 'interceptor macos *' commands (AX tree, CGEvent input,
+# screenshots, vision/NLP). Without it, half the product is silently inert.
+BRIDGE_INSTALLED=0
+if [[ -f "$BRIDGE_SRC" ]]; then
+  cp -f "$BRIDGE_SRC" "$INSTALL_DIR/bin/interceptor-bridge"
+  chmod +x "$INSTALL_DIR/bin/interceptor-bridge"
+  BRIDGE_INSTALLED=1
+fi
+
+# LaunchAgent makes the bridge auto-start at login and respawn on crash.
+# The plist in-tree points at /usr/local/bin/interceptor-bridge — rewrite it
+# to point at the user's install path.
+PLIST_DST="$HOME/Library/LaunchAgents/com.interceptor.bridge.plist"
+if [[ "$BRIDGE_INSTALLED" == "1" && -f "$PLIST_SRC" ]]; then
+  mkdir -p "$HOME/Library/LaunchAgents"
+  sed "s|/usr/local/bin/interceptor-bridge|$INSTALL_DIR/bin/interceptor-bridge|g" \
+    "$PLIST_SRC" > "$INSTALL_DIR/launch/com.interceptor.bridge.plist"
+  cp -f "$INSTALL_DIR/launch/com.interceptor.bridge.plist" "$PLIST_DST"
+
+  # Unload any previous instance (idempotent on re-install), then load.
+  launchctl unload "$PLIST_DST" 2>/dev/null || true
+  launchctl load "$PLIST_DST" 2>/dev/null || true
+fi
 
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if [[ ! -f "$INJECT" ]]; then
@@ -171,5 +198,26 @@ case "$BROWSER" in
 esac
 
 osascript -e 'display notification "Interceptor installed successfully! Your browser is starting." with title "Interceptor" sound name "Glass"' 2>/dev/null || true
+
+# ── PRD-35: first-run macOS permission walkthrough ────────────────────────────
+# The bridge needs three Privacy toggles to do its job. Point the user there
+# explicitly — otherwise they see "error: interceptor-bridge not running" the
+# first time they run an `interceptor macos *` command.
+if [[ "$BRIDGE_INSTALLED" == "1" ]]; then
+  WALK_MSG="Interceptor can now control your Mac, not just the browser.
+
+To enable that, grant these three permissions to interceptor-bridge in System Settings → Privacy & Security:
+
+• Accessibility — AX tree + OS-level clicks & keys
+• Input Monitoring — trusted keyboard/mouse input
+• Screen Recording — screenshots, OCR, Vision APIs
+
+Click Open to jump to Privacy & Security now."
+
+  CHOICE=$(osascript -e "display dialog \"$WALK_MSG\" buttons {\"Later\", \"Open\"} default button \"Open\" with title \"Interceptor — macOS Permissions\"" 2>/dev/null | sed 's/button returned://')
+  if [[ "$CHOICE" == "Open" ]]; then
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
+  fi
+fi
 
 exit 0

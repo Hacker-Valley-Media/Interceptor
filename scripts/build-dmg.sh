@@ -87,10 +87,28 @@ chmod +x "$PAYLOAD/daemon/interceptor-daemon"
 cp "$ROOT/dist/interceptor" "$PAYLOAD/dist/interceptor"
 chmod +x "$PAYLOAD/dist/interceptor"
 
+# Bridge binary (macOS native control) — PRD-35
+if [[ -f "$ROOT/dist/interceptor-bridge" ]]; then
+  cp "$ROOT/dist/interceptor-bridge" "$PAYLOAD/dist/interceptor-bridge"
+  chmod +x "$PAYLOAD/dist/interceptor-bridge"
+else
+  echo "ERROR: dist/interceptor-bridge not found — run scripts/build-bridge.sh first" >&2
+  echo "       (the DMG is for macOS; the bridge is required for 'interceptor macos *' commands)" >&2
+  exit 1
+fi
+
+# LaunchAgent plist template (installer.sh rewrites the path at install time) — PRD-35
+mkdir -p "$PAYLOAD/launch"
+cp "$ROOT/interceptor-bridge/com.interceptor.bridge.plist" "$PAYLOAD/launch/com.interceptor.bridge.plist"
+
 # Scripts
 cp "$ROOT/scripts/inject.py" "$PAYLOAD/scripts/inject.py"
 cp "$ROOT/scripts/installer.sh" "$PAYLOAD/scripts/installer.sh"
 chmod +x "$PAYLOAD/scripts/installer.sh"
+if [[ -f "$ROOT/scripts/uninstall.sh" ]]; then
+  cp "$ROOT/scripts/uninstall.sh" "$PAYLOAD/scripts/uninstall.sh"
+  chmod +x "$PAYLOAD/scripts/uninstall.sh"
+fi
 
 # Native messaging template
 mkdir -p "$PAYLOAD/daemon"

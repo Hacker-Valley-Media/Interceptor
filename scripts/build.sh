@@ -45,16 +45,33 @@ build_windows() {
   bun build daemon/index.ts --compile --target=bun-windows-x64 --outfile=daemon/interceptor-daemon.exe
 }
 
+build_bridge() {
+  # Swift-only, macOS-only. Warn-and-continue on CI/linux hosts.
+  if ! command -v swift >/dev/null 2>&1; then
+    echo "Skipping interceptor-bridge (swift toolchain not found)"
+    return 0
+  fi
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "Skipping interceptor-bridge (not on macOS)"
+    return 0
+  fi
+  echo "Building interceptor-bridge (macOS native)..."
+  bash scripts/build-bridge.sh
+}
+
 build_extension
 
 if [[ "$BUILD_ALL" == "1" ]]; then
   build_host
   build_macos
   build_windows
+  build_bridge
 elif [[ "$TARGET" == "host" ]]; then
   build_host
+  build_bridge
 elif [[ "$TARGET" == "macos" ]]; then
   build_macos
+  build_bridge
 elif [[ "$TARGET" == "windows" ]]; then
   build_windows
 else
