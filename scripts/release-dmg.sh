@@ -107,10 +107,9 @@ PAYLOAD="$APP_DIR/Contents/Resources/interceptor"
 # can lose the signature or touch mtime). Doing this here is belt-and-suspenders.
 sign_one "$PAYLOAD/dist/interceptor"             "com.hackervalley.interceptor-cli"
 sign_one "$PAYLOAD/daemon/interceptor-daemon"    "com.hackervalley.interceptor-daemon"
-# Bridge is not embedded in the DMG (it installs separately) but if a future
-# change adds it, sign here too.
-[[ -f "$PAYLOAD/dist/interceptor-bridge" ]] && \
-  sign_one "$PAYLOAD/dist/interceptor-bridge" "com.hackervalley.interceptor-bridge"
+# PRD-35: bridge is now embedded in the DMG. Re-sign the payload copy so the
+# signature survives cp + the .app deep-sign below treats it as already valid.
+sign_one "$PAYLOAD/dist/interceptor-bridge"      "com.hackervalley.interceptor-bridge"
 
 # Sign the .app bundle itself (deep, so any nested Mach-Os are covered)
 echo "    Signing .app bundle (deep)"

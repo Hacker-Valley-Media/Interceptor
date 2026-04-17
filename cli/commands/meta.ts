@@ -37,13 +37,46 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
       if (daemonPid) statusLines.push(`pid: ${daemonPid}`)
       statusLines.push(`socket: ${sockExists ? SOCKET_PATH : "not found"}`)
       statusLines.push(`transport: ${transport}`)
+
+      // PRD-35: bridge health. The bridge powers `interceptor macos *` and is
+      // installed as a user LaunchAgent by the DMG installer.
+      const BRIDGE_PID_PATH = "/tmp/interceptor-bridge.pid"
+      const BRIDGE_SOCK_PATH = "/tmp/interceptor-bridge.sock"
+      const bridgeSockExists = !IS_WIN && existsSync(BRIDGE_SOCK_PATH)
+      let bridgePid: number | null = null
+      let bridgeAlive = false
+      if (existsSync(BRIDGE_PID_PATH)) {
+        try {
+          bridgePid = parseInt(readFileSync(BRIDGE_PID_PATH, "utf-8").trim())
+          if (!isNaN(bridgePid)) {
+            try { process.kill(bridgePid, 0); bridgeAlive = true } catch { bridgeAlive = false }
+          }
+        } catch {}
+      }
+      statusLines.push("")
+      statusLines.push(`bridge: ${bridgeAlive ? "running" : "not running"}`)
+      if (bridgePid) statusLines.push(`  pid: ${bridgePid}`)
+      statusLines.push(`  socket: ${bridgeSockExists ? BRIDGE_SOCK_PATH : "not found"}`)
+      if (!bridgeAlive) {
+        statusLines.push("  hint: 'interceptor macos *' commands require the bridge. If you installed")
+        statusLines.push("        via DMG, launchctl should auto-start it. Try 'launchctl load ~/Library/LaunchAgents/com.interceptor.bridge.plist'")
+      }
+
       if (!daemonAlive) {
         statusLines.push("")
         statusLines.push("hint: run any interceptor command and the daemon will auto-start.")
         statusLines.push("ensure Chrome/Brave has the Interceptor extension loaded for browser control.")
       }
       if (jsonMode) {
-        console.log(JSON.stringify({ daemon: daemonAlive, pid: daemonPid, socket: sockExists ? SOCKET_PATH : null, transport }, null, 2))
+        console.log(JSON.stringify({
+          daemon: daemonAlive,
+          pid: daemonPid,
+          socket: sockExists ? SOCKET_PATH : null,
+          transport,
+          bridge: bridgeAlive,
+          bridgePid,
+          bridgeSocket: bridgeSockExists ? BRIDGE_SOCK_PATH : null
+        }, null, 2))
       } else {
         console.log(statusLines.join("\n"))
       }
