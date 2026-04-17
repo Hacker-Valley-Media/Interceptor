@@ -601,7 +601,7 @@ pkill interceptor-daemon                      # Next command auto-respawns
 ### Extension install (DMG — recommended)
 ```bash
 bash scripts/build-dmg.sh              # Build DMG installer
-# Open dist/Interceptor-v0.6.0-macOS.dmg, double-click Install Interceptor
+# Open dist/Interceptor-v0.7.0-macOS.dmg, double-click Install Interceptor
 # Select browser + profile → done
 ```
 
