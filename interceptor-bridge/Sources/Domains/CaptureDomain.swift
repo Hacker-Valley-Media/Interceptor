@@ -26,6 +26,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
         let quality = action["quality"] as? Int ?? 80
         let displayId = action["display"] as? Int
         let windowId = action["window"] as? Int
+        let requestedCwd = action["cwd"] as? String
 
         Task {
             do {
@@ -91,9 +92,9 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                 if save {
                     let ext = format == "png" ? "png" : "jpg"
                     let filename = "interceptor-macos-screenshot-\(Int(Date().timeIntervalSince1970)).\(ext)"
-                    let path = FileManager.default.currentDirectoryPath + "/" + filename
-                    try data.write(to: URL(fileURLWithPath: path))
-                    completion(WireFormat.success(["dataUrl": dataUrl, "filePath": path, "format": format, "bytes": data.count]))
+                    let fileURL = resolveSaveURL(filename: filename, requestedCwd: requestedCwd)
+                    try data.write(to: fileURL)
+                    completion(WireFormat.success(["dataUrl": dataUrl, "filePath": fileURL.path, "format": format, "bytes": data.count]))
                 } else {
                     completion(WireFormat.success(["dataUrl": dataUrl, "format": format, "bytes": data.count]))
                 }
@@ -106,6 +107,26 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    private func resolveSaveURL(filename: String, requestedCwd: String?) -> URL {
+        let fm = FileManager.default
+
+        let candidateDirs: [URL] = [
+            requestedCwd.map { URL(fileURLWithPath: $0, isDirectory: true) },
+            fm.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+            URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        ].compactMap { $0 }
+
+        for dir in candidateDirs {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue, fm.isWritableFile(atPath: dir.path) {
+                return dir.appendingPathComponent(filename, isDirectory: false)
+            }
+        }
+
+        return URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(filename, isDirectory: false)
     }
 
     private func handleCapture(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {

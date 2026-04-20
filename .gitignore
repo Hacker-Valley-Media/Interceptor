@@ -9,7 +9,8 @@ daemon/.generated/
 .DS_Store
 interceptor-screenshot-*.jpg
 interceptor-screenshot-*.png
-prd/
+interceptor-macos-screenshot-*.jpg
+interceptor-macos-screenshot-*.png
 scripts/auto-improve/
 signing.env
 notarization.env

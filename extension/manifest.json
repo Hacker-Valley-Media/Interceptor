@@ -8,6 +8,7 @@
   "permissions": [
     "activeTab",
     "scripting",
+    "userScripts",
     "tabs",
     "storage",
     "nativeMessaging",

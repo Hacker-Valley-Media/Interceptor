@@ -18,7 +18,20 @@ export async function handleMetaActions(
     case "capabilities": {
       const daemonConnected = activeTransport !== "none"
       const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false
+      const hasUserScriptsPermission = chrome.runtime.getManifest().permissions?.includes("userScripts") ?? false
       const debuggerActive = debuggerAttached.size > 0
+      let userScriptsApi = false
+      let userScriptsEnabled = false
+      let userScriptsError: string | undefined
+      try {
+        userScriptsApi = !!chrome.userScripts
+        if (chrome.userScripts) {
+          await chrome.userScripts.getScripts()
+          userScriptsEnabled = true
+        }
+      } catch (err) {
+        userScriptsError = (err as Error).message || String(err)
+      }
       return {
         success: true,
         data: {
@@ -27,6 +40,12 @@ export async function handleMetaActions(
             tabCapture: true,
             cdp_debugger: hasDebugger,
             debugger_active: debuggerActive
+          },
+          userScripts: {
+            manifest_permission: hasUserScriptsPermission,
+            api_present: userScriptsApi,
+            enabled: userScriptsEnabled,
+            ...(userScriptsError ? { error: userScriptsError } : {})
           },
           daemon: daemonConnected,
           infoBannerHeight: debuggerActive ? 35 : 0

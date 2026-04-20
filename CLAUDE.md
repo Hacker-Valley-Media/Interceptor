@@ -1,5 +1,7 @@
 # interceptor
 
+> Canonical agent instructions now live in [AGENTS.md](AGENTS.md). This file is retained for compatibility with tools that still look for `CLAUDE.md`.
+
 Browser control CLI for AI agents. No CDP, no MCP, no API keys. You call `interceptor`, read the output, decide what's next.
 
 **Binary:** `dist/interceptor`

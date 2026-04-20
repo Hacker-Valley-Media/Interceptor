@@ -22,6 +22,12 @@ No detection. No separate instance. No starting from zero. Your browser, your ap
 
 The agent calls `interceptor` CLI commands, reads the output, decides what to do next. No MCP, no API keys.
 
+## Agent Instructions
+
+`AGENTS.md` is the canonical repo instruction file for agentic tools. `CLAUDE.md` remains in the repo as a compatibility file for tools that still expect that filename.
+
+Shared repo-local skills live under [`.agents/skills/`](.agents/skills/). For cross-tool compatibility, [`.codex/skills`](.codex/skills), [`.claude/skills`](.claude/skills), and [`.gemini/skills`](.gemini/skills) all point at the same backing directory.
+
 ## Installation
 
 ### Option 1: DMG Installer (Recommended)

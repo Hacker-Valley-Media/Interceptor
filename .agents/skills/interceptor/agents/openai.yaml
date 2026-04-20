@@ -1,0 +1,4 @@
+interface:
+  display_name: "Interceptor"
+  short_description: "Operate live browsers and macOS apps with Interceptor"
+  default_prompt: "Use $interceptor to operate a live browser or macOS app through the interceptor CLI. Prefer `open`, `read`, `act`, and `inspect` plus other structured surfaces over screenshots, and treat the skill as an agent control workflow rather than Interceptor troubleshooting."

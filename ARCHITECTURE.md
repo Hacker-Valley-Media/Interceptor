@@ -1,6 +1,6 @@
 # Interceptor — Architecture
 
-This document describes the live architecture as of PRD-32 / PRD-33 / PRD-34. It is not a tutorial — it explains *how the pieces fit*, with file references. For user-facing usage see `README.md` / `CLAUDE.md`. For change rationale see `prd/PRD-*.md`.
+This document describes the live architecture as of PRD-32 / PRD-33 / PRD-34 / PRD-37. It is not a tutorial — it explains *how the pieces fit*, with file references. For user-facing usage see `README.md` / `AGENTS.md`. For change rationale see `prd/PRD-*.md`.
 
 ---
 
@@ -174,6 +174,12 @@ Caps: 64 KiB per entry, JSON / text / XML / JS content types only, conservative 
 - **SSE:** `inject-net.ts` recognizes `text/event-stream` responses, dispatches per-chunk events; `net-buffer.ts` assembles streams.
 - **Active (CDP-based):** `extension/src/background/cdp.ts` + `cdp-network-actions.ts` provide raw debugger network capture for cases where passive isn't enough. Shows the yellow infobanner — opt-in.
 
+### Page-world eval on strict-CSP sites
+
+`extension/src/background/capabilities/evaluate.ts` now treats page CSP as a first-class runtime concern. On a `MAIN`-world eval failure that matches a CSP/`unsafe-eval` pattern, it installs a tab-scoped **session** `declarativeNetRequest` rule that strips `content-security-policy` and `content-security-policy-report-only`, reloads the tab, then retries once. This is the behavior proven against OpenStreetMap in [PRD-37](prd/PRD-37.md).
+
+`extension/src/background/capabilities/meta.ts` also exposes `userScripts` capability diagnostics so live validation can distinguish between the `userScripts` route and the CSP-bypass fallback.
+
 ### Scene graph (rich editors)
 
 `extension/src/content/scene/` provides per-host resolvers for Canva (LB layer ids), Google Docs (hidden text-event iframe + `data-ri` offsets), and Google Slides (filmstrip SVG + blob URLs). `interceptor scene profile` detects the host; `interceptor scene list / click / text / insert / slide` operate on the resolver.
@@ -203,6 +209,8 @@ The daemon talks to the extension via three channels, routed by [`daemon/outboun
 
 Communication: CLI / daemon → Unix socket (`/tmp/interceptor-bridge.sock`) → bridge router → domain handler → CGEvent / AX / etc.
 
+For screenshot saving, `interceptor-bridge/Sources/Domains/CaptureDomain.swift` no longer relies on `FileManager.default.currentDirectoryPath` when running under `launchd`. The CLI passes its working directory (`cli/commands/macos.ts`), and the bridge falls back through Downloads, home, then temp so `interceptor macos screenshot --save` works cleanly under LaunchAgent execution.
+
 ---
 
 ## Build Outputs
@@ -227,5 +235,6 @@ Communication: CLI / daemon → Unix socket (`/tmp/interceptor-bridge.sock`) →
 | [PRD-32](prd/PRD-32.md) | Document-scoped sessions, child-tab handoff, durable artifacts, body persistence | Implemented |
 | [PRD-33](prd/PRD-33.md) | Transport resilience — `monitor stop` non-throw on disconnected port | Implemented |
 | [PRD-34](prd/PRD-34.md) | Focus-follow — auto-attach to manually switched tabs in the interceptor group | Implemented |
+| [PRD-37](prd/PRD-37.md) | Strict-CSP `eval --main` fallback via tab-scoped CSP stripping and retry | Implemented |
 
 Older PRDs (`PRD-18` through `PRD-31`) document the evolution from single-tab monitor and pre-compound-command CLI to today's architecture; consult them for historical context.

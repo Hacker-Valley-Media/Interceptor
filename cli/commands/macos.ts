@@ -233,6 +233,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
         format: flagVal(filtered, "--format") || "jpeg",
         quality: flagInt(filtered, "--quality") || 80,
         element: flagVal(filtered, "--element"),
+        cwd: process.cwd(),
       }
 
     case "capture": {
