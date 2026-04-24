@@ -412,6 +412,7 @@ const socketWriteQueues = new Map<object, Buffer[]>()
 
 const LARGE_PAYLOAD_THRESHOLD = 16 * 1024
 const MAX_RESPONSE_CHARS = 50000
+const NATIVE_HOST_TO_CHROME_MAX_BYTES = 1024 * 1024
 
 function socketWriteFramed(socket: { write: (data: Buffer | string) => number }, json: string): boolean {
   try {
@@ -467,7 +468,13 @@ function drainSocketQueue(socket: { write: (data: Buffer | string) => number }) 
   if (!queue || queue.length === 0) return
   while (queue.length > 0) {
     const chunk = queue[0]
-    const wrote = socket.write(chunk)
+    let wrote = 0
+    try {
+      wrote = socket.write(chunk)
+    } catch (err) {
+      log(`socket drain error: ${(err as Error).message}`)
+      return
+    }
     if (wrote < chunk.byteLength) {
       queue[0] = chunk.subarray(wrote)
       return
@@ -600,6 +607,18 @@ function sendNativeMessage(msg: unknown): void {
     stdinAlive,
     standalone: STANDALONE
   })
+  const byteLength = Buffer.byteLength(json, "utf-8")
+
+  function failOversizedNativeMessage(transport: string): boolean {
+    if (byteLength <= NATIVE_HOST_TO_CHROME_MAX_BYTES) return false
+    const id = (msg as { id?: unknown } | null)?.id
+    const error = `native message too large for ${transport}: ${byteLength} bytes exceeds ${NATIVE_HOST_TO_CHROME_MAX_BYTES}`
+    log(error)
+    if (typeof id === "string") {
+      handleNativeMessage({ id, result: { success: false, error } })
+    }
+    return true
+  }
 
   if (preferred === "ws" && extensionWs) {
     log(`forwarding via ws: ${json.slice(0, 200)}`)
@@ -612,6 +631,7 @@ function sendNativeMessage(msg: unknown): void {
   }
 
   if (preferred === "relay" && nativeRelaySocket) {
+    if (failOversizedNativeMessage("native relay")) return
     log(`forwarding via relay: ${json.slice(0, 200)}`)
     try {
       socketWriteFramed(nativeRelaySocket, json)
@@ -623,6 +643,7 @@ function sendNativeMessage(msg: unknown): void {
   }
 
   if (preferred === "native" && !STANDALONE && stdinAlive) {
+    if (failOversizedNativeMessage("native stdio")) return
     log(`forwarding via native: ${json.slice(0, 200)}`)
     const encoded = Buffer.from(json, "utf-8")
     const header = Buffer.alloc(4)
@@ -643,6 +664,7 @@ function sendNativeMessage(msg: unknown): void {
   }
 
   if (nativeRelaySocket) {
+    if (failOversizedNativeMessage("fallback native relay")) return
     log(`fallback via relay: ${json.slice(0, 200)}`)
     try {
       socketWriteFramed(nativeRelaySocket, json)
@@ -654,6 +676,7 @@ function sendNativeMessage(msg: unknown): void {
   }
 
   if (!STANDALONE && stdinAlive) {
+    if (failOversizedNativeMessage("fallback native stdio")) return
     log(`fallback via native: ${json.slice(0, 200)}`)
     const encoded = Buffer.from(json, "utf-8")
     const header = Buffer.alloc(4)

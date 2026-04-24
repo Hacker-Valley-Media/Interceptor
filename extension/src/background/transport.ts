@@ -1,8 +1,9 @@
 import { handleDaemonMessage, drainMessageQueue, pendingRequests } from "./message-dispatch"
-import { ensureInterceptorGroup } from "./tab-group"
-import { safePortPost } from "./safe-port-post"
+import { safeNativePortDisconnect, safeNativePortPing, safeNativePortPost, shouldSkipNativeKeepalive } from "./native-port-lifecycle"
+import { recoverPendingRequestsAfterNativeDisconnect } from "./pending-request-recovery"
 
 type ActiveTransport = "none" | "native" | "websocket"
+export type HostDeliveryResult = "sent" | "queued" | "failed"
 
 export let nativePort: chrome.runtime.Port | null = null
 export let activeTransport: ActiveTransport = "none"
@@ -13,43 +14,106 @@ let wsChannel: WebSocket | null = null
 let wsReady = false
 let wsKeepAliveTimer: ReturnType<typeof setInterval> | null = null
 let keepalivePongTimer: ReturnType<typeof setTimeout> | null = null
+let pendingHandshakePort: chrome.runtime.Port | null = null
+let lastNativeActivityAt = 0
 const WS_URL = "ws://localhost:19222"
+export const NATIVE_KEEPALIVE_PONG_TIMEOUT_MS = 15_000
+export const RECENT_NATIVE_ACTIVITY_GRACE_MS = 10_000
+const OUTBOUND_RECOVERY_QUEUE_CAP = 50
+const outboundRecoveryQueue: unknown[] = []
+
+function describeOutboundMessage(msg: unknown): string {
+  const candidate = msg as { id?: unknown; result?: { error?: unknown } } | null
+  if (candidate && typeof candidate.id === "string") {
+    const error = typeof candidate.result?.error === "string" ? ` (${candidate.result.error})` : ""
+    return `${candidate.id}${error}`
+  }
+  return JSON.stringify(msg).slice(0, 200)
+}
 
 function emitEvent(event: string, data: Record<string, unknown> = {}) {
   sendToHost({ type: "event", event, ...data })
 }
 
-function postNative(msg: unknown): boolean {
-  const port = nativePort
+function clearNativeStateFor(port: chrome.runtime.Port | null): void {
+  if (nativePort === port) nativePort = null
+  if (pendingHandshakePort === port) pendingHandshakePort = null
+  if (activeTransport === "native") activeTransport = "none"
+}
+
+function disconnectNativePort(port: chrome.runtime.Port | null): void {
+  if (!port) return
+  safeNativePortDisconnect(port)
+  if (keepalivePongTimer) {
+    clearTimeout(keepalivePongTimer)
+    keepalivePongTimer = null
+  }
+  clearNativeStateFor(port)
+}
+
+function postNative(msg: unknown, port = nativePort): boolean {
   if (!port) return false
-  const res = safePortPost(port, msg)
+  const res = safeNativePortPost(port, msg)
   if (res.posted) return true
   console.error("nativePort.postMessage threw (port disconnected before onDisconnect fired):", res.error)
-  if (nativePort === port) nativePort = null
-  if (activeTransport === "native") activeTransport = "none"
+  clearNativeStateFor(port)
   return false
 }
 
-export function sendToHost(msg: unknown, forceWs?: boolean): void {
-  if (forceWs && wsReady && wsChannel) {
-    try { wsChannel.send(JSON.stringify(msg)) } catch {}
-    return
+function isWsOpen(): boolean {
+  if (!wsReady || !wsChannel || wsChannel.readyState !== WebSocket.OPEN) return false
+  return true
+}
+
+function sendWs(msg: unknown): boolean {
+  const channel = wsChannel
+  if (!wsReady || !channel || channel.readyState !== WebSocket.OPEN) return false
+  try {
+    channel.send(JSON.stringify(msg))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function enqueueOutboundRecovery(msg: unknown): HostDeliveryResult {
+  if (outboundRecoveryQueue.length >= OUTBOUND_RECOVERY_QUEUE_CAP) {
+    const dropped = outboundRecoveryQueue.shift()
+    console.error("final delivery failure for queued outbound message:", describeOutboundMessage(dropped))
+  }
+  outboundRecoveryQueue.push(msg)
+  return "queued"
+}
+
+function drainOutboundRecoveryQueue(): void {
+  while (outboundRecoveryQueue.length > 0) {
+    const msg = outboundRecoveryQueue[0]
+    if (!sendWs(msg)) return
+    outboundRecoveryQueue.shift()
+  }
+}
+
+export function sendToHost(msg: unknown, forceWs?: boolean, allowQueue = false): HostDeliveryResult {
+  if (forceWs) {
+    if (sendWs(msg)) return "sent"
+    return allowQueue ? enqueueOutboundRecovery(msg) : "failed"
   }
   if (activeTransport === "native" && nativePort) {
-    if (postNative(msg)) return
+    if (postNative(msg)) return "sent"
     // fall through to ws channel if native postMessage failed
   }
   if (activeTransport === "websocket" && wsReady && wsChannel) {
-    try { wsChannel.send(JSON.stringify(msg)) } catch {}
-    return
+    if (sendWs(msg)) return "sent"
+    return allowQueue ? enqueueOutboundRecovery(msg) : "failed"
   }
   if (nativePort) {
-    if (postNative(msg)) return
+    if (postNative(msg)) return "sent"
     // fall through to ws channel if native postMessage failed
   }
   if (wsReady && wsChannel) {
-    try { wsChannel.send(JSON.stringify(msg)) } catch {}
+    if (sendWs(msg)) return "sent"
   }
+  return allowQueue ? enqueueOutboundRecovery(msg) : "failed"
 }
 
 export function connectToHost(): void {
@@ -60,7 +124,7 @@ export function connectToHost(): void {
 
   const handshakeTimer = setTimeout(() => {
     console.error("native host handshake timeout (10s)")
-    port.disconnect()
+    disconnectNativePort(port)
   }, 10000)
 
   port.onMessage.addListener((msg: {
@@ -69,42 +133,43 @@ export function connectToHost(): void {
     tabId?: number
   }) => {
     if (msg.type === "pong") {
-      clearTimeout(handshakeTimer)
-      activeTransport = "native"
-      reconnectDelay = 1000
-      isConnecting = false
-      console.log("native host connected (pong received)")
-      emitEvent("connection_established")
-      drainMessageQueue()
+      lastNativeActivityAt = Date.now()
+      if (pendingHandshakePort === port) {
+        clearTimeout(handshakeTimer)
+        pendingHandshakePort = null
+        activeTransport = "native"
+        reconnectDelay = 1000
+        isConnecting = false
+        console.log("native host connected (pong received)")
+        emitEvent("connection_established")
+        drainMessageQueue()
+      }
       if (keepalivePongTimer) {
         clearTimeout(keepalivePongTimer)
         keepalivePongTimer = null
       }
       return
     }
+    lastNativeActivityAt = Date.now()
     handleDaemonMessage(msg)
   })
 
   port.onDisconnect.addListener(() => {
-    const dyingPort = nativePort
+    const disconnectedPort = port
     isConnecting = false
     const lastError = chrome.runtime.lastError
     if (lastError) console.error("native host disconnected:", lastError.message)
     console.log("connection_lost", lastError?.message)
-    nativePort = null
-    if (wsReady && wsChannel) {
+    clearNativeStateFor(disconnectedPort)
+    if (isWsOpen()) {
       activeTransport = "websocket"
       console.log("native host down but ws channel active, switching to websocket")
       return
     }
-    if (activeTransport === "native") activeTransport = "none"
-    for (const [id, req] of pendingRequests) {
-      clearTimeout(req.timer)
-      console.error(`orphaned request ${id} (${req.action}) — native port disconnected`)
-      if (dyingPort) {
-        try { dyingPort.postMessage({ id, result: { success: false, error: "native port disconnected" } }) } catch {}
-      }
-    }
+    recoverPendingRequestsAfterNativeDisconnect(
+      pendingRequests,
+      (msg) => sendToHost(msg, true, true)
+    )
     pendingRequests.clear()
     const jitter = Math.random() * reconnectDelay * 0.3
     setTimeout(connectToHost, reconnectDelay + jitter)
@@ -112,7 +177,13 @@ export function connectToHost(): void {
   })
 
   nativePort = port
-  port.postMessage({ type: "ping" })
+  pendingHandshakePort = port
+  const ping = safeNativePortPing(port)
+  if (!ping.posted) {
+    clearTimeout(handshakeTimer)
+    clearNativeStateFor(port)
+    isConnecting = false
+  }
 }
 
 function startWsKeepAlive(): void {
@@ -149,6 +220,7 @@ export function connectWsChannel(): void {
         console.log("connection ready via ws channel")
         drainMessageQueue()
       }
+      drainOutboundRecoveryQueue()
     }
     ws.onmessage = (event) => {
       try {
@@ -201,11 +273,18 @@ export function registerAlarmListener(): void {
     if (!nativePort) connectToHost()
     if (!wsChannel || wsChannel.readyState === WebSocket.CLOSED) connectWsChannel()
     if (activeTransport === "native" && nativePort) {
-      nativePort.postMessage({ type: "ping" })
+      if (shouldSkipNativeKeepalive(Date.now(), lastNativeActivityAt, RECENT_NATIVE_ACTIVITY_GRACE_MS)) return
+      const port = nativePort
+      const res = safeNativePortPing(port)
+      if (!res.posted) {
+        console.error("native keepalive ping failed:", res.error)
+        clearNativeStateFor(port)
+        return
+      }
       keepalivePongTimer = setTimeout(() => {
-        console.error("keepalive pong timeout (5s) — forcing reconnect")
-        if (nativePort) nativePort.disconnect()
-      }, 5000)
+        console.error(`keepalive pong timeout (${NATIVE_KEEPALIVE_PONG_TIMEOUT_MS / 1000}s) — forcing reconnect`)
+        disconnectNativePort(port)
+      }, NATIVE_KEEPALIVE_PONG_TIMEOUT_MS)
     }
   })
 }
