@@ -445,14 +445,23 @@ interceptor click "button:Play"
 ```
 
 ### Screenshots
+
+Default capture is **DOM render** — no `chrome.tabs.captureVisibleTab` in the hot path. Works regardless of window focus, macOS Space, or service-worker activation context. A vendored `html-to-image` bundle is injected on demand and paired with a per-tab CORS-clearance DNR rule. Use `--pixel` for compositor-accurate capture (requires Chrome focused).
+
 ```bash
-interceptor screenshot                       # Viewport JPEG (returns data URL)
-interceptor screenshot --save                # Save to disk
-interceptor screenshot --full                # Full-page scroll+stitch
-interceptor screenshot --format png          # PNG format
+interceptor screenshot                       # Default DOM-render full-page (works without focus)
+interceptor screenshot --save                # Also save to disk
+interceptor screenshot --selector "h1"       # Capture matching element (off-screen supported)
+interceptor screenshot --element 5           # Capture by ref/index from a recent read
+interceptor screenshot --region X,Y,W,H      # Render full + crop to region in content script
+interceptor screenshot --scale 2             # Override pixel ratio
+interceptor screenshot --pixel               # Pixel-true compositor capture (legacy captureVisibleTab)
+interceptor screenshot --pixel --full        # Pixel-true full-page (scroll + in-SW stitch)
+interceptor screenshot --format png          # PNG (default for DOM render)
 interceptor screenshot --quality 80          # JPEG quality 0-100
-interceptor screenshot --element 5           # Capture element bounding box
 ```
+
+`screenshot` invocations are auto-routed through the WebSocket transport because base64 dataUrl responses larger than ~50KB are unreliable over the native-messaging port on Brave/Chromium. Override with `--no-ws` if needed.
 
 ### Data
 ```bash

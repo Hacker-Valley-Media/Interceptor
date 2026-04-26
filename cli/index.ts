@@ -55,7 +55,13 @@ function unwrapResult(response: DaemonResponse): DaemonResult {
 async function main() {
   const args = process.argv.slice(2)
   const jsonMode = args.includes("--json")
-  const useWs = args.includes("--ws")
+  // PRD-44: screenshot responses can carry tens-to-hundreds of KB of base64
+  // dataUrl payloads. Native-messaging port-based responses for that size
+  // are unreliable on Brave/Chromium (messages are silently dropped despite
+  // the documented 1MB native-messaging limit). The WebSocket transport does
+  // not exhibit this issue, so we auto-route screenshot through it.
+  const isScreenshotCmd = args[0] === "screenshot"
+  const useWs = args.includes("--ws") || (isScreenshotCmd && !args.includes("--no-ws"))
   const anyTab = args.includes("--any-tab")
   const globalTabId = parseTabFlag(args)
 

@@ -246,14 +246,25 @@ The rolling live event stream lives in `/tmp/interceptor-events.jsonl` (the same
 
 ## Screenshots
 
+Default capture is **DOM render** (no `chrome.tabs.captureVisibleTab` in the hot path) — works regardless of window focus, macOS Space, or SW activation context. Backed by a vendored `html-to-image` bundle injected on demand via `chrome.scripting.executeScript`, paired with a per-tab `declarativeNetRequest` session rule that grants CORS clearance to subresource fetches for the duration of the capture. A per-image fallback that excludes `<img>`/`<picture>`/`<video>`/`<canvas>` kicks in automatically if the page has tainted-canvas content the rule cannot un-taint. Use `--pixel` for compositor-accurate (true-pixel) capture via `captureVisibleTab` — that path requires the browser window to be visible and focused.
+
 ```bash
-interceptor screenshot                        # Viewport JPEG (returns data URL)
-interceptor screenshot --save                 # Save to disk as file
-interceptor screenshot --full                 # Full-page scroll+stitch
-interceptor screenshot --format png           # PNG format
+interceptor screenshot                        # Default DOM-render full-page (works without focus)
+interceptor screenshot --save                 # Also save to disk
+interceptor screenshot --selector "h1"        # Capture by CSS selector (off-screen elements supported)
+interceptor screenshot --element 5            # Capture by ref/index from a recent read
+interceptor screenshot --region X,Y,W,H       # Capture a region (renders + crops in content script)
+interceptor screenshot --scale 2              # Override pixel ratio (e.g. retina from a 1x display)
+interceptor screenshot --pixel                # Pixel-true compositor capture (legacy captureVisibleTab)
+interceptor screenshot --pixel --full         # Pixel-true full-page (scroll + in-SW stitch)
+interceptor screenshot --format png           # PNG format (default for DOM render)
 interceptor screenshot --quality 80           # JPEG quality 0-100
-interceptor screenshot --element 5            # Capture specific element
+interceptor screenshot --clip X,Y,W,H         # [deprecated] alias for --region
 ```
+
+The CLI auto-routes `screenshot` invocations through the WebSocket transport because base64 dataUrl payloads larger than ~50KB are unreliable over the native-messaging port on Brave/Chromium despite the documented 1MB limit. Override with `--no-ws` if needed.
+
+`--pixel --full` captures one strip per viewport, throttled to clear Chrome's 2-call/sec `captureVisibleTab` quota, and stitches the strips together inside the SW using `OffscreenCanvas` — no offscreen-document IPC hop, so multi-MB stitched results do not get truncated en route back to the daemon.
 
 ## LinkedIn Extraction
 

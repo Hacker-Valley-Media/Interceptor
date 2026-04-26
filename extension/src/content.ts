@@ -27,6 +27,7 @@ import { handleRect, handleRegions } from "./content/inspection/rect"
 import { handleModals, handlePanels } from "./content/inspection/modals"
 import { handleFindElement, handleSemanticResolve, handleFindAndClick, handleFindAndType, handleFindAndCheck } from "./content/find"
 import { handleCanvasAction } from "./content/scene/engine"
+import { handleDomScreenshot } from "./content/dom-screenshot"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; changes?: unknown }
@@ -149,6 +150,7 @@ async function executeAction(action: Action): Promise<ActionResult> {
         return diffResult
       }
       case "find_element":        return handleFindElement(action)
+      case "dom_screenshot":      return handleDomScreenshot(action as Parameters<typeof handleDomScreenshot>[0])
       case "modals":              return handleModals(action)
       case "panels":              return handlePanels(action)
       case "click_at":            return handleClickAt(action)

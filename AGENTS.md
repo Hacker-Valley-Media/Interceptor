@@ -318,6 +318,8 @@ On strict-CSP sites, page-world evaluation may require Interceptor's automatic r
 
 Use screenshots only when the task depends on rendered pixels, visual layout, chart appearance, image content, or screenshot output.
 
+The default `interceptor screenshot` is a DOM render and does NOT require the browser to be focused or visible — it works from a backgrounded Chrome on a different macOS Space. Use `--selector <css>` for a single element, `--region X,Y,W,H` for an arbitrary rect, `--element <ref>` for a refRegistry-tracked element. Use `--pixel` only when you need pixel-accurate compositor output (e.g., visual regression of compositor effects, hardware video frames); the `--pixel` path requires the browser window to be visible and focused. `--pixel --full` scrolls + stitches and is throttled to clear Chrome's `MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND` quota.
+
 ## Recovery Rules
 
 - If a ref fails, run `read` or `find` again and retry with the new ref.

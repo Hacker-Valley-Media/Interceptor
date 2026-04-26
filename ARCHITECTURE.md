@@ -251,10 +251,39 @@ For screenshot saving, `interceptor-bridge/Sources/Domains/CaptureDomain.swift` 
 
 ---
 
+## Screenshot Pipeline
+
+Two distinct capture paths share the `interceptor screenshot` surface:
+
+### DOM render (default)
+
+The default path renders the page's DOM directly to a canvas inside the target tab — no `chrome.tabs.captureVisibleTab`, no `chrome.tabCapture`, no browser focus or visibility requirement.
+
+1. **Library injection.** `extension/src/screenshot-runner.ts` is a small bundle entry that imports a vendored copy of `html-to-image` and assigns it to `globalThis.__interceptor_h2i`. The bundle is built to `extension/dist/screenshot-runner.js` (~30 KB) and loaded on demand via `chrome.scripting.executeScript({ files: ["screenshot-runner.js"], world: "ISOLATED" })`. It is **not** registered as a `content_scripts` entry — pages that never get screenshotted pay no cost.
+2. **CORS clearance.** Before the render, the SW installs a `chrome.declarativeNetRequest` session rule (`extension/src/background/capabilities/screenshot-cors.ts`) scoped to `tabIds: [tabId]` and `resourceTypes: [image, font, media, stylesheet, xmlhttprequest]`. The rule sets `Access-Control-Allow-Origin: *`, removes `Access-Control-Allow-Credentials`, and sets `Cross-Origin-Resource-Policy: cross-origin` for the duration of the capture, then is removed in a `try/finally`. The rule lifecycle mirrors the CSP-bypass rule used by `evaluate.ts`.
+3. **Render.** `extension/src/content/dom-screenshot.ts` resolves the target node by mode (`full` → `document.documentElement`, `element` → refRegistry lookup, `selector` → `querySelector`, `region` → full + in-frame canvas crop) and calls `__interceptor_h2i.toPng`/`toJpeg`. Options include `cacheBust: true`, `imagePlaceholder` (a 1×1 transparent PNG), and `fetchRequestInit: { mode: "cors", cache: "no-cache" }`. If the first attempt throws a tainted-canvas error, the handler retries with a `filter` that excludes `<img>`, `<picture>`, `<video>`, and `<canvas>` so structural captures still succeed when third-party assets cannot be CORS-cleansed.
+4. **Region crop in-frame.** For `--region`, the content script renders the full page once and then crops via a regular `<canvas>.drawImage` + `toDataURL` inside the same frame, so the inter-process message back to the SW carries only the cropped result instead of a multi-MB full-page payload.
+
+### Pixel-true compositor capture (`--pixel`)
+
+`--pixel` opts into the legacy `chrome.tabs.captureVisibleTab` path. It produces compositor-accurate output (hardware video frames, GPU filters, exact compositor pixels) but requires the browser window to be visible and focused. Single-viewport captures complete in ~50 ms when the window is focused.
+
+`--pixel --full` scrolls the page and captures one viewport-sized strip per scroll position. Strip cadence is set above 1 second to clear Chrome's `MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND` quota (default 2/sec). Strips are stitched together inside the SW using `OffscreenCanvas` + `createImageBitmap` + `convertToBlob` — explicitly **not** routed through the offscreen-document `stitch` handler, because the IPC return path for multi-MB stitched results is unreliable.
+
+### Transport routing
+
+Screenshot responses can carry tens to hundreds of KB of base64 dataUrl. Empirical testing on Brave/Chromium showed the native-messaging port silently drops messages above ~50 KB despite the documented 1 MB cap, so the CLI auto-enables WebSocket transport for any `screenshot` invocation (`cli/index.ts`). `--no-ws` overrides if the user wants the native path.
+
+---
+
 ## Implementation Notes
 
 Recent major additions reflected in this document:
 
+- DOM-render screenshot pipeline as the default capture path; `--pixel` retains the legacy `captureVisibleTab` route as an opt-in
+- per-tab CORS-clearance session DNR rule scoped to subresource fetches during a capture
+- in-SW `OffscreenCanvas` stitching for `--pixel --full` so multi-MB responses no longer round-trip through the offscreen document
+- automatic WebSocket routing for `screenshot` CLI invocations
 - CLI-first Brave install path through `scripts/install.sh --brave --profile <profile>`
 - frame-targeted `read --include-frames` with subtree refs preserved end-to-end
 - canvas observer summaries that filter `log` and `objects` by DOM canvas index

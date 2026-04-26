@@ -22,6 +22,7 @@ build_extension() {
   bun build extension/src/content.ts --outdir=extension/dist --target=browser
   bun build extension/src/inject-net.ts --outdir=extension/dist --target=browser
   bun build extension/src/inject-canvas.ts --outdir=extension/dist --target=browser
+  bun build extension/src/screenshot-runner.ts --outdir=extension/dist --target=browser
   bun build extension/src/offscreen.ts --outfile=extension/dist/offscreen.js --target=browser
   cp extension/manifest.json extension/dist/
   cp extension/offscreen.html extension/dist/

@@ -68,13 +68,16 @@ Tabs:
   interceptor tab switch <id>                Switch to tab
 
 Capture:
-  interceptor screenshot                     Viewport screenshot (returns data URL)
-  interceptor screenshot --save              Also save to disk
-  interceptor screenshot --format png        PNG format (default: jpeg)
-  interceptor screenshot --quality 80        JPEG quality 0-100 (default: 50)
-  interceptor screenshot --full              Full-page scroll+stitch capture
-  interceptor screenshot --clip X,Y,W,H     Capture region
-  interceptor screenshot --element N         Capture element bounding rect
+  interceptor screenshot                     Full-page DOM-render screenshot (default — works without focus)
+  interceptor screenshot --selector "h1"    Capture only the matching element
+  interceptor screenshot --element N         Capture element by ref (off-screen elements supported)
+  interceptor screenshot --region X,Y,W,H   Capture page region (rendered + cropped)
+  interceptor screenshot --scale 2           Override pixel ratio (e.g. retina from 1x display)
+  interceptor screenshot --pixel             Pixel-true compositor capture (legacy captureVisibleTab — requires Chrome focused)
+  interceptor screenshot --save              Save to disk in addition to returning data URL
+  interceptor screenshot --format png        PNG format (default: png for DOM render, jpeg for --pixel)
+  interceptor screenshot --quality 80        JPEG quality 0-100
+  interceptor screenshot --clip X,Y,W,H     [deprecated alias for --region]
   interceptor eval <code>                    Run JS in isolated world
   interceptor eval <code> --main             Run JS in page context
 

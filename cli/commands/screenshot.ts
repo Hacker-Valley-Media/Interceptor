@@ -20,11 +20,22 @@ export function parseScreenshotCommand(filtered: string[]): Action {
       if (filtered.includes("--format")) ssAction.format = filtered[filtered.indexOf("--format") + 1]
       if (filtered.includes("--quality")) ssAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
       if (filtered.includes("--full")) ssAction.full = true
+      if (filtered.includes("--pixel")) ssAction.pixel = true
+      if (filtered.includes("--scale")) ssAction.scale = parseFloat(filtered[filtered.indexOf("--scale") + 1])
+      if (filtered.includes("--selector")) {
+        ssAction.selector = filtered[filtered.indexOf("--selector") + 1]
+      }
+      if (filtered.includes("--region")) {
+        const rp = filtered[filtered.indexOf("--region") + 1].split(",").map(Number)
+        ssAction.region = { x: rp[0], y: rp[1], width: rp[2], height: rp[3] }
+      }
       if (filtered.includes("--clip")) {
+        // --clip is a deprecated alias for --region (preserved for backward compat)
         const clipParts = filtered[filtered.indexOf("--clip") + 1].split(",").map(Number)
         ssAction.clip = { x: clipParts[0], y: clipParts[1], width: clipParts[2], height: clipParts[3] }
       }
       if (filtered.includes("--element")) ssAction.element = parseInt(filtered[filtered.indexOf("--element") + 1])
+      if (filtered.includes("--ref")) ssAction.ref = filtered[filtered.indexOf("--ref") + 1]
       return ssAction
     }
 

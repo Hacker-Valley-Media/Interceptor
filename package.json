@@ -17,5 +17,8 @@
     "@types/chrome": "latest",
     "happy-dom": "^20.9.0",
     "ocrad.js": "^0.0.1"
+  },
+  "dependencies": {
+    "html-to-image": "^1.11.13"
   }
 }

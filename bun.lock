@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "interceptor-browser",
+      "dependencies": {
+        "html-to-image": "^1.11.13",
+      },
       "devDependencies": {
         "@happy-dom/global-registrator": "^20.9.0",
         "@types/bun": "latest",
@@ -37,6 +40,8 @@
     "entities": ["entities@7.0.1", "", {}, "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="],
 
     "happy-dom": ["happy-dom@20.9.0", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.18.3" } }, "sha512-GZZ9mKe8r646NUAf/zemnGbjYh4Bt8/MqASJY+pSm5ZDtc3YQox+4gsLI7yi1hba6o+eCsGxpHn5+iEVn31/FQ=="],
+
+    "html-to-image": ["html-to-image@1.11.13", "", {}, "sha512-cuOPoI7WApyhBElTTb9oqsawRvZ0rHhaHwghRLlTuffoD1B2aDemlCruLeZrUIIdvG7gs9xeELEPm6PhuASqrg=="],
 
     "ocrad.js": ["ocrad.js@0.0.1", "", {}, "sha512-4W8Kcf4ewFJUgEGIBH4FxEgusHPmk0dSzD+CBMaaZeOb1RPM1Rv0+cA177pHDlN2yK8Gelb4KTczxtbQmq+p/w=="],
 
