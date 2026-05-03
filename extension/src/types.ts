@@ -12,7 +12,7 @@ export type Action =
   | { type: "extract_html"; index?: number; ref?: string; frameId?: number }
   | { type: "evaluate"; code: string; world?: "MAIN" | "ISOLATED" }
   | { type: "screenshot"; format?: "png" | "jpeg" | "webp"; quality?: number; save?: boolean; clip?: { x: number; y: number; width: number; height: number }; element?: number; full?: boolean; target_max_long_edge?: number }
-  | { type: "tab_create"; url?: string }
+  | { type: "tab_create"; url?: string; reuse?: boolean }
   | { type: "tab_close"; tabId?: number }
   | { type: "tab_switch"; tabId: number }
   | { type: "tab_list" }

@@ -131,7 +131,10 @@ interceptor open https://example.com --full
 interceptor open https://example.com --tree-only
 interceptor open https://example.com --text-only
 interceptor open https://example.com --timeout 15000
+interceptor open https://example.com --reuse        # Long automation: navigate the most recent Interceptor-group tab instead of opening a new one
 ```
+
+For long-running automation that calls `open` many times in a single session — verification loops, batch inspections, repeated probes against the same surface — pass `--reuse` so each call navigates the same managed tab instead of leaving a dead tab behind. Without `--reuse`, every `open` creates a new tab and the browser fills with stale tabs over the course of a session. `--reuse` is opt-in to preserve existing scripts that depend on a fresh tab per call; it falls back to creating a new tab when the Interceptor group is empty or the candidate tab vanishes between query and navigation.
 
 Use `read` for current state. Use a ref to limit the read to a subtree.
 

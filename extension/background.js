@@ -1582,12 +1582,32 @@ async function handleCanvasActions(action, tabId) {
 async function handleTabActions(action, tabId) {
   switch (action.type) {
     case "tab_create": {
-      const newTab = await chrome.tabs.create({ url: action.url || "about:blank" });
+      const targetUrl = action.url || "about:blank";
+      if (action.reuse) {
+        const groupId2 = await ensureInterceptorGroup();
+        if (groupId2 !== -1) {
+          const groupTabs = await chrome.tabs.query({ groupId: groupId2 });
+          if (groupTabs.length > 0) {
+            const sorted = groupTabs.filter((t) => typeof t.id === "number").sort((a, b) => b.id - a.id);
+            const candidate = sorted[0];
+            if (candidate?.id !== void 0) {
+              try {
+                const updated = await chrome.tabs.update(candidate.id, { url: targetUrl });
+                await waitForTabLoad(candidate.id);
+                await chrome.storage.session.set({ activeTabId: candidate.id });
+                return { success: true, data: { tabId: candidate.id, url: updated?.url ?? targetUrl, groupId: groupId2, reused: true } };
+              } catch {
+              }
+            }
+          }
+        }
+      }
+      const newTab = await chrome.tabs.create({ url: targetUrl });
       if (newTab.id) {
         const groupId = await addTabToInterceptorGroup(newTab.id);
-        return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId } };
+        return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId, reused: false } };
       }
-      return { success: true, data: { tabId: newTab.id, url: newTab.url } };
+      return { success: true, data: { tabId: newTab.id, url: newTab.url, reused: false } };
     }
     case "tab_close":
       await chrome.tabs.remove(action.tabId || tabId);

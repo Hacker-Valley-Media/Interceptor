@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildReadTreeAction } from "../cli/commands/compound"
+import { buildReadTreeAction, buildTabCreateAction } from "../cli/commands/compound"
 import { parseElementTarget } from "../cli/parse"
 
 describe("buildReadTreeAction", () => {
@@ -36,5 +36,29 @@ describe("buildReadTreeAction", () => {
       includeStyle: false,
       filter: "interactive"
     })
+  })
+})
+
+describe("buildTabCreateAction", () => {
+  test("omits reuse field by default — preserves existing create-new-tab semantics", () => {
+    const action = buildTabCreateAction(["open", "https://example.com"], "https://example.com")
+    expect(action).toEqual({ type: "tab_create", url: "https://example.com" })
+    expect("reuse" in action).toBe(false)
+  })
+
+  test("sets reuse: true when --reuse is present in filtered args", () => {
+    const action = buildTabCreateAction(
+      ["open", "https://example.com", "--reuse"],
+      "https://example.com"
+    )
+    expect(action).toEqual({ type: "tab_create", url: "https://example.com", reuse: true })
+  })
+
+  test("does NOT set reuse when other open flags are present without --reuse", () => {
+    const action = buildTabCreateAction(
+      ["open", "https://example.com", "--full", "--tree-only"],
+      "https://example.com"
+    )
+    expect(action.reuse).toBeUndefined()
   })
 })

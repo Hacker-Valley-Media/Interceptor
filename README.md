@@ -327,6 +327,7 @@ interceptor open "https://example.com" --tree-only   # Skip text
 interceptor open "https://example.com" --text-only   # Skip tree
 interceptor open "https://example.com" --full        # Full text (no 2000-char limit)
 interceptor open "https://example.com" --no-wait     # Don't wait for load
+interceptor open "https://example.com" --reuse        # Reuse the most recent Interceptor-group tab (long automation: avoids tab accumulation)
 interceptor read                              # Tree + text for current page
 interceptor read e5                           # Tree + text for element subtree
 interceptor read --tree-only                  # Just tree

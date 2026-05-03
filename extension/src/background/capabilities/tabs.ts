@@ -9,7 +9,43 @@ export async function handleTabActions(
 ): Promise<ActionResult> {
   switch (action.type) {
     case "tab_create": {
-      const newTab = await chrome.tabs.create({ url: (action.url as string) || "about:blank" })
+      const targetUrl = (action.url as string) || "about:blank"
+      // When `reuse` is set, navigate the most recently created tab inside
+      // the Interceptor group instead of opening a new one. Long-running
+      // automations would otherwise leave a dead tab behind on every call
+      // (dora-cc#5). Falls back to creating a new tab if the group is empty
+      // or the candidate tab disappeared between query and update.
+      if (action.reuse) {
+        const groupId = await ensureInterceptorGroup()
+        if (groupId !== -1) {
+          const groupTabs = await chrome.tabs.query({ groupId })
+          if (groupTabs.length > 0) {
+            const sorted = groupTabs
+              .filter(t => typeof t.id === "number")
+              .sort((a, b) => (b.id as number) - (a.id as number))
+            const candidate = sorted[0]
+            if (candidate?.id !== undefined) {
+              try {
+                const updated = await chrome.tabs.update(candidate.id, { url: targetUrl })
+                await waitForTabLoad(candidate.id)
+                // Pin the reused tab as the auto-target for subsequent commands.
+                // Mirrors the new-tab path below: every successful tab_create
+                // — whether new or reused — must update activeTabId so a fresh
+                // CLI invocation (no --tab) routes here instead of a stale id
+                // or the user's foreground tab.
+                await chrome.storage.session.set({ activeTabId: candidate.id })
+                return {
+                  success: true,
+                  data: { tabId: candidate.id, url: updated?.url ?? targetUrl, groupId, reused: true }
+                }
+              } catch {
+                // Tab vanished between query and update — fall through to create.
+              }
+            }
+          }
+        }
+      }
+      const newTab = await chrome.tabs.create({ url: targetUrl })
       if (newTab.id) {
         const groupId = await addTabToInterceptorGroup(newTab.id)
         // Pin the newly-created tab as the auto-target for subsequent commands
@@ -17,9 +53,9 @@ export async function handleTabActions(
         // stale activeTabId or whatever Chrome reports as "active in currentWindow"
         // (which may be the user's foreground tab, not the one we just opened).
         await chrome.storage.session.set({ activeTabId: newTab.id })
-        return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId } }
+        return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId, reused: false } }
       }
-      return { success: true, data: { tabId: newTab.id, url: newTab.url } }
+      return { success: true, data: { tabId: newTab.id, url: newTab.url, reused: false } }
     }
 
     case "tab_close": {

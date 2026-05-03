@@ -113,6 +113,15 @@ export function buildReadTreeAction(opts: {
 
 // ── interceptor open <url> ──────────────────────────────────────────────────────────
 
+export function buildTabCreateAction(
+  filtered: string[],
+  url: string
+): { type: "tab_create"; url: string; reuse?: boolean } {
+  const action: { type: "tab_create"; url: string; reuse?: boolean } = { type: "tab_create", url }
+  if (filtered.includes("--reuse")) action.reuse = true
+  return action
+}
+
 export async function runOpen(
   filtered: string[],
   globalTabId?: number,
@@ -132,17 +141,19 @@ export async function runOpen(
   const timeoutIdx = filtered.indexOf("--timeout")
   const timeout = timeoutIdx !== -1 ? parseInt(filtered[timeoutIdx + 1]) : 5000
 
-  // Step 1: Create tab
-  const createResult = await send({ type: "tab_create", url }, globalTabId, useWs)
+  // Step 1: Create tab (or reuse an existing managed one when --reuse is set)
+  const createAction = buildTabCreateAction(filtered, url)
+  const createResult = await send(createAction, globalTabId, useWs)
   if (!createResult.success) {
     output(jsonMode, { success: false, error: createResult.error || "failed to create tab" })
     return
   }
   const dataObj = (typeof createResult.data === "object" && createResult.data) ? createResult.data as Record<string, unknown> : {}
   const tabId = (dataObj.tabId as number) || createResult.tabId || globalTabId
+  const reused = dataObj.reused === true
 
   if (noWait) {
-    output(jsonMode, { success: true, data: { tabId, url, message: "tab created (no-wait)" } })
+    output(jsonMode, { success: true, data: { tabId, url, reused, message: reused ? "tab reused (no-wait)" : "tab created (no-wait)" } })
     return
   }
 
@@ -196,7 +207,7 @@ export async function runOpen(
   if (jsonMode) {
     const result: { success: boolean; data?: unknown; warning?: string } = {
       success: true,
-      data: { tabId, url, tree: treeData || undefined, text: textContent || undefined }
+      data: { tabId, url, reused, tree: treeData || undefined, text: textContent || undefined }
     }
     if (aggregate.warnings?.length) result.warning = aggregate.warnings.join("; ")
     output(jsonMode, result)
@@ -206,7 +217,7 @@ export async function runOpen(
   if (aggregate.warnings?.length) console.error(`warning: ${aggregate.warnings.join("; ")}`)
 
   // Pretty output
-  parts.push(`Tab: ${tabId} | ${url}`)
+  parts.push(`Tab: ${tabId} | ${url}${reused ? " (reused)" : ""}`)
   if (treeData) {
     parts.push("")
     parts.push(treeData)
