@@ -33,10 +33,6 @@ export function stopFixtureServer(): void {
 }
 
 export function startCondition(condition: ConditionDef): void {
-  if (condition.id === "interceptor") {
-    shellResult("interceptor reload")
-    shellResult("sleep 2")
-  }
   if (condition.daemon === "explicit" && condition.daemonStart) {
     shellResult(condition.daemonStart)
   }
@@ -64,9 +60,16 @@ export function waitForHealth(condition: ConditionDef): void {
 
 export function runPreflight(condition: ConditionDef): void {
   for (const command of condition.preflight?.commands ?? []) {
-    const result = shellResult(command, { timeoutMs: 30_000 })
-    if (!result.ok) {
-      throw new Error(`Preflight failed for ${condition.id}: ${command}\n${result.stderr || result.stdout}`)
+    let lastErr = ""
+    let ok = false
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const result = shellResult(command, { timeoutMs: 30_000 })
+      if (result.ok) { ok = true; break }
+      lastErr = result.stderr || result.stdout
+      shellResult(`sleep ${attempt}`)
+    }
+    if (!ok) {
+      throw new Error(`Preflight failed for ${condition.id}: ${command}\n${lastErr}`)
     }
   }
 }

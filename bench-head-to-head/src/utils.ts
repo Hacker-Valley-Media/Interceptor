@@ -1,6 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import { execSync } from "node:child_process"
 import type { BenchConfig, ConditionDef, ModelsConfig, RunPolicy, ScoringConfig, TaskDef, TaskSuiteFile } from "./types"
 
 export const BENCH_ROOT = resolve(import.meta.dirname, "..")
@@ -55,28 +54,47 @@ export function getTask(config: BenchConfig, suite: keyof BenchConfig["suites"],
   return task
 }
 
-export function shell(command: string, opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {}): string {
-  return execSync(command, {
+// Bun.spawnSync over Node's execSync: native timeout + killSignal, faster
+// spawn, argv as a real array (no multi-MB inline argv in `ps` for child
+// processes carrying long prompts), and no event-loop blocking on the syscall.
+// Sync signature is retained to avoid an async ripple through every caller;
+// AbortSignal support (Bun.spawn-only) can be a follow-up when cooperative
+// cancellation is needed beyond the timeout-driven SIGTERM.
+export function shellResult(
+  command: string,
+  opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {},
+): { ok: boolean; stdout: string; stderr: string } {
+  const proc = Bun.spawnSync({
+    cmd: ["sh", "-c", command],
     cwd: opts.cwd,
-    timeout: opts.timeoutMs,
-    encoding: "utf-8",
-    stdio: "pipe",
     env: {
       ...process.env,
       PATH: `${join(REPO_ROOT, "dist")}:${process.env.PATH ?? ""}`,
       ...(opts.env ?? {}),
     },
+    timeout: opts.timeoutMs,
+    killSignal: "SIGTERM",
+    stdout: "pipe",
+    stderr: "pipe",
   })
+  return {
+    ok: proc.success,
+    stdout: proc.stdout?.toString("utf-8") ?? "",
+    stderr: proc.stderr?.toString("utf-8") ?? "",
+  }
 }
 
-export function shellResult(command: string, opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {}): { ok: boolean; stdout: string; stderr: string } {
-  try {
-    const stdout = shell(command, opts)
-    return { ok: true, stdout, stderr: "" }
-  } catch (error) {
-    const err = error as { stdout?: string; stderr?: string }
-    return { ok: false, stdout: err.stdout ?? "", stderr: err.stderr ?? "" }
+// Kept for backward compat with any caller that needed the throwing variant.
+// Returns stdout on success; throws { stdout, stderr, exitCode } on failure.
+export function shell(command: string, opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {}): string {
+  const r = shellResult(command, opts)
+  if (!r.ok) {
+    const err = new Error(`shell failed: ${command}`) as Error & { stdout: string; stderr: string }
+    err.stdout = r.stdout
+    err.stderr = r.stderr
+    throw err
   }
+  return r.stdout
 }
 
 export function nowStamp(): string {

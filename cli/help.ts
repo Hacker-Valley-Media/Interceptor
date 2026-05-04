@@ -70,7 +70,8 @@ Actions:
   interceptor rightclick <index> --at X,Y   Right-click at coordinates
   interceptor type <index|ref> <text>        Type into element (clears first)
   interceptor type <index|ref> <text> --append  Type without clearing
-  interceptor type "role:name" <text>        Type using semantic selector
+  interceptor type "role:name" <text>        Type using semantic selector (e.g. "button:Submit")
+  interceptor click "text:<query>"            Click first element whose textContent matches (e.g. "text:Save")
   interceptor select <index|ref> <value>     Select dropdown option
   interceptor focus <index|ref>              Focus element
   interceptor hover <index|ref>              Hover over element

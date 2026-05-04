@@ -36,7 +36,7 @@ Operating rules:
 - Use the CLI plus native-host route for setup, validation, and development.
 - Do not default to debugging Interceptor itself unless the task is specifically about Interceptor.
 - Use `--json` when another tool or script will consume the output.
-- Treat `eN` and framed refs such as `e2_7` as short-lived. Re-run `read` or `find` after navigation, rerenders, or DOM mutations.
+- Treat `eN` and framed refs such as `e2_7` as short-lived: refs survive across calls as long as the underlying element stays connected to the document. They do **not** survive a navigation, a rerender that recreates the node, or a removal. They **do** survive a transient layout flicker (an ancestor briefly toggling `display`, a CSS transition, an offscreen scroll). If `act <ref>` returns "stale element", the element was removed from the DOM — not just hidden — re-run `read` or `find` to get a fresh ref. The `text:<query>` selector matches any visible element whose `textContent` contains the query, regardless of role; useful for clicking framework-style cards (`<div tabindex=0>...</div>`) where the role is not "button".
 - Do not use `--any-tab` unless the user explicitly wants to operate outside Interceptor's tracked tab group.
 - Prefer passive observation before invasive instrumentation. For network work, start with `inspect` or `net`, not CDP debugger attachment.
 - For browser tasks, default to synthetic events (`act`, `click`, `type`, `keys`). The pre-load `userActivation` override + `__interceptor_trust` event marker handle most `isTrusted` and transient-activation gates. Reach for `--os` only when synthetic input is observed to fail; reach for `interceptor macos` only when the target is outside the page (native app, OS dialog, browser chrome).

@@ -12,18 +12,31 @@ export async function handleTabActions(
       const newTab = await chrome.tabs.create({ url: (action.url as string) || "about:blank" })
       if (newTab.id) {
         const groupId = await addTabToInterceptorGroup(newTab.id)
+        // Pin the newly-created tab as the auto-target for subsequent commands
+        // so a fresh CLI invocation (no --tab) routes to this tab instead of a
+        // stale activeTabId or whatever Chrome reports as "active in currentWindow"
+        // (which may be the user's foreground tab, not the one we just opened).
+        await chrome.storage.session.set({ activeTabId: newTab.id })
         return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId } }
       }
       return { success: true, data: { tabId: newTab.id, url: newTab.url } }
     }
 
-    case "tab_close":
-      await chrome.tabs.remove((action.tabId as number) || tabId)
+    case "tab_close": {
+      const closedId = (action.tabId as number) || tabId
+      await chrome.tabs.remove(closedId)
+      // If the closed tab was the auto-target, clear it so the next call
+      // re-resolves via chrome.tabs.query rather than targeting a dead tab.
+      const stored = await chrome.storage.session.get("activeTabId") as { activeTabId?: number }
+      if (stored.activeTabId === closedId) await chrome.storage.session.remove("activeTabId")
       return { success: true }
+    }
 
-    case "tab_switch":
+    case "tab_switch": {
       await chrome.tabs.update(action.tabId as number, { active: true })
+      await chrome.storage.session.set({ activeTabId: action.tabId as number })
       return { success: true }
+    }
 
     case "tab_list": {
       const tabs = await chrome.tabs.query({})

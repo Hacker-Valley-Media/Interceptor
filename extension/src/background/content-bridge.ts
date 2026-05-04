@@ -61,6 +61,16 @@ export async function sendToContentScript(
   const first = await sendToContentScriptOnce(tabId, action, frameId)
   if (first.success || !shouldRetryContentScript(first.error)) return first
 
+  // Before reinjecting via executeScript (which re-evaluates content.js and
+  // blows away the in-page refRegistry the consumer has been using), give the
+  // manifest's `document_idle` auto-inject a brief window to fire and handle
+  // the message. Most "Receiving end does not exist" errors on freshly-opened
+  // http(s) tabs are timing races against document_idle, not genuine
+  // missing-script states.
+  await new Promise(resolve => setTimeout(resolve, 250))
+  const retryWithoutInject = await sendToContentScriptOnce(tabId, action, frameId)
+  if (retryWithoutInject.success) return retryWithoutInject
+
   const injected = await injectContentScript(tabId, frameId)
   if (!injected.success) {
     if (isChromeRestrictedInjectError(injected.error)) {

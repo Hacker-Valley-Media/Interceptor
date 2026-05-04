@@ -6,6 +6,23 @@ import { parseElementTarget } from "../parse"
 
 type Action = { type: string; [key: string]: unknown }
 
+// parseElementTarget falls through unknown strings to { ref: <arg> }, which
+// would then misroute to the content script as a bogus ref lookup and surface
+// a misleading "stale element" error. Reject at the parser instead with a
+// clear message about the supported argument shapes.
+function rejectIfBogusRef(cmdName: string, raw: string, target: ReturnType<typeof parseElementTarget>): void {
+  const isValidRef = !!target.ref && /^e\d+$/.test(target.ref)
+  const isValidIndex = target.index !== undefined && !Number.isNaN(target.index)
+  const isValidSemantic = !!target.semantic
+  if (!isValidRef && !isValidIndex && !isValidSemantic) {
+    console.error(
+      `error: ${cmdName} got '${raw}' but requires an element ref (e.g. 'e2'), an index (e.g. '5'), or 'role:name' (e.g. 'button:Submit'). ` +
+      `Tag names and CSS selectors are not supported. Use 'interceptor read --tree-only' to find refs.`,
+    )
+    process.exit(1)
+  }
+}
+
 export function parseStateCommand(filtered: string[]): Action {
   const cmd = filtered[0]
 
@@ -50,13 +67,22 @@ export function parseStateCommand(filtered: string[]): Action {
       }
     }
 
-    case "text":
-      return filtered[1]
-        ? { type: "extract_text", ...parseElementTarget(filtered[1]) }
-        : { type: "extract_text" }
+    case "text": {
+      if (!filtered[1]) return { type: "extract_text" }
+      const target = parseElementTarget(filtered[1])
+      rejectIfBogusRef("text", filtered[1], target)
+      return { type: "extract_text", ...target }
+    }
 
-    case "html":
-      return { type: "extract_html", ...parseElementTarget(filtered[1]) }
+    case "html": {
+      if (!filtered[1]) {
+        console.error(`error: html requires an element ref (e.g. 'html e2'). Use 'interceptor read --tree-only' to find refs.`)
+        process.exit(1)
+      }
+      const target = parseElementTarget(filtered[1])
+      rejectIfBogusRef("html", filtered[1], target)
+      return { type: "extract_html", ...target }
+    }
 
     default:
       console.error(`error: unknown state command '${cmd}'`)

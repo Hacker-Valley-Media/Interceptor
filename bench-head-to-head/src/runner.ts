@@ -124,6 +124,7 @@ export function runOne(spec: RunSpec, config = loadConfig()): RunResult {
     agentResult = shellResult(codexCommand(config, condition, task, artifactDir), {
       cwd: benchmarkAgentCwd(spec),
       env: { CODEX_HOME: codexHome.path },
+      timeoutMs: 900_000,
     })
     wallClock = (Date.now() - started) / 1000
   }

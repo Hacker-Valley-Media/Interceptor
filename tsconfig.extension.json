@@ -6,5 +6,8 @@
   },
   "include": [
     "extension/src/**/*.ts"
+  ],
+  "exclude": [
+    "extension/src/**/*.test.ts"
   ]
 }
