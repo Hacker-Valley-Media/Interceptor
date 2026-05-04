@@ -27,10 +27,20 @@ export const VERSION = "$pkg_version"
 export const BUILD_SHA = "$sha"
 export const BUILD_DATE = "$date"
 EOF
+  # Keep extension/manifest.json#version in lockstep with package.json so the
+  # extension reports the same version as the CLI / pkg / Sparkle artifacts.
+  # Source manifest is restored via `git checkout` after build (same shape as
+  # cli/version.ts). Without this, the manifest is whatever someone hand-bumped
+  # last and silently drifts every release that forgets to bump it.
+  if [[ -f extension/manifest.json ]]; then
+    sed -i.bak -E 's|("version":[[:space:]]*)"[^"]+"|\1"'"$pkg_version"'"|' extension/manifest.json
+    rm -f extension/manifest.json.bak
+  fi
 }
 
 restore_version() {
   git checkout cli/version.ts 2>/dev/null || true
+  git checkout extension/manifest.json 2>/dev/null || true
 }
 
 trap restore_version EXIT
