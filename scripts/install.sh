@@ -232,6 +232,63 @@ done
 # ── Step 3: Load extension into browser via --load-extension ──────────────────
 # Takes one arg: "chrome" | "brave". Reads $SKIP_EXTENSION, $PROFILE, $DRY_RUN,
 # $EXTENSION_DIR from the surrounding scope.
+
+# Resolve the profile root for a given browser target.
+profile_root_for() {
+  case "$1" in
+    brave)  echo "$HOME/Library/Application Support/BraveSoftware/Brave-Browser" ;;
+    chrome) echo "$HOME/Library/Application Support/Google/Chrome" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Read extensions.ui.developer_mode from a profile's Preferences JSON.
+# Echoes "true" / "false" / "unknown" (file missing, malformed, or key absent).
+read_developer_mode() {
+  local prefs="$1"
+  if [[ ! -f "$prefs" ]]; then echo "unknown"; return 0; fi
+  python3 - "$prefs" <<'PY' 2>/dev/null || echo "unknown"
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    v = d.get("extensions", {}).get("ui", {}).get("developer_mode")
+    if v is True: print("true")
+    elif v is False: print("false")
+    else: print("unknown")
+except Exception:
+    print("unknown")
+PY
+}
+
+# Toggle extensions.ui.developer_mode = true in a profile's Preferences JSON.
+# Must NOT run while the browser owns the file — the browser overwrites on shutdown.
+# Returns 0 on success, non-zero on failure (file missing, malformed, browser running).
+write_developer_mode_true() {
+  local prefs="$1" browser_bin="$2"
+  if [[ ! -f "$prefs" ]]; then return 1; fi
+  if pgrep -f "$browser_bin" >/dev/null 2>&1; then return 2; fi
+  python3 - "$prefs" <<'PY' 2>/dev/null || return 3
+import json, sys, os, tempfile
+path = sys.argv[1]
+with open(path) as f:
+    d = json.load(f)
+d.setdefault("extensions", {}).setdefault("ui", {})["developer_mode"] = True
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w") as f:
+    json.dump(d, f, separators=(",", ":"))
+os.replace(tmp, path)
+PY
+}
+
+# Probe whether the just-launched extension is reachable. Returns 0 if yes.
+probe_extension_reachable() {
+  local interceptor_bin="$ROOT/dist/interceptor"
+  [[ -x "$interceptor_bin" ]] || return 0  # nothing to probe with; skip silently
+  # status --verbose ends with a per-component breakdown including "extension:"
+  "$interceptor_bin" status --verbose 2>/dev/null | grep -qE "^extension:[[:space:]]+reachable"
+}
+
 load_extension() {
   local target="$1"
 
@@ -268,6 +325,68 @@ load_extension() {
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "==> [browser] DRY: would launch $BROWSER_NAME --load-extension=$EXTENSION_DIR"
     return 0
+  fi
+
+  # ── Developer-mode preflight ─────────────────────────────────────────────────
+  # Chromium silently drops --load-extension when the target profile has Dev
+  # mode off — the launch reports success, the extension is dormant, and every
+  # subsequent browser-side command times out at 15s. Detect and surface this
+  # before launching, with both manual and (with Brave/Chrome closed) automatic
+  # remediation.
+  local PROFILE_DIR_NAME="${PROFILE:-Default}"
+  local PROFILE_PATH
+  PROFILE_PATH="$(profile_root_for "$target")/$PROFILE_DIR_NAME"
+  local PREFS_PATH="$PROFILE_PATH/Preferences"
+  local DEVMODE_STATE
+  DEVMODE_STATE="$(read_developer_mode "$PREFS_PATH")"
+
+  if [[ "$DEVMODE_STATE" == "false" || "$DEVMODE_STATE" == "unknown" ]]; then
+    echo ""
+    echo "==> [browser] $BROWSER_NAME profile '$PROFILE_DIR_NAME' has Developer mode OFF"
+    echo "    (or the profile has not been opened yet)."
+    echo ""
+    echo "    Without Developer mode, --load-extension is silently dropped by Chromium:"
+    echo "    the install reports success, the extension never registers, and every"
+    echo "    'interceptor open / read / act / …' will time out at 15s."
+    echo ""
+    echo "    Manual remediation:"
+    echo "      1. Quit $BROWSER_NAME entirely."
+    echo "      2. Re-launch $BROWSER_NAME, open $(case "$target" in brave) echo brave://extensions/ ;; chrome) echo chrome://extensions/ ;; esac), toggle Developer mode ON."
+    echo "      3. Quit $BROWSER_NAME again."
+    echo "      4. Re-run: bash scripts/install.sh ${MODE:+--$MODE} --$target${PROFILE:+ --profile \"$PROFILE\"}"
+
+    # Offer auto-remediation if and only if the browser is currently closed
+    # AND we have a Preferences file to write to. Editing while the browser
+    # runs is unsafe — the browser overwrites on shutdown.
+    local CAN_AUTO=0
+    if [[ -f "$PREFS_PATH" ]] && ! pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then
+      CAN_AUTO=1
+    fi
+
+    if [[ "$CAN_AUTO" == "1" && -t 0 ]]; then
+      echo ""
+      read -r -p "    Or: enable Developer mode now (writes Preferences while $BROWSER_NAME is closed)? [y/N] " ANSWER
+      if [[ "${ANSWER:-n}" == "y" || "${ANSWER:-n}" == "Y" ]]; then
+        if write_developer_mode_true "$PREFS_PATH" "$BROWSER_BIN"; then
+          echo "    Developer mode enabled in $PREFS_PATH."
+        else
+          echo "    Failed to write Preferences (browser may have launched, file missing, or JSON malformed)."
+          echo "    Use the manual path above."
+          exit 1
+        fi
+      else
+        echo "    Skipped auto-enable. Use the manual path above, then re-run."
+        exit 1
+      fi
+    elif [[ -t 0 ]]; then
+      echo ""
+      echo "    Auto-enable is unavailable (no Preferences file at '$PREFS_PATH'"
+      echo "    or $BROWSER_NAME is still running). Use the manual path."
+      exit 1
+    else
+      # Non-interactive: hard-fail loudly so a wrapper doesn't ship a dormant install.
+      exit 1
+    fi
   fi
 
   # Check if browser is already running
@@ -329,11 +448,44 @@ load_extension() {
 
   open -a "$BROWSER_APP" --args "${LAUNCH_ARGS[@]}"
 
+  # ── Post-launch reachability probe ──────────────────────────────────────────
+  # Wait briefly for the extension to initialize, then probe via
+  # `interceptor status --verbose`. If the extension is not reachable, the
+  # most likely cause is still a Developer-mode mismatch we couldn't detect
+  # (e.g. the Preferences file we read was for a different profile than the
+  # browser actually opened). Surface the symptom + remediation rather than
+  # report a silent success.
   echo ""
-  echo "==> Extension loaded into $BROWSER_NAME."
-  echo "    Extension ID: hkjbaciefhhgekldhncknbjkofbpenng"
-  if [[ -n "$PROFILE" ]]; then
-    echo "    Profile: $PROFILE"
+  echo "==> Verifying extension reachability (waits up to 8s)..."
+  local probed=0
+  for i in 1 2 3 4 5 6 7 8; do
+    sleep 1
+    if probe_extension_reachable; then probed=1; break; fi
+  done
+
+  if [[ "$probed" == "1" ]]; then
+    echo "==> Extension loaded into $BROWSER_NAME and reachable."
+    echo "    Extension ID: hkjbaciefhhgekldhncknbjkofbpenng"
+    [[ -n "$PROFILE" ]] && echo "    Profile: $PROFILE"
+  else
+    echo "==> WARNING: $BROWSER_NAME launched, but the extension is NOT reachable after 8s."
+    echo ""
+    echo "    Most common cause: Developer mode is off in the profile $BROWSER_NAME"
+    echo "    actually opened (which may differ from the profile this script targeted)."
+    echo ""
+    echo "    Verify in $BROWSER_NAME:"
+    case "$target" in
+      brave)  echo "      1. Open brave://extensions/" ;;
+      chrome) echo "      1. Open chrome://extensions/" ;;
+    esac
+    echo "      2. Confirm Developer mode is ON (top-right toggle)."
+    echo "      3. Confirm 'Interceptor' appears with ID hkjbaciefhhgekldhncknbjkofbpenng."
+    echo "      4. If the extension is missing, click 'Load unpacked' and select:"
+    echo "         $EXTENSION_DIR"
+    echo ""
+    echo "    Diagnose with: interceptor status --verbose"
+    echo ""
+    return 1
   fi
 }
 

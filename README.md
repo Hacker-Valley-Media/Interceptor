@@ -190,8 +190,11 @@ The recommended install path for end users is the signed `.pkg` documented in [I
 #### Prerequisites
 
 - [Bun](https://bun.sh/) runtime
-<<<<<<< HEAD
-- Brave Browser (or Chrome — see Chrome path below)
+- [Brave Browser](https://brave.com/download/) (or Chrome — see Chrome path below)
+  - **macOS:** `brew install --cask brave-browser`
+  - **Windows:** `winget install Brave.Brave` (or `choco install brave`)
+  - **Linux:** `sudo snap install brave` or `flatpak install flathub com.brave.Browser`. For native package-manager installs (apt/dnf/zypper/AUR), see the [official Linux guide](https://brave.com/linux/).
+- **Developer mode enabled** in the target Brave / Chrome profile. `--load-extension` is silently dropped by Chromium when Dev mode is off, leaving a dormant install with no error. `scripts/install.sh` preflights this and offers to flip it for you (Brave-closed only) or fail loudly with remediation steps. To enable manually: open `brave://extensions/` (or `chrome://extensions/`) and toggle Developer mode in the top-right.
 - Xcode command line tools (only required if you want to build the macOS bridge)
 
 #### Two install modes
@@ -204,12 +207,6 @@ The recommended install path for end users is the signed `.pkg` documented in [I
 | **`--full`** | Everything in browser-only **plus** the Swift bridge `.app`, the LaunchAgent, and the macOS subcommands | Screen Recording, Accessibility, Apple Events (per-target-app on first dispatch) | You need `interceptor macos *` (native AX tree, OS-level input, ScreenCaptureKit, Vision/Speech/NLP). macOS only. |
 
 If you don't pass either flag, the script prompts. The default in the prompt is `--full` on macOS, `--browser-only` everywhere else.
-=======
-- [Brave Browser](https://brave.com/download/)
-  - **macOS:** `brew install --cask brave-browser`
-  - **Windows:** `winget install Brave.Brave` (or `choco install brave`)
-  - **Linux:** `sudo snap install brave` or `flatpak install flathub com.brave.Browser`. For native package-manager installs (apt/dnf/zypper/AUR), see the [official Linux guide](https://brave.com/linux/).
->>>>>>> fb06399 (docs(readme): link Brave in Prerequisites and add platform install hints)
 
 #### Build and Install
 
@@ -284,6 +281,14 @@ bash scripts/uninstall.sh --bridge-only     # Remove only the macOS bridge (down
 ```
 
 `daemon: not running` from `status` on a fresh install is normal — `status` is a local pre-spawn check that never starts the daemon. Run `interceptor open <url>` to spawn the daemon and verify the daemon, native messaging bridge, extension, and page together.
+
+#### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `interceptor open <url>` returns `error: timeout: no response for 'tab_create' after 15s` | Browser extension is not loaded — most often because **Developer mode is off** in the target profile. Chromium silently drops `--load-extension` when Dev mode is off. | Open `brave://extensions/` or `chrome://extensions/`, toggle Developer mode ON. Quit the browser fully. Re-run `bash scripts/install.sh` (it will preflight Dev mode and re-launch). |
+| `interceptor status --verbose` says `extension: not reachable` | Same as above, or extension is registered but the Interceptor extension was disabled in the browser. | Open the extensions page, confirm Interceptor (ID `hkjbaciefhhgekldhncknbjkofbpenng`) is present and enabled. If missing, click **Load unpacked** and select `extension/dist/`. |
+| `chrome://extensions/` reports the extension as version `0.10.0` while `interceptor --version` reports a higher version | Extension manifest drift fixed in this release — rebuild from current source: `bash scripts/build.sh` then re-run `scripts/install.sh`. | Restart the browser after re-loading the extension so Chromium picks up the bumped manifest. |
 
 In browser-only mode, running an `interceptor macos *` command returns a structured "requires full computer-use install" error within 1 second instead of timing out at 15 seconds.
 
