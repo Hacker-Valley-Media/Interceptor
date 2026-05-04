@@ -215,5 +215,9 @@ Recording (Session Monitor):
     --with-bodies                        (P1) Merge cached response bodies
 
 Meta:
+  interceptor init                           First-run preflight: verify daemon, bridge, and extension are reachable
+  interceptor init --verbose                 Same as 'init', plus a per-component reachability breakdown
   interceptor status                         Check daemon status (local — no connection needed)
+  interceptor status --verbose               Daemon + bridge + extension probe with per-component diagnostics
+  interceptor status --explain               Alias for --verbose with extra rationale per component
   interceptor help                           This help text`

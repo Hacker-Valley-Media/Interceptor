@@ -190,16 +190,14 @@ describe("formatStatus (#49 + #52)", () => {
 })
 
 describe("init command (#50)", () => {
-  test("init is a recognized command (not rejected as unknown)", () => {
+  test("init is a recognized command and --help returns its slice", () => {
     // We can't actually run init without potentially spawning the daemon,
     // but we can check that --help short-circuits cleanly: that confirms
-    // init is wired into the dispatcher.
+    // init is wired into the dispatcher AND has an entry in HELP.
     const r = runCli(["init", "--help"])
     expect(r.status).toBe(0)
-    // The per-command help lookup will return null for `init` (we don't
-    // have an `interceptor init` line in HELP yet — would-be future addition),
-    // so the CLI falls back to printing the full HELP. That still confirms
-    // the command was accepted by the dispatcher.
-    expect(r.stdout).toContain("interceptor — browser control CLI")
+    // Per-command slice header + at least one matching line.
+    expect(r.stdout).toContain("interceptor init — usage")
+    expect(r.stdout).toMatch(/interceptor init\s/)
   })
 })
