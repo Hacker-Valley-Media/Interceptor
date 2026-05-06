@@ -21,8 +21,10 @@ while [[ $i -le $# ]]; do
   arg="${!i}"
   case "$arg" in
     --skip-extension) SKIP_EXTENSION=1 ;;
-    --brave)  BROWSER="brave" ;;
-    --chrome) BROWSER="chrome" ;;
+    --brave)   BROWSER="brave" ;;
+    --chrome)  BROWSER="chrome" ;;
+    --edge)    BROWSER="edge" ;;
+    --vivaldi) BROWSER="vivaldi" ;;
     --profile)
       i=$((i + 1))
       PROFILE="${!i}"
@@ -55,6 +57,8 @@ while [[ $i -le $# ]]; do
        echo "Browser:"
        echo "  --brave           Target Brave Browser"
        echo "  --chrome          Target Google Chrome"
+       echo "  --edge            Target Microsoft Edge"
+       echo "  --vivaldi         Target Vivaldi"
        echo "  --profile <name>  Profile directory name (e.g. \"Default\", \"Profile 2\")"
        echo "  --profiles        List available profiles and exit"
        echo ""
@@ -74,8 +78,10 @@ if [[ "$LIST_PROFILES" == "1" ]]; then
     fi
   fi
   case "$BROWSER" in
-    brave)  PROFILE_ROOT="$HOME/Library/Application Support/BraveSoftware/Brave-Browser" ;;
-    chrome) PROFILE_ROOT="$HOME/Library/Application Support/Google/Chrome" ;;
+    brave)   PROFILE_ROOT="$HOME/Library/Application Support/BraveSoftware/Brave-Browser" ;;
+    chrome)  PROFILE_ROOT="$HOME/Library/Application Support/Google/Chrome" ;;
+    edge)    PROFILE_ROOT="$HOME/Library/Application Support/Microsoft Edge" ;;
+    vivaldi) PROFILE_ROOT="$HOME/Library/Application Support/Vivaldi" ;;
     *) echo "No supported browser found."; exit 1 ;;
   esac
 
@@ -92,6 +98,8 @@ if [[ "$LIST_PROFILES" == "1" ]]; then
   done
   echo ""
   echo "Usage: bash scripts/install.sh --brave --profile \"Profile 2\""
+  echo "       bash scripts/install.sh --edge --profiles"
+  echo "       bash scripts/install.sh --vivaldi --profiles"
   exit 0
 fi
 
@@ -148,17 +156,27 @@ fi
 if [[ -z "$BROWSER" ]]; then
   CHROME_INSTALLED=0
   BRAVE_INSTALLED=0
-  [[ -d "/Applications/Google Chrome.app" ]] && CHROME_INSTALLED=1
-  [[ -d "/Applications/Brave Browser.app" ]] && BRAVE_INSTALLED=1
+  EDGE_INSTALLED=0
+  VIVALDI_INSTALLED=0
+  [[ -d "/Applications/Google Chrome.app" ]]  && CHROME_INSTALLED=1
+  [[ -d "/Applications/Brave Browser.app" ]]  && BRAVE_INSTALLED=1
+  [[ -d "/Applications/Microsoft Edge.app" ]] && EDGE_INSTALLED=1
+  [[ -d "/Applications/Vivaldi.app" ]]         && VIVALDI_INSTALLED=1
 
-  if (( CHROME_INSTALLED + BRAVE_INSTALLED == 0 )); then
+  TOTAL_INSTALLED=$(( CHROME_INSTALLED + BRAVE_INSTALLED + EDGE_INSTALLED + VIVALDI_INSTALLED ))
+
+  if (( TOTAL_INSTALLED == 0 )); then
     echo "ERROR: No supported browser found in /Applications/." >&2
-    echo "       Install Google Chrome or Brave Browser, then re-run." >&2
+    echo "       Install Chrome, Brave, Edge, or Vivaldi, then re-run." >&2
     exit 1
   fi
 
-  if (( CHROME_INSTALLED + BRAVE_INSTALLED == 1 )); then
-    [[ "$CHROME_INSTALLED" == "1" ]] && BROWSER="chrome" || BROWSER="brave"
+  if (( TOTAL_INSTALLED == 1 )); then
+    if   [[ "$CHROME_INSTALLED"  == "1" ]]; then BROWSER="chrome"
+    elif [[ "$BRAVE_INSTALLED"   == "1" ]]; then BROWSER="brave"
+    elif [[ "$EDGE_INSTALLED"    == "1" ]]; then BROWSER="edge"
+    else                                          BROWSER="vivaldi"
+    fi
     echo "==> Browser: $BROWSER (only supported browser found)"
   elif [[ "$DRY_RUN" == "1" || ! -t 0 ]]; then
     BROWSER="chrome"
@@ -166,16 +184,18 @@ if [[ -z "$BROWSER" ]]; then
   else
     echo ""
     echo "Choose target browser:"
-    echo "  chrome   Google Chrome"
-    echo "  brave    Brave Browser"
-    echo "  both     Install for both"
+    [[ "$CHROME_INSTALLED"  == "1" ]] && echo "  chrome     Google Chrome"
+    [[ "$BRAVE_INSTALLED"   == "1" ]] && echo "  brave      Brave Browser"
+    [[ "$EDGE_INSTALLED"    == "1" ]] && echo "  edge       Microsoft Edge"
+    [[ "$VIVALDI_INSTALLED" == "1" ]] && echo "  vivaldi    Vivaldi"
+    [[ "$CHROME_INSTALLED" == "1" && "$BRAVE_INSTALLED" == "1" ]] && echo "  both       Chrome and Brave"
     echo ""
-    read -r -p "Browser [chrome/brave/both] (default: chrome): " ANSWER
+    read -r -p "Browser (default: chrome): " ANSWER
     ANSWER="${ANSWER:-chrome}"
     case "$ANSWER" in
-      chrome|brave|both) BROWSER="$ANSWER" ;;
+      chrome|brave|edge|vivaldi|both) BROWSER="$ANSWER" ;;
       *)
-        echo "Unrecognized browser '$ANSWER'. Use chrome, brave, or both." >&2
+        echo "Unrecognized browser '$ANSWER'." >&2
         exit 1 ;;
     esac
   fi
@@ -207,8 +227,10 @@ fi
 echo "==> [browser] Installing native messaging symlink(s)..."
 NM_DIRS=()
 case "$BROWSER" in
-  chrome) NM_DIRS+=("$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts") ;;
-  brave)  NM_DIRS+=("$HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts") ;;
+  chrome)  NM_DIRS+=("$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts") ;;
+  brave)   NM_DIRS+=("$HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts") ;;
+  edge)    NM_DIRS+=("$HOME/Library/Application Support/Microsoft Edge/NativeMessagingHosts") ;;
+  vivaldi) NM_DIRS+=("$HOME/Library/Application Support/Vivaldi/NativeMessagingHosts") ;;
   both)
     NM_DIRS+=("$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts")
     NM_DIRS+=("$HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts")
@@ -223,8 +245,10 @@ for dir in "${NM_DIRS[@]}"; do
     mkdir -p "$dir"
     ln -sfn "$GENERATED_MANIFEST" "$dir/com.interceptor.host.json"
     case "$dir" in
-      *Google/Chrome*) echo "    Chrome: $dir/com.interceptor.host.json" ;;
-      *Brave-Browser*) echo "    Brave:  $dir/com.interceptor.host.json" ;;
+      *Google/Chrome*)   echo "    Chrome:  $dir/com.interceptor.host.json" ;;
+      *Brave-Browser*)   echo "    Brave:   $dir/com.interceptor.host.json" ;;
+      *Microsoft\ Edge*) echo "    Edge:    $dir/com.interceptor.host.json" ;;
+      *Vivaldi*)         echo "    Vivaldi: $dir/com.interceptor.host.json" ;;
     esac
   fi
 done
@@ -236,8 +260,10 @@ done
 # Resolve the profile root for a given browser target.
 profile_root_for() {
   case "$1" in
-    brave)  echo "$HOME/Library/Application Support/BraveSoftware/Brave-Browser" ;;
-    chrome) echo "$HOME/Library/Application Support/Google/Chrome" ;;
+    brave)   echo "$HOME/Library/Application Support/BraveSoftware/Brave-Browser" ;;
+    chrome)  echo "$HOME/Library/Application Support/Google/Chrome" ;;
+    edge)    echo "$HOME/Library/Application Support/Microsoft Edge" ;;
+    vivaldi) echo "$HOME/Library/Application Support/Vivaldi" ;;
     *) return 1 ;;
   esac
 }
@@ -316,6 +342,16 @@ load_extension() {
       BROWSER_APP="/Applications/Google Chrome.app"
       BROWSER_BIN="$BROWSER_APP/Contents/MacOS/Google Chrome"
       BROWSER_NAME="Chrome"
+      ;;
+    edge)
+      BROWSER_APP="/Applications/Microsoft Edge.app"
+      BROWSER_BIN="$BROWSER_APP/Contents/MacOS/Microsoft Edge"
+      BROWSER_NAME="Edge"
+      ;;
+    vivaldi)
+      BROWSER_APP="/Applications/Vivaldi.app"
+      BROWSER_BIN="$BROWSER_APP/Contents/MacOS/Vivaldi"
+      BROWSER_NAME="Vivaldi"
       ;;
     *)
       echo "ERROR: load_extension called with unknown browser '$target'." >&2
@@ -424,11 +460,16 @@ load_extension() {
     fi
   fi
 
-  if [[ "$target" == "chrome" ]]; then
+  if [[ "$target" == "chrome" || "$target" == "edge" ]]; then
+    local SCHEMA
+    case "$target" in
+      chrome) SCHEMA="chrome" ;;
+      edge)   SCHEMA="edge" ;;
+    esac
     echo ""
-    echo "==> Google Chrome ignores --load-extension in branded desktop builds."
+    echo "==> $BROWSER_NAME ignores --load-extension in branded desktop builds."
     echo "    Use one of these paths instead:"
-    echo "      1. Developer flow: open chrome://extensions, enable Developer Mode,"
+    echo "      1. Developer flow: open ${SCHEMA}://extensions, enable Developer Mode,"
     echo "         then Load unpacked -> $EXTENSION_DIR"
     echo ""
     echo "    Native messaging metadata has already been installed."
@@ -475,8 +516,10 @@ load_extension() {
     echo ""
     echo "    Verify in $BROWSER_NAME:"
     case "$target" in
-      brave)  echo "      1. Open brave://extensions/" ;;
-      chrome) echo "      1. Open chrome://extensions/" ;;
+      brave)   echo "      1. Open brave://extensions/" ;;
+      chrome)  echo "      1. Open chrome://extensions/" ;;
+      edge)    echo "      1. Open edge://extensions/" ;;
+      vivaldi) echo "      1. Open vivaldi://extensions/" ;;
     esac
     echo "      2. Confirm Developer mode is ON (top-right toggle)."
     echo "      3. Confirm 'Interceptor' appears with ID hkjbaciefhhgekldhncknbjkofbpenng."
@@ -490,7 +533,7 @@ load_extension() {
 }
 
 case "$BROWSER" in
-  chrome|brave) load_extension "$BROWSER" ;;
+  chrome|brave|edge|vivaldi) load_extension "$BROWSER" ;;
   both)
     load_extension chrome
     load_extension brave
