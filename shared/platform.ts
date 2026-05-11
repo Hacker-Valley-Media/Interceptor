@@ -15,7 +15,7 @@ export type PlatformConfig = {
 }
 
 export function resolvePlatformConfig(platform: PlatformName = process.platform, tempOverride = process.env.TEMP): PlatformConfig {
-  const isWin = platform === "win32"
+  const isWin = platform === "win32" || !!process.env.INTERCEPTOR_USE_TCP
   const explicitTemp = process.env.INTERCEPTOR_TEMP
   const temp = explicitTemp || (isWin ? (tempOverride || "C:\\Temp") : "/tmp")
   const sep = isWin ? "\\" : "/"

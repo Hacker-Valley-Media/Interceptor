@@ -13,13 +13,17 @@ $template | ConvertTo-Json -Depth 10 | Set-Content -Path $GeneratedManifest -NoN
 
 $chromeKey = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.interceptor.host'
 $braveKey = 'HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.interceptor.host'
+$edgeKey  = 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.interceptor.host'
 
 New-Item -Path $chromeKey -Force | Out-Null
 Set-ItemProperty -Path $chromeKey -Name '(default)' -Value $GeneratedManifest
 New-Item -Path $braveKey -Force | Out-Null
 Set-ItemProperty -Path $braveKey -Name '(default)' -Value $GeneratedManifest
+New-Item -Path $edgeKey -Force | Out-Null
+Set-ItemProperty -Path $edgeKey -Name '(default)' -Value $GeneratedManifest
 
 Write-Host "Installed manifest registry keys:"
 Write-Host "  Chrome: $chromeKey"
 Write-Host "  Brave:  $braveKey"
+Write-Host "  Edge:   $edgeKey"
 Write-Host "Manifest: $GeneratedManifest"
