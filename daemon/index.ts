@@ -441,6 +441,7 @@ if (existsSync(PID_PATH)) {
         process.kill(existingPid, 0)
         if (STANDALONE) {
           log(`another daemon already running (pid ${existingPid}) — exiting`)
+          ;(process as any)._skipCleanup = true
           process.exit(0)
         }
         // Native-messaging mode: become a relay instead of exiting
@@ -1071,6 +1072,7 @@ function gracefulShutdown(signal: string) {
 }
 
 process.on("exit", (code) => {
+  if ((process as any)._skipCleanup) return
   log(`exiting with code ${code}`)
   try { unlinkSync(SOCKET_PATH) } catch {}
   try { unlinkSync(PID_PATH) } catch {}
