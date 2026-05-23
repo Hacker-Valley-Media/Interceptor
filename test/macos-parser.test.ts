@@ -146,4 +146,26 @@ describe("macos parser", () => {
     expect(action.noPrompt).toBe(true)
     expect(action.prompt).toBe(false)
   })
+
+  test("tcc status parses target", () => {
+    const action = parseMacosCommand(["macos", "tcc", "status", "--target", "host"]) as Record<string, unknown>
+    expect(action.type).toBe("macos_tcc_status")
+    expect(action.sub).toBe("status")
+    expect(action.target).toBe("host")
+  })
+
+  test("tcc profile generate parses output and services", () => {
+    const action = parseMacosCommand([
+      "macos", "tcc", "profile", "generate",
+      "--target", "host",
+      "--out", "/tmp/interceptor.mobileconfig",
+      "--service", "Accessibility,PostEvent",
+      "--full-disk",
+    ]) as Record<string, unknown>
+    expect(action.type).toBe("macos_tcc_profile_generate")
+    expect(action.sub).toBe("profile_generate")
+    expect(action.out).toBe("/tmp/interceptor.mobileconfig")
+    expect(action.services).toEqual(["Accessibility", "PostEvent"])
+    expect(action.fullDisk).toBe(true)
+  })
 })

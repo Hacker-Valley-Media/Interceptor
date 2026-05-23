@@ -9,7 +9,7 @@ Platform.writePID()
 
 let router = Router()
 
-// PRD-66 — expose the router to AppIntents perform() callbacks so declared
+// expose the router to AppIntents perform() callbacks so declared
 // intents can dispatch into the same domain handlers the CLI uses.
 GlobalRouterRef.shared = router
 
@@ -33,6 +33,7 @@ let audioDomain = AudioDomain()
 let streamDomain = StreamDomain()
 let monitorDomain = MonitorDomain()
 let trustDomain = TrustDomain()
+let tccDomain = TccDomain()
 let menuDomain = MenuDomain()
 let textDomain = TextDomain()
 let compoundDomain = CompoundDomain(router: router)
@@ -46,8 +47,13 @@ let logDomain = LogDomain()
 let intentDomain = IntentDomain()
 let containerDomain = ContainerDomain()
 
-// PRD-66 — personal data and distribution domains. Each handler reads
-// `action["sub"]` per the PRD-63 dispatch invariant and is registered
+// VM management. Registered against `vm` so `macos_vm_<verb>`
+// actions route here. Lives alongside ContainerDomain (which keeps
+// running the existing `macos_container_run` shell-out path).
+let vmDomain = VmDomain()
+
+// personal data and distribution domains. Each handler reads
+// `action["sub"]` per the dispatch invariant and is registered
 // against the two-segment action type `macos_<key>_<verb>` below.
 let pdfDomain = PdfDomain()
 let detectDomain = DetectDomain()
@@ -99,6 +105,7 @@ router.register("audio", handler: audioDomain)
 router.register("stream", handler: streamDomain)
 router.register("monitor", handler: monitorDomain)
 router.register("trust", handler: trustDomain)
+router.register("tcc", handler: tccDomain)
 router.register("menu", handler: menuDomain)
 router.register("text", handler: textDomain)
 router.register("compound", handler: compoundDomain)
@@ -111,8 +118,10 @@ router.register("url", handler: netDomain)
 router.register("log", handler: logDomain)
 router.register("intent", handler: intentDomain)
 router.register("container", handler: containerDomain)
+// register the new `vm` domain.
+router.register("vm", handler: vmDomain)
 
-// PRD-66 — register the 14 new domain keys.
+// register the 14 new domain keys.
 router.register("pdf", handler: pdfDomain)
 router.register("detect", handler: detectDomain)
 router.register("translate", handler: translateDomain)

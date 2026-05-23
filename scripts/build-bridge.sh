@@ -22,7 +22,10 @@ INTERCEPTOR_BRIDGE_IDENTIFIER="com.interceptor.bridge"
 INTERCEPTOR_BRIDGE_VERSION="${INTERCEPTOR_BRIDGE_VERSION:-1.0.0}"
 INTERCEPTOR_SPARKLE_FEED_URL="${INTERCEPTOR_SPARKLE_FEED_URL:-https://updates.hackervalley.media/appcast.xml}"
 INTERCEPTOR_SPARKLE_PUBLIC_KEY="${INTERCEPTOR_SPARKLE_PUBLIC_KEY:-dnUnuHGCO4obHb44Khlf2TZQFUMmFGGpm2c6j+EqmdU=}"
-ENTITLEMENTS="$SCRIPT_DIR/entitlements.plist"
+## Bridge carries Virtualization framework capabilities (VM lifecycle)
+## that the CLI and daemon don't need; entitlements-bridge.plist is the
+## superset, entitlements.plist is the slim CLI/daemon set.
+ENTITLEMENTS="$SCRIPT_DIR/entitlements-bridge.plist"
 APP_DIR="$DIST_DIR/interceptor-bridge.app"
 
 echo "==> Building interceptor-bridge (release)..."
@@ -109,7 +112,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>
     <true/>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>15.0</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>interceptor-bridge dispatches Apple Events to apps you ask Interceptor to control via app_intent. macOS will prompt you to allow each target app the first time.</string>
     <key>NSAccessibilityUsageDescription</key>
@@ -119,7 +122,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>NSMicrophoneUsageDescription</key>
     <string>interceptor-bridge captures microphone input when you ask Interceptor to use listen / audio commands.</string>
 
-    <!-- PRD-66 — personal data and distribution surfaces.
+    <!-- personal data and distribution surfaces.
          Each TCC-gated framework gets a usage description string that surfaces
          in the system consent dialog. Strings follow Apple's recommended shape
          (verb + reason). Both modern (macOS 14+) and legacy keys are present

@@ -37,10 +37,17 @@
     <true/>
     <key>com.apple.security.personal-information.location</key>
     <true/>
-    <!-- CLI + daemon entitlement set. Bridge-only capabilities (e.g.
-         com.apple.security.virtualization) live in entitlements-bridge.plist
-         to keep this surface minimal — AMFI rejects launchd-spawned
-         binaries that carry entitlements their bundle ID isn't allowlisted
-         for. -->
+    <!-- Bridge-only Virtualization framework requirement. Enables
+         VZVirtualMachine + VZVirtualMachineConfiguration + VZMacOSRestoreImage
+         (Virtualization.md:18). Apple does not restrict this entitlement —
+         any Developer ID-signed app may carry it
+         (BundleResources/Entitlements/com.apple.security.virtualization.md).
+         ships VM lifecycle with VZNATNetworkDeviceAttachment, which
+         requires only this entitlement. Bridged + vmnet attachment modes
+         (com.apple.vm.networking) are out of scope per 's scope
+         decision header — Apple restricts that entitlement via a private
+         allowlist Interceptor is not pursuing. -->
+    <key>com.apple.security.virtualization</key>
+    <true/>
 </dict>
 </plist>

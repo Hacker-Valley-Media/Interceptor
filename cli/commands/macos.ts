@@ -206,6 +206,46 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       }
     }
 
+    // ── TCC / PPPC profile management ──
+    case "tcc": {
+      const op = filtered[2] || "status"
+      const target = flagVal(filtered, "--target") || "host"
+
+      if (op === "status") {
+        return {
+          type: "macos_tcc_status",
+          sub: "status",
+          target,
+        }
+      }
+
+      if (op === "profile") {
+        const profileOp = filtered[3]
+        if (profileOp !== "generate") {
+          console.error("error: interceptor macos tcc profile requires subcommand: generate")
+          process.exit(1)
+        }
+        const services = collectMulti(filtered, "--service").flatMap((s) => s.split(",").filter(Boolean))
+        const action: Action = {
+          type: "macos_tcc_profile_generate",
+          sub: "profile_generate",
+          target,
+        }
+        if (services.length > 0) action.services = services
+        if (flagVal(filtered, "--out")) action.out = flagVal(filtered, "--out")
+        if (flagVal(filtered, "--bundle-id")) action.bundleId = flagVal(filtered, "--bundle-id")
+        if (flagVal(filtered, "--app-path")) action.appPath = flagVal(filtered, "--app-path")
+        if (flagVal(filtered, "--identifier-type")) action.identifierType = flagVal(filtered, "--identifier-type")
+        if (flagVal(filtered, "--code-requirement")) action.codeRequirement = flagVal(filtered, "--code-requirement")
+        if (filtered.includes("--full-disk")) action.fullDisk = true
+        if (filtered.includes("--include-user-only")) action.includeUserOnly = true
+        return action
+      }
+
+      console.error("error: interceptor macos tcc requires subcommand: status | profile generate")
+      process.exit(1)
+    }
+
     // ── Apps ──
     case "apps":
       return { type: "macos_apps" }
@@ -298,7 +338,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       if (!ref) { console.error("error: interceptor macos resize requires a ref"); process.exit(1) }
       const width = flagInt(filtered, "--width") || parseInt(filtered[3]) || undefined
       const height = flagInt(filtered, "--height") || parseInt(filtered[4]) || undefined
-      // PRD-62: parser parity with click/type/keys/scroll/drag — forward
+      // : parser parity with click/type/keys/scroll/drag — forward
       // --app and --pid so the bridge can use them for ref qualification.
       const action: Action = { type: "macos_resize", ref, width, height }
       const resizeApp = flagVal(filtered, "--app")
@@ -416,7 +456,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
         sub: op,
         app: flagVal(filtered, "--app"),
       }
-      // PRD-63 diagnostic: dump the captured image to disk so the operator
+      // diagnostic: dump the captured image to disk so the operator
       // can see what Vision actually fed VNRecognizeTextRequest. Off by
       // default; opt in with --debug-dump <path>.
       const debugDump = flagVal(filtered, "--debug-dump")
@@ -441,7 +481,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
     // ── Intelligence ──
     case "ai": {
       const op = filtered[2] || "status"
-      // PRD-65 Spec 1 follow-up: `ai session <op>` previously sent
+      // Spec 1 follow-up: `ai session <op>` previously sent
       // filtered[3] as `prompt`, but the bridge's IntelligenceDomain.handleSession
       // reads action["op"], so the inner op (start/send/history/end) was
       // dropped and every session call fell through to "session status"
@@ -496,7 +536,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       // legacy DistributedNotificationCenter flags
       const app = flagVal(filtered, "--app"); if (app) action.app = app
       const limit = flagInt(filtered, "--limit"); if (limit !== undefined) action.limit = limit
-      // PRD-66 — UNUserNotificationCenter flags. Numeric flags must be
+      // UNUserNotificationCenter flags. Numeric flags must be
       // int-typed because the bridge handler casts with `as? Int` and a
       // string value silently drops to nil (NotificationsDomain.swift:297
       // — `--seconds <N> required` fires even when --seconds 5 is passed).
@@ -547,7 +587,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
 
     // ── Audio ──
     case "audio": {
-      // PRD-65 Spec 5 / PRD-64 Spec 5: bare `interceptor macos audio`
+      // Spec 5 / Spec 5: bare `interceptor macos audio`
       // previously defaulted to channel="output" + op="start" — silently
       // starting capture as a side effect of asking for help. Require both
       // explicitly so the no-arg invocation prints usage instead.
@@ -877,6 +917,318 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       }
     }
 
+    // ── VM management (VmDomain) — ──
+    case "vm": {
+      const vmSub = filtered[2]
+      if (!vmSub) {
+        console.error("error: interceptor macos vm requires a subcommand: create | adopt | clone | install | pull | list | get | inspect | start | stop | pause | resume | delete | reset | snapshot | restore | exec | cp | share | mount | port-forward | screenshot | type | click | keys | read-ax | console | logs | trust | tcc")
+        process.exit(1)
+      }
+      const stateDir = flagVal(filtered, "--state-dir")
+      const base: Action = { type: `macos_vm_${vmSub.replace(/-/g, "_")}`, sub: vmSub }
+      if (stateDir) base.stateDir = stateDir
+
+      const intArg = (flag: string): number | undefined => flagInt(filtered, flag) ?? undefined
+      const strArg = (flag: string): string | undefined => flagVal(filtered, flag) ?? undefined
+      const boolArg = (flag: string): boolean => filtered.includes(flag)
+
+      switch (vmSub) {
+        case "create": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm create requires a name"); process.exit(1) }
+          base.name = name
+          const kind = strArg("--kind") || "linux"
+          base.kind = kind
+          if (intArg("--cpu") !== undefined) base.cpu = intArg("--cpu")
+          if (intArg("--memory") !== undefined) base.memorySize = intArg("--memory")
+          if (intArg("--disk") !== undefined) base.diskSize = intArg("--disk")
+          if (strArg("--image")) base.image = strArg("--image")
+          if (strArg("--network")) base.network = strArg("--network")
+          if (boolArg("--rosetta")) base.rosetta = true
+          // --share src:tag[:ro|:rw], repeatable
+          const shares: Array<{ hostPath: string; tag: string; readOnly: boolean }> = []
+          for (let i = 0; i < filtered.length - 1; i++) {
+            if (filtered[i] === "--share") {
+              const parts = filtered[i + 1].split(":")
+              if (parts.length >= 2) {
+                shares.push({ hostPath: parts[0], tag: parts[1], readOnly: parts[2] !== "rw" })
+              }
+            }
+          }
+          if (shares.length > 0) base.shares = shares
+          return base
+        }
+        case "adopt": {
+          const sourcePath = filtered[3]
+          if (!sourcePath) { console.error("error: interceptor macos vm adopt requires <path>"); process.exit(1) }
+          base.sourcePath = sourcePath
+          const name = strArg("--name")
+          if (!name) { console.error("error: interceptor macos vm adopt requires --name <name>"); process.exit(1) }
+          base.name = name
+          base.kind = strArg("--kind") || "macos"
+          base.provider = strArg("--provider") || "auto"
+          base.mode = strArg("--mode") || "clone"
+          if (boolArg("--install-agent")) base.installAgent = true
+          if (boolArg("--wait-for-agent")) base.waitForAgent = true
+          return base
+        }
+        case "clone": {
+          const src = filtered[3]
+          const dst = filtered[4]
+          if (!src || !dst) { console.error("error: interceptor macos vm clone requires <src> <dst>"); process.exit(1) }
+          base.src = src; base.dst = dst
+          return base
+        }
+        case "install": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm install requires a name"); process.exit(1) }
+          base.name = name
+          if (strArg("--ipsw")) base.ipsw = strArg("--ipsw")
+          if (boolArg("--from-latest")) base.fromLatest = true
+          return base
+        }
+        case "pull": {
+          const image = filtered[3]
+          if (!image) { console.error("error: interceptor macos vm pull requires an image OCI ref"); process.exit(1) }
+          base.image = image
+          return base
+        }
+        case "list": {
+          return base
+        }
+        case "get":
+        case "inspect": {
+          const name = filtered[3]
+          if (!name) { console.error(`error: interceptor macos vm ${vmSub} requires a name`); process.exit(1) }
+          base.name = name
+          return base
+        }
+        case "start": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm start requires a name"); process.exit(1) }
+          base.name = name
+          if (boolArg("--headless")) base.headless = true
+          if (boolArg("--wait-for-vsock")) base.waitForVsock = true
+          if (boolArg("--detach")) base.detach = true
+          return base
+        }
+        case "stop": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm stop requires a name"); process.exit(1) }
+          base.name = name
+          if (boolArg("--force")) base.force = true
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "pause":
+        case "resume":
+        case "reset": {
+          const name = filtered[3]
+          if (!name) { console.error(`error: interceptor macos vm ${vmSub} requires a name`); process.exit(1) }
+          base.name = name
+          return base
+        }
+        case "delete": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm delete requires a name"); process.exit(1) }
+          base.name = name
+          if (boolArg("--force")) base.force = true
+          if (boolArg("--keep-disk")) base.keepDisk = true
+          return base
+        }
+        case "trust": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm trust requires a name"); process.exit(1) }
+          base.name = name
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "tcc": {
+          const tccOp = filtered[3]
+          if (tccOp !== "profile") {
+            console.error("error: interceptor macos vm tcc requires subcommand: profile generate <name>")
+            process.exit(1)
+          }
+          const profileOp = filtered[4]
+          if (profileOp !== "generate") {
+            console.error("error: interceptor macos vm tcc profile requires subcommand: generate <name>")
+            process.exit(1)
+          }
+          const name = filtered[5]
+          if (!name) { console.error("error: interceptor macos vm tcc profile generate requires a VM name"); process.exit(1) }
+          base.type = "macos_vm_tcc_profile_generate"
+          base.sub = "tcc_profile_generate"
+          base.name = name
+          const services = collectMulti(filtered, "--service").flatMap((s) => s.split(",").filter(Boolean))
+          if (services.length > 0) base.services = services
+          if (strArg("--out")) base.out = strArg("--out")
+          if (strArg("--bundle-id")) base.bundleId = strArg("--bundle-id")
+          if (strArg("--app-path")) base.appPath = strArg("--app-path")
+          if (strArg("--identifier-type")) base.identifierType = strArg("--identifier-type")
+          if (strArg("--code-requirement")) base.codeRequirement = strArg("--code-requirement")
+          if (boolArg("--full-disk")) base.fullDisk = true
+          if (boolArg("--include-user-only")) base.includeUserOnly = true
+          return base
+        }
+        case "exec": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm exec requires <name> <cmd> [args...]"); process.exit(1) }
+          base.name = name
+          // Everything after the name and -- separator is the command argv
+          const sepIdx = filtered.indexOf("--", 4)
+          const argv = sepIdx >= 0 ? filtered.slice(sepIdx + 1) : filtered.slice(4).filter(a => !a.startsWith("--"))
+          if (argv.length === 0) { console.error("error: interceptor macos vm exec requires a command"); process.exit(1) }
+          base.command = argv
+          if (strArg("--user")) base.user = strArg("--user")
+          if (strArg("--workdir")) base.workdir = strArg("--workdir")
+          if (boolArg("--tty")) base.tty = true
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          // --env KEY=VAL repeatable
+          const env: Record<string, string> = {}
+          for (let i = 0; i < filtered.length - 1; i++) {
+            if (filtered[i] === "--env") {
+              const m = /^([^=]+)=(.*)$/.exec(filtered[i + 1])
+              if (m) env[m[1]] = m[2]
+            }
+          }
+          if (Object.keys(env).length > 0) base.env = env
+          return base
+        }
+        case "snapshot": {
+          const name = filtered[3]
+          const tag = filtered[4]
+          if (!name || !tag) { console.error("error: interceptor macos vm snapshot requires <name> <tag>"); process.exit(1) }
+          base.name = name; base.tag = tag
+          base.snapshotOp = strArg("--op") || "create"
+          if (boolArg("--disk-only")) base.diskOnly = true
+          if (boolArg("--paused-state")) base.pausedStateOnly = true
+          return base
+        }
+        case "restore": {
+          const name = filtered[3]
+          const tag = filtered[4]
+          if (!name || !tag) { console.error("error: interceptor macos vm restore requires <name> <tag>"); process.exit(1) }
+          base.name = name; base.tag = tag
+          return base
+        }
+        case "cp": {
+          const src = filtered[3]
+          const dst = filtered[4]
+          if (!src || !dst) { console.error("error: interceptor macos vm cp requires <src> <dst>"); process.exit(1) }
+          base.src = src
+          base.dst = dst
+          const srcVm = /^([^/:]+):(.+)$/.exec(src)
+          const dstVm = /^([^/:]+):(.+)$/.exec(dst)
+          base.name = (dstVm && dstVm[1]) || (srcVm && srcVm[1])
+          if (!base.name) { console.error("error: interceptor macos vm cp requires one side as <vm>:<path>"); process.exit(1) }
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "mount": {
+          const name = filtered[3]
+          const tag = filtered[4]
+          const path = filtered[5]
+          if (!name || !tag || !path) { console.error("error: interceptor macos vm mount requires <name> <tag> <guest-path>"); process.exit(1) }
+          base.name = name
+          base.tag = tag
+          base.path = path
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "screenshot": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm screenshot requires <name>"); process.exit(1) }
+          base.name = name
+          if (strArg("--out")) base.out = strArg("--out")
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "type": {
+          const name = filtered[3]
+          const text = filtered[4]
+          if (!name || text === undefined) { console.error("error: interceptor macos vm type requires <name> <text>"); process.exit(1) }
+          base.name = name
+          base.text = text
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "click": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm click requires <name> <x,y> or --x --y"); process.exit(1) }
+          base.name = name
+          const xy = filtered[4] && /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(filtered[4]) ? filtered[4].split(",") : undefined
+          const xRaw = strArg("--x") ?? xy?.[0]
+          const yRaw = strArg("--y") ?? xy?.[1]
+          const x = xRaw !== undefined ? Number(xRaw) : NaN
+          const y = yRaw !== undefined ? Number(yRaw) : NaN
+          if (!Number.isFinite(x) || !Number.isFinite(y)) { console.error("error: interceptor macos vm click requires numeric x/y"); process.exit(1) }
+          base.x = x
+          base.y = y
+          if (strArg("--button")) base.button = strArg("--button")
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "keys": {
+          const name = filtered[3]
+          const keys = filtered[4]
+          if (!name || !keys) { console.error("error: interceptor macos vm keys requires <name> <keys>"); process.exit(1) }
+          base.name = name
+          base.keys = keys
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "read-ax": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm read-ax requires <name>"); process.exit(1) }
+          base.name = name
+          if (intArg("--max-depth") !== undefined) base.max_depth = intArg("--max-depth")
+          if (strArg("--app")) base.app = strArg("--app")
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "logs": {
+          const name = filtered[3]
+          if (!name) { console.error("error: interceptor macos vm logs requires <name>"); process.exit(1) }
+          base.name = name
+          if (intArg("--limit") !== undefined) base.limit = intArg("--limit")
+          if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
+          return base
+        }
+        case "share": {
+          const name = filtered[3]
+          const hostPath = filtered[4]
+          const tag = filtered[5]
+          if (!name || !hostPath || !tag) { console.error("error: interceptor macos vm share requires <name> <host-path> <tag>"); process.exit(1) }
+          base.name = name
+          base.hostPath = hostPath
+          base.tag = tag
+          base.readOnly = !boolArg("--rw")
+          return base
+        }
+        case "port-forward":
+        case "console": {
+          const name = filtered[3]
+          if (name) base.name = name
+          const rule = filtered[4]
+          if (vmSub === "port-forward" && rule) {
+            const parts = rule.split(":")
+            if (parts.length === 2) {
+              base.hostPort = Number(parts[0])
+              base.guestPort = Number(parts[1])
+            } else if (parts.length === 3) {
+              base.hostAddress = parts[0]
+              base.hostPort = Number(parts[1])
+              base.guestPort = Number(parts[2])
+            }
+          }
+          return base
+        }
+        default:
+          console.error(`error: interceptor macos vm: unknown subcommand '${vmSub}'`)
+          process.exit(1)
+      }
+    }
+
     // ── container_run (ContainerDomain) ──
     case "container": {
       const containerSub = filtered[2]
@@ -940,13 +1292,13 @@ export function parseMacosCommand(filtered: string[]): Action | null {
           const sceneScript = flagVal(filtered, "--scene-script")
           const url = flagVal(filtered, "--url")
           const htmlB64 = flagVal(filtered, "--html-b64")
-          // PRD-65 Spec 7: --html accepted as a friendlier alias to
+          // Spec 7: --html accepted as a friendlier alias to
           // --html-b64; the parser b64-encodes inline HTML so callers
           // don't have to wrap shell-escaped HTML themselves.
           const htmlInline = flagVal(filtered, "--html")
           const rect = flagVal(filtered, "--rect")
           const timeout = flagInt(filtered, "--timeout-seconds")
-          // PRD-65 Spec 7: --duration / --duration-ms aliases for the
+          // Spec 7: --duration / --duration-ms aliases for the
           // existing --timeout-seconds. The bridge auto-dismisses after
           // the timeout regardless of mode.
           const durationMs = flagInt(filtered, "--duration-ms")
@@ -971,7 +1323,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
           if (sceneScript) action.scene_script = sceneScript
           if (url) action.url = url
           if (htmlB64) action.html_b64 = htmlB64
-          // PRD-65 Spec 7: forward inline --html as html_b64 (b64-encoded)
+          // Spec 7: forward inline --html as html_b64 (b64-encoded)
           // so the bridge has a single source HTML field. Buffer.from is
           // already imported into Bun's globals.
           let resolvedHtmlB64: string | undefined = htmlB64
@@ -980,7 +1332,7 @@ export function parseMacosCommand(filtered: string[]): Action | null {
             action.html_b64 = resolvedHtmlB64
           }
 
-          // PRD-65 Spec 7: unify --duration-ms / --duration / --timeout-seconds
+          // Spec 7: unify --duration-ms / --duration / --timeout-seconds
           // into the bridge's single `timeout_seconds` action field
           // (OverlayDomain only reads timeout_seconds today, see
           // OverlayDomain.swift:114). --duration-ms wins, then --duration
@@ -1058,9 +1410,9 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       }
     }
 
-    // ── PRD-66 — Personal data + distribution + document surfaces ──
+    // ── Personal data + distribution + document surfaces ──
     // Each branch maps `interceptor macos <domain> <verb> [...]` to a
-    // `macos_<domain>` action with `sub` carrying the verb (PRD-63 invariant).
+    // `macos_<domain>` action with `sub` carrying the verb (invariant).
 
     case "pdf": {
       const verb = filtered[2]
