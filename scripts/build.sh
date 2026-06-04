@@ -97,13 +97,18 @@ build_macos() {
 }
 
 build_windows() {
-  # Baseline target: no AVX2 requirement, so the distributed installer runs on
-  # any x64 Windows (incl. older/virtualized CPUs) instead of crashing with
-  # "Illegal instruction" at launch. Small speed cost; correct for a public .exe.
-  echo "Building CLI (Windows x64, baseline)..."
-  bun build cli/index.ts --compile --target=bun-windows-x64-baseline --outfile=dist/interceptor.exe
-  echo "Building daemon (Windows x64, baseline)..."
-  bun build daemon/index.ts --compile --target=bun-windows-x64-baseline --outfile=daemon/interceptor-daemon.exe
+  # Modern (default) target. We tried -baseline (which drops the AVX2
+  # requirement so the .exe runs on older/virtualized CPUs), but bun's baseline
+  # Windows runtime currently fails to extract ("Failed to extract executable
+  # for 'bun-windows-x64-baseline-...'") on bun 1.3.x — so the modern target is
+  # the only working build today. CAVEAT: the resulting .exe needs an
+  # AVX2-capable CPU (≈ any machine from 2013+); on hardware without AVX2 it
+  # crashes at launch with "Illegal instruction". Revisit -baseline once bun
+  # ships a working baseline Windows artifact. See PRD-90 F4.
+  echo "Building CLI (Windows x64)..."
+  bun build cli/index.ts --compile --target=bun-windows-x64 --outfile=dist/interceptor.exe
+  echo "Building daemon (Windows x64)..."
+  bun build daemon/index.ts --compile --target=bun-windows-x64 --outfile=daemon/interceptor-daemon.exe
 }
 
 build_bridge() {
