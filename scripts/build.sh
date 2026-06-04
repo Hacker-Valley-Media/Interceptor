@@ -97,10 +97,13 @@ build_macos() {
 }
 
 build_windows() {
-  echo "Building CLI (Windows x64)..."
-  bun build cli/index.ts --compile --target=bun-windows-x64 --outfile=dist/interceptor.exe
-  echo "Building daemon (Windows x64)..."
-  bun build daemon/index.ts --compile --target=bun-windows-x64 --outfile=daemon/interceptor-daemon.exe
+  # Baseline target: no AVX2 requirement, so the distributed installer runs on
+  # any x64 Windows (incl. older/virtualized CPUs) instead of crashing with
+  # "Illegal instruction" at launch. Small speed cost; correct for a public .exe.
+  echo "Building CLI (Windows x64, baseline)..."
+  bun build cli/index.ts --compile --target=bun-windows-x64-baseline --outfile=dist/interceptor.exe
+  echo "Building daemon (Windows x64, baseline)..."
+  bun build daemon/index.ts --compile --target=bun-windows-x64-baseline --outfile=daemon/interceptor-daemon.exe
 }
 
 build_bridge() {
