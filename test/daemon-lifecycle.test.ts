@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   clearDaemonRuntimeFiles,
   decideDaemonStartupRole,
+  decideSingletonGate,
   parseDaemonPidFile,
   readPidState,
   resolveStandaloneSpawnSpec,
@@ -84,6 +85,23 @@ describe("daemon lifecycle helpers", () => {
   test("native mode spawns a detached singleton when no live singleton exists", () => {
     expect(decideDaemonStartupRole(false, { status: "missing", pid: null })).toEqual({ action: "spawn" })
     expect(decideDaemonStartupRole(false, { status: "stale", pid: 222 })).toEqual({ action: "clear-and-spawn", reason: "stale pid 222" })
+  })
+
+  test("singleton gate serves when the ws port was acquired", () => {
+    expect(decideSingletonGate({ wsPortAcquired: true, standalone: true })).toMatchObject({ action: "serve" })
+    expect(decideSingletonGate({ wsPortAcquired: true, standalone: false })).toMatchObject({ action: "serve" })
+  })
+
+  test("singleton gate exits a standalone duplicate that loses the ws-port race", () => {
+    const decision = decideSingletonGate({ wsPortAcquired: false, standalone: true })
+    expect(decision.action).toBe("exit")
+    expect(decision.exitCode).toBe(0)
+  })
+
+  test("singleton gate exits a native daemon that loses the ws-port race (never a second singleton)", () => {
+    const decision = decideSingletonGate({ wsPortAcquired: false, standalone: false })
+    expect(decision.action).toBe("exit")
+    expect(decision.exitCode).toBe(0)
   })
 
   test("resolves compiled daemon standalone spawn command", () => {

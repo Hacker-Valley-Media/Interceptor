@@ -108,6 +108,32 @@ export function decideDaemonStartupRole(standalone: boolean, state: PidState): S
   return { action: "continue" }
 }
 
+export type SingletonGateDecision = {
+  action: "serve" | "exit"
+  reason: string
+  exitCode: number
+}
+
+// The pid-file election (decideDaemonStartupRole) is advisory and racy. The authoritative
+// singleton token is the WebSocket port: the OS lets exactly one process bind it. A daemon
+// that reaches the singleton code path must acquire that port BEFORE claiming the CLI socket;
+// if it can't, another singleton already owns it, so this process must never proceed — doing
+// so would split-brain the system (one daemon owning the CLI socket, another the extension
+// channel). Exiting cleanly lets the existing daemon serve everyone; a native parent will
+// simply re-resolve its relay to the surviving singleton.
+export function decideSingletonGate(input: { wsPortAcquired: boolean; standalone: boolean }): SingletonGateDecision {
+  if (input.wsPortAcquired) {
+    return { action: "serve", reason: "acquired the singleton port", exitCode: 0 }
+  }
+  return {
+    action: "exit",
+    reason: input.standalone
+      ? "another singleton is already running; exiting this duplicate"
+      : "another singleton owns the port; exiting so the existing daemon serves everyone",
+    exitCode: 0,
+  }
+}
+
 export function resolveStandaloneSpawnSpec(execPath: string, argv: string[]): { command: string; args: string[] } {
   const scriptArg = argv.find((arg, idx) => idx > 0 && /(?:^|[\\/])daemon[\\/]index\.ts$/.test(arg))
   const bunLike = /(?:^|[\\/])bun(?:\.exe)?$/.test(execPath)

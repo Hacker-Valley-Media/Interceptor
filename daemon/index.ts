@@ -13,7 +13,7 @@ import {
 } from "../shared/monitor-artifacts"
 import { chooseOutboundTransport, validateContextRouting } from "./outbound-routing"
 import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
-import { clearDaemonRuntimeFiles, decideDaemonStartupRole, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon } from "./lifecycle"
+import { clearDaemonRuntimeFiles, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon } from "./lifecycle"
 
 // ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
 const BRIDGE_SOCKET_PATH = "/tmp/interceptor-bridge.sock"
@@ -488,8 +488,6 @@ async function bootstrapDaemonRole(): Promise<void> {
 
 await bootstrapDaemonRole()
 
-try { if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH) } catch {}
-
 const pendingRequests = new Map<string, {
   resolve: (v: string) => void
   timer: ReturnType<typeof setTimeout>
@@ -887,6 +885,24 @@ async function handleOsAction(
 
 let socketServer: Bun.TCPSocketListener<undefined> | Bun.UnixSocketListener<undefined> | null = null
 
+// Singleton election (atomic): the WebSocket port is the one OS-exclusive token that both
+// the CLI socket and the extension channel must agree on. Bind it BEFORE claiming the CLI
+// socket, so two daemons can never split-brain (one owning the socket, another the WS port).
+// Losing this race is fatal: we exit instead of becoming a second, extension-less singleton.
+let wsServer: ReturnType<typeof Bun.serve> | null = null
+let wsBindError: Error | null = null
+try {
+  wsServer = startWsServer()
+} catch (err) {
+  wsBindError = err as Error
+}
+const singletonGate = decideSingletonGate({ wsPortAcquired: wsServer !== null, standalone: STANDALONE })
+if (singletonGate.action === "exit") {
+  log(`ws port ${WS_PORT} already held by another daemon — ${singletonGate.reason}${wsBindError ? ` (${wsBindError.message})` : ""}`)
+  process.exit(singletonGate.exitCode)
+}
+log(`ws server listening on port ${WS_PORT}`)
+
 try {
   const socketHandlers: Bun.SocketHandler<undefined> = {
       open(socket: Bun.Socket<undefined>) {
@@ -1026,20 +1042,22 @@ try {
   if (IS_WIN) {
     socketServer = Bun.listen({ hostname: "127.0.0.1", port: IPC_PORT, socket: socketHandlers })
   } else {
+    // We hold the WS port (the singleton token), so any leftover socket file is ours to clear.
+    try { if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH) } catch {}
     socketServer = Bun.listen({ unix: SOCKET_PATH, socket: socketHandlers })
   }
   log(`socket listening on ${transportLabel()}`)
 } catch (err) {
   log(`socket listen failed: ${(err as Error).message}`)
+  if (wsServer) wsServer.stop(true)
   process.exit(1)
 }
 
 Bun.write(PID_PATH, `${process.pid}\n${transportLabel()}\n`)
 log(`pid file written: ${process.pid}`)
 
-let wsServer: ReturnType<typeof Bun.serve> | null = null
-try {
-  wsServer = Bun.serve<undefined>({
+function startWsServer(): ReturnType<typeof Bun.serve> {
+  return Bun.serve<undefined>({
     port: WS_PORT,
     fetch(req, server) {
       if (server.upgrade(req, {})) return
@@ -1134,9 +1152,6 @@ try {
       }
     }
   })
-  log(`ws server listening on port ${WS_PORT}`)
-} catch (err) {
-  log(`ws server failed (port ${WS_PORT} in use?) — continuing without WebSocket: ${(err as Error).message}`)
 }
 
 function gracefulShutdown(signal: string) {
