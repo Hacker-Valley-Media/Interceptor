@@ -36,6 +36,7 @@ import { runUpgradeCommand } from "./commands/upgrade"
 import { runInitCommand } from "./commands/init"
 import { runResearchCommand } from "./commands/research"
 import { runExtensionsCommand } from "./commands/extensions"
+import { runDiagnoseCommand } from "./commands/diagnose"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs } from "./global-flags"
 import { normalizeArgs } from "./normalize"
@@ -67,11 +68,13 @@ const RESEARCH_CMDS = new Set(["research"])
 const EXTENSIONS_CMDS = new Set(["extensions"])
 const SKILLS_CMDS = new Set(["skills"])
 const MANIFEST_CMDS = new Set(["manifest"])
+const DIAGNOSE_CMDS = new Set(["diagnose"])
 
 // Commands that don't require a daemon connection (or, in init's case,
 // bootstrap it themselves rather than relying on the pre-dispatch auto-spawn).
 // `research` prints guidance / manages an on-disk ledger — no browser, no daemon.
-const NO_DAEMON = new Set(["status", "help", "events", "session", "upgrade", "init", "research", "extensions", "skills", "manifest"])
+// `diagnose` reads local state + optionally probes the daemon — never auto-spawns.
+const NO_DAEMON = new Set(["status", "help", "events", "session", "upgrade", "init", "research", "extensions", "skills", "manifest", "diagnose"])
 
 // Every command the CLI dispatches. Used to reject unknown commands
 // before any daemon-spawning side effect runs.
@@ -81,7 +84,7 @@ const ALL_KNOWN_CMDS = new Set<string>([
   ...SAVE_CMDS, ...BRAND_CMDS, ...GROUP_CMDS, ...BATCH_CMDS, ...MONITOR_CMDS, ...SCENE_CMDS, ...SSE_CMDS,
   ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...MACOS_CMDS, ...IOS_CMDS,
   ...UPGRADE_CMDS, ...INIT_CMDS, ...RESEARCH_CMDS, ...EXTENSIONS_CMDS,
-  ...SKILLS_CMDS, ...MANIFEST_CMDS,
+  ...SKILLS_CMDS, ...MANIFEST_CMDS, ...DIAGNOSE_CMDS,
   "help", "contexts",
 ])
 
@@ -270,6 +273,11 @@ async function main() {
 
   if (MANIFEST_CMDS.has(cmd)) {
     runManifestCommand(args)
+    return
+  }
+
+  if (DIAGNOSE_CMDS.has(cmd)) {
+    await runDiagnoseCommand(jsonMode)
     return
   }
 
