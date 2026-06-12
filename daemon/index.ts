@@ -7,7 +7,7 @@ import { createHash } from "node:crypto"
 import { dirname } from "node:path"
 import { validateBinarySinkPath, binarySinkIntegrityError } from "./binary-sink"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
-import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
+import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOCK_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, transportLabel } from "../shared/platform"
 import {
   MONITOR_EVENT_NAMES,
   appendSessionEvent,
@@ -20,7 +20,7 @@ import {
 import { chooseOutboundTransport, validateContextRouting } from "./outbound-routing"
 import { claimContextId, type ContextSocket } from "./context-registration"
 import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
-import { clearDaemonRuntimeFiles, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon } from "./lifecycle"
+import { clearDaemonRuntimeFiles, checkLockFileDuplicate, clearLockFile, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
 import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
 import { CDP_CONTEXT_PREFIX } from "../shared/cdp-app"
 import { IosManager } from "./ios/manager"
@@ -29,6 +29,7 @@ import {
   NATIVE_REGISTER_TYPE, NATIVE_DELEGATE_TYPE, NATIVE_CONTEXT_PREFIX,
   type NativeAgentState, type CodeSlice, type NativeWayIn,
 } from "../shared/native-agent"
+import { VERSION } from "../cli/version"
 
 // Legacy experiment: older packages could run this binary as the
 // com.interceptor.ios-tunnel root helper. Current packages remove that helper;
@@ -521,13 +522,25 @@ async function startNativeRelay(existingPid: number): Promise<never> {
 
 function lifecycleDeps() {
   return {
-    ...defaultLifecycleDeps({ pidPath: PID_PATH, socketPath: SOCKET_PATH, isWin: IS_WIN }),
+    ...defaultLifecycleDeps({ pidPath: PID_PATH, lockPath: LOCK_PATH, socketPath: SOCKET_PATH, isWin: IS_WIN }),
     log,
   }
 }
 
 async function bootstrapDaemonRole(): Promise<void> {
   const deps = lifecycleDeps()
+
+  // Check lock file for a live duplicate before checking PID state.
+  // Two --standalone daemons will both have valid PID files pointing to
+  // themselves; only the lock file reveals that another real instance exists.
+  const duplicate = checkLockFileDuplicate(LOCK_PATH, process.pid, process.kill.bind(process))
+  if (duplicate) {
+    const msg = `duplicate daemon already running (pid ${duplicate.pid}, started ${duplicate.startedAt}). Run \`interceptor kill\` to clean up.`
+    log(msg)
+    process.stderr.write(`interceptor-daemon: ${msg}\n`)
+    process.exit(1)
+  }
+
   const state = readPidState(deps)
   const decision = decideDaemonStartupRole(STANDALONE, state)
 
@@ -572,6 +585,20 @@ if (singletonGate.action === "exit") {
   process.exit(singletonGate.exitCode)
 }
 log(`ws server listening on port ${WS_PORT}`)
+
+// Write lock file — authoritative record of this running instance.
+writeLockFile(LOCK_PATH, {
+  pid: process.pid,
+  version: VERSION,
+  execPath: process.execPath,
+  startedAt: new Date().toISOString(),
+  socketPath: SOCKET_PATH,
+  wsPort: WS_PORT,
+  mode: STANDALONE ? "standalone" : "relay",
+})
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(sig, () => { clearLockFile(LOCK_PATH); process.exit(0) })
+}
 
 const pendingRequests = new Map<string, {
   resolve: (v: string) => void

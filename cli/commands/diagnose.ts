@@ -11,11 +11,32 @@
  * Context-aware: without --context, enumerates ALL connected browser contexts
  * and probes each one. In a dual-browser setup (Chrome + Brave) you see both
  * contexts side-by-side, making context mismatches immediately visible.
+ *
+ * Binary mismatch detection: compares the execPath recorded in the lock file
+ * (which binary the socket daemon is actually running) against the path in
+ * each browser's NMH manifest (which binary Chrome/Brave will spawn on
+ * extension connect). A mismatch means the extension and CLI are talking to
+ * different daemon processes — the root cause of "no extensions connected"
+ * when Chrome appears open and the extension appears loaded.
  */
 
+import { existsSync, readFileSync } from "node:fs"
 import { readStatusSnapshot } from "../lib/status-renderer"
 import { sendCommand } from "../transport"
 import { listSessions } from "./monitor"
+import { readLockFile, type LockFileData } from "../../daemon/lifecycle"
+import { LOCK_PATH } from "../../shared/platform"
+
+const NMH_PATHS: Record<string, string> = {
+  chrome: `${process.env.HOME}/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.interceptor.host.json`,
+  brave:  `${process.env.HOME}/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.interceptor.host.json`,
+}
+
+type BinaryMismatch = {
+  browser: string
+  manifestPath: string
+  runningPath: string
+}
 
 type ContextProbe = {
   contextId: string
@@ -25,7 +46,8 @@ type ContextProbe = {
 }
 
 type DiagnoseSnapshot = {
-  daemon: { running: boolean; pid: number | null }
+  daemon: { running: boolean; pid: number | null; execPath?: string; version?: string; startedAt?: string }
+  binaryMismatches: BinaryMismatch[]
   contexts: ContextProbe[]
   monitor: { active: number; total: number }
 }
@@ -46,6 +68,28 @@ async function probeWithTimeout<T>(fn: () => Promise<T>, ms = 2000): Promise<T |
   } finally {
     clearTimeout(timer)
   }
+}
+
+function readNmhManifestPath(manifestFile: string): string | null {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestFile, "utf-8")) as { path?: string }
+    return manifest.path ?? null
+  } catch {
+    return null
+  }
+}
+
+function detectBinaryMismatches(lock: LockFileData | null): BinaryMismatch[] {
+  if (!lock?.execPath) return []
+  const mismatches: BinaryMismatch[] = []
+  for (const [browser, manifestFile] of Object.entries(NMH_PATHS)) {
+    if (!existsSync(manifestFile)) continue
+    const manifestPath = readNmhManifestPath(manifestFile)
+    if (manifestPath && manifestPath !== lock.execPath) {
+      mismatches.push({ browser, manifestPath, runningPath: lock.execPath })
+    }
+  }
+  return mismatches
 }
 
 async function probeContext(contextId: string | undefined): Promise<ContextProbe> {
@@ -86,9 +130,15 @@ async function probeContext(contextId: string | undefined): Promise<ContextProbe
 
 export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string): Promise<void> {
   const status = readStatusSnapshot()
+  const lock = readLockFile(LOCK_PATH)
 
   const snap: DiagnoseSnapshot = {
-    daemon: { running: status.daemon, pid: status.pid },
+    daemon: {
+      running: status.daemon,
+      pid: status.pid,
+      ...(lock ? { execPath: lock.execPath, version: lock.version, startedAt: lock.startedAt } : {}),
+    },
+    binaryMismatches: detectBinaryMismatches(lock),
     contexts: [],
     monitor: { active: 0, total: 0 },
   }
@@ -97,7 +147,6 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
     if (contextId) {
       snap.contexts = [await probeContext(contextId)]
     } else {
-      // Enumerate all contexts so dual-browser setups are visible.
       const contextsResp = await probeWithTimeout(() => sendCommand({ type: "contexts" }))
       const contextIds =
         contextsResp?.result.success && Array.isArray(contextsResp.result.data)
@@ -112,7 +161,6 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
     }
   }
 
-  // Monitor session state lives on disk — readable without a daemon.
   try {
     const sessions = listSessions()
     snap.monitor = {
@@ -130,13 +178,25 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
 
   const lines: string[] = []
 
-  lines.push(
-    `daemon:    ${
-      status.daemon
-        ? `running  (pid ${status.pid})`
-        : "not running  — open Chrome with the Interceptor extension, then run 'interceptor init'"
-    }`
-  )
+  // Daemon block — include binary path when lock file is present
+  if (status.daemon) {
+    const daemonDetail = lock?.execPath
+      ? `running  (pid ${status.pid}, ${lock.execPath})`
+      : `running  (pid ${status.pid})`
+    lines.push(`daemon:    ${daemonDetail}`)
+  } else {
+    lines.push("daemon:    not running  — open Chrome with the Interceptor extension, then run 'interceptor init'")
+  }
+
+  // Binary mismatch warning — the root cause of "no extensions connected" when
+  // Chrome is open. Surface it immediately after the daemon line so it's impossible to miss.
+  for (const m of snap.binaryMismatches) {
+    lines.push(`⚠ binary mismatch (${m.browser}):`)
+    lines.push(`    socket daemon: ${m.runningPath}`)
+    lines.push(`    NMH manifest:  ${m.manifestPath}`)
+    lines.push(`    Chrome will spawn the manifest binary; CLI talks to the socket binary.`)
+    lines.push(`    Fix: run 'interceptor init' or update the NMH manifest to match.`)
+  }
 
   if (status.daemon) {
     const multiCtx = snap.contexts.length > 1 || snap.contexts[0]?.contextId !== "default"

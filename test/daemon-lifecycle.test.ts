@@ -39,6 +39,7 @@ function makeDeps(overrides: Partial<LifecycleDeps> = {}): LifecycleDeps {
     execPath: "/Applications/Interceptor/interceptor-daemon",
     argv: ["/Applications/Interceptor/interceptor-daemon"],
     pidPath: "/tmp/interceptor.pid",
+    lockPath: "/tmp/interceptor.lock",
     socketPath: "/tmp/interceptor.sock",
     isWin: false,
     log() {},

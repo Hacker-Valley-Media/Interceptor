@@ -8,6 +8,7 @@ export type PlatformConfig = {
   ipcPort: number
   wsPort: number
   pidPath: string
+  lockPath: string
   logPath: string
   eventsPath: string
   monitorSessionsDir: string
@@ -23,11 +24,12 @@ export function resolvePlatformConfig(platform: PlatformName = process.platform,
   const ipcPort = parseInt(process.env.INTERCEPTOR_IPC_PORT || "19221")
   const wsPort = parseInt(process.env.INTERCEPTOR_WS_PORT || "19222")
   const pidPath = process.env.INTERCEPTOR_PID_PATH || `${temp}${sep}interceptor.pid`
+  const lockPath = process.env.INTERCEPTOR_LOCK_PATH || `${temp}${sep}interceptor.lock`
   const logPath = process.env.INTERCEPTOR_LOG_PATH || `${temp}${sep}interceptor.log`
   const eventsPath = process.env.INTERCEPTOR_EVENTS_PATH || `${temp}${sep}interceptor-events.jsonl`
   const monitorSessionsDir = process.env.INTERCEPTOR_MONITOR_SESSIONS_DIR || `${temp}${sep}interceptor-monitor-sessions`
   const transportLabel = isWin ? `tcp:127.0.0.1:${ipcPort}` : `unix:${socketPath}`
-  return { isWin, temp, sep, socketPath, ipcPort, wsPort, pidPath, logPath, eventsPath, monitorSessionsDir, transportLabel }
+  return { isWin, temp, sep, socketPath, ipcPort, wsPort, pidPath, lockPath, logPath, eventsPath, monitorSessionsDir, transportLabel }
 }
 
 const current = resolvePlatformConfig()
@@ -39,6 +41,7 @@ export const SOCKET_PATH = current.socketPath
 export const IPC_PORT = current.ipcPort
 export const WS_PORT = current.wsPort
 export const PID_PATH = current.pidPath
+export const LOCK_PATH = current.lockPath
 export const LOG_PATH = current.logPath
 export const EVENTS_PATH = current.eventsPath
 export const MONITOR_SESSIONS_DIR = current.monitorSessionsDir
