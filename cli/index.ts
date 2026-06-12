@@ -277,7 +277,7 @@ async function main() {
   }
 
   if (DIAGNOSE_CMDS.has(cmd)) {
-    await runDiagnoseCommand(jsonMode)
+    await runDiagnoseCommand(jsonMode, globalContextId)
     return
   }
 
