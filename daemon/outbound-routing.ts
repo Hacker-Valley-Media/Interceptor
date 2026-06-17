@@ -33,23 +33,35 @@ export function validateContextRouting(input: {
   contextId?: string
   connectedContexts: string[]
   nativeRelayAvailable: boolean
+  /** CDP-app contexts. Verbs for these are routed before this check,
+   *  but they participate in disambiguation messages so the operator is told to
+   *  use --context when only a CDP context exists. */
+  cdpContexts?: string[]
 }): ContextRoutingValidation {
   const { contextId, connectedContexts, nativeRelayAvailable } = input
+  const cdpContexts = input.cdpContexts ?? []
 
   if (contextId) {
     if (connectedContexts.includes(contextId)) return { ok: true }
-    const hint = connectedContexts.length > 0
-      ? ` (connected: ${connectedContexts.join(", ")})`
-      : " (no extensions connected)"
+    if (cdpContexts.includes(contextId)) return { ok: true }
+    const all = [...connectedContexts, ...cdpContexts]
+    const hint = all.length > 0
+      ? ` (connected: ${all.join(", ")})`
+      : " (no contexts connected)"
     return { ok: false, error: `context '${contextId}' not found${hint}` }
   }
 
   if (connectedContexts.length === 1) return { ok: true }
   if (connectedContexts.length === 0 && nativeRelayAvailable) return { ok: true }
-  if (connectedContexts.length === 0) return { ok: false, error: "no extensions connected" }
+  if (connectedContexts.length === 0) {
+    if (cdpContexts.length > 0) {
+      return { ok: false, error: `no extensions connected; a CDP app context exists — use --context ${cdpContexts.length === 1 ? cdpContexts[0] : "<id>"} (cdp: ${cdpContexts.join(", ")})` }
+    }
+    return { ok: false, error: "no extensions connected" }
+  }
 
   return {
     ok: false,
-    error: `multiple extensions connected, use --context <id> (connected: ${connectedContexts.join(", ")})`,
+    error: `multiple extensions connected, use --context <id> (connected: ${[...connectedContexts, ...cdpContexts].join(", ")})`,
   }
 }

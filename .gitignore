@@ -18,6 +18,9 @@ interceptor-macos-screenshot-*.webp
 interceptor-audio-input-*.caf
 prd/
 scripts/auto-improve/
+scripts/refresh-apple-docs.ts
+scripts/flatten-apple-docs.ts
+apple-developer-docs/
 interceptor-bridge/.build/
 keys/
 /.vscode/
@@ -38,6 +41,25 @@ staging/
 /release/
 .interceptor/
 .interceptor-research/
+.maestro/
+# Extension Fabric: operator-placed extensions live under
+# ~/.interceptor/extensions (covered by .interceptor/ above). Also ignore a
+# repo-ROOT extension drop + the operator trust config, so capability-specific
+# extension payloads are never accidentally committed to the capability-blind core.
+# Root-anchored so docs/extensions/ (the authoring guide) stays tracked.
+/extensions/
+extension-trust.json
+# Belt-and-suspenders: the operator reference extension `native-managed-copy`
+# (re-signs / audits a local managed COPY of owned, third-party, or Apple apps)
+# must NEVER be committed to this repo. It lives only under ~/.interceptor/extensions
+# (outside this repo). Re-signing or modifying Apple / third-party software may have
+# licensing implications — e.g. the Apple Developer Agreement / macOS SLA
+# (https://developer.apple.com/support/terms/#apple-developer-agreement) — that are
+# the operator's responsibility to assess. Keeping this capability out of the repo and
+# the shipped product is deliberate. Ignore it by
+# name anywhere, in case a copy is ever dropped in-repo.
+native-managed-copy/
+**/native-managed-copy/
 reports/
 use-cases/deep-research-demo/
 # Apple container runtime data dir (symlinked from ~/Library/Application Support/com.apple.container/)

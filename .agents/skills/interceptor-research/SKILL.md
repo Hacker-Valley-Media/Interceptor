@@ -1,6 +1,6 @@
 ---
 name: interceptor-research
-description: "Deep web-research methodology for the interceptor browser surface — investigate a topic the way researchers, intelligence analysts, investigative journalists, private investigators, and OSINT operators do, not 'read 3 links and summarize.' Use when the task is research, deep research, investigate, go deeper, be thorough/exhaustive, OSINT, due diligence, competitive analysis, literature review, background check, dig in, or 'find everything about X.' Drives interceptor-browser verbs (open/read/inspect/net/eval/tab) with a planner loop, query-craft filters, a per-page escalation chain, pivot-chaining, an on-disk source ledger, and adversarial verification. Pull the playbook any time with `interceptor research`."
+description: "Deep web-research methodology for the interceptor browser surface — investigate a topic the way researchers, intelligence analysts, investigative journalists, private investigators, and OSINT operators do, not 'read 3 links and summarize.' Use when the task is research, deep research, investigate, go deeper, be thorough/exhaustive, OSINT, due diligence, competitive analysis, literature review, background check, dig in, or 'find everything about X.' Drives interceptor-browser verbs (open/read/inspect/net/eval/tab) with a planner loop, query-craft filters, a per-page escalation chain, pivot-chaining, an on-disk source ledger, and adversarial verification. Do every fetch and search through interceptor — never WebFetch/WebSearch. Pull the playbook any time with `interceptor research`."
 metadata:
   short-description: Deep web-research methodology + source ledger for the interceptor browser surface
 ---
@@ -16,6 +16,17 @@ this one when the task is to research a topic deeply rather than read one page.
 > is a discipline with STOPPING RULES, not a longer prompt.** This skill gives you
 > the method, a filing system (the ledger), and a satisfiable rubric. You decide
 > when the case is closed — Interceptor never crawls for you.
+
+> **Tool discipline — interceptor only.** While you are running this skill, do every
+> fetch and every search through the `interceptor` CLI (`open` / `read` / `find` /
+> `inspect` / `net` / `eval` / `tab`). **Do not fall back to your host's built-in web
+> tools** — `WebFetch`, `WebSearch`, or their equivalents in other agent hosts. They
+> bypass the user's signed-in browser session, carry a scraper fingerprint, can't walk
+> the escalation chain or capture the network the page already calls, and never feed
+> the ledger — so the depth discipline below silently breaks. If you catch yourself
+> reaching for a built-in web tool mid-research, stop and use `interceptor open` /
+> `read` instead. (This is *how to research on the interceptor surface*; it composes
+> with — does not replace — any higher-level research orchestrator your host provides.)
 
 ## Core principles
 
@@ -53,6 +64,15 @@ INTERCEPTOR DEEP RESEARCH — the one-screen playbook
 
 Most agents quit after 2-3 sources because nothing forces them deeper. Depth is
 a discipline with STOPPING RULES, not a longer prompt. Run this as a loop.
+
+TOOL     - interceptor CLI ONLY. Every fetch and every search in a research run goes
+           through interceptor (open / read / find / inspect / net / eval / tab). Do
+           NOT fall back to your host's built-in web tools (WebFetch / WebSearch and
+           the like): they bypass the user's signed-in session, drop the zero-CDP
+           fingerprint edge, can't walk the escalation chain or capture the network
+           the page calls, and never reach the ledger -> the depth discipline below
+           silently breaks. Catch yourself reaching for a built-in web tool -> stop,
+           use interceptor open / read instead.
 
 PLAN     - Decompose the question into 5-10 sub-questions. Each one earns >=1 source.
          - Pre-commit the source TYPE per question (primary doc / paper / repo /

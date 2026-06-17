@@ -31,7 +31,7 @@ Operating rules:
 - When multiple browser profiles are connected, use `interceptor contexts` to list available context IDs and `--context <id>` to route a command to the right profile. Without `--context`, browser commands only auto-route when exactly one context is connected; zero or multiple contexts fail fast.
 - **Output is plain text by default** — that is the format the LLM consumes. Use `--json` only when piping into a script or another tool that needs a machine-parseable contract. Do not default to `--json` for your own context; structured JSON costs more tokens and reduces model comprehension on prose-trained models.
 - `eN` and framed refs like `e2_7` are short-lived. They survive transient layout flicker (CSS transitions, scroll, an ancestor briefly toggling `display`) but **not** navigation, rerender that recreates the node, or removal. If `act <ref>` returns "stale element," the element was removed from the DOM — re-run `read` or `find` for a fresh ref.
-- Prefer passive observation before invasive instrumentation. For network work, start with `inspect` or `net`, not CDP debugger attach.
+- Prefer passive observation before invasive instrumentation. For network work, start with `inspect` or `net`, not CDP debugger attach. (This rule governs the **browser** surface — driving the user's real Chrome/Brave, where zero-CDP fingerprint matters. The `interceptor macos cdp` surface is CDP-native *by design*: it drives your own Electron/Chromium apps, where there is no anti-bot adversary. See `.agents/skills/interceptor-macos/references/cdp-app.md`.)
 - Do not use `--any-tab` unless the user explicitly authorizes operating outside Interceptor's tracked tab group.
 
 ## Background First (Browser + macOS)
@@ -54,6 +54,8 @@ Full contract + verb inventory + worked examples + pitfalls: [`.agents/skills/in
 |---|---|
 | Page content (DOM, network, scene graph, browser monitor, screenshot of current tab) | `interceptor-browser` |
 | Native apps, OS dialogs, browser chrome (URL bar, menus), occluded/minimized windows, cross-app routing | `interceptor-macos` |
+| **Electron / Chromium desktop apps** (Slack, VS Code, Descript, …): read DOM, run JS, capture network, screenshot *inside the app's web content* | `interceptor macos cdp` / `interceptor macos cdp app` |
+| **Native app runtime internals** (AppKit/SwiftUI): read the live view/object graph, run selectors, **rewrite rendered text**, intercept/redirect — via an injected in-process agent (no Frida, no SIP-off) | `interceptor macos runtime` |
 | Deep web research: investigate a topic across many sources (planner loop, source ledger, verification) | `interceptor-research` (run `interceptor research`) |
 | User said "open in Brave / Mail / X" (any specific named app) | `interceptor-macos` (Apple Events) |
 | Visual overlays / HUDs above all apps | `interceptor-macos` (overlay via NSPanel above compositor) |

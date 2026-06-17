@@ -18,6 +18,7 @@ import { resolve } from "node:path"
 
 import { rewriteCspEvalError } from "../cli/format"
 import { helpForCommand } from "../cli/help"
+import { parseMacosCommand } from "../cli/commands/macos"
 import { formatStatus, type StatusSnapshot } from "../cli/lib/status-renderer"
 
 const REPO_ROOT = resolve(import.meta.dir, "..")
@@ -108,6 +109,65 @@ describe("helpForCommand (#51)", () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain("interceptor — browser control CLI")
     expect(r.stdout).toContain("Compound (agent-optimized)")
+  })
+
+  test("CLI: nested macos cdp/app help short-circuits without spawning daemon", () => {
+    const cdp = runCli(["macos", "cdp", "--help"])
+    expect(cdp.status).toBe(0)
+    expect(cdp.stdout).toContain("interceptor macos cdp <subcommand>")
+    expect(cdp.stderr).not.toContain("daemon not running")
+
+    const app = runCli(["macos", "cdp", "app", "--help"])
+    expect(app.status).toBe(0)
+    expect(app.stdout).toContain("interceptor macos cdp app <subcommand>")
+    expect(app.stderr).not.toContain("daemon not running")
+  })
+
+  test("CLI: nested macos runtime help short-circuits without spawning daemon", () => {
+    const runtime = runCli(["macos", "runtime", "--help"])
+    expect(runtime.status).toBe(0)
+    expect(runtime.stdout).toContain("interceptor macos runtime <subcommand>")
+    expect(runtime.stdout).toContain("runtime:<app>")
+    expect(runtime.stderr).not.toContain("daemon not running")
+  })
+
+  test("CLI: removed top-level cdp/app commands are rejected before daemon spawn", () => {
+    const cdp = runCli(["cdp", "status"])
+    expect(cdp.status).toBe(1)
+    expect(cdp.stderr).toContain("unknown command 'cdp'")
+    expect(cdp.stderr).not.toContain("daemon not running")
+
+    const app = runCli(["app", "status"])
+    expect(app.status).toBe(1)
+    expect(app.stderr).toContain("unknown command 'app'")
+    expect(app.stderr).not.toContain("daemon not running")
+  })
+
+  test("CLI: removed top-level native aliases are rejected before daemon spawn", () => {
+    const native = runCli(["native", "status"])
+    expect(native.status).toBe(1)
+    expect(native.stderr).toContain("unknown command 'native'")
+    expect(native.stderr).not.toContain("daemon not running")
+
+    const mutate = runCli(["mutate", "--ref", "n1", "--set-text", "Hi"])
+    expect(mutate.status).toBe(1)
+    expect(mutate.stderr).toContain("unknown command 'mutate'")
+    expect(mutate.stderr).not.toContain("daemon not running")
+
+    const intercept = runCli(["intercept", "--class", "X", "--selector", "y"])
+    expect(intercept.status).toBe(1)
+    expect(intercept.stderr).toContain("unknown command 'intercept'")
+    expect(intercept.stderr).not.toContain("daemon not running")
+  })
+
+  test("CLI: macos cdp app namespace does not shadow macos app lifecycle", () => {
+    expect(parseMacosCommand(["macos", "app", "activate", "Finder"])).toEqual({
+      type: "macos_app",
+      subcommand: "activate",
+      app: "Finder",
+      pid: undefined,
+      bundleId: undefined,
+    })
   })
 })
 

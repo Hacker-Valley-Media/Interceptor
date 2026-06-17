@@ -1,0 +1,60 @@
+{
+  "manifest_version": 2,
+  "name": "Interceptor Electron App Bridge",
+  "version": "0.17.2",
+  "description": "Electron app bridge",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr8I3MwCNVrLcP0OCP8fRpiGWHIpbu2iMsyweU4YcX/CWdmO2fnZAJ6UP+IKkM5Zw9mt9kY4CFW4tZt096ChuMKiVBg4HM47ffWHTlo6rXOzdLuXMQ6MtFDuqbQuq6x0tLgYlOr7UxSiPVFgPRuczOz+kPkTO/h8nJNDaouNY1WnG4/ESruv10gwLwxgNKEvisnjxDU6lw9zDm/+pF8aAB8RMJbJQpRRBKDVL8rTRb4yCp6qi8E9VkJRK3sTD9sX0fgZoYd4pkvbK+7kPh9oxiuzPKNCKm9v8XTCVBh+sWBJBdke7PAoERkdXOs2MEijjO2A0X4/tzqygr3oARSghkQIDAQAB",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "electron-config.js",
+      "background-electron.js"
+    ],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "Interceptor",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "net-buffer-content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

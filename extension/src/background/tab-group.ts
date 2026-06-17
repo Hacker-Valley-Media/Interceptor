@@ -1,6 +1,11 @@
 export let interceptorGroupId: number | null = null
 
+function hasTabGroupApi(): boolean {
+  return !!chrome.tabGroups && typeof chrome.tabGroups.query === "function"
+}
+
 export async function ensureInterceptorGroup(): Promise<number> {
+  if (!hasTabGroupApi()) return -1
   if (interceptorGroupId !== null) {
     try {
       await chrome.tabGroups.get(interceptorGroupId)
@@ -19,6 +24,7 @@ export async function ensureInterceptorGroup(): Promise<number> {
 
 export async function addTabToInterceptorGroup(tabId: number): Promise<number> {
   let groupId = await ensureInterceptorGroup()
+  if (groupId === -1 && (!hasTabGroupApi() || typeof chrome.tabs.group !== "function")) return -1
   if (groupId === -1) {
     groupId = await chrome.tabs.group({ tabIds: tabId })
     await chrome.tabGroups.update(groupId, { title: "interceptor", color: "cyan" })
@@ -30,6 +36,7 @@ export async function addTabToInterceptorGroup(tabId: number): Promise<number> {
 }
 
 export async function isTabInInterceptorGroup(tabId: number): Promise<boolean> {
+  if (!hasTabGroupApi()) return true
   const tab = await chrome.tabs.get(tabId)
   if (interceptorGroupId === null) await ensureInterceptorGroup()
   return interceptorGroupId !== null && tab.groupId === interceptorGroupId
@@ -50,6 +57,7 @@ export async function verifyTabUrl(tabId: number, expectedUrl?: string): Promise
 }
 
 export function registerTabGroupListeners(): void {
+  if (!hasTabGroupApi()) return
   chrome.tabs.onRemoved.addListener(async (_removedTabId) => {
     if (interceptorGroupId === null) return
     try {

@@ -193,20 +193,24 @@ describe("install browser selection — dry-run", () => {
     const { stdout, status } = runInstallDryRun(["--browser-only"])
     expect(status).toBe(0)
     // Two valid auto-select paths:
-    //   1. Both browsers installed → script prints "defaulting to 'chrome' (non-interactive)"
+    //   1. Both browsers installed → script prints "defaulting to 'chrome' (non-interactive, first installed)"
     //   2. Only one installed     → script prints "Browser: <X> (only supported browser found)"
     const hasBoth = browserInstalled("chrome") && browserInstalled("brave")
     if (hasBoth) {
-      expect(stdout).toContain("defaulting to 'chrome' (non-interactive)")
+      expect(stdout).toContain("defaulting to 'chrome' (non-interactive")
       expect(stdout).toContain("Browser: chrome")
       expect(stdout).toContain(CHROME_NM_SUBSTR)
       expect(stdout).not.toContain(BRAVE_NM_SUBSTR)
     } else if (browserInstalled("chrome")) {
-      expect(stdout).toContain("only supported browser found")
+      // Either "only supported browser found" or the non-interactive default —
+      // both are valid auto-selections of the single installed browser. (The
+      // install script's detection can differ from browserInstalled() on CI
+      // runners, so assert the outcome, not the exact phrasing.)
+      expect(stdout).toMatch(/only supported browser found|defaulting to 'chrome' \(non-interactive/)
       expect(stdout).toContain("Browser: chrome")
       expect(stdout).toContain(CHROME_NM_SUBSTR)
     } else if (browserInstalled("brave")) {
-      expect(stdout).toContain("only supported browser found")
+      expect(stdout).toMatch(/only supported browser found|defaulting to 'brave' \(non-interactive/)
       expect(stdout).toContain("Browser: brave")
       expect(stdout).toContain(BRAVE_NM_SUBSTR)
     } else {
@@ -294,10 +298,16 @@ describe("install browser selection — Edge + Vivaldi (Darwin)", () => {
  * of the Edge case.
  */
 describe("install branded-Chromium messaging — static checks", () => {
-  test("install.sh prints branded-build remediation for Chrome AND Edge", () => {
+  test("install.sh prints branded-build remediation for Chrome (all channels) AND Edge", () => {
     const src = require("node:fs").readFileSync(INSTALL_SCRIPT, "utf8")
-    // Single block; both vendors should be handled together.
-    expect(src).toContain('target" == "chrome" || "$target" == "edge"')
+    // Single block; all branded Chrome channels + Edge are handled together.
+    // (#98 wrapped the condition across lines, so assert each token rather than
+    // the combined single-line literal.)
+    expect(src).toContain('"$target" == "chrome"')
+    expect(src).toContain('"$target" == "chrome-beta"')
+    expect(src).toContain('"$target" == "chrome-canary"')
+    expect(src).toContain('"$target" == "chrome-dev"')
+    expect(src).toContain('"$target" == "edge"')
     expect(src).toContain("ignores --load-extension in branded desktop builds")
     // Developer flow URL substitution must be present for Edge.
     expect(src).toMatch(/SCHEMA="edge"/)

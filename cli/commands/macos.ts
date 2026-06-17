@@ -13,6 +13,9 @@ import {
   resolveOrCreateMonitorTask,
   validateMonitorTaskMode,
 } from "../../shared/monitor-tasks"
+import { runCdpCommand } from "./cdp"
+import { runNativeCommand } from "./native"
+import { extensionMacosPrefixes, extensionActionType } from "../../shared/extensions"
 
 type Action = { type: string; [key: string]: unknown }
 type Result = { success: boolean; error?: string; data?: unknown }
@@ -67,13 +70,22 @@ function bridgePreflightFailure(): string | null {
 
 export async function runMacosCommand(
   filtered: string[],
-  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number }
+  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; contextId?: string }
 ): Promise<void> {
   // Skip preflight only for "trust" — that subcommand is the user-driven
   // first-run permission walkthrough and may legitimately be the very first
   // call before anything else is wired up. The bridge will surface its own
   // not-ready errors there.
   const sub = filtered[1]
+  if (sub === "cdp") {
+    await runCdpCommand(filtered, { jsonMode: opts.jsonMode, contextId: opts.contextId })
+    return
+  }
+  if (sub === "runtime") {
+    await runNativeCommand(["runtime", ...filtered.slice(2)], { jsonMode: opts.jsonMode, contextId: opts.contextId })
+    return
+  }
+
   if (sub !== "trust") {
     const failure = bridgePreflightFailure()
     if (failure !== null) {
@@ -82,7 +94,11 @@ export async function runMacosCommand(
     }
   }
 
-  const action = parseMacosCommand(filtered)
+  // Extension Fabric: synchronously discover the set of
+  // manifest-declared `macos <prefix>` subcommands so an installed extension's
+  // verbs fall through to the generic builder instead of the hard `default`.
+  const extPrefixes = extensionMacosPrefixes()
+  const action = parseMacosCommand(filtered, extPrefixes)
   if (!action) process.exit(1)
 
   let pendingMonitorTaskId: string | undefined
@@ -149,7 +165,7 @@ export async function runMacosCommand(
   }
 }
 
-export function parseMacosCommand(filtered: string[]): Action | null {
+export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<string>): Action | null {
   const sub = filtered[1]
   if (!sub) {
     console.error("error: interceptor macos requires a subcommand. Examples:")
@@ -1783,10 +1799,46 @@ export function parseMacosCommand(filtered: string[]): Action | null {
       return action
     }
 
-    default:
+    default: {
+      // Extension Fabric: an installed extension may declare this
+      // prefix as a `macos <prefix> <cmd>` verb → route to its bridge domain as
+      // `macos_<prefix>_<cmd>` (mirrors vm's hyphen-normalized type encoding).
+      if (extensionPrefixes && sub && extensionPrefixes.has(sub)) {
+        return buildExtensionVerbAction(filtered, sub)
+      }
       console.error(`error: unknown macos subcommand '${sub}'. Run 'interceptor help' for usage.`)
       process.exit(1)
+    }
   }
+}
+
+/**
+ * Build a generic extension verb action: `macos <prefix> <cmd> [args] [--flags]`
+ * → `{ type: macos_<prefix>_<cmd>, sub: <cmd>, args, flags }`. The extension's
+ * bridge handler receives the verb (via the Router's `command`) plus this action;
+ * the core stays capability-blind (it knows the routing shape, not the behavior).
+ */
+function buildExtensionVerbAction(filtered: string[], prefix: string): Action | null {
+  const verb = filtered[2]
+  if (!verb || verb.startsWith("--")) {
+    console.error(`error: interceptor macos ${prefix} requires a subcommand (e.g. interceptor macos ${prefix} <cmd>)`)
+    process.exit(1)
+  }
+  const rest = filtered.slice(3)
+  const args: string[] = []
+  const flags: Record<string, string | boolean> = {}
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]
+    if (a.startsWith("--")) {
+      const key = a.slice(2)
+      const next = rest[i + 1]
+      if (next !== undefined && !next.startsWith("--")) { flags[key] = next; i++ }
+      else flags[key] = true
+    } else {
+      args.push(a)
+    }
+  }
+  return { type: extensionActionType(prefix, verb), sub: verb, args, flags }
 }
 
 function parseScriptRunAction(

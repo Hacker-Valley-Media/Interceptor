@@ -256,7 +256,24 @@ Meta:
   interceptor status --explain               Alias for --verbose with extra rationale per component
   interceptor help                           This help text
 
-Native (macOS Bridge — full install only):
+macOS App Internals:
+  interceptor macos cdp connect <port> [--host H] [--app NAME] [--url HINT]
+                                             Attach to an Electron/Chromium app debug port
+  interceptor macos cdp discover             List running Electron/Chromium apps + CDP/debug-port status
+  interceptor macos cdp launch <app> [--port N] --confirm
+                                             Quit + relaunch with --remote-debugging-port (loses unsaved state)
+  interceptor macos cdp targets|attach|detach|status|raw ...
+                                             Manage cdp:<id> contexts
+  interceptor macos cdp app discover         List Electron apps + extension attach state
+  interceptor macos cdp app attach <app> [--pid N] [--inspect-port N] [--allow-sigusr1]
+                                             SIGUSR1 + loadExtension path, registering app:<name>
+  interceptor macos cdp app detach|status ... Manage app:<name> extension contexts
+  interceptor macos runtime discover|enable|disable|status|signid
+                                             Manage in-process runtime agents for runtime:<app> contexts
+  interceptor macos runtime tree|read|eval|mutate|intercept|screenshot ...
+                                             Drive an enabled runtime:<app> context
+
+macOS Bridge (full install only):
   Background-first by contract (mirrors the browser surface in 'Tabs' and 'open' above):
   the only verbs that move the user's frontmost window or active tab are
   'macos app activate', 'macos open --activate', 'open --activate',

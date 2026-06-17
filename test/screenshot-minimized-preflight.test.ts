@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 //       advancing past windows.get to the inject stage).
 
 interface FakeTab { id: number; windowId: number }
-interface FakeWindow { id: number; state: chrome.windows.windowStateEnum }
+interface FakeWindow { id: number; state: string }
 
 let windowGetCalls: number[]
 let scriptingInjectCalls: number

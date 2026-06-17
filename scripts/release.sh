@@ -39,6 +39,11 @@
 #   INTERCEPTOR_INSTALLER_IDENTITY  Developer ID Installer name
 #   INTERCEPTOR_NOTARY_PROFILE      keychain profile name for notarytool
 #   INTERCEPTOR_VERSION             version string (else read from package.json)
+#   INTERCEPTOR_ENABLE_PLATFORM_TARGETS=1
+#                                  compile in research-only native platform targets
+#   INTERCEPTOR_INCLUDE_AGENT_DYLIBS=1
+#                                  bundle/sign native agent dylibs (research only;
+#                                  public Full packages require BYO dylib)
 
 set -euo pipefail
 
@@ -60,6 +65,14 @@ DIST_XML_FULL="$REPO_ROOT/scripts/release/distribution.xml"
 DIST_XML_BROWSER="$REPO_ROOT/scripts/release/distribution-browser.xml"
 POSTINSTALL_FULL="$REPO_ROOT/scripts/release/postinstall-full"
 POSTINSTALL_BROWSER="$REPO_ROOT/scripts/release/postinstall-browser"
+ENABLE_PLATFORM_TARGETS="${INTERCEPTOR_ENABLE_PLATFORM_TARGETS:-0}"
+INCLUDE_AGENT_DYLIBS="${INTERCEPTOR_INCLUDE_AGENT_DYLIBS:-0}"
+# When 1, a stapler failure is non-fatal: the artifact is still signed +
+# notarized (Gatekeeper verifies online at first launch), just not stapled for
+# offline use. Intended for network environments that can reach Apple's notary
+# service but not its CloudKit ticket-delivery host (e.g. TLS-inspecting proxies).
+# Default 0 — stapling stays mandatory for real public distribution.
+ALLOW_UNSTAPLED="${INTERCEPTOR_ALLOW_UNSTAPLED:-0}"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 VERSION=""
@@ -156,6 +169,7 @@ DEST_CLI_DIR="usr/local/bin"
 DEST_BRIDGE_DIR="Applications"
 DEST_SUPPORT_DIR="Library/Application Support/Interceptor"
 DEST_EXTENSION_DIR="${DEST_SUPPORT_DIR}/extension"
+DEST_EXTENSION_MV2_DIR="${DEST_SUPPORT_DIR}/extension-mv2"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 # `run`: in dry-run, print and skip; otherwise execute. Use for any external
@@ -167,6 +181,29 @@ run() {
   else
     "$@"
   fi
+}
+
+# `staple_or_fail`: staple + validate a target. A failure aborts the release
+# UNLESS INTERCEPTOR_ALLOW_UNSTAPLED=1, in which case it warns and continues
+# (the artifact is still signed + notarized; Gatekeeper verifies online).
+staple_or_fail() {
+  local target="$1"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "    DRY: xcrun stapler staple $target"
+    echo "    DRY: xcrun stapler validate $target"
+    return 0
+  fi
+  if xcrun stapler staple "$target" && xcrun stapler validate "$target"; then
+    return 0
+  fi
+  if [[ "$ALLOW_UNSTAPLED" == "1" ]]; then
+    echo "    WARNING: stapling failed for $target — continuing UNSTAPLED (INTERCEPTOR_ALLOW_UNSTAPLED=1)." >&2
+    echo "             The artifact is notarized; Gatekeeper verifies it online at first launch." >&2
+    return 0
+  fi
+  echo "ERROR: stapling failed for $target." >&2
+  echo "       Set INTERCEPTOR_ALLOW_UNSTAPLED=1 to ship an unstapled (still-notarized) artifact." >&2
+  return 1
 }
 
 echo "==> Mode(s): ${MODES[*]}"
@@ -228,6 +265,8 @@ echo "    Modes:             ${MODES[*]}"
 echo "    Signing identity:  $SIGNING_IDENTITY"
 echo "    Installer cert:    $INSTALLER_IDENTITY"
 echo "    Notary profile:    $NOTARY_PROFILE"
+echo "    Platform targets:  $([[ "$ENABLE_PLATFORM_TARGETS" == "1" ]] && echo "research enabled" || echo "public disabled")"
+echo "    Runtime agent dylibs: $([[ "$INCLUDE_AGENT_DYLIBS" == "1" ]] && echo "bundled research payload" || echo "BYO (not bundled)")"
 echo ""
 
 # ── Step 2: Build ─────────────────────────────────────────────────────────────
@@ -236,8 +275,23 @@ echo ""
 # against the appcast's sparkle:version — if they don't agree, the updater
 # silently decides nothing's available.
 echo "==> Step 2: bash scripts/build.sh"
-run env INTERCEPTOR_BRIDGE_VERSION="$VERSION" bash "$REPO_ROOT/scripts/build.sh"
+run env \
+  INTERCEPTOR_BRIDGE_VERSION="$VERSION" \
+  INTERCEPTOR_ENABLE_PLATFORM_TARGETS="$ENABLE_PLATFORM_TARGETS" \
+  INTERCEPTOR_INCLUDE_AGENT_DYLIBS="$INCLUDE_AGENT_DYLIBS" \
+  bash "$REPO_ROOT/scripts/build.sh"
 echo ""
+
+# Runtime Agent surface: build the in-process agent dylib(s) shipped in
+# Full mode (browser-only never injects native apps).
+if [[ "$BUILD_FULL" == "1" && "$INCLUDE_AGENT_DYLIBS" == "1" ]]; then
+  echo "==> Step 2b: build InterceptorAgent dylib (Runtime Agent surface)"
+  run bash "$REPO_ROOT/interceptor-agent/build-agent.sh"
+  echo ""
+elif [[ "$BUILD_FULL" == "1" ]]; then
+  echo "==> Step 2b: Skipped InterceptorAgent dylib build (public Full package requires BYO dylib)"
+  echo ""
+fi
 
 # ── Step 3: Codesign CLI + daemon ─────────────────────────────────────────────
 echo "==> Step 3: Codesigning CLI and daemon (hardened runtime + timestamp)"
@@ -254,6 +308,23 @@ run codesign --force --options runtime --timestamp \
   --entitlements "$ENT" \
   "$REPO_ROOT/daemon/interceptor-daemon"
 
+# Runtime Agent surface: research packages may sign and ship agent
+# dylib(s). Public Full packages intentionally leave dylibs BYO so the operator
+# supplies both the agent and the native re-sign identity.
+if [[ "$BUILD_FULL" == "1" && "$INCLUDE_AGENT_DYLIBS" == "1" ]]; then
+  for slice in arm64 arm64e; do
+    AGENT_DY="$REPO_ROOT/interceptor-agent/dist/InterceptorAgent-$slice.dylib"
+    if [[ -f "$AGENT_DY" || "$DRY_RUN" == "1" ]]; then
+      run codesign --force --timestamp --options runtime \
+        --sign "$SIGNING_IDENTITY" \
+        --identifier "com.interceptor.agent.$slice" \
+        "$AGENT_DY"
+    fi
+  done
+elif [[ "$BUILD_FULL" == "1" ]]; then
+  echo "==> Step 3b: Skipped agent dylib signing (BYO dylib; vendor cert not used for injected agent)"
+fi
+
 run codesign --verify --strict --verbose=2 "$REPO_ROOT/dist/interceptor"
 run codesign --verify --strict --verbose=2 "$REPO_ROOT/daemon/interceptor-daemon"
 if [[ "$BUILD_FULL" == "1" ]]; then
@@ -268,6 +339,7 @@ run rm -rf "$RELEASE_DIR"
 run mkdir -p "$STAGING_DIR/cli/$DEST_CLI_DIR"
 run mkdir -p "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR"
 run mkdir -p "$STAGING_DIR/extension/$DEST_EXTENSION_DIR"
+run mkdir -p "$STAGING_DIR/extension/$DEST_EXTENSION_MV2_DIR"
 run mkdir -p "$COMPONENTS_DIR"
 run mkdir -p "$SCRIPTS_BROWSER_DIR"
 run mkdir -p "$SCRIPTS_FULL_DIR"
@@ -305,6 +377,9 @@ run chmod 644 "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/README.md"
 # Browser extension: extension/dist → staging/extension/<support>/extension
 run ditto "$REPO_ROOT/extension/dist" "$STAGING_DIR/extension/$DEST_EXTENSION_DIR"
 
+# Electron app extension: extension/dist-mv2 → staging/extension/<support>/extension-mv2
+run ditto "$REPO_ROOT/extension/dist-mv2" "$STAGING_DIR/extension/$DEST_EXTENSION_MV2_DIR"
+
 # Skill packs — shipped inside the daemon component payload at
 # /Library/Application Support/Interceptor/skills/<name>/. The conclusion
 # screen tells users to symlink these into the runtime skill dirs they use
@@ -335,6 +410,22 @@ if [[ "$BUILD_FULL" == "1" ]]; then
   run chmod 644 "$STAGING_DIR/daemon-full/Library/LaunchAgents/com.interceptor.bridge.plist"
   run ditto "$REPO_ROOT/.agents/skills/interceptor-macos" \
     "$STAGING_DIR/daemon-full/$DEST_SUPPORT_DIR/skills/interceptor-macos"
+
+  if [[ "$INCLUDE_AGENT_DYLIBS" == "1" ]]; then
+    # Runtime Agent surface (research profile): ship the agent dylib(s) at
+    # /Library/Application Support/Interceptor/agent/ — where NativeDomain's
+    # resolveAgentDylib() looks for them post-install.
+    run mkdir -p "$STAGING_DIR/daemon-full/$DEST_SUPPORT_DIR/agent"
+    for slice in arm64 arm64e; do
+      AGENT_DY="$REPO_ROOT/interceptor-agent/dist/InterceptorAgent-$slice.dylib"
+      if [[ -f "$AGENT_DY" || "$DRY_RUN" == "1" ]]; then
+        run ditto "$AGENT_DY" \
+          "$STAGING_DIR/daemon-full/$DEST_SUPPORT_DIR/agent/InterceptorAgent-$slice.dylib"
+      fi
+    done
+  else
+    echo "    Runtime Agent dylibs: BYO — not staged into public Full package"
+  fi
 fi
 
 # Per-mode --scripts dirs: exactly one postinstall per mode.
@@ -388,13 +479,34 @@ echo ""
 # ── Step 6: Staple the bridge .app (Mach-O can't be stapled) ──────────────────
 if [[ "$BUILD_FULL" == "1" ]]; then
   echo "==> Step 6: Stapling bridge .app (in staging tree)"
-  run xcrun stapler staple "$STAGING_DIR/bridge/$DEST_BRIDGE_DIR/interceptor-bridge.app"
-  run xcrun stapler validate "$STAGING_DIR/bridge/$DEST_BRIDGE_DIR/interceptor-bridge.app"
+  staple_or_fail "$STAGING_DIR/bridge/$DEST_BRIDGE_DIR/interceptor-bridge.app"
   echo ""
 else
   echo "==> Step 6: Skipped (browser-only mode — no bridge .app to staple)"
   echo ""
 fi
+
+# ── Step 6.5: capability-blind packaging assertion ───────────────
+# The shipped .pkg must carry NO extension bundle and NO relocated hardened-target
+# managed-copy capability. Extensions are operator-placed at install time, never
+# staged by the release.
+echo "==> Step 6.5: Capability-blind packaging assertion"
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "    (dry-run: would assert no extensions/ dir and no relocated capability in $STAGING_DIR)"
+else
+  if find "$STAGING_DIR" -type d -name extensions -print -quit | grep -q .; then
+    echo "ERROR: staging tree contains an extensions/ directory — extensions must not be packaged" >&2
+    exit 1
+  fi
+  # Staged skills must carry only a neutral extension pointer, no relocated specifics.
+  SKILL_DIRS=$(find "$STAGING_DIR" -type d -name skills 2>/dev/null)
+  if [[ -n "$SKILL_DIRS" ]] && rg -n "re-sign|entitlement continuity|capability continuity|managed copy|managed-copy" $SKILL_DIRS -S >&2 2>/dev/null; then
+    echo "ERROR: staged skills carry relocated capability specifics (capability-blind violation)" >&2
+    exit 1
+  fi
+  echo "    ok: no extension bundle and no relocated capability in the staged payload"
+fi
+echo ""
 
 # ── Step 7: pkgbuild component pkgs ───────────────────────────────────────────
 echo "==> Step 7: Building component pkgs"
@@ -531,8 +643,7 @@ build_pkg_for_mode() {
   echo ""
 
   echo "==> [$mode] Step 11: Stapling the pkg"
-  run xcrun stapler staple "$signed_pkg"
-  run xcrun stapler validate "$signed_pkg"
+  staple_or_fail "$signed_pkg"
   echo ""
 }
 
@@ -549,7 +660,13 @@ verify_pkg() {
   echo "  pkgutil --check-signature:"
   run pkgutil --check-signature "$pkg"
   echo "  xcrun stapler validate:"
-  run xcrun stapler validate "$pkg"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "    DRY: xcrun stapler validate $pkg"
+  else
+    xcrun stapler validate "$pkg" 2>&1 || {
+      if [[ "$ALLOW_UNSTAPLED" == "1" ]]; then echo "    (unstapled — notarized, verified online by Gatekeeper)"; else false; fi
+    }
+  fi
   echo "  spctl --assess --type install:"
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "    DRY: spctl --assess --type install --verbose=2 $pkg"

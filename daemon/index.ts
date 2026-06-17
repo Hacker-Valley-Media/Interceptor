@@ -13,7 +13,13 @@ import {
 } from "../shared/monitor-artifacts"
 import { chooseOutboundTransport, validateContextRouting } from "./outbound-routing"
 import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
-import { clearDaemonRuntimeFiles, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon } from "./lifecycle"
+import { clearDaemonRuntimeFiles, decideDaemonStartupRole, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon } from "./lifecycle"
+import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
+import { CDP_CONTEXT_PREFIX } from "../shared/cdp-app"
+import {
+  NATIVE_REGISTER_TYPE, NATIVE_DELEGATE_TYPE, NATIVE_CONTEXT_PREFIX,
+  type NativeAgentState, type CodeSlice, type NativeWayIn,
+} from "../shared/native-agent"
 
 // ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
 const BRIDGE_SOCKET_PATH = "/tmp/interceptor-bridge.sock"
@@ -220,6 +226,49 @@ function sendToBridge(id: string, action: Record<string, unknown>, cliSocket: { 
     startTime: Date.now(),
     actionType
   })
+}
+
+// Runtime Agent surface: forward a `delegate` frame from an in-process
+// agent to the Swift bridge (a macos_* action), then send the bridge's
+// {id,result} back to the agent's WebSocket. This is how the injected agent
+// piggybacks on the bridge's already-granted TCC (Accessibility / Screen
+// Recording / Apple Events) instead of the re-signed target's reset grants.
+function forwardDelegateToBridge(
+  id: string,
+  action: Record<string, unknown>,
+  agentWs: { send: (data: string) => void },
+  contextId: string,
+): void {
+  const actionType = (action?.type as string) || "unknown"
+  emitEvent("native_delegate", { contextId, action: actionType, requestId: id })
+  const fail = (error: string) => {
+    try { agentWs.send(JSON.stringify({ id, result: { success: false, error } })) } catch {}
+  }
+  const dispatch = () => {
+    const payload = JSON.stringify({ id, action })
+    const encoded = Buffer.from(payload, "utf-8")
+    const header = Buffer.alloc(4)
+    header.writeUInt32LE(encoded.byteLength, 0)
+    try {
+      ;(bridgeSocket as any).write(Buffer.concat([header, encoded]))
+    } catch {
+      fail("bridge connection lost")
+      return
+    }
+    const timer = setTimeout(() => {
+      bridgePending.delete(id)
+      fail("bridge timeout")
+    }, REQUEST_TIMEOUT_MS)
+    bridgePending.set(id, {
+      resolve: (response: string) => { clearTimeout(timer); try { agentWs.send(response) } catch {} },
+      timer,
+      cliSocket: { write: () => 0 } as any,
+      startTime: Date.now(),
+      actionType,
+    })
+  }
+  if (bridgeSocket) dispatch()
+  else connectBridge().then((ok) => { (ok && bridgeSocket) ? dispatch() : fail("bridge unavailable for delegation") })
 }
 
 // Start bridge connection on daemon startup
@@ -488,6 +537,8 @@ async function bootstrapDaemonRole(): Promise<void> {
 
 await bootstrapDaemonRole()
 
+try { if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH) } catch {}
+
 const pendingRequests = new Map<string, {
   resolve: (v: string) => void
   timer: ReturnType<typeof setTimeout>
@@ -675,6 +726,11 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
 }
 
 const extensionWsMap = new Map<string, { send: (data: string) => void }>()
+// Runtime Agent surface: per-agent metadata for `macos runtime status`.
+// The agent's ws is stored in extensionWsMap under its runtime:<app> contextId so the
+// normal verb-routing / contexts / disambiguation paths work unchanged; this map
+// only adds the descriptive metadata those paths don't carry.
+const nativeAgentMeta = new Map<string, NativeAgentState>()
 let nativeRelaySocket: Bun.Socket<undefined> | null = null
 const wsOutboundQueues = new Map<string, string[]>()
 const WS_QUEUE_CAP = 50
@@ -684,6 +740,29 @@ function resolveExtensionWs(contextId?: string): { send: (data: string) => void 
   if (extensionWsMap.size === 1) return [...extensionWsMap.values()][0]
   return null
 }
+
+// Resolve where the MV2 sibling extension (loaded into Electron apps) lives.
+function resolveMv2ExtDir(): string {
+  const env = process.env.INTERCEPTOR_MV2_EXT_DIR
+  if (env) return env
+  const candidates = [
+    `${import.meta.dir}/../extension/dist-mv2`,
+    `${process.env.HOME ?? ""}/.interceptor/extension-mv2`,
+    "/Library/Application Support/Interceptor/extension-mv2",
+  ]
+  for (const c of candidates) {
+    try { if (existsSync(c)) return c } catch {}
+  }
+  return candidates[0]
+}
+
+// CDP-app surface: direct CDP (cdp:) contexts live here; inspector
+// bootstrap loads the MV2 extension which registers as an app: extension context.
+const cdpManager = new CdpManager({
+  emit: (event, data) => emitEvent(event, data || {}),
+  hasExtensionContext: (ctxId: string) => extensionWsMap.has(ctxId),
+  mv2ExtensionDir: resolveMv2ExtDir,
+})
 
 function drainWsOutboundQueue(ctxId: string): void {
   const ws = extensionWsMap.get(ctxId)
@@ -746,7 +825,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
 
   if (preferred === "native" && !STANDALONE && stdinAlive) {
     if (failOversizedNativeMessage("native stdio")) return
-    log(`forwarding via native: ${json.slice(0, 200)}`)
+    log(`forwarding via runtime agent: ${json.slice(0, 200)}`)
     const encoded = Buffer.from(json, "utf-8")
     const header = Buffer.alloc(4)
     header.writeUInt32LE(encoded.byteLength, 0)
@@ -779,7 +858,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
 
   if (!STANDALONE && stdinAlive) {
     if (failOversizedNativeMessage("fallback native stdio")) return
-    log(`fallback via native: ${json.slice(0, 200)}`)
+    log(`fallback via runtime agent: ${json.slice(0, 200)}`)
     const encoded = Buffer.from(json, "utf-8")
     const header = Buffer.alloc(4)
     header.writeUInt32LE(encoded.byteLength, 0)
@@ -885,24 +964,6 @@ async function handleOsAction(
 
 let socketServer: Bun.TCPSocketListener<undefined> | Bun.UnixSocketListener<undefined> | null = null
 
-// Singleton election (atomic): the WebSocket port is the one OS-exclusive token that both
-// the CLI socket and the extension channel must agree on. Bind it BEFORE claiming the CLI
-// socket, so two daemons can never split-brain (one owning the socket, another the WS port).
-// Losing this race is fatal: we exit instead of becoming a second, extension-less singleton.
-let wsServer: ReturnType<typeof Bun.serve> | null = null
-let wsBindError: Error | null = null
-try {
-  wsServer = startWsServer()
-} catch (err) {
-  wsBindError = err as Error
-}
-const singletonGate = decideSingletonGate({ wsPortAcquired: wsServer !== null, standalone: STANDALONE })
-if (singletonGate.action === "exit") {
-  log(`ws port ${WS_PORT} already held by another daemon — ${singletonGate.reason}${wsBindError ? ` (${wsBindError.message})` : ""}`)
-  process.exit(singletonGate.exitCode)
-}
-log(`ws server listening on port ${WS_PORT}`)
-
 try {
   const socketHandlers: Bun.SocketHandler<undefined> = {
       open(socket: Bun.Socket<undefined>) {
@@ -953,8 +1014,29 @@ try {
           emitEvent("request_received", { requestId: id, action: actionType })
 
           if (action?.type === "contexts") {
-            const list = [...extensionWsMap.keys()]
+            const list = [...extensionWsMap.keys(), ...cdpManager.contextIds()]
             socketWriteFramed(socket, JSON.stringify({ id, result: { success: true, data: list } }))
+            continue
+          }
+
+          // Runtime Agent surface: list connected in-process agents.
+          if (action?.type === "native_status") {
+            socketWriteFramed(socket, JSON.stringify({ id, result: { success: true, data: [...nativeAgentMeta.values()] } }))
+            continue
+          }
+
+          // CDP-app surface: lifecycle actions → manager; verbs for
+          // cdp: contexts → manager (app: contexts are extensions, handled below).
+          if (action?.type && CDP_ACTION_TYPES.has(action.type)) {
+            cdpManager.handle(action as { type: string; [k: string]: unknown })
+              .then((result) => socketWriteFramed(socket, JSON.stringify({ id, result })))
+              .catch((err) => socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: `cdp dispatch failed: ${(err as Error).message}` } })))
+            continue
+          }
+          if (request.contextId && request.contextId.startsWith(CDP_CONTEXT_PREFIX)) {
+            cdpManager.executeVerb(request.contextId, (action as { type: string; [k: string]: unknown }) ?? { type: "unknown" })
+              .then((result) => socketWriteFramed(socket, JSON.stringify({ id, result })))
+              .catch((err) => socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: `cdp verb failed: ${(err as Error).message}` } })))
             continue
           }
 
@@ -993,6 +1075,7 @@ try {
             contextId: request.contextId,
             connectedContexts: [...extensionWsMap.keys()],
             nativeRelayAvailable: !!nativeRelaySocket,
+            cdpContexts: cdpManager.contextIds(),
           })
           if (!contextValidation.ok) {
             socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: contextValidation.error } }))
@@ -1042,22 +1125,20 @@ try {
   if (IS_WIN) {
     socketServer = Bun.listen({ hostname: "127.0.0.1", port: IPC_PORT, socket: socketHandlers })
   } else {
-    // We hold the WS port (the singleton token), so any leftover socket file is ours to clear.
-    try { if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH) } catch {}
     socketServer = Bun.listen({ unix: SOCKET_PATH, socket: socketHandlers })
   }
   log(`socket listening on ${transportLabel()}`)
 } catch (err) {
   log(`socket listen failed: ${(err as Error).message}`)
-  if (wsServer) wsServer.stop(true)
   process.exit(1)
 }
 
 Bun.write(PID_PATH, `${process.pid}\n${transportLabel()}\n`)
 log(`pid file written: ${process.pid}`)
 
-function startWsServer(): ReturnType<typeof Bun.serve> {
-  return Bun.serve<undefined>({
+let wsServer: ReturnType<typeof Bun.serve> | null = null
+try {
+  wsServer = Bun.serve<undefined>({
     port: WS_PORT,
     fetch(req, server) {
       if (server.upgrade(req, {})) return
@@ -1091,6 +1172,48 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           return
         }
 
+        // Runtime Agent surface: an in-process agent dylib registers
+        // here. We store it in extensionWsMap under its runtime:<app> contextId
+        // so verb routing / contexts / disambiguation all work unchanged, plus
+        // nativeAgentMeta for `macos runtime status`.
+        if (request.type === NATIVE_REGISTER_TYPE) {
+          const r = request as { contextId?: string; pid?: number; slice?: string; appName?: string; frameworks?: string[]; wayIn?: string }
+          const ctxId = r.contextId && r.contextId.startsWith(NATIVE_CONTEXT_PREFIX) ? r.contextId : NATIVE_CONTEXT_PREFIX + (r.contextId ?? "app")
+          const oldCtxId = (ws as any).__contextId
+          if (oldCtxId && oldCtxId !== ctxId && extensionWsMap.get(oldCtxId) === ws) {
+            extensionWsMap.delete(oldCtxId)
+            nativeAgentMeta.delete(oldCtxId)
+          }
+          ;(ws as any).__contextId = ctxId
+          ;(ws as any).__native = true
+          extensionWsMap.set(ctxId, ws)
+          nativeAgentMeta.set(ctxId, {
+            contextId: ctxId,
+            appName: r.appName ?? ctxId.slice(NATIVE_CONTEXT_PREFIX.length),
+            pid: typeof r.pid === "number" ? r.pid : undefined,
+            slice: (r.slice as CodeSlice) ?? "unknown",
+            wayIn: r.wayIn as NativeWayIn | undefined,
+            frameworks: Array.isArray(r.frameworks) ? r.frameworks : undefined,
+            registeredAt: Date.now(),
+            connection: "connected",
+          })
+          log(`ws native agent registered [context: ${ctxId} pid: ${r.pid ?? "?"} slice: ${r.slice ?? "?"}]`)
+          emitEvent("native_agent_registered", { contextId: ctxId, pid: r.pid, slice: r.slice, appName: r.appName })
+          drainWsOutboundQueue(ctxId)
+          return
+        }
+
+        // Runtime Agent surface: the agent delegates a TCC-gated /
+        // OS-level op to the bridge. Routes the macos_* action to the bridge and
+        // returns {id,result} back to the agent's ws.
+        if (request.type === NATIVE_DELEGATE_TYPE) {
+          const id = request.id ?? crypto.randomUUID()
+          const action = (request.action as Record<string, unknown> | undefined) ?? { type: "unknown" }
+          const ctxId = (ws as any).__contextId ?? "runtime:?"
+          forwardDelegateToBridge(id, action, ws, ctxId)
+          return
+        }
+
         if (request.type === "keepalive") {
           log("ws keepalive")
           return
@@ -1112,10 +1235,25 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
 
         const actionType = (request.action as { type?: string })?.type || "unknown"
 
+        // CDP-app surface over the WebSocket transport (screenshot etc.).
+        if (CDP_ACTION_TYPES.has(actionType)) {
+          cdpManager.handle(request.action as { type: string; [k: string]: unknown })
+            .then((result) => ws.send(JSON.stringify({ id, result })))
+            .catch((err) => { try { ws.send(JSON.stringify({ id, result: { success: false, error: `cdp dispatch failed: ${(err as Error).message}` } })) } catch {} })
+          return
+        }
+        if (request.contextId && request.contextId.startsWith(CDP_CONTEXT_PREFIX)) {
+          cdpManager.executeVerb(request.contextId, (request.action as { type: string; [k: string]: unknown }) ?? { type: "unknown" })
+            .then((result) => ws.send(JSON.stringify({ id, result })))
+            .catch((err) => { try { ws.send(JSON.stringify({ id, result: { success: false, error: `cdp verb failed: ${(err as Error).message}` } })) } catch {} })
+          return
+        }
+
         const contextValidation = validateContextRouting({
           contextId: request.contextId,
           connectedContexts: [...extensionWsMap.keys()],
           nativeRelayAvailable: !!nativeRelaySocket,
+          cdpContexts: cdpManager.contextIds(),
         })
         if (!contextValidation.ok) {
           ws.send(JSON.stringify({ id, result: { success: false, error: contextValidation.error } }))
@@ -1148,10 +1286,17 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         if (ctxId && extensionWsMap.get(ctxId) === ws) {
           extensionWsMap.delete(ctxId)
         }
+        if (ctxId && nativeAgentMeta.has(ctxId)) {
+          nativeAgentMeta.delete(ctxId)
+          emitEvent("native_agent_disconnected", { contextId: ctxId })
+        }
         log(`ws client disconnected [context: ${ctxId ?? "unknown"}]`)
       }
     }
   })
+  log(`ws server listening on port ${WS_PORT}`)
+} catch (err) {
+  log(`ws server failed (port ${WS_PORT} in use?) — continuing without WebSocket: ${(err as Error).message}`)
 }
 
 function gracefulShutdown(signal: string) {
@@ -1161,6 +1306,7 @@ function gracefulShutdown(signal: string) {
     socketWriteFramed(req.socket, JSON.stringify({ id, result: { success: false, error: "daemon shutting down" } }))
   }
   pendingRequests.clear()
+  try { cdpManager.shutdown() } catch {} // close outbound CDP sockets + disable Fetch/Network on targets
   if (socketServer) {
     socketServer.stop(true)
     socketServer = null

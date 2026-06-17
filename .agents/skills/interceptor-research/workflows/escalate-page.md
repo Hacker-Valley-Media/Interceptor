@@ -4,7 +4,7 @@ A page came back empty or thin. **This is the moment most agents silently skip â
 and that skip biases the whole corpus toward shallow sources.** Walk the
 escalation chain until one rung yields. A page is "read" only when the chain is
 exhausted; if it still fails, **log the skip explicitly** rather than letting
-truncation masquerade as coverage.
+truncation look like coverage.
 
 ## The chain (run top to bottom, stop when one yields)
 

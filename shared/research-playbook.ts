@@ -35,6 +35,15 @@ export const RESEARCH_PLAYBOOK_ONE_SCREEN = `INTERCEPTOR DEEP RESEARCH — the o
 Most agents quit after 2-3 sources because nothing forces them deeper. Depth is
 a discipline with STOPPING RULES, not a longer prompt. Run this as a loop.
 
+TOOL     - interceptor CLI ONLY. Every fetch and every search in a research run goes
+           through interceptor (open / read / find / inspect / net / eval / tab). Do
+           NOT fall back to your host's built-in web tools (WebFetch / WebSearch and
+           the like): they bypass the user's signed-in session, drop the zero-CDP
+           fingerprint edge, can't walk the escalation chain or capture the network
+           the page calls, and never reach the ledger -> the depth discipline below
+           silently breaks. Catch yourself reaching for a built-in web tool -> stop,
+           use interceptor open / read instead.
+
 PLAN     - Decompose the question into 5-10 sub-questions. Each one earns >=1 source.
          - Pre-commit the source TYPE per question (primary doc / paper / repo /
            practitioner thread / public record). Breadth here is what separates a

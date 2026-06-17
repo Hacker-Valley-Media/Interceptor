@@ -17,6 +17,14 @@ final class Router: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Is `prefix` already claimed by a built-in (or earlier-loaded) domain?
+    /// Reads BOTH maps so the Extension Fabric's collision check
+    /// cannot let an extension clobber a registered or lazily-registered domain.
+    func isRegistered(_ prefix: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return domains[prefix] != nil || lazyDomains[prefix] != nil
+    }
+
     private func resolveHandler(for key: String) -> DomainHandler? {
         lock.lock()
         if let handler = domains[key] {

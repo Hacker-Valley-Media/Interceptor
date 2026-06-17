@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + tests + capability-blind audit
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Shell syntax check (scripts/*.sh)
+        run: |
+          for f in scripts/*.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: Select newest Xcode (Swift 6.2 toolchain — bridge requires tools 6.2)
+        run: |
+          ls -d /Applications/Xcode_*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Capability-blind audit
+        run: bash scripts/audit-capability-blind.sh
+
+      - name: TypeScript tests
+        run: bun test
+
+      - name: Swift build (bridge)
+        working-directory: interceptor-bridge
+        run: swift build
+
+      - name: Swift tests — Extension Fabric (bridge)
+        working-directory: interceptor-bridge
+        run: swift test --filter ExtensionFabricTests

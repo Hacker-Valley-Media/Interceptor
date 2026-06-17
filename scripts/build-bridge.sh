@@ -8,6 +8,8 @@
 # Env overrides:
 #   INTERCEPTOR_SIGNING_IDENTITY  codesign identity (default: HVM Developer ID)
 #   INTERCEPTOR_BRIDGE_VERSION    version string in Info.plist (default 1.0.0)
+#   INTERCEPTOR_ENABLE_PLATFORM_TARGETS=1
+#                                  compile in research-only platform target support
 #   INTERCEPTOR_SKIP_SIGNING=1    skip codesign + lsregister (dev mode)
 
 set -euo pipefail
@@ -32,7 +34,15 @@ APP_ICON_NAME="interceptor"
 
 echo "==> Building interceptor-bridge (release)..."
 cd "$BRIDGE_DIR"
-swift build -c release 2>&1
+SWIFT_FLAGS=()
+if [[ "${INTERCEPTOR_ENABLE_PLATFORM_TARGETS:-0}" == "1" ]]; then
+  echo "==> Native platform target support: ENABLED (research build)"
+  SWIFT_FLAGS+=("-Xswiftc" "-DINTERCEPTOR_ENABLE_PLATFORM_TARGETS")
+  swift build -c release "${SWIFT_FLAGS[@]}" 2>&1
+else
+  echo "==> Native platform target support: disabled (public build)"
+  swift build -c release 2>&1
+fi
 
 BINARY="$BRIDGE_DIR/.build/release/interceptor-bridge"
 if [ ! -f "$BINARY" ]; then

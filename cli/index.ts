@@ -28,6 +28,7 @@ import { runMacosCommand } from "./commands/macos"
 import { runUpgradeCommand } from "./commands/upgrade"
 import { runInitCommand } from "./commands/init"
 import { runResearchCommand } from "./commands/research"
+import { runExtensionsCommand } from "./commands/extensions"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs } from "./global-flags"
 
@@ -51,11 +52,12 @@ const MACOS_CMDS = new Set(["macos"])
 const UPGRADE_CMDS = new Set(["upgrade"])
 const INIT_CMDS = new Set(["init"])
 const RESEARCH_CMDS = new Set(["research"])
+const EXTENSIONS_CMDS = new Set(["extensions"])
 
 // Commands that don't require a daemon connection (or, in init's case,
 // bootstrap it themselves rather than relying on the pre-dispatch auto-spawn).
 // `research` prints guidance / manages an on-disk ledger — no browser, no daemon.
-const NO_DAEMON = new Set(["status", "help", "events", "session", "upgrade", "init", "research"])
+const NO_DAEMON = new Set(["status", "help", "events", "session", "upgrade", "init", "research", "extensions"])
 
 // Every command the CLI dispatches. Used to reject unknown commands
 // before any daemon-spawning side effect runs.
@@ -64,7 +66,7 @@ const ALL_KNOWN_CMDS = new Set<string>([
   ...SS_CMDS, ...DATA_CMDS, ...META_CMDS, ...EVAL_CMDS,
   ...BATCH_CMDS, ...MONITOR_CMDS, ...SCENE_CMDS, ...SSE_CMDS,
   ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...MACOS_CMDS,
-  ...UPGRADE_CMDS, ...INIT_CMDS, ...RESEARCH_CMDS,
+  ...UPGRADE_CMDS, ...INIT_CMDS, ...RESEARCH_CMDS, ...EXTENSIONS_CMDS,
   "help", "contexts",
 ])
 
@@ -117,11 +119,21 @@ async function main() {
     return
   }
 
+  const cmd = filtered[0]
+
   // Per-command --help / -h short-circuit. `interceptor open --help` prints
   // the open-specific help block; `interceptor --help` (no command) falls
   // back to the full HELP. Runs before any daemon-spawn side effect.
   if (filtered.includes("--help") || filtered.includes("-h")) {
-    const sub = helpForCommand(filtered[0])
+    if (cmd === "macos" && (filtered[1] === "cdp" || filtered[1] === "runtime")) {
+      await runMacosCommand(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
+      return
+    }
+    if (cmd === "extensions") {
+      runExtensionsCommand(filtered, jsonMode)
+      return
+    }
+    const sub = helpForCommand(cmd)
     if (sub) {
       console.log(sub)
     } else {
@@ -129,8 +141,6 @@ async function main() {
     }
     return
   }
-
-  const cmd = filtered[0]
 
   if (!ALL_KNOWN_CMDS.has(cmd)) {
     console.error(`error: unknown command '${cmd}'. Run 'interceptor help' for usage.`)
@@ -153,7 +163,7 @@ async function main() {
   let action: { type: string; [key: string]: unknown } | null
 
   if (MACOS_CMDS.has(cmd)) {
-    await runMacosCommand(filtered, { jsonMode, useWs, globalTabId })
+    await runMacosCommand(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
     return
   }
 
@@ -169,6 +179,11 @@ async function main() {
 
   if (RESEARCH_CMDS.has(cmd)) {
     await runResearchCommand(filtered, jsonMode)
+    return
+  }
+
+  if (EXTENSIONS_CMDS.has(cmd)) {
+    runExtensionsCommand(filtered, jsonMode)
     return
   }
 

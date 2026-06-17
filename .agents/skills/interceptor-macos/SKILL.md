@@ -1,6 +1,6 @@
 ---
 name: interceptor-macos
-description: "Drive native macOS apps via interceptor macos *: AX trees, background click/type/keys/drag/scroll, occluded or minimized window capture, browser chrome, URL bars, OS dialogs, Apple Events, trusted OS input, monitor/replay, overlays, vision, speech, NLP, and JSC host utilities. Background-first by contract; only app activate and open --activate move focus. Use for native apps, named browser app routing, window control, cross-app work, and system UI. Not for content inside browser pages."
+description: "Drive native macOS apps via interceptor macos *: AX trees, background click/type/keys/drag/scroll, occluded or minimized window capture, browser chrome, URL bars, OS dialogs, Apple Events, trusted OS input, monitor/replay, overlays, vision, speech, NLP, JSC host utilities, Electron app web-content control via interceptor macos cdp, and in-process app runtime control via interceptor macos runtime. Background-first by contract; only app activate and open --activate move focus. Use for native apps, named browser app routing, window control, cross-app work, and system UI. Not for content inside browser pages."
 metadata:
   short-description: Drive native macOS apps via the interceptor CLI; background-first
 ---
@@ -12,11 +12,13 @@ Windows surface (UIA, Win32 input, ETW). It does not exist yet — do not stub i
 
 # Interceptor macOS
 
-Agent-operator skill for the macOS surface of Interceptor. Use the `interceptor macos *` CLI to drive native macOS applications: AX trees, OS-level trusted input, capture / vision / speech / NLP / Apple Events, monitor-and-replay, overlays. For content inside a browser tab load `interceptor-browser` instead.
+Agent-operator skill for the macOS surface of Interceptor. Use the `interceptor macos *` CLI to drive native macOS applications: AX trees, OS-level trusted input, capture / vision / speech / NLP / Apple Events, monitor-and-replay, overlays. Use `interceptor macos cdp` / `interceptor macos cdp app` for Electron app web contents, and `interceptor macos runtime` for in-process native app runtime control. For content inside a browser tab load `interceptor-browser` instead.
 
 The macOS bridge is a Swift daemon launched as a LaunchAgent / `.app` bundle. Links Apple frameworks only (Accessibility, ScreenCaptureKit, AVFoundation, Speech, Vision, NaturalLanguage, OSLogStore, NSAppleScript, container runtime). No private APIs.
 
 This installed skill is self-contained. Source checkouts also have `AGENTS.md`, but packaged users may only have the skill directory below `/Library/Application Support/Interceptor/skills`.
+
+> Installed extensions may add capabilities under `interceptor macos <prefix> <cmd>`. Each carries its own skill (`interceptor-ext-<name>`); this skill does not describe them. Run `interceptor extensions list` to see what is installed.
 
 ## Fast Path
 
@@ -63,10 +65,16 @@ Each workflow is a complete self-contained "you are doing X" procedure. Open the
 | [`references/monitor-and-replay.md`](references/monitor-and-replay.md) | Native monitor sessions, replay plans, event sources |
 | [`references/command-catalog.md`](references/command-catalog.md) | Full macOS command surface with flags and examples |
 | [`references/permissions.md`](references/permissions.md) | TCC permissions, microphone re-poll, Dock-icon notes |
+| [`references/cdp-app.md`](references/cdp-app.md) | Electron/Chromium desktop apps via `interceptor macos cdp` / `interceptor macos cdp app` |
+| [`references/native-agent.md`](references/native-agent.md) | In-process native app runtime control via `interceptor macos runtime` |
 
 ## When To Switch Surfaces
 
 If the target is **inside a browser page** (DOM, network, SPA state, browser monitor, scene graph of a rich editor) - load `interceptor-browser` instead.
+
+If the target is **inside an Electron/Chromium desktop app's web contents** (Slack, VS Code, Notion, Descript, etc.) - use [`references/cdp-app.md`](references/cdp-app.md), not AX screenshots.
+
+If the target is **inside a native app's runtime** (AppKit/SwiftUI object graph, selector calls, rendered text changes, hooks, MapKit state) - use [`references/native-agent.md`](references/native-agent.md). AX is still the fallback projection when the in-process agent is unavailable.
 
 ## Do Not Default To Troubleshooting
 

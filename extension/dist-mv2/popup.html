@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Interceptor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      width: 260px;
+      padding: 16px;
+      background: #fff;
+      color: #111;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+      color: #444;
+    }
+    input {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: monospace;
+      outline: none;
+    }
+    input:focus { border-color: #0071e3; }
+    .row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    button {
+      flex: 1;
+      padding: 6px 10px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #save {
+      background: #0071e3;
+      color: #fff;
+    }
+    #save:hover { background: #005bb5; }
+    #reset {
+      background: #f0f0f0;
+      color: #333;
+    }
+    #reset:hover { background: #e0e0e0; }
+    #status {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #888;
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <label for="contextId">Context ID</label>
+  <input id="contextId" type="text" placeholder="e.g. work, personal, …" spellcheck="false">
+  <div class="row">
+    <button id="save">Save</button>
+    <button id="reset">Reset</button>
+  </div>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

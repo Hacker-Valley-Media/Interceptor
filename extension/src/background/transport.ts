@@ -55,6 +55,10 @@ function disconnectNativePort(port: chrome.runtime.Port | null): void {
   clearNativeStateFor(port)
 }
 
+function hasNativeMessaging(): boolean {
+  return typeof chrome.runtime.connectNative === "function"
+}
+
 function postNative(msg: unknown, port = nativePort): boolean {
   if (!port) return false
   const res = safeNativePortPost(port, msg)
@@ -144,6 +148,11 @@ function scheduleNativeReconnect(): void {
 }
 
 export function connectToHost(): void {
+  if (!hasNativeMessaging()) {
+    if (isWsOpen()) activeTransport = "websocket"
+    else connectWsChannel()
+    return
+  }
   if (nativePort || isConnecting) return
   isConnecting = true
 
@@ -241,6 +250,11 @@ function stopWsKeepAlive(): void {
 }
 
 async function getOrCreateContextId(): Promise<string> {
+  const configured = (globalThis as { INTERCEPTOR_APP_CONTEXT_ID?: unknown }).INTERCEPTOR_APP_CONTEXT_ID
+  if (typeof configured === "string" && configured.length > 0) {
+    await chrome.storage.local.set({ contextId: configured })
+    return configured
+  }
   const stored = await chrome.storage.local.get("contextId") as { contextId?: string }
   if (stored.contextId) return stored.contextId
   const id = crypto.randomUUID()
@@ -345,6 +359,7 @@ export function registerStorageContextListener(): void {
 }
 
 export function registerAlarmListener(): void {
+  if (!chrome.alarms) return
   chrome.alarms.create("keepalive", { periodInMinutes: 0.5 })
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name !== "keepalive") return

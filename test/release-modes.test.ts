@@ -20,7 +20,7 @@ const TEST_VERSION = "0.0.0-test"
  * True on macOS. The whole describe block below is gated behind this.
  *
  * scripts/release.sh exercises the macOS-only release pipeline: codesign,
- * productbuild, xcrun notarytool/stapler, /Volumes/ disk images, .pkg signing.
+ * productbuild, xcrun notarytool/stapler, disk-image volumes, .pkg signing.
  * None of this is meaningful on Linux. The dry-run still emits the script
  * commands, but the assertions are written against macOS-specific paths and
  * would be misleading if they ran on Linux.
@@ -32,7 +32,7 @@ const IS_DARWIN = process.platform === "darwin"
  * stdout/stderr/exit status. Sets `INTERCEPTOR_DRY_RUN=1` so the script never
  * shells out to codesign/notarytool or produces real .pkg artifacts.
  */
-function runReleaseDryRun(args: string[]): {
+function runReleaseDryRun(args: string[], envOverrides: Record<string, string> = {}): {
   stdout: string
   stderr: string
   status: number
@@ -42,7 +42,7 @@ function runReleaseDryRun(args: string[]): {
     [RELEASE_SCRIPT, "--dry-run", `--version=${TEST_VERSION}`, ...args],
     {
       cwd: REPO_ROOT,
-      env: { ...process.env, INTERCEPTOR_DRY_RUN: "1" },
+      env: { ...process.env, INTERCEPTOR_DRY_RUN: "1", ...envOverrides },
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf-8",
     },
@@ -101,6 +101,11 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
     expect(stdout).toContain("Interceptor-Daemon-Full.pkg")
     expect(stdout).toContain("daemon-full")
     expect(stdout).toContain("Step 6: Stapling bridge .app")
+    expect(stdout).toContain("Runtime agent dylibs: BYO (not bundled)")
+    expect(stdout).toContain("Skipped InterceptorAgent dylib build")
+    expect(stdout).toContain("Skipped agent dylib signing")
+    expect(stdout).toContain("Runtime Agent dylibs: BYO")
+    expect(stdout).not.toContain("InterceptorAgent-arm64.dylib")
 
     // No Browser pkg should be produced.
     expect(stdout).not.toContain(`Interceptor-Browser-${TEST_VERSION}`)
@@ -186,12 +191,12 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
   test("Browser pkg uses postinstall-browser, Full pkg uses postinstall-full", () => {
     const browserOut = runReleaseDryRun(["--browser-only"]).stdout
     expect(browserOut).toContain(
-      "scripts/release/postinstall-browser /Volumes",
+      `scripts/release/postinstall-browser ${REPO_ROOT}`,
     )
     expect(browserOut).not.toContain("scripts/release/postinstall-full ")
 
     const fullOut = runReleaseDryRun(["--full"]).stdout
-    expect(fullOut).toContain("scripts/release/postinstall-full /Volumes")
+    expect(fullOut).toContain(`scripts/release/postinstall-full ${REPO_ROOT}`)
     expect(fullOut).not.toContain("scripts/release/postinstall-browser ")
   })
 
@@ -211,7 +216,7 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
 
     // Browser daemon staging must include the browser-surface skill.
     expect(stdout).toContain(
-      ".agents/skills/interceptor-browser /Volumes",
+      `.agents/skills/interceptor-browser ${REPO_ROOT}`,
     )
     // It must NOT include the macOS skill — that ships only in Full.
     expect(stdout).not.toContain(".agents/skills/interceptor-macos")
@@ -222,10 +227,10 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
     expect(status).toBe(0)
 
     expect(stdout).toContain(
-      ".agents/skills/interceptor-browser /Volumes",
+      `.agents/skills/interceptor-browser ${REPO_ROOT}`,
     )
     expect(stdout).toContain(
-      ".agents/skills/interceptor-macos /Volumes",
+      `.agents/skills/interceptor-macos ${REPO_ROOT}`,
     )
 
     // The macOS skill stages into the daemon-full subtree, not the shared
@@ -237,5 +242,18 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
     expect(
       macosLines.some((l) => l.includes("/staging/daemon-full/")),
     ).toBe(true)
+  })
+
+  test("research Full profile explicitly bundles runtime agent dylibs and enables platform targets", () => {
+    const { stdout, status } = runReleaseDryRun(["--full"], {
+      INTERCEPTOR_ENABLE_PLATFORM_TARGETS: "1",
+      INTERCEPTOR_INCLUDE_AGENT_DYLIBS: "1",
+    })
+    expect(status).toBe(0)
+    expect(stdout).toContain("Platform targets:  research enabled")
+    expect(stdout).toContain("Runtime agent dylibs: bundled research payload")
+    expect(stdout).toContain("Step 2b: build InterceptorAgent dylib")
+    expect(stdout).toContain("InterceptorAgent-arm64.dylib")
+    expect(stdout).toContain("InterceptorAgent-arm64e.dylib")
   })
 })

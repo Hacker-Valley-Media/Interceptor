@@ -1,6 +1,6 @@
 {
   "name": "interceptor",
-  "version": "0.16.9",
+  "version": "0.17.2",
   "type": "module",
   "license": "Elastic-2.0",
   "bin": {
@@ -9,15 +9,18 @@
   "scripts": {
     "build": "./scripts/build.sh",
     "typecheck": "bunx tsc -p tsconfig.host.json && bunx tsc -p tsconfig.extension.json && bunx tsc -p tsconfig.json",
+    "test": "bun test",
+    "audit:capability-blind": "bash scripts/audit-capability-blind.sh",
     "daemon": "bun run daemon/index.ts",
     "cli": "bun run cli/index.ts"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.9.0",
-    "@types/bun": "latest",
-    "@types/chrome": "latest",
+    "@types/bun": "^1.3.14",
+    "@types/chrome": "^0.1.43",
     "happy-dom": "^20.9.0",
-    "ocrad.js": "^0.0.1"
+    "ocrad.js": "^0.0.1",
+    "typescript": "5.9.3"
   },
   "dependencies": {
     "html-to-image": "^1.11.13"

@@ -220,6 +220,7 @@ bash scripts/build.sh
 bash scripts/install.sh --browser-only --brave --profile Default   # browser only, no TCC
 bash scripts/install.sh --full --brave --profile Default           # browser + macOS bridge
 bash scripts/install.sh --brave --profile Default                  # interactive prompt
+bash scripts/install.sh --chrome-beta --browser-only               # a Chrome channel (also --chrome-canary/--chrome-dev/--chrome-for-testing)
 bash scripts/install.sh --full --dry-run                           # print steps without running
 ```
 
@@ -248,14 +249,18 @@ mkdir -p ~/.local/bin
 ln -sf "$PWD/dist/interceptor" ~/.local/bin/interceptor
 ```
 
-#### Chrome Development Path
+#### Chrome channels & the Development Path
 
-Google Chrome ignores `--load-extension` in branded desktop builds. `scripts/install.sh --chrome` still writes the native messaging manifest, but load the extension manually:
+`scripts/install.sh` can target any Chrome channel: `--chrome` (stable), `--chrome-beta`, `--chrome-canary`, `--chrome-dev`, and `--chrome-for-testing` (macOS; Linux deferred, same as the Edge/Vivaldi gap).
+
+All **branded** Google Chrome builds — stable, Beta, Canary, and Dev — ignore `--load-extension` in desktop builds (Chrome 137+ removed the switch for branded builds). For those, `scripts/install.sh` still writes the native messaging manifest, but load the extension manually:
 
 1. Open Chrome and navigate to `chrome://extensions`
 2. Enable **Developer mode**
 3. Click **Load unpacked**
 4. Select `extension/dist/`
+
+**Chrome for Testing** is Google's unbranded automation build and *does* respect `--load-extension`, so `--chrome-for-testing` loads the extension automatically. Two caveats: its native-messaging host directory is `~/Library/Application Support/Google/ChromeForTesting/` as of Chrome 146 (the installer writes there), and it is typically installed as a standalone binary rather than into `/Applications`, so auto-detection may not find it — pass `--chrome-for-testing` explicitly.
 
 #### Uninstall
 

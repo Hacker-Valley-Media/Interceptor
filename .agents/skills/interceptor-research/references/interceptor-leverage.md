@@ -1,7 +1,34 @@
 # Interceptor Leverage — why this tool is built for depth
 
 Interceptor's architecture turns the tactics in this skill into an advantage no
-CDP-based or HTTP-only scraper has. Three structural reasons depth works better here.
+CDP-based or HTTP-only scraper — and no built-in agent web tool — has. Three
+structural reasons depth works better here.
+
+## 0. Why not just use your host's built-in web tools?
+
+Your agent host ships a `WebFetch` / `WebSearch` (or equivalent) and it is *right
+there* with zero setup — which is exactly why a model reaches for it on
+autopilot. For deep research that is a downgrade, and this skill assumes you do
+**not** take it:
+
+- **No signed-in session.** Built-in fetchers hit pages anonymously, so paywalls,
+  soft logins, and human-verification gates that the user's real session already
+  clears come back blocked or thin. Interceptor drives the user's actual Chrome.
+- **Scraper fingerprint.** A raw fetch looks like a bot; many sources serve it
+  degraded or empty HTML. Interceptor's zero-CDP signed-in Chrome behaves like a
+  human visitor (it passes BrowserScan / CreepJS / Fingerprint.com).
+- **No escalation, no network surface.** `WebFetch` returns one flattened blob.
+  It cannot `wait-stable`, walk the `read → find → inspect → eval → screenshot`
+  chain, scrape the JSON the page already fetched (`net log`), or read a number
+  trapped in a chart. Those are the moves that make a page *yield*.
+- **No ledger.** Built-in fetches don't land in `sources/`, so the collect-first
+  discipline, the source count, and the saturation rubric all silently break.
+
+So: every fetch and every search in this skill goes through the `interceptor`
+CLI. If a built-in web tool feels easier mid-run, that's the autopilot — stop and
+use `interceptor open` / `read`. (This composes with, and does not replace, any
+higher-level research orchestrator your host provides — but the *fetching* is
+interceptor's job.)
 
 ## 1. Real signed-in Chrome beats headless for depth
 
