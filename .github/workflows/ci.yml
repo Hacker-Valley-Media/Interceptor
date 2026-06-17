@@ -22,6 +22,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
+      - name: Shell syntax check (scripts/*.sh)
+        run: |
+          for f in scripts/*.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
       - name: Select newest Xcode (Swift 6.2 toolchain — bridge requires tools 6.2)
         run: |
           ls -d /Applications/Xcode_*.app
