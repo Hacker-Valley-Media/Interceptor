@@ -3,6 +3,7 @@ import { safeNativePortDisconnect, safeNativePortPing, safeNativePortPost, shoul
 import { recoverPendingRequestsAfterNativeDisconnect } from "./pending-request-recovery"
 import { INITIAL_RECONNECT_DELAY_MS, delayWithJitter, nextReconnectDelay } from "./reconnect-lifecycle"
 import { clearContextConflictBadge, registrationControlType, setContextConflictBadge } from "./context-registration"
+import { reportContextConflict, reportNativeState, reportWsRegistered, reportWsState } from "./health-indicator"
 
 type ActiveTransport = "none" | "native" | "websocket"
 export type HostDeliveryResult = "sent" | "queued" | "failed"
@@ -194,6 +195,7 @@ export function connectToHost(): void {
   }
   if (nativePort || isConnecting) return
   isConnecting = true
+  reportNativeState(chrome, "connecting")
 
   const port = chrome.runtime.connectNative("com.interceptor.host")
 
@@ -221,6 +223,7 @@ export function connectToHost(): void {
         }
         isConnecting = false
         console.log("native host connected (pong received)")
+        reportNativeState(chrome, "connected")
         emitEvent("connection_established")
         drainMessageQueue()
       }
@@ -240,6 +243,7 @@ export function connectToHost(): void {
     const lastError = chrome.runtime.lastError
     if (lastError) console.error("native host disconnected:", lastError.message)
     console.log("connection_lost", lastError?.message)
+    reportNativeState(chrome, "disconnected")
     clearNativeStateFor(disconnectedPort)
     if (isWsOpen()) {
       activeTransport = "websocket"
@@ -306,6 +310,7 @@ export function connectWsChannel(): void {
   try {
     const ws = new WebSocket(WS_URL)
     wsChannel = ws
+    reportWsState(chrome, "connecting")
     ws.onopen = async () => {
       if (wsChannel !== ws) {
         try { ws.close() } catch {}
@@ -328,6 +333,7 @@ export function connectWsChannel(): void {
         return
       }
       console.log("ws channel connected; context registration requested")
+      reportWsState(chrome, "connected")
     }
     ws.onmessage = (event) => {
       if (wsChannel !== ws) return
@@ -339,10 +345,13 @@ export function connectWsChannel(): void {
           markWsUnregistered()
           console.error(`[interceptor] context name conflict: '${msg.contextId}' is already registered. Change the context ID in the extension popup.`)
           setContextConflictBadge(chrome)
+          reportContextConflict(chrome)
+          reportWsRegistered(chrome, false)
           return
         }
         if (controlType === "context_registered") {
           markWsRegistered()
+          reportWsRegistered(chrome, true)
           return
         }
         if (msg.id && msg.action) {
@@ -358,6 +367,7 @@ export function connectWsChannel(): void {
       stopWsKeepAlive()
       markWsUnregistered()
       wsChannel = null
+      reportWsState(chrome, "disconnected")
       scheduleWsReconnect()
     }
     ws.onerror = () => {
@@ -365,11 +375,13 @@ export function connectWsChannel(): void {
       stopWsKeepAlive()
       markWsUnregistered()
       wsChannel = null
+      reportWsState(chrome, "disconnected")
       scheduleWsReconnect()
     }
   } catch {
     markWsUnregistered()
     wsChannel = null
+    reportWsState(chrome, "disconnected")
     scheduleWsReconnect()
   }
 }
