@@ -78,7 +78,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   capabilities: META, modals: META, panels: META,
   // singles
   eval: [], save: SAVE, brand: [], group: [], batch: BATCH, raw: BATCH,
-  monitor: MONITOR, scene: SCENE, sse: SSE, override: [],
+  monitor: MONITOR, scene: SCENE, sse: SSE, override: [], csp: [],
   upgrade: [], init: [], research: RESEARCH, extensions: [], contexts: [],
   skills: SKILLS, manifest: [],
 }

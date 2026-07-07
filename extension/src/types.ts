@@ -12,6 +12,9 @@ export type Action =
   | { type: "extract_markdown"; index?: number; ref?: string; frameId?: number; maxChars?: number }
   | { type: "extract_html"; index?: number; ref?: string; frameId?: number }
   | { type: "evaluate"; code: string; world?: "MAIN" | "ISOLATED" }
+  | { type: "csp_strip"; reload?: boolean }
+  | { type: "csp_restore"; reload?: boolean }
+  | { type: "csp_status" }
   | { type: "screenshot"; format?: "png" | "jpeg" | "webp"; quality?: number; save?: boolean; clip?: { x: number; y: number; width: number; height: number }; element?: number; full?: boolean; target_max_long_edge?: number }
   | { type: "tab_create"; url?: string; reuse?: boolean; active?: boolean }
   | { type: "tab_close"; tabId?: number }

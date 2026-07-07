@@ -1,6 +1,6 @@
 ---
 name: interceptor-browser
-description: "Drive a signed-in Chrome / Brave session via the interceptor CLI: open/read pages, click, type, inspect DOM/text/network, automate rich browser editors and scene graphs, capture WebSocket/Beacon/BroadcastChannel traffic, record/replay flows, take VLM-budgeted screenshots, compare pages, and route to specific browser profiles with --context. Use for browser page content, tabs, forms, SPA extraction, request overrides, page communication capture, and deployment checks. Not for native macOS apps, Electron desktop app web contents, OS dialogs, browser chrome, or large scraping."
+description: "Drive a signed-in Chrome / Brave session via the interceptor CLI: open/read pages, click, type, inspect DOM/text/network, automate rich browser editors and scene graphs, capture WebSocket/Beacon/BroadcastChannel traffic, record/replay flows, take VLM-budgeted screenshots, compare pages, disable CSP across all tabs to run blocked inline/eval JS, and route to specific browser profiles with --context. Use for browser page content, tabs, forms, SPA extraction, request overrides, CSP bypass, page communication capture, and deployment checks. Not for native macOS apps, Electron desktop app web contents, OS dialogs, browser chrome, or large scraping."
 metadata:
   short-description: Drive a real signed-in Chrome / Brave session via the interceptor CLI
 ---
@@ -59,7 +59,7 @@ Each workflow is a complete self-contained "you are doing X" procedure. Open the
 
 | File | Topic |
 |---|---|
-| [`references/browser-and-network.md`](references/browser-and-network.md) | Command selection, SPA extraction, request overrides, SSE capture, page-world `eval --main` cautions |
+| [`references/browser-and-network.md`](references/browser-and-network.md) | Command selection, SPA extraction, request overrides, SSE capture, page-world `eval --main` cautions, CSP toggle for blocked JS |
 | [`references/page-communication-capture.md`](references/page-communication-capture.md) | P1 WebSocket, Beacon, and BroadcastChannel capture mechanics, commands, event shapes, and limits |
 | [`references/rich-editors.md`](references/rich-editors.md) | Overview: Canva, Google Docs, Google Slides behavior, canvas-rendered editor input, WebGL camera apps, blob export capture (deep mechanics in the four `references/canvas-*`/`webgl-*`/`blob-*` files below) |
 | [`references/canvas-rendered-editor-input.md`](references/canvas-rendered-editor-input.md) | Deep mechanic: caret / typing / key-nav inside canvas-rendered editors (Docs/Slides/Sheets) via dispatched events + iframe-window `KeyboardEvent`. The `eval --main` + `__interceptor_trust`/`userActivation` foundation lives here. |

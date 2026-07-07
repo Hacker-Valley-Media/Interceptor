@@ -154,6 +154,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "cookies", surface: "browser", usage: "interceptor cookies [domain] | cookies set/delete …", summary: "Read/write cookies", returns: "Cookie list." },
   { name: "storage", surface: "browser", usage: "interceptor storage [key] | storage delete <key>", summary: "localStorage access", returns: "Values." },
   { name: "override", surface: "browser", usage: "interceptor override <sub> …", summary: "Request/response overrides", returns: "Override state." },
+  { name: "csp", surface: "browser", usage: "interceptor csp off|on|status [--no-reload]", summary: "Disable/restore Content-Security-Policy across ALL tabs (session)", returns: "off/on → {scope:'all-tabs', cspStripped, tabsReloaded}; status → {scope, cspStripped}. Removes CSP response headers via one global declarativeNetRequest rule so injected page-origin JS runs on strict-CSP sites — every tab, current and future." },
   { name: "monitor", surface: "browser", usage: "interceptor monitor start|stop|status|tail|export …", summary: "Record page/network/user activity into a replayable session", returns: "Session id; export produces workflow artifacts." },
   { name: "scene", surface: "browser", usage: "interceptor scene <sub> …", summary: "Scene-graph automation for canvas/rich editors", returns: "Scene nodes / action results." },
   // ── local (no daemon) ───────────────────────────────────────────────────────

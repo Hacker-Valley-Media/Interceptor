@@ -292,6 +292,12 @@ Request Override (passive, no CDP):
   interceptor override "*api*" limit=50 offset=0  Multiple params
   interceptor override clear                  Remove all overrides
 
+Content-Security-Policy (all tabs, session):
+  interceptor csp off                        Disable CSP on every tab so injected inline/eval JS runs (reloads open tabs)
+  interceptor csp on                         Re-enable CSP on every tab (reloads open tabs)
+  interceptor csp status                     Report whether CSP is disabled
+  interceptor csp off --no-reload            Toggle without reloading (each tab applies it on its next navigation)
+
 Passive Network (always-on, no CDP):
   interceptor net log                        Passively captured fetch/XHR traffic
   interceptor net log --filter <pattern>     Filter by URL substring

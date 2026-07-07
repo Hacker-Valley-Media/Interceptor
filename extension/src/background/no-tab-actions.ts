@@ -5,7 +5,10 @@ export const NO_TAB_ACTIONS = new Set([
   "bookmark_create", "downloads_search", "browsing_data_remove",
   "session_list", "session_restore", "notification_create", "notification_clear",
   "search_query", "monitor_status", "monitor_start", "monitor_pause", "monitor_resume",
-  "monitor_stop", "brand_set_tab_group", "group_list", "group_close"
+  "monitor_stop", "brand_set_tab_group", "group_list", "group_close",
+  // CSP toggle is browser-global (one DNR rule, no tabIds), so it never needs a
+  // resolved active tab — it operates on every tab, current and future.
+  "csp_strip", "csp_restore", "csp_status"
 ])
 
 export function needsTab(type: string): boolean {

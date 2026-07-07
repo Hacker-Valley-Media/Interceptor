@@ -47,6 +47,7 @@ interceptor net log --filter api --limit 20
 
 - Use `eval --main` only when the structured command surface is not enough.
 - On strict-CSP sites, the first `eval --main` attempt may trigger an automatic reload/retry path before succeeding.
+- To run page-origin JS that CSP would block up front — inline `<script>` injection, a PoC payload, or many evals without the per-call reload — disable CSP explicitly first: `interceptor csp off` (browser-global: all tabs current and future, session-scoped, reloads open tabs to apply; `csp on` restores it, `csp status` reports state). See `references/command-catalog.md`.
 - Prefer staged injections over one giant payload when cooking or building page overlays.
 
 

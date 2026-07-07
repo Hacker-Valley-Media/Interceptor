@@ -2458,6 +2458,94 @@ async function handleEvaluateActions(action, tabId) {
   return runWithCspStripBypass(tabId, world, (t, w) => executeEval(t, w, code));
 }
 
+// extension/src/background/capabilities/csp.ts
+var CSP_GLOBAL_RULE_ID = 900000;
+function buildGlobalCspRule() {
+  return {
+    id: CSP_GLOBAL_RULE_ID,
+    priority: 10,
+    action: {
+      type: "modifyHeaders",
+      responseHeaders: [
+        { header: "content-security-policy", operation: "remove" },
+        { header: "content-security-policy-report-only", operation: "remove" }
+      ]
+    },
+    condition: {
+      resourceTypes: ["main_frame", "sub_frame"]
+    }
+  };
+}
+async function isCspStripped() {
+  const rules = await chrome.declarativeNetRequest.getSessionRules();
+  return rules.some((r) => r.id === CSP_GLOBAL_RULE_ID);
+}
+async function reloadAllWebTabs() {
+  let tabs;
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    return 0;
+  }
+  const targets = tabs.filter((t) => typeof t.id === "number" && /^https?:/i.test(t.url || t.pendingUrl || ""));
+  const results = await Promise.all(targets.map((t) => chrome.tabs.reload(t.id, { bypassCache: true }).then(() => true, () => false)));
+  return results.filter(Boolean).length;
+}
+async function handleCspActions(action) {
+  switch (action.type) {
+    case "csp_strip": {
+      const reload = action.reload !== false;
+      let alreadyStripped;
+      try {
+        alreadyStripped = await isCspStripped();
+      } catch (err) {
+        return { success: false, error: `failed to read CSP bypass state: ${err.message}` };
+      }
+      if (alreadyStripped) {
+        return { success: true, data: { scope: "all-tabs", cspStripped: true, tabsReloaded: 0 } };
+      }
+      try {
+        await chrome.declarativeNetRequest.updateSessionRules({
+          removeRuleIds: [CSP_GLOBAL_RULE_ID],
+          addRules: [buildGlobalCspRule()]
+        });
+      } catch (err) {
+        return { success: false, error: `failed to install CSP bypass rule: ${err.message}` };
+      }
+      const tabsReloaded = reload ? await reloadAllWebTabs() : 0;
+      return { success: true, data: { scope: "all-tabs", cspStripped: true, tabsReloaded } };
+    }
+    case "csp_restore": {
+      const reload = action.reload !== false;
+      let stripped;
+      try {
+        stripped = await isCspStripped();
+      } catch (err) {
+        return { success: false, error: `failed to read CSP bypass state: ${err.message}` };
+      }
+      if (!stripped) {
+        return { success: true, data: { scope: "all-tabs", cspStripped: false, tabsReloaded: 0 } };
+      }
+      try {
+        await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [CSP_GLOBAL_RULE_ID] });
+      } catch (err) {
+        return { success: false, error: `failed to remove CSP bypass rule: ${err.message}` };
+      }
+      const tabsReloaded = reload ? await reloadAllWebTabs() : 0;
+      return { success: true, data: { scope: "all-tabs", cspStripped: false, tabsReloaded } };
+    }
+    case "csp_status": {
+      try {
+        const stripped = await isCspStripped();
+        return { success: true, data: { scope: "all-tabs", cspStripped: stripped } };
+      } catch (err) {
+        return { success: false, error: `failed to read CSP bypass state: ${err.message}` };
+      }
+    }
+  }
+  return { success: false, error: `unknown csp action: ${action.type}` };
+}
+
 // extension/src/background/capabilities/binary-sink.ts
 var DEFAULT_CHUNK_SIZE = 1024 * 1024;
 async function executeNormalize(tabId, world, code) {
@@ -4138,6 +4226,7 @@ var NOTIFICATION_ACTIONS = new Set(["notification_create", "notification_clear"]
 var BROWSING_DATA_ACTIONS = new Set(["browsing_data_remove"]);
 var HEADER_ACTIONS = new Set(["headers_modify"]);
 var EVALUATE_ACTIONS = new Set(["evaluate"]);
+var CSP_ACTIONS = new Set(["csp_strip", "csp_restore", "csp_status"]);
 var BINARY_SINK_ACTIONS = new Set(["binary_sink_save"]);
 var STYLE_ACTIONS = new Set(["style_inject", "style_remove"]);
 var FRAME_ACTIONS = new Set(["frames_list", "frames_read_tree"]);
@@ -4213,6 +4302,8 @@ async function routeAction(action, tabId) {
     return handleHeaderActions(action, tabId);
   if (EVALUATE_ACTIONS.has(action.type))
     return handleEvaluateActions(action, tabId);
+  if (CSP_ACTIONS.has(action.type))
+    return handleCspActions(action);
   if (BINARY_SINK_ACTIONS.has(action.type))
     return handleBinarySinkActions(action, tabId);
   if (STYLE_ACTIONS.has(action.type))
@@ -4309,7 +4400,10 @@ var NO_TAB_ACTIONS = new Set([
   "monitor_stop",
   "brand_set_tab_group",
   "group_list",
-  "group_close"
+  "group_close",
+  "csp_strip",
+  "csp_restore",
+  "csp_status"
 ]);
 function needsTab(type) {
   return !NO_TAB_ACTIONS.has(type);

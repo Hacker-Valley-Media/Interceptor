@@ -270,7 +270,25 @@ interceptor eval --main "document.title"
 interceptor eval --main "window.__APP_STATE__"
 ```
 
-Use only when no built-in command exposes what you need. Strict-CSP sites may trigger an automatic reload/retry on first attempt.
+Use only when no built-in command exposes what you need. On strict-CSP sites the first `eval --main` triggers an automatic reload/retry (the reactive CSP strip). To make page-origin JS run reliably up front — inline `<script>` injection, an XSS/PoC payload, repeated evals without the per-call reload dance — strip CSP explicitly first with `csp off` (below).
+
+## CSP (disable Content-Security-Policy)
+
+Browser-global toggle that removes CSP so injected page-origin JS runs even when `script-src` would block inline / `eval` code. Affects **every tab** — the ones already open and any opened later.
+
+```bash
+interceptor csp off                 # disable CSP on all tabs, then reload open tabs so it's live
+interceptor csp on                  # re-enable CSP on all tabs (reloads open tabs)
+interceptor csp status              # → "csp: disabled (all tabs)" | "csp: enabled (all tabs)"
+interceptor csp off --no-reload     # toggle without reloading; each tab applies it on its next navigation
+```
+
+- **Mechanism:** one `declarativeNetRequest` session rule (no tab scope) that removes the `content-security-policy` and `content-security-policy-report-only` **response headers** — no `chrome.debugger`, no debugging banner.
+- **Scope:** all tabs, current and future. New tabs and later navigations are covered automatically; no per-tab setup.
+- **Lifetime:** session only (cleared on browser restart) — a global "CSP off" never silently persists across restarts.
+- **Reload:** `off`/`on` reload every open http/https tab by default so already-loaded pages go live immediately; `--no-reload` skips the reloads (each tab then applies the change on its next navigation).
+- **Limitation:** removes header-delivered CSP only, not a `<meta http-equiv="Content-Security-Policy">` tag baked into the HTML.
+- `disable`/`enable` are accepted as aliases for `off`/`on`.
 
 ## Output mode
 

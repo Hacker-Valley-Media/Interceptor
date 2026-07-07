@@ -30,6 +30,7 @@ import { parseSceneCommand } from "./commands/scene"
 import { parseSseCommand } from "./commands/sse"
 import { runCompoundCommand } from "./commands/compound"
 import { runOverride } from "./commands/override"
+import { runCsp } from "./commands/csp"
 import { runMacosCommand } from "./commands/macos"
 import { runIosCommand } from "./commands/ios"
 import { runUpgradeCommand } from "./commands/upgrade"
@@ -60,6 +61,7 @@ const SCENE_CMDS = new Set(["scene"])
 const SSE_CMDS = new Set(["sse"])
 const COMPOUND_CMDS = new Set(["open", "read", "act", "inspect"])
 const OVERRIDE_CMDS = new Set(["override"])
+const CSP_CMDS = new Set(["csp"])
 const MACOS_CMDS = new Set(["macos"])
 const IOS_CMDS = new Set(["ios"])
 const UPGRADE_CMDS = new Set(["upgrade"])
@@ -82,7 +84,7 @@ const ALL_KNOWN_CMDS = new Set<string>([
   ...STATE_CMDS, ...ACTION_CMDS, ...NAV_CMDS, ...TAB_CMDS, ...NET_CMDS,
   ...SS_CMDS, ...DATA_CMDS, ...META_CMDS, ...EVAL_CMDS,
   ...SAVE_CMDS, ...BRAND_CMDS, ...GROUP_CMDS, ...BATCH_CMDS, ...MONITOR_CMDS, ...SCENE_CMDS, ...SSE_CMDS,
-  ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...MACOS_CMDS, ...IOS_CMDS,
+  ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...CSP_CMDS, ...MACOS_CMDS, ...IOS_CMDS,
   ...UPGRADE_CMDS, ...INIT_CMDS, ...RESEARCH_CMDS, ...EXTENSIONS_CMDS,
   ...SKILLS_CMDS, ...MANIFEST_CMDS, ...DIAGNOSE_CMDS,
   "help", "contexts",
@@ -311,6 +313,11 @@ async function main() {
 
   if (OVERRIDE_CMDS.has(cmd)) {
     await runOverride(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
+    return
+  }
+
+  if (CSP_CMDS.has(cmd)) {
+    await runCsp(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
     return
   }
 
