@@ -2,7 +2,7 @@ import { handleDaemonMessage, drainMessageQueue, pendingRequests } from "./messa
 import { safeNativePortDisconnect, safeNativePortPing, safeNativePortPost, shouldSkipNativeKeepalive } from "./native-port-lifecycle"
 import { recoverPendingRequestsAfterNativeDisconnect } from "./pending-request-recovery"
 import { INITIAL_RECONNECT_DELAY_MS, delayWithJitter, nextReconnectDelay } from "./reconnect-lifecycle"
-import { clearContextConflictBadge, registrationControlType, setContextConflictBadge } from "./context-registration"
+import { registrationControlType } from "./context-registration"
 import { reportContextConflict, reportNativeState, reportWsRegistered, reportWsState } from "./health-indicator"
 
 type ActiveTransport = "none" | "native" | "websocket"
@@ -83,7 +83,6 @@ function markWsUnregistered(): void {
 
 function markWsRegistered(): void {
   wsReady = true
-  clearContextConflictBadge(chrome)
   if (activeTransport !== "native") {
     activeTransport = "websocket"
     wsReconnectDelay = INITIAL_RECONNECT_DELAY_MS
@@ -202,6 +201,8 @@ export function connectToHost(): void {
   const handshakeTimer = setTimeout(() => {
     console.error("native host handshake timeout (10s)")
     disconnectNativePort(port)
+    isConnecting = false
+    reportNativeState(chrome, "disconnected")
     scheduleNativeReconnect()
   }, 10000)
 
@@ -344,7 +345,6 @@ export function connectWsChannel(): void {
         if (controlType === "context_conflict") {
           markWsUnregistered()
           console.error(`[interceptor] context name conflict: '${msg.contextId}' is already registered. Change the context ID in the extension popup.`)
-          setContextConflictBadge(chrome)
           reportContextConflict(chrome)
           reportWsRegistered(chrome, false)
           return
