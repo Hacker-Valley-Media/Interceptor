@@ -33,7 +33,7 @@ This document describes the live architecture as of the current monitor, CSP-fal
 ```
 
 - **CLI** is a Bun-bundled standalone binary. It parses args, sends an action over `/tmp/interceptor.sock` to the daemon, and prints the response.
-- **Daemon** is a singleton (PID at `/tmp/interceptor.pid`). Spawned automatically by Chrome via native messaging, *or* started by the CLI on demand. It bridges CLI ⇄ extension ⇄ bridge, owns event persistence, and tracks per-session monitor artifacts.
+- **Daemon** is a singleton (PID at `/tmp/interceptor.pid`, lock file at `/tmp/interceptor.lock`). Spawned automatically by Chrome via native messaging, *or* started by the CLI on demand. It bridges CLI ⇄ extension ⇄ bridge, owns event persistence, and tracks per-session monitor artifacts. The lock file (`daemon/lifecycle.ts`) records `pid`, `execPath`, `version`, and `startedAt` for the live instance — `bootstrapDaemonRole` checks it for a duplicate before spawning, and `interceptor diagnose` reads it to compare the running daemon's binary against each browser's native-messaging manifest (see "Daemon diagnosis" below).
 - **Extension** is an MV3 service worker plus content scripts + a MAIN-world inject script. It owns DOM capture, ref assignment, monitor session in-memory state, network monkey-patching, and scene-graph access for rich editors.
 - **Bridge** is a Swift LaunchAgent-style daemon that exposes macOS-native capabilities (AX tree, CGEvent input, ScreenCaptureKit, AVFoundation audio, Vision/NLP frameworks).
 
@@ -154,6 +154,12 @@ Plus:
 
 `monitor_stop` (and `tabs.onRemoved`) wrap their `detachAttachment` + `sendToHost(mon_stop)` in `try` and run `sessions.delete` / `activeSessionByTab.delete` / `clearPendingChildTabsForSession` in `finally`. Cleanup is now guaranteed even if transport raises.
 
+### Daemon diagnosis (`interceptor diagnose`)
+
+[`cli/commands/diagnose.ts`](cli/commands/diagnose.ts) gives an agent a single-command debugging snapshot instead of chaining `status` + `contexts` + `tab_list` + `get_a11y_tree` + `monitor status` by hand. It reports: daemon running/pid/execPath (from the lock file), a binary-mismatch check per browser, per-context extension reachability + active tab + interactive-element count, and monitor session counts (active/total).
+
+**Binary mismatch detection** is the headline capability: it compares `execPath` from the daemon's lock file against the `path` field in each browser's native-messaging host manifest (`~/Library/Application Support/<Chrome|BraveSoftware/Brave-Browser>/NativeMessagingHosts/com.interceptor.host.json`). A mismatch means Chrome/Brave will spawn a different `interceptor` binary than the one the CLI's socket is talking to — the root cause of "no extensions connected" when the browser and extension both look fine. Without a context argument, `diagnose` enumerates and probes every connected browser context (`--context <id>` narrows to one); each browser-side probe (`tab_list`, `get_a11y_tree`) runs under a 2s timeout via `probeWithTimeout`, which always clears its internal timer in a `finally` block so a resolved probe never keeps the CLI process alive. `diagnose` never auto-spawns the daemon — it is registered in `NO_DAEMON` in `cli/index.ts` — and reports what it can from local state alone when the daemon isn't running.
+
 ### Network body persistence
 
 `extension/src/inject-net.ts` (MAIN world) monkey-patches `fetch` and `XHR`, dispatching `__interceptor_net` custom events with body + content-type. The content script's monitor listens for those events; when a fetch is correlated to a recent trusted user action (`cause`), it builds a redacted, capped preview (`buildBodyPreview` in [`extension/src/content/monitor.ts`](extension/src/content/monitor.ts)) and emits an enriched `fetch` / `xhr` / `sse` event with `bp` (body preview), `bt` (bytes), `trn` (truncated), `ct` (content type) fields.
@@ -176,6 +182,10 @@ Caps: 64 KiB per entry, JSON / text / XML / JS content types only, conservative 
 ---
 
 ## Other Subsystems (Brief)
+
+### Extension connection health (toolbar badge)
+
+[`extension/src/background/health-indicator.ts`](extension/src/background/health-indicator.ts) is the single source of truth for the extension's user-visible transport health. It reduces three independent signals — native port state, WS channel state, WS context registration — to one of five visible states (`healthy` / `connecting` / `degraded` / `disconnected` / `conflict`), rendered as a toolbar-action badge + tooltip (green/amber/red, empty when healthy). Either transport being up is enough for `healthy`; both down (the failure mode that used to produce a silent "Native host has exited" console loop) shows `disconnected`. A latched `conflict` state (context ID already registered elsewhere) overrides all other signals until the extension re-registers cleanly. [`extension/src/background/transport.ts`](extension/src/background/transport.ts) calls `reportNativeState` / `reportWsState` / `reportWsRegistered` / `reportContextConflict` at each connection-lifecycle transition (connecting, connected, disconnected, handshake timeout, registration, conflict).
 
 ### Network capture
 

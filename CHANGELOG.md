@@ -1,5 +1,8 @@
 # 01KY3JDN0Q90BPNAEYAF41BYN5 — Changelog
 
+## 2026-07-22 — session e7525a3d
+
+Files: cli/manifest.ts, README.md, .agents/skills/interceptor-browser/references/browser-and-network.md, ARCHITECTURE.md
 ## 2026-07-22 — session 14e78692
 
 Files: extension/src/background/transport.ts

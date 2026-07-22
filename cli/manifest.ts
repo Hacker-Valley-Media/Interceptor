@@ -172,6 +172,12 @@ export const COMMAND_SPECS: CommandSpec[] = [
   },
   { name: "status", surface: "local", usage: "interceptor status [--verbose]", summary: "Daemon/bridge/extension health + skills adoption", returns: "Status report." },
   { name: "init", surface: "local", usage: "interceptor init [--verbose]", summary: "Bootstrap the daemon and report status", returns: "Status report." },
+  {
+    name: "diagnose", surface: "local",
+    usage: "interceptor diagnose [--context <id>] [--json]",
+    summary: "Agent debugging snapshot: daemon, all contexts, active tabs, elements, monitor sessions",
+    returns: "Daemon pid/execPath, binary mismatches between the running daemon and each browser's NMH manifest, per-context extension reachability + active tab + interactive element count, monitor session counts.",
+  },
   { name: "research", surface: "local", usage: "interceptor research [init|log|status|…]", summary: "Deep-research methodology + on-disk source ledger", returns: "Playbook guidance / ledger state." },
   { name: "upgrade", surface: "local", usage: "interceptor upgrade --full", summary: "Promote browser-only install to full computer-use mode (macOS)", returns: "Installer output." },
   // ── other surfaces (verbs enumerated via their own --help) ──────────────────

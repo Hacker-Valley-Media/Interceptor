@@ -296,8 +296,11 @@ bash scripts/uninstall.sh --bridge-only     # Remove only the macOS bridge (down
 | `interceptor open <url>` returns `error: timeout: no response for 'tab_create' after 15s` | Browser extension is not loaded — most often because **Developer mode is off** in the target profile. Chromium silently drops `--load-extension` when Dev mode is off. | Open `brave://extensions/` or `chrome://extensions/`, toggle Developer mode ON. Quit the browser fully. Re-run `bash scripts/install.sh` (it will preflight Dev mode and re-launch). |
 | `interceptor status --verbose` says `extension: not reachable` | Same as above, or extension is registered but the Interceptor extension was disabled in the browser. | Open the extensions page, confirm Interceptor (ID `hkjbaciefhhgekldhncknbjkofbpenng`) is present and enabled. If missing, click **Load unpacked** and select `extension/dist/`. |
 | `chrome://extensions/` reports the extension as version `0.10.0` while `interceptor --version` reports a higher version | Extension manifest drift fixed in this release — rebuild from current source: `bash scripts/build.sh` then re-run `scripts/install.sh`. | Restart the browser after re-loading the extension so Chromium picks up the bumped manifest. |
+| "No extensions connected" though Chrome looks open and the extension looks loaded | Binary mismatch — the running daemon and the browser's native-messaging manifest point at different `interceptor` binaries, so the extension spawns a daemon the CLI never talks to. | Run `interceptor diagnose`. It compares the daemon's `execPath` (from its lock file) against each browser's NMH manifest path and reports the mismatch directly; fix with `interceptor init` or by updating the NMH manifest to match. |
 
 In browser-only mode, running an `interceptor macos *` command returns a structured "requires full computer-use install" error within 1 second instead of timing out at 15 seconds.
+
+For a one-shot debugging snapshot instead of stepping through this table — daemon liveness, per-context extension reachability, active tab, interactive element count, and binary-mismatch detection all in one call — run `interceptor diagnose` (add `--json` for machine-readable output, `--context <id>` to probe a single context).
 
 ## Browser Quick Start
 
@@ -587,6 +590,7 @@ interceptor raw '{"type":"any_action","key":"value"}'  # Send any raw action
 ### Meta
 ```bash
 interceptor status                           # Daemon status (local check, no connection needed)
+interceptor diagnose                         # Agent debugging snapshot: daemon, contexts, tabs, elements, monitor
 interceptor help                             # Full CLI help
 interceptor contexts                         # List IDs of all connected browser contexts
 interceptor reload                           # Reload extension
