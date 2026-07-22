@@ -140,14 +140,19 @@ export function buildA11yTree(
 
     // Visibility disposition. `display:none` / `visibility:hidden` hide the
     // whole subtree, so we stop. But an element that's invisible only because
-    // it is an out-of-flow box with a zero-area rect — a shrink-to-fit portal /
-    // popper wrapper that has collapsed to 0×0 while its descendants render
-    // elsewhere — must still be descended into: those descendants are
-    // visibility-checked individually. Only genuinely out-of-flow positions
-    // (CSS "removed from normal flow" = `absolute` / `fixed`) qualify; in-flow
-    // boxes (`static` / `relative` / `sticky` — sticky is in-flow per CSS) are
-    // pruned as before, so collapsed/empty in-flow content doesn't leak in. The
-    // element itself is only emitted when it is actually visible.
+    // it is a zero-area box whose own rect doesn't reflect its descendants —
+    // an out-of-flow shrink-to-fit portal/popper (`absolute`/`fixed`), *or* an
+    // inline (`display: inline`) grouping/target wrapper, e.g. a bare
+    // `<span data-controller-target="...">` some JS component wraps fields in
+    // purely as a hook, with no box of its own even though its block/flex
+    // children render normally — must still be descended into: those
+    // descendants are visibility-checked individually. Other in-flow boxes
+    // (`static`/`relative`/`sticky` block-level, `block`/`flex`/`grid`
+    // display) are pruned as before, so genuinely collapsed/empty in-flow
+    // content doesn't leak in — only `inline` gets this exception, since
+    // block-level containers with real content don't collapse to 0×0 unless
+    // they're actually empty. The element itself is only emitted when it is
+    // actually visible.
     //
     // One computed-style read per element, shared between the visibility test
     // and the disposition below: isVisible() reads computed style too, so we
@@ -157,7 +162,7 @@ export function buildA11yTree(
     if (!selfVisible) {
       if (style!.display === "none" || style!.visibility === "hidden") return
       const pos = style!.position
-      if (pos !== "fixed" && pos !== "absolute") return
+      if (pos !== "fixed" && pos !== "absolute" && style!.display !== "inline") return
     }
 
     const role = getEffectiveRole(el)

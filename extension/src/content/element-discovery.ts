@@ -66,6 +66,17 @@ export function isInteractive(el: Element, tags: Set<string>, roles: Set<string>
     const cursor = getComputedStyle(el).cursor
     if (cursor === "pointer") return true
   }
+  // Custom-widget fallback: a plain DIV/SPAN driven entirely by an
+  // addEventListener click handler (no onclick attribute, no role, no
+  // tabindex — common in Stimulus/React/Vue-built dropdown replacements for
+  // native <select>) is otherwise invisible to every check above. cursor:
+  // pointer is the one CSS signal such widgets almost always carry (real
+  // "this is clickable" affordance styling), so treat it the same way the
+  // SVG branch already does, rather than only SVG icons getting this signal.
+  if (el.tagName !== "BODY" && el.tagName !== "HTML") {
+    const cursor = getComputedStyle(el).cursor
+    if (cursor === "pointer") return true
+  }
   return false
 }
 
