@@ -1,5 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
+  checkLockFileDuplicate,
   clearDaemonRuntimeFiles,
   decideDaemonStartupRole,
   decideSingletonGate,
@@ -7,7 +11,9 @@ import {
   readPidState,
   resolveStandaloneSpawnSpec,
   spawnDetachedStandaloneDaemon,
+  writeLockFile,
   type LifecycleDeps,
+  type LockFileData,
 } from "../daemon/lifecycle"
 
 function makeDeps(overrides: Partial<LifecycleDeps> = {}): LifecycleDeps {
@@ -133,5 +139,66 @@ describe("daemon lifecycle helpers", () => {
     }
 
     await expect(spawnDetachedStandaloneDaemon(deps, 500)).resolves.toBe(333)
+  })
+
+  describe("checkLockFileDuplicate", () => {
+    let dir: string
+    let lockPath: string
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "interceptor-lock-test-"))
+      lockPath = join(dir, "interceptor.lock")
+    })
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true })
+    })
+
+    function makeLock(overrides: Partial<LockFileData> = {}): LockFileData {
+      return {
+        pid: 999,
+        version: "1.0.0",
+        execPath: "/Applications/Interceptor/interceptor-daemon",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        socketPath: "/tmp/interceptor.sock",
+        wsPort: 9000,
+        mode: "standalone",
+        ...overrides,
+      }
+    }
+
+    test("returns null when no lock file exists", () => {
+      const result = checkLockFileDuplicate(lockPath, 111, () => {})
+      expect(result).toBeNull()
+    })
+
+    test("returns null when the lock file belongs to the current process", () => {
+      writeLockFile(lockPath, makeLock({ pid: 111 }))
+
+      const result = checkLockFileDuplicate(lockPath, 111, () => {
+        throw new Error("kill should not be called for our own pid")
+      })
+
+      expect(result).toBeNull()
+    })
+
+    test("returns null when the lock file's pid is dead", () => {
+      writeLockFile(lockPath, makeLock({ pid: 222 }))
+
+      const result = checkLockFileDuplicate(lockPath, 111, (pid) => {
+        expect(pid).toBe(222)
+        throw new Error("ESRCH")
+      })
+
+      expect(result).toBeNull()
+    })
+
+    test("returns an error-duplicate decision when the lock file's pid is alive and not us", () => {
+      writeLockFile(lockPath, makeLock({ pid: 222, startedAt: "2026-01-02T03:04:05.000Z" }))
+
+      const result = checkLockFileDuplicate(lockPath, 111, () => {})
+
+      expect(result).toEqual({ action: "error-duplicate", pid: 222, startedAt: "2026-01-02T03:04:05.000Z" })
+    })
   })
 })

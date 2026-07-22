@@ -535,7 +535,7 @@ async function bootstrapDaemonRole(): Promise<void> {
   // themselves; only the lock file reveals that another real instance exists.
   const duplicate = checkLockFileDuplicate(LOCK_PATH, process.pid, process.kill.bind(process))
   if (duplicate) {
-    const msg = `duplicate daemon already running (pid ${duplicate.pid}, started ${duplicate.startedAt}). Run \`interceptor kill\` to clean up.`
+    const msg = `duplicate daemon already running (pid ${duplicate.pid}, started ${duplicate.startedAt}). If that pid is not actually an interceptor daemon, remove the stale lock file at ${LOCK_PATH} and run \`interceptor init\` again.`
     log(msg)
     process.stderr.write(`interceptor-daemon: ${msg}\n`)
     process.exit(1)

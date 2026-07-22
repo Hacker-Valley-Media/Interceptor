@@ -130,7 +130,7 @@ async function probeContext(contextId: string | undefined): Promise<ContextProbe
 
 export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string): Promise<void> {
   const status = readStatusSnapshot()
-  const lock = readLockFile(LOCK_PATH)
+  const lock = status.daemon ? readLockFile(LOCK_PATH) : null
 
   const snap: DiagnoseSnapshot = {
     daemon: {
@@ -138,7 +138,7 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
       pid: status.pid,
       ...(lock ? { execPath: lock.execPath, version: lock.version, startedAt: lock.startedAt } : {}),
     },
-    binaryMismatches: detectBinaryMismatches(lock),
+    binaryMismatches: status.daemon ? detectBinaryMismatches(lock) : [],
     contexts: [],
     monitor: { active: 0, total: 0 },
   }
