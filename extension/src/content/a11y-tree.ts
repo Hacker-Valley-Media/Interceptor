@@ -27,6 +27,22 @@ export function isUploadTarget(el: Element, maxDepth = 3): boolean {
   return false
 }
 
+// An invisible element's rect is otherwise pruned wholesale (its subtree
+// never visited). Two shapes must still be descended into instead, because
+// the element's own zero-area rect doesn't reflect its descendants: an
+// out-of-flow shrink-to-fit portal/popper (`absolute`/`fixed`), or an inline
+// (`display: inline`) grouping/target wrapper — e.g. a bare
+// `<span data-controller-target="...">` some JS component wraps fields in
+// purely as a hook, with no box of its own even though its block/flex
+// children render normally. Other in-flow boxes (`static`/`relative`/
+// `sticky` block-level, `block`/`flex`/`grid` display) are pruned as before,
+// so genuinely collapsed/empty in-flow content doesn't leak in — only
+// `inline` gets this exception, since block-level containers with real
+// content don't collapse to 0×0 unless they're actually empty.
+export function shouldDescendDespiteZeroArea(display: string, position: string): boolean {
+  return position === "fixed" || position === "absolute" || display === "inline"
+}
+
 export function getEffectiveRole(el: Element): string {
   const explicit = el.getAttribute("role")
   if (explicit) return explicit
@@ -139,20 +155,10 @@ export function buildA11yTree(
     if (d > maxDepth) return
 
     // Visibility disposition. `display:none` / `visibility:hidden` hide the
-    // whole subtree, so we stop. But an element that's invisible only because
-    // it is a zero-area box whose own rect doesn't reflect its descendants —
-    // an out-of-flow shrink-to-fit portal/popper (`absolute`/`fixed`), *or* an
-    // inline (`display: inline`) grouping/target wrapper, e.g. a bare
-    // `<span data-controller-target="...">` some JS component wraps fields in
-    // purely as a hook, with no box of its own even though its block/flex
-    // children render normally — must still be descended into: those
-    // descendants are visibility-checked individually. Other in-flow boxes
-    // (`static`/`relative`/`sticky` block-level, `block`/`flex`/`grid`
-    // display) are pruned as before, so genuinely collapsed/empty in-flow
-    // content doesn't leak in — only `inline` gets this exception, since
-    // block-level containers with real content don't collapse to 0×0 unless
-    // they're actually empty. The element itself is only emitted when it is
-    // actually visible.
+    // whole subtree, so we stop. An invisible element that's only zero-area
+    // (see shouldDescendDespiteZeroArea) must still be descended into: its
+    // descendants are visibility-checked individually. The element itself is
+    // only emitted when it is actually visible.
     //
     // One computed-style read per element, shared between the visibility test
     // and the disposition below: isVisible() reads computed style too, so we
@@ -161,15 +167,14 @@ export function buildA11yTree(
     const selfVisible = el.tagName === "BODY" || isVisible(el, style!)
     if (!selfVisible) {
       if (style!.display === "none" || style!.visibility === "hidden") return
-      const pos = style!.position
-      if (pos !== "fixed" && pos !== "absolute" && style!.display !== "inline") return
+      if (!shouldDescendDespiteZeroArea(style!.display, style!.position)) return
     }
 
     const role = getEffectiveRole(el)
     const tag = el.tagName.toLowerCase()
     const isLandmark = LANDMARK_ROLES.has(role) || LANDMARK_TAGS.has(el.tagName)
     const isHeading = /^h[1-6]$/.test(tag) || role === "heading"
-    const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES)
+    const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES, style ?? undefined)
     const prefix = compact ? ">".repeat(d) : "  ".repeat(d)
 
     if (selfVisible && isLandmark && !isInteractiveEl) {
