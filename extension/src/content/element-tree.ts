@@ -95,6 +95,15 @@ const STYLE_BUNDLE_PROPS = [
   "opacity"
 ] as const
 
+// `cursor` is an inherited CSS property: a passive descendant (a label span,
+// an icon) of a `cursor: pointer` container computes the same "pointer"
+// value as the container itself, purely via inheritance. Only treat pointer
+// as a genuine "this element is a clickable widget" signal when it isn't
+// just passed through from a `cursor: pointer` ancestor.
+export function hasOwnPointerCursor(cursor: string, parentCursor: string | null): boolean {
+  return cursor === "pointer" && parentCursor !== "pointer"
+}
+
 export function getStyleBundle(el: Element): string {
   const cs = getComputedStyle(el)
   const parts: string[] = []
