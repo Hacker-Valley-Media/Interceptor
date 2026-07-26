@@ -1632,11 +1632,17 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           // severed. The ack is the inbound frame the extension watches for; N
           // consecutive unacked keepalives means the read side is gone and it
           // must force a reconnect. Older extensions ignore this frame.
-          try {
-            ws.send(JSON.stringify({ type: "keepalive_ack", timestamp: Date.now() }))
-          } catch (err) {
-            log(`ws keepalive_ack send failed: ${(err as Error).message}`)
-          }
+          //
+          // This app-level ack is NOT redundant with Bun's protocol-level pings
+          // (sendPings, on by default): those are RFC 6455 control frames the
+          // browser's ws stack answers internally — extension JS never sees
+          // them, so they can't drive half-open detection on the client side.
+          //
+          // Bun's ServerWebSocket.send() reports failure via return value, not
+          // exceptions: -1 = enqueued with backpressure, 0 = dropped due to a
+          // connection issue, 1+ = bytes sent.
+          const ackSent = ws.send(JSON.stringify({ type: "keepalive_ack", timestamp: Date.now() }))
+          if (ackSent === 0) log("ws keepalive_ack dropped (connection issue) — extension will detect via miss limit")
           return
         }
 
