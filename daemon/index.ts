@@ -1626,6 +1626,17 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
 
         if (request.type === "keepalive") {
           log("ws keepalive")
+          // Ack so the extension can detect a half-open socket. After MV3 SW
+          // hibernation the OS socket can wedge OPEN-but-dead: the extension's
+          // outbound keepalives keep flowing while its ws.onmessage is silently
+          // severed. The ack is the inbound frame the extension watches for; N
+          // consecutive unacked keepalives means the read side is gone and it
+          // must force a reconnect. Older extensions ignore this frame.
+          try {
+            ws.send(JSON.stringify({ type: "keepalive_ack", timestamp: Date.now() }))
+          } catch (err) {
+            log(`ws keepalive_ack send failed: ${(err as Error).message}`)
+          }
           return
         }
 
