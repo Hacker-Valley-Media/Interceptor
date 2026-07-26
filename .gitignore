@@ -1,5 +1,7 @@
 node_modules/
 .build/
+# Orphaned temp files (~98MB each) from interrupted `bun build --compile` runs
+*.bun-build
 .claude/worktrees/
 dist/
 extension/dist/

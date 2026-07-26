@@ -10,6 +10,13 @@ interceptor screenshot --save --format webp --target-max-long-edge 1568 --qualit
 
 Produces a small WebP on disk (~50–100 KB for a typical full page) and a path-only response. Every flag is load-bearing.
 
+## Auto-fallback and `--no-fallback`
+
+When the default DOM render fails outright on a heavy page, a whole-page `screenshot` transparently retries via the pixel path and still returns an image. Two things an agent must know:
+
+- The pixel retry **borrows tab focus and scrolls the page** (both restored afterward); the result's `fallback` note says so. Mid-interaction — while typing into a form, mid-drag, or watching a monitor stream — pass `--no-fallback` to forbid the retry and take the DOM-render error instead.
+- Scoped captures (`--selector` / `--element` / `--ref` / `--region`) never fall back: the pixel path would crop against the wrong origin. They fail honestly.
+
 ## Token-cost reality
 
 Screenshots are a **last-resort** read surface. Structured reads (`read`, `text`, `inspect`, `scene text`, `canvas log`, `macos tree`) cost roughly **10× fewer tokens per turn** than pixels, and they survive DOM churn far better. Use a screenshot only when pixels are genuinely the answer:

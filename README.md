@@ -604,10 +604,13 @@ interceptor screenshot --region X,Y,W,H      # Render full + crop to region in c
 interceptor screenshot --scale 2             # Override pixel ratio
 interceptor screenshot --pixel               # Pixel-true compositor capture (legacy captureVisibleTab)
 interceptor screenshot --pixel --full        # Pixel-true full-page (scroll + in-SW stitch)
+interceptor screenshot --no-fallback         # Forbid the DOM-render→pixel auto-fallback (see below)
 interceptor screenshot --format webp         # png (default), jpeg, or webp
 interceptor screenshot --quality 80          # Encode quality 0-100 (defaults: png 92, jpeg 92, webp 85)
 interceptor screenshot --target-max-long-edge 1568   # Auto-resize at capture (clamps long edge)
 ```
+
+When the DOM renderer fails outright on a heavy page (the serialized SVG won't decode), a default whole-page `screenshot` automatically retries via the pixel path so the command still produces an image. The fallback preserves the DOM path's PNG default (no silent JPEG downgrade), only applies to whole-page captures (element/ref/region requests fail honestly instead of cropping wrong), and reports itself in a `fallback` note — including that the pixel path transiently borrowed tab focus and scrolled the page (both restored). `--no-fallback` forbids the retry entirely.
 
 `screenshot` invocations are auto-routed through the WebSocket transport because base64 dataUrl responses larger than ~50KB are unreliable over the native-messaging port on Brave/Chromium. Override with `--no-ws` if needed.
 

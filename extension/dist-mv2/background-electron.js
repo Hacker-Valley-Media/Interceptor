@@ -45,6 +45,19 @@ var interceptorGroupId = null;
 function hasTabGroupApi() {
   return !!chrome.tabGroups && typeof chrome.tabGroups.query === "function";
 }
+async function isTabInNormalWindow(tabId) {
+  if (!chrome.windows || typeof chrome.windows.get !== "function")
+    return true;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.windowId === undefined)
+      return true;
+    const win = await chrome.windows.get(tab.windowId);
+    return win.type === undefined || win.type === "normal";
+  } catch {
+    return true;
+  }
+}
 var GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/;
 var SESSION_NAMED_GROUPS_KEY = "namedTabGroups";
 var namedGroups = new Map;
@@ -126,18 +139,25 @@ function addTabToNamedGroup(tabId, label, colorOverride) {
 async function addTabToNamedGroupSerialized(tabId, label, colorOverride) {
   if (!hasTabGroupApi() || typeof chrome.tabs.group !== "function")
     return -1;
+  if (!await isTabInNormalWindow(tabId))
+    return -1;
   let groupId = await ensureNamedGroup(label);
-  if (groupId === -1) {
-    groupId = await chrome.tabs.group({ tabIds: tabId });
-    const color = typeof colorOverride === "string" && VALID_COLORS.includes(colorOverride) ? normalizeColor(colorOverride) : colorForLabel(label);
-    await chrome.tabGroups.update(groupId, {
-      title: groupTitleFor(label),
-      color
-    });
-    namedGroups.set(label, groupId);
-    await persistNamedGroups();
-  } else {
-    await chrome.tabs.group({ tabIds: tabId, groupId });
+  try {
+    if (groupId === -1) {
+      groupId = await chrome.tabs.group({ tabIds: tabId });
+      const color = typeof colorOverride === "string" && VALID_COLORS.includes(colorOverride) ? normalizeColor(colorOverride) : colorForLabel(label);
+      await chrome.tabGroups.update(groupId, {
+        title: groupTitleFor(label),
+        color
+      });
+      namedGroups.set(label, groupId);
+      await persistNamedGroups();
+    } else {
+      await chrome.tabs.group({ tabIds: tabId, groupId });
+    }
+  } catch (err) {
+    console.warn(`addTabToNamedGroup: skipping group '${label}' (tab=${tabId}):`, err);
+    return -1;
   }
   return groupId;
 }
@@ -213,15 +233,22 @@ async function addTabToInterceptorGroupSerialized(tabId) {
   let groupId = await ensureInterceptorGroup();
   if (groupId === -1 && (!hasTabGroupApi() || typeof chrome.tabs.group !== "function"))
     return -1;
-  if (groupId === -1) {
-    groupId = await chrome.tabs.group({ tabIds: tabId });
-    await chrome.tabGroups.update(groupId, {
-      title: getTabGroupTitle(),
-      color: getTabGroupColor()
-    });
-    interceptorGroupId = groupId;
-  } else {
-    await chrome.tabs.group({ tabIds: tabId, groupId });
+  if (!await isTabInNormalWindow(tabId))
+    return -1;
+  try {
+    if (groupId === -1) {
+      groupId = await chrome.tabs.group({ tabIds: tabId });
+      await chrome.tabGroups.update(groupId, {
+        title: getTabGroupTitle(),
+        color: getTabGroupColor()
+      });
+      interceptorGroupId = groupId;
+    } else {
+      await chrome.tabs.group({ tabIds: tabId, groupId });
+    }
+  } catch (err) {
+    console.warn(`addTabToInterceptorGroup: skipping group (tab=${tabId}):`, err);
+    return -1;
   }
   return groupId;
 }
@@ -864,7 +891,7 @@ async function handleDomRenderScreenshot(action, tabId) {
       throw err;
     }
     if (!renderResult || !renderResult.success || !renderResult.data) {
-      return { success: false, error: renderResult?.error || "dom render returned no data" };
+      return { success: false, error: renderResult?.error || "dom render returned no data", fallbackEligible: true };
     }
     let dataUrl = renderResult.data.dataUrl;
     const width = renderResult.data.width;
@@ -1139,6 +1166,30 @@ async function handleOcr(action, tabId) {
     }
   };
 }
+function planPixelFallback(action, domResult) {
+  if (action.no_fallback === true)
+    return null;
+  const isWholePageCapture = !(action.region || action.clip || action.selector || action.element !== undefined || action.ref !== undefined);
+  if (!domResult.fallbackEligible || !isWholePageCapture)
+    return null;
+  const droppedOpts = [];
+  if (action.scale !== undefined)
+    droppedOpts.push("--scale");
+  const pixelAction = {
+    type: "screenshot",
+    pixel: true,
+    full: true
+  };
+  pixelAction.format = action.format !== undefined ? action.format : "png";
+  pixelAction.quality = action.quality !== undefined ? action.quality : 92;
+  if (action.target_max_long_edge !== undefined)
+    pixelAction.target_max_long_edge = action.target_max_long_edge;
+  if (action.save !== undefined)
+    pixelAction.save = action.save;
+  const sideEffects = "borrowed tab focus + scrolled page (both restored; --no-fallback to forbid)";
+  const note = droppedOpts.length ? `dom-render (${domResult.error}) → pixel [dropped: ${droppedOpts.join(", ")}] — ${sideEffects}` : `dom-render (${domResult.error}) → pixel — ${sideEffects}`;
+  return { pixelAction, note };
+}
 async function handleScreenshotActions(action, tabId) {
   switch (action.type) {
     case "screenshot_background":
@@ -1154,7 +1205,18 @@ async function handleScreenshotActions(action, tabId) {
       if (action.pixel === true) {
         return handlePixelScreenshot(action, tabId);
       }
-      return handleDomRenderScreenshot(action, tabId);
+      const domResult = await handleDomRenderScreenshot(action, tabId);
+      if (domResult.success)
+        return domResult;
+      const plan = planPixelFallback(action, domResult);
+      if (!plan)
+        return domResult;
+      const pixelResult = await handlePixelScreenshot(plan.pixelAction, tabId);
+      if (pixelResult.success && pixelResult.data) {
+        pixelResult.data.fallback = plan.note;
+        return pixelResult;
+      }
+      return { success: false, error: `${domResult.error} (pixel fallback also failed: ${pixelResult.error})` };
     }
   }
   return { success: false, error: `unknown screenshot action: ${action.type}` };
@@ -1752,6 +1814,27 @@ function sessionArea3() {
   const storage = chrome.storage;
   return storage.session ?? chrome.storage.local;
 }
+function groupWarningFor(groupId, groupApiAvailable) {
+  if (groupId === -1 && groupApiAvailable) {
+    return "tab was not added to a tab group (non-normal window or transient group failure) — per-agent group isolation is not in effect for this tab";
+  }
+  return;
+}
+async function resolveNormalWindowPlacement(focusNew, url) {
+  if (!chrome.windows || typeof chrome.windows.getAll !== "function")
+    return {};
+  try {
+    const normal = await chrome.windows.getAll({ windowTypes: ["normal"] });
+    const existing = normal.find((w) => w.focused)?.id ?? normal[0]?.id;
+    if (existing !== undefined)
+      return { windowId: existing };
+    if (typeof chrome.windows.create === "function") {
+      const created = await chrome.windows.create({ url, focused: focusNew });
+      return { windowId: created?.id, createdTab: created?.tabs?.[0] };
+    }
+  } catch {}
+  return {};
+}
 async function handleTabActions(action, tabId) {
   switch (action.type) {
     case "tab_create": {
@@ -1786,11 +1869,20 @@ async function handleTabActions(action, tabId) {
         }
       }
       const shouldActivate = action.active === true;
-      const newTab = await chrome.tabs.create({ url: targetUrl, active: shouldActivate });
+      const placement = await resolveNormalWindowPlacement(shouldActivate, targetUrl);
+      const newTab = placement.createdTab ?? await chrome.tabs.create({
+        url: targetUrl,
+        active: shouldActivate,
+        ...placement.windowId !== undefined ? { windowId: placement.windowId } : {}
+      });
       if (newTab.id) {
         const groupId = group ? await addTabToNamedGroup(newTab.id, group, action.groupColor) : await addTabToInterceptorGroup(newTab.id);
         await sessionArea3().set({ [activeTabKey(group)]: newTab.id });
-        return { success: true, data: { tabId: newTab.id, url: newTab.url, groupId, group, reused: false } };
+        const data = { tabId: newTab.id, url: newTab.url, groupId, group, reused: false };
+        const groupWarning = groupWarningFor(groupId, hasTabGroupApi());
+        if (groupWarning)
+          data.groupWarning = groupWarning;
+        return { success: true, data };
       }
       return { success: true, data: { tabId: newTab.id, url: newTab.url, reused: false } };
     }
@@ -4821,6 +4913,7 @@ var nativeReconnectTimer = null;
 var wsReconnectTimer = null;
 var wsChannel = null;
 var wsReady = false;
+var wsKeepalive = { keepalivesSinceAck: 0, ackSupported: false };
 var wsKeepAliveTimer = null;
 var keepalivePongTimer = null;
 var pendingHandshakePort = null;
@@ -4830,6 +4923,7 @@ var configuredContextId = null;
 var forceWebSocketTransport = false;
 var safariNativeRelayEnabled = false;
 var safariNativeRelayClient = null;
+var WS_KEEPALIVE_MISS_LIMIT = 2;
 var OUTBOUND_RECOVERY_QUEUE_CAP = 50;
 var outboundRecoveryQueue = [];
 function describeOutboundMessage(msg) {
@@ -5144,18 +5238,40 @@ function connectSafariNativeRelayChannel() {
   });
   safariNativeRelayClient.start();
 }
+function wsStateOnOpen() {
+  return { keepalivesSinceAck: 0, ackSupported: false };
+}
+function wsStateOnKeepaliveSent(state) {
+  return { ...state, keepalivesSinceAck: state.keepalivesSinceAck + 1 };
+}
+function wsStateOnInboundFrame(state) {
+  return { ...state, keepalivesSinceAck: 0 };
+}
+function wsStateOnAck(state) {
+  return { ...state, ackSupported: true };
+}
+function shouldForceWsReconnect(ackSupported, keepalivesSinceAck, missLimit) {
+  return ackSupported && keepalivesSinceAck >= missLimit;
+}
 function startWsKeepAlive() {
   if (wsKeepAliveTimer)
     clearInterval(wsKeepAliveTimer);
   wsKeepAliveTimer = setInterval(() => {
-    if (!wsChannel || wsChannel.readyState !== WebSocket.OPEN) {
+    const channel = wsChannel;
+    if (!channel || channel.readyState !== WebSocket.OPEN) {
       if (wsKeepAliveTimer)
         clearInterval(wsKeepAliveTimer);
       wsKeepAliveTimer = null;
       return;
     }
+    if (shouldForceWsReconnect(wsKeepalive.ackSupported, wsKeepalive.keepalivesSinceAck, WS_KEEPALIVE_MISS_LIMIT)) {
+      console.error(`ws inbound stale (${wsKeepalive.keepalivesSinceAck} unacked keepalives) — forcing reconnect`);
+      closeWsForReconnect(channel);
+      return;
+    }
     try {
-      wsChannel.send(JSON.stringify({ type: "keepalive", timestamp: Date.now() }));
+      channel.send(JSON.stringify({ type: "keepalive", timestamp: Date.now() }));
+      wsKeepalive = wsStateOnKeepaliveSent(wsKeepalive);
     } catch {}
   }, 20000);
 }
@@ -5205,6 +5321,7 @@ function connectWsChannel() {
         clearTimeout(wsReconnectTimer);
         wsReconnectTimer = null;
       }
+      wsKeepalive = wsStateOnOpen();
       startWsKeepAlive();
       const contextId = await getOrCreateContextId();
       if (wsChannel !== ws) {
@@ -5224,8 +5341,13 @@ function connectWsChannel() {
     ws.onmessage = (event) => {
       if (wsChannel !== ws)
         return;
+      wsKeepalive = wsStateOnInboundFrame(wsKeepalive);
       try {
         const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+        if (msg?.type === "keepalive_ack") {
+          wsKeepalive = wsStateOnAck(wsKeepalive);
+          return;
+        }
         console.log("ws onmessage:", JSON.stringify(msg).slice(0, 200));
         handleControlPlaneMessage(msg, "websocket");
       } catch (err) {
