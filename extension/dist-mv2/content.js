@@ -104,6 +104,9 @@ function getRelevantAttrs(el) {
     attrs.push("invalid");
   return attrs.join(" ");
 }
+function hasOwnPointerCursor(cursor, parentCursor) {
+  return cursor === "pointer" && parentCursor !== "pointer";
+}
 function getStyleBundle(el) {
   const cs = getComputedStyle(el);
   const parts = [];
@@ -159,7 +162,10 @@ function isUploadTarget(el, maxDepth = 3) {
   }
   return false;
 }
-function getEffectiveRole(el) {
+function shouldDescendDespiteZeroArea(display, position) {
+  return position === "fixed" || position === "absolute" || display === "inline";
+}
+function getEffectiveRole(el, style) {
   const explicit = el.getAttribute("role");
   if (explicit)
     return explicit;
@@ -214,7 +220,7 @@ function getEffectiveRole(el) {
   if (el.namespaceURI === "http://www.w3.org/2000/svg") {
     if (tag === "a")
       return "link";
-    if (el.hasAttribute("onclick") || getComputedStyle(el).cursor === "pointer")
+    if (el.hasAttribute("onclick") || (style ?? getComputedStyle(el)).cursor === "pointer")
       return "button";
     return "img";
   }
@@ -293,15 +299,14 @@ function buildA11yTree(root, depth, maxDepth, filter, includeStyle = false, form
     if (!selfVisible) {
       if (style.display === "none" || style.visibility === "hidden")
         return;
-      const pos = style.position;
-      if (pos !== "fixed" && pos !== "absolute")
+      if (!shouldDescendDespiteZeroArea(style.display, style.position))
         return;
     }
-    const role = getEffectiveRole(el);
+    const role = getEffectiveRole(el, style ?? undefined);
     const tag = el.tagName.toLowerCase();
     const isLandmark = LANDMARK_ROLES.has(role) || LANDMARK_TAGS.has(el.tagName);
     const isHeading = /^h[1-6]$/.test(tag) || role === "heading";
-    const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES);
+    const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES, style ?? undefined);
     const prefix = compact ? ">".repeat(d) : "  ".repeat(d);
     if (selfVisible && isLandmark && !isInteractiveEl) {
       const name = getAccessibleName(el);
@@ -402,7 +407,7 @@ function isVisible(el, style = getComputedStyle(el)) {
     return false;
   return true;
 }
-function isInteractive(el, tags, roles) {
+function isInteractive(el, tags, roles, style = getComputedStyle(el)) {
   if (tags.has(el.tagName))
     return true;
   const role = el.getAttribute("role");
@@ -422,8 +427,13 @@ function isInteractive(el, tags, roles) {
       return true;
     if (role && roles.has(role))
       return true;
-    const cursor = getComputedStyle(el).cursor;
-    if (cursor === "pointer")
+    if (style.cursor === "pointer")
+      return true;
+  }
+  if (style.cursor === "pointer" && el.tagName !== "BODY" && el.tagName !== "HTML") {
+    const parent = el.parentElement;
+    const parentCursor = parent ? getComputedStyle(parent).cursor : null;
+    if (hasOwnPointerCursor(style.cursor, parentCursor))
       return true;
   }
   return false;
@@ -434,7 +444,8 @@ function getInteractiveElements() {
   pruneStaleRefs();
   const results = [];
   walkWithShadow(document.body, (el) => {
-    if (isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES) && isVisible(el)) {
+    const style = getComputedStyle(el);
+    if (isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES, style) && isVisible(el, style)) {
       const idx = nextIndex++;
       const selector = buildSelector(el);
       selectorMap.set(idx, selector);
@@ -442,7 +453,7 @@ function getInteractiveElements() {
       const tag = el.tagName.toLowerCase();
       const text = getAccessibleName(el);
       const attrs = getRelevantAttrs(el);
-      refMetadata.set(refId, { role: getEffectiveRole(el), name: text, tag, value: (el.value || "").slice(0, 40) });
+      refMetadata.set(refId, { role: getEffectiveRole(el, style), name: text, tag, value: (el.value || "").slice(0, 40) });
       results.push({ index: idx, refId, element: el, selector, tag, text, attrs });
     }
   });
