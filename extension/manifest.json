@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Interceptor",
-  "version": "0.22.36",
+  "version": "0.22.37",
   "minimum_chrome_version": "116",
   "description": "Browser bridge",
   "icons": {
