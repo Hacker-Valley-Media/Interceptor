@@ -29,6 +29,13 @@ pinning test files whenever you touch this surface.
    (`sessionArea()` in `capabilities/tabs.ts`, inline in `message-dispatch.ts`)
    — `chrome.storage.session` is MV3-only and the MV2 Electron package shares
    these handlers.
+5. **Tab creation pins to a normal window and surfaces grouping failure.**
+   `tab_create` resolves placement via `resolveNormalWindowPlacement` (a
+   created window carries the url — its initial tab IS the requested tab; do
+   not create a second one). Grouping tolerates failure but must stay
+   visible: when the group API exists and the tab still couldn't be grouped,
+   the result carries `groupWarning` (`groupWarningFor`). Never downgrade
+   that to a console.warn — per-agent isolation consumers key off it.
 
 Tests that pin this: `extension/src/background/resolve-tab.test.ts`
 (resolution precedence) and `test/tab-id-args.test.ts` (CLI arg forms). A
