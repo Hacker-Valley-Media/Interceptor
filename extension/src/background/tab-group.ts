@@ -6,6 +6,26 @@ function hasTabGroupApi(): boolean {
   return !!chrome.tabGroups && typeof chrome.tabGroups.query === "function"
 }
 
+/**
+ * True when a tab lives in a normal (groupable) window. Tab groups are
+ * window-scoped and chrome.tabs.group rejects with "Tabs can only be moved to
+ * and from normal windows" for popup/devtools/app windows. Grouping is a UX
+ * nicety, not a hard requirement — so when we can't confirm a normal window
+ * (lookup throws, or chrome.windows is unavailable in MV2/Electron) we assume
+ * groupable and let the guarded chrome.tabs.group call be the final arbiter.
+ */
+async function isTabInNormalWindow(tabId: number): Promise<boolean> {
+  if (!chrome.windows || typeof chrome.windows.get !== "function") return true
+  try {
+    const tab = await chrome.tabs.get(tabId)
+    if (tab.windowId === undefined) return true
+    const win = await chrome.windows.get(tab.windowId)
+    return win.type === undefined || win.type === "normal"
+  } catch {
+    return true
+  }
+}
+
 // --- Named per-agent groups ------------------------------------------------
 // Registry of label -> live groupId, mirrored to chrome.storage.session
 // ("namedTabGroups"). session lifetime matches tab-group-id lifetime exactly:
@@ -116,20 +136,28 @@ async function addTabToNamedGroupSerialized(
   colorOverride?: unknown
 ): Promise<number> {
   if (!hasTabGroupApi() || typeof chrome.tabs.group !== "function") return -1
+  // Skip grouping for non-normal windows rather than let chrome.tabs.group
+  // throw out of tab_create. The tab is still fully functional ungrouped.
+  if (!(await isTabInNormalWindow(tabId))) return -1
   let groupId = await ensureNamedGroup(label)
-  if (groupId === -1) {
-    groupId = await chrome.tabs.group({ tabIds: tabId })
-    const color = typeof colorOverride === "string" && (VALID_COLORS as readonly string[]).includes(colorOverride)
-      ? normalizeColor(colorOverride)
-      : colorForLabel(label)
-    await chrome.tabGroups.update(groupId, {
-      title: groupTitleFor(label),
-      color: color as `${chrome.tabGroups.Color}`,
-    })
-    namedGroups.set(label, groupId)
-    await persistNamedGroups()
-  } else {
-    await chrome.tabs.group({ tabIds: tabId, groupId })
+  try {
+    if (groupId === -1) {
+      groupId = await chrome.tabs.group({ tabIds: tabId })
+      const color = typeof colorOverride === "string" && (VALID_COLORS as readonly string[]).includes(colorOverride)
+        ? normalizeColor(colorOverride)
+        : colorForLabel(label)
+      await chrome.tabGroups.update(groupId, {
+        title: groupTitleFor(label),
+        color: color as `${chrome.tabGroups.Color}`,
+      })
+      namedGroups.set(label, groupId)
+      await persistNamedGroups()
+    } else {
+      await chrome.tabs.group({ tabIds: tabId, groupId })
+    }
+  } catch (err) {
+    console.warn(`addTabToNamedGroup: skipping group '${label}' (tab=${tabId}):`, err)
+    return -1
   }
   return groupId
 }
@@ -231,15 +259,25 @@ export function addTabToInterceptorGroup(tabId: number): Promise<number> {
 async function addTabToInterceptorGroupSerialized(tabId: number): Promise<number> {
   let groupId = await ensureInterceptorGroup()
   if (groupId === -1 && (!hasTabGroupApi() || typeof chrome.tabs.group !== "function")) return -1
-  if (groupId === -1) {
-    groupId = await chrome.tabs.group({ tabIds: tabId })
-    await chrome.tabGroups.update(groupId, {
-      title: getTabGroupTitle(),
-      color: getTabGroupColor() as `${chrome.tabGroups.Color}`,
-    })
-    interceptorGroupId = groupId
-  } else {
-    await chrome.tabs.group({ tabIds: tabId, groupId })
+  // Skip grouping for non-normal windows rather than let chrome.tabs.group
+  // throw out of tab_create. The tab is still fully functional ungrouped.
+  if (!(await isTabInNormalWindow(tabId))) return -1
+  try {
+    if (groupId === -1) {
+      groupId = await chrome.tabs.group({ tabIds: tabId })
+      await chrome.tabGroups.update(groupId, {
+        title: getTabGroupTitle(),
+        color: getTabGroupColor() as `${chrome.tabGroups.Color}`,
+      })
+      interceptorGroupId = groupId
+    } else {
+      await chrome.tabs.group({ tabIds: tabId, groupId })
+    }
+  } catch (err) {
+    // Cross-window group mismatch or transient failure — grouping is a UX
+    // nicety, so keep tab_create successful and skip the group.
+    console.warn(`addTabToInterceptorGroup: skipping group (tab=${tabId}):`, err)
+    return -1
   }
   return groupId
 }

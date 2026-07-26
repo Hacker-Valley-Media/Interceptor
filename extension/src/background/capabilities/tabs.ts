@@ -19,6 +19,29 @@ function sessionArea(): chrome.storage.StorageArea {
   return storage.session ?? chrome.storage.local
 }
 
+// Resolve a normal (groupable) window to birth a new tab in: the focused normal
+// window, else the first normal window, else create one. Without an explicit
+// windowId, chrome.tabs.create opens in whatever window last had focus — which
+// may be a popup, devtools, or app window, and tabs there can't be grouped
+// (chrome.tabs.group rejects with "Tabs can only be moved to and from normal
+// windows"). Returns undefined when chrome.windows is unavailable (MV2/Electron)
+// so the caller falls back to chrome.tabs.create's default placement.
+export async function resolveNormalWindowId(focusNew: boolean): Promise<number | undefined> {
+  if (!chrome.windows || typeof chrome.windows.getAll !== "function") return undefined
+  try {
+    const normal = await chrome.windows.getAll({ windowTypes: ["normal"] })
+    const existing = normal.find(w => w.focused)?.id ?? normal[0]?.id
+    if (existing !== undefined) return existing
+    if (typeof chrome.windows.create === "function") {
+      const created = await chrome.windows.create({ focused: focusNew })
+      return created?.id
+    }
+  } catch {
+    // fall through — let chrome.tabs.create pick a window
+  }
+  return undefined
+}
+
 export async function handleTabActions(
   action: { type: string; [key: string]: unknown },
   tabId: number
@@ -87,7 +110,14 @@ export async function handleTabActions(
       // --activate` is the explicit opt-in). Callers pass `action.active:
       // true` only when the new tab is genuinely meant to be foregrounded.
       const shouldActivate = (action.active as boolean | undefined) === true
-      const newTab = await chrome.tabs.create({ url: targetUrl, active: shouldActivate })
+      // Pin creation to a normal window so the tab is groupable (see
+      // resolveNormalWindowId). undefined windowId → chrome.tabs.create's default.
+      const targetWindowId = await resolveNormalWindowId(shouldActivate)
+      const newTab = await chrome.tabs.create({
+        url: targetUrl,
+        active: shouldActivate,
+        ...(targetWindowId !== undefined ? { windowId: targetWindowId } : {})
+      })
       if (newTab.id) {
         const groupId = group
           ? await addTabToNamedGroup(newTab.id, group, action.groupColor)
