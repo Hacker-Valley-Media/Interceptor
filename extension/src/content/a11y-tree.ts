@@ -43,7 +43,13 @@ export function shouldDescendDespiteZeroArea(display: string, position: string):
   return position === "fixed" || position === "absolute" || display === "inline"
 }
 
-export function getEffectiveRole(el: Element): string {
+// `style` is optional and only consulted on the SVG branch — pass the
+// already-computed style from full-DOM walks (a11y tree, element discovery)
+// so those stay at one computed-style read per element. No default-param
+// getComputedStyle here: a default expression evaluates on every call that
+// omits the arg, which would ADD a style read for the many callers that
+// never reach the SVG branch.
+export function getEffectiveRole(el: Element, style?: CSSStyleDeclaration): string {
   const explicit = el.getAttribute("role")
   if (explicit) return explicit
 
@@ -77,7 +83,7 @@ export function getEffectiveRole(el: Element): string {
   }
   if (el.namespaceURI === "http://www.w3.org/2000/svg") {
     if (tag === "a") return "link"
-    if (el.hasAttribute("onclick") || getComputedStyle(el).cursor === "pointer") return "button"
+    if (el.hasAttribute("onclick") || (style ?? getComputedStyle(el)).cursor === "pointer") return "button"
     return "img"
   }
   if (tag === "input") {
@@ -170,7 +176,7 @@ export function buildA11yTree(
       if (!shouldDescendDespiteZeroArea(style!.display, style!.position)) return
     }
 
-    const role = getEffectiveRole(el)
+    const role = getEffectiveRole(el, style ?? undefined)
     const tag = el.tagName.toLowerCase()
     const isLandmark = LANDMARK_ROLES.has(role) || LANDMARK_TAGS.has(el.tagName)
     const isHeading = /^h[1-6]$/.test(tag) || role === "heading"

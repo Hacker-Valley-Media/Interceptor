@@ -78,7 +78,13 @@ export function isInteractive(
   // "this is clickable" affordance styling), so treat it the same way the
   // SVG branch already does, rather than only SVG icons getting this signal.
   // See hasOwnPointerCursor for why this is guarded against inheritance.
-  if (el.tagName !== "BODY" && el.tagName !== "HTML") {
+  //
+  // Check the element's OWN cursor before touching the parent: this runs for
+  // every element of a full DOM walk, and the parent getComputedStyle is only
+  // needed for the (rare) pointer-cursor elements — reading it first would
+  // double style resolution across the whole page for a test that is almost
+  // always false.
+  if (style.cursor === "pointer" && el.tagName !== "BODY" && el.tagName !== "HTML") {
     const parent = el.parentElement
     const parentCursor = parent ? getComputedStyle(parent).cursor : null
     if (hasOwnPointerCursor(style.cursor, parentCursor)) return true
@@ -105,7 +111,7 @@ export function getInteractiveElements(): IndexedElement[] {
       const text = getAccessibleName(el)
       const attrs = getRelevantAttrs(el)
 
-      refMetadata.set(refId, { role: getEffectiveRole(el), name: text, tag, value: ((el as HTMLInputElement).value || "").slice(0, 40) })
+      refMetadata.set(refId, { role: getEffectiveRole(el, style), name: text, tag, value: ((el as HTMLInputElement).value || "").slice(0, 40) })
 
       results.push({ index: idx, refId, element: el, selector, tag, text, attrs })
     }
