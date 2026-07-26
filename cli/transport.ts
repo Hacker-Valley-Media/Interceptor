@@ -63,7 +63,6 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   ios_shot: 30_000,
   ios_backup: 30_000,
   ios_axtree: 30_000,
-  screenshot: 45_000,
   binary_sink_save: 600_000,
   screenshot_background: 45_000,
   canvas_read: 45_000,
@@ -75,8 +74,24 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   ocr: 60_000,
 }
 
-function pickTimeoutForAction(actionType: string): number {
-  return ACTION_TIMEOUT_OVERRIDES_MS[actionType] ?? INTERCEPTOR_TIMEOUT_MS
+// Every screenshot gets a ceiling aligned with the daemon's REQUEST_TIMEOUT_MS
+// (180s), not the flat 45s. The service worker bounds its own stages (the
+// DOM-render path has a 30s budget; the pixel path has per-strip guards), so
+// the CLI only needs to out-wait the SW's worst case without racing it:
+//  - `--pixel`/`--pixel --full` scrolls + captures + stitches strip-by-strip
+//    (~1.1s/strip, Chrome-rate-limited) with no single 30s cap.
+//  - the DEFAULT (DOM-render) path can auto-fall-back to the pixel path when
+//    the native renderer fails on a heavy page, so a plain `screenshot` can
+//    also run DOM-render (≤30s) THEN a full pixel capture. A 45s ceiling would
+//    race that combined path and surface the generic transport timeout it was
+//    meant to prevent, so all screenshots share the long ceiling.
+const SCREENSHOT_TIMEOUT_MS = 175_000
+
+export function pickTimeoutForAction(action: Action): number {
+  if (action.type === "screenshot") {
+    return SCREENSHOT_TIMEOUT_MS
+  }
+  return ACTION_TIMEOUT_OVERRIDES_MS[action.type] ?? INTERCEPTOR_TIMEOUT_MS
 }
 
 // Branch the timeout hint on `macos_*` so bridge commands don't get a
@@ -155,7 +170,7 @@ export function sendCommand(rawAction: Action, tabId?: number, contextId?: strin
       // wrote <= 0: socket buffer full — keep pendingWrite, retry on drain.
     }
 
-    const timeoutMs = pickTimeoutForAction(action.type)
+    const timeoutMs = pickTimeoutForAction(action)
     const timer = setTimeout(() => {
       if (!resolved) {
         resolved = true
@@ -226,7 +241,7 @@ export function sendCommandWs(rawAction: Action, tabId?: number, contextId?: str
     const shortId = id.slice(0, 8)
     process.stderr.write(`[${shortId}] →ws ${action.type}\n`)
 
-    const timeoutMs = pickTimeoutForAction(action.type)
+    const timeoutMs = pickTimeoutForAction(action)
     const timer = setTimeout(() => {
       reject(new Error(`timeout: no response for '${action.type}' after ${timeoutMs / 1000}s via WebSocket.`))
     }, timeoutMs)

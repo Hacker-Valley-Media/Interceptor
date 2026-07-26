@@ -2,7 +2,7 @@ import { sendToContentScript } from "../content-bridge"
 import { sendToOffscreen } from "../offscreen"
 import { installScreenshotCorsRule, uninstallScreenshotCorsRule } from "./screenshot-cors"
 
-type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number; fallbackEligible?: boolean }
 
 const CAPTURE_TIMEOUT_MS = 5000
 const DOM_RENDER_TIMEOUT_MS = 30_000
@@ -226,7 +226,12 @@ async function handleDomRenderScreenshot(
     }
 
     if (!renderResult || !renderResult.success || !renderResult.data) {
-      return { success: false, error: renderResult?.error || "dom render returned no data" }
+      // The genuine render failure (content script couldn't rasterize — e.g. the
+      // serialized foreignObject SVG won't decode on a heavy page). ONLY this
+      // branch is eligible for the pixel fallback; the earlier returns (tab not
+      // found, restricted page) and the timeout return above are actionable
+      // errors a pixel retry can't fix, so they are NOT tagged.
+      return { success: false, error: renderResult?.error || "dom render returned no data", fallbackEligible: true }
     }
 
     let dataUrl = renderResult.data.dataUrl
@@ -604,6 +609,61 @@ async function handleOcr(
   }
 }
 
+// ─── Auto-fallback planning (pure) ────────────────────────────────────────────
+
+// Decide whether a failed DOM-render screenshot should retry via the pixel
+// path, and if so, shape the pixel request. Pure so it's unit-testable without
+// chrome. Returns null when NO fallback should happen.
+//
+// The pixel path is a DIFFERENT capture mechanism that can only honor a subset
+// of the request, so the fallback is gated tightly:
+//  - Only on a genuine render failure (domResult.fallbackEligible) — not on
+//    tab-not-found / restricted-page / timeout errors, which a pixel retry
+//    can't fix and would only mask behind extra latency.
+//  - Only for a whole-page capture. region/clip/selector are DOM-render-only
+//    concepts; element/ref crops resolve against the DOM, and the pixel path
+//    can't honor `ref` at all and would crop an off-screen element against the
+//    wrong (viewport) origin — a wrong image reported as success.
+//
+// When it does fall back it reconstructs an EXPLICIT full-page pixel request
+// (the default DOM-render screenshot is whole-page by contract, so the fallback
+// must be too — `full: true` selects the strip-and-stitch path, not a viewport
+// grab) carrying only the fields the pixel path honors. Options the pixel path
+// can't apply (`--scale` and DOM-only fields) are dropped and named in the note.
+export function planPixelFallback(
+  action: { type: string; [key: string]: unknown },
+  domResult: ActionResult
+): { pixelAction: { type: string; [key: string]: unknown }; note: string } | null {
+  const isWholePageCapture = !(
+    action.region || action.clip || action.selector ||
+    action.element !== undefined || action.ref !== undefined
+  )
+  if (!domResult.fallbackEligible || !isWholePageCapture) return null
+
+  const droppedOpts: string[] = []
+  if (action.scale !== undefined) droppedOpts.push("--scale")
+
+  const pixelAction: { type: string; [key: string]: unknown } = {
+    type: "screenshot",
+    pixel: true,
+    full: true,
+  }
+  // Match the DOM-render defaults (PNG, quality 92) when the caller pinned
+  // neither — otherwise the pixel path's own defaults (JPEG, quality 50) would
+  // silently downgrade a whole-page capture that the DOM path would have
+  // returned as a lossless PNG. A caller who asked for jpeg/webp or a specific
+  // quality still gets exactly that; only the unspecified case changes.
+  pixelAction.format = action.format !== undefined ? action.format : "png"
+  pixelAction.quality = action.quality !== undefined ? action.quality : 92
+  if (action.target_max_long_edge !== undefined) pixelAction.target_max_long_edge = action.target_max_long_edge
+  if (action.save !== undefined) pixelAction.save = action.save
+
+  const note = droppedOpts.length
+    ? `dom-render (${domResult.error}) → pixel [dropped: ${droppedOpts.join(", ")}]`
+    : `dom-render (${domResult.error}) → pixel`
+  return { pixelAction, note }
+}
+
 // ─── Public dispatcher ────────────────────────────────────────────────────────
 
 export async function handleScreenshotActions(
@@ -629,7 +689,26 @@ export async function handleScreenshotActions(
       if (action.pixel === true) {
         return handlePixelScreenshot(action, tabId)
       }
-      return handleDomRenderScreenshot(action, tabId)
+      const domResult = await handleDomRenderScreenshot(action, tabId)
+      if (domResult.success) return domResult
+
+      // Auto-fallback: the native DOM renderer fails outright on some heavy
+      // real pages (the serialized foreignObject SVG won't decode → an
+      // image-load error). Rather than surface a dead end, transparently retry
+      // via the pixel (captureVisibleTab) path so the default command still
+      // produces an image. Gating + request-shaping is pure logic in
+      // planPixelFallback so it stays testable without chrome mocks.
+      const plan = planPixelFallback(action, domResult)
+      if (!plan) return domResult
+
+      const pixelResult = await handlePixelScreenshot(plan.pixelAction, tabId)
+      if (pixelResult.success && pixelResult.data) {
+        (pixelResult.data as Record<string, unknown>).fallback = plan.note
+        return pixelResult
+      }
+      // Pixel also failed — return the original DOM-render error (the primary
+      // path the caller asked for), noting the pixel fallback was tried.
+      return { success: false, error: `${domResult.error} (pixel fallback also failed: ${pixelResult.error})` }
     }
   }
   return { success: false, error: `unknown screenshot action: ${action.type}` }
