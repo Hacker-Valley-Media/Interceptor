@@ -2,7 +2,7 @@ import { getTabGroupTitle, getTabGroupColor, getCandidateTitles, normalizeColor,
 
 export let interceptorGroupId: number | null = null
 
-function hasTabGroupApi(): boolean {
+export function hasTabGroupApi(): boolean {
   return !!chrome.tabGroups && typeof chrome.tabGroups.query === "function"
 }
 
