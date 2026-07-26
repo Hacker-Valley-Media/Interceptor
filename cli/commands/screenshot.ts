@@ -21,6 +21,10 @@ export function parseScreenshotCommand(filtered: string[]): Action {
       if (filtered.includes("--quality")) ssAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
       if (filtered.includes("--full")) ssAction.full = true
       if (filtered.includes("--pixel")) ssAction.pixel = true
+      // Forbid the DOM-render → pixel auto-fallback. The pixel path borrows tab
+      // focus and scrolls the page (both restored) — callers mid-interaction can
+      // refuse those side effects and take the DOM-render error instead.
+      if (filtered.includes("--no-fallback")) ssAction.no_fallback = true
       if (filtered.includes("--scale")) ssAction.scale = parseFloat(filtered[filtered.indexOf("--scale") + 1])
       if (filtered.includes("--selector")) {
         ssAction.selector = filtered[filtered.indexOf("--selector") + 1]

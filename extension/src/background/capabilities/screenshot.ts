@@ -617,6 +617,10 @@ async function handleOcr(
 //
 // The pixel path is a DIFFERENT capture mechanism that can only honor a subset
 // of the request, so the fallback is gated tightly:
+//  - Never when the caller set `no_fallback` (`--no-fallback`). The pixel
+//    full-page path borrows tab focus (captureVisibleTab needs the tab active)
+//    and scrolls the page strip-by-strip — both restored, but callers
+//    mid-interaction can refuse those side effects outright.
 //  - Only on a genuine render failure (domResult.fallbackEligible) — not on
 //    tab-not-found / restricted-page / timeout errors, which a pixel retry
 //    can't fix and would only mask behind extra latency.
@@ -634,6 +638,7 @@ export function planPixelFallback(
   action: { type: string; [key: string]: unknown },
   domResult: ActionResult
 ): { pixelAction: { type: string; [key: string]: unknown }; note: string } | null {
+  if (action.no_fallback === true) return null
   const isWholePageCapture = !(
     action.region || action.clip || action.selector ||
     action.element !== undefined || action.ref !== undefined
@@ -658,9 +663,12 @@ export function planPixelFallback(
   if (action.target_max_long_edge !== undefined) pixelAction.target_max_long_edge = action.target_max_long_edge
   if (action.save !== undefined) pixelAction.save = action.save
 
+  // The note travels in the result data — it must disclose the fallback's
+  // side effects, not just that it happened. Suppressible via --no-fallback.
+  const sideEffects = "borrowed tab focus + scrolled page (both restored; --no-fallback to forbid)"
   const note = droppedOpts.length
-    ? `dom-render (${domResult.error}) → pixel [dropped: ${droppedOpts.join(", ")}]`
-    : `dom-render (${domResult.error}) → pixel`
+    ? `dom-render (${domResult.error}) → pixel [dropped: ${droppedOpts.join(", ")}] — ${sideEffects}`
+    : `dom-render (${domResult.error}) → pixel — ${sideEffects}`
   return { pixelAction, note }
 }
 

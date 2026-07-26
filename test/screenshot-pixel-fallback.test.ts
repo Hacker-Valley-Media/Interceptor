@@ -12,6 +12,26 @@ import { planPixelFallback } from "../extension/src/background/capabilities/scre
 const RENDER_FAIL = { success: false, error: "dom render failed: image load failed", fallbackEligible: true }
 
 describe("planPixelFallback", () => {
+  test("no_fallback forbids the fallback entirely (side-effect escape hatch)", () => {
+    // --no-fallback: the caller refuses the pixel path's focus-borrow + scroll
+    // side effects and takes the DOM-render error instead.
+    expect(planPixelFallback({ type: "screenshot", no_fallback: true }, RENDER_FAIL)).toBeNull()
+  })
+
+  test("the note discloses the fallback's side effects and the escape hatch", () => {
+    // The pixel full-page path borrows tab focus and scrolls the page. The
+    // caller never asked for the pixel path, so the result must say so.
+    const plan = planPixelFallback({ type: "screenshot" }, RENDER_FAIL)
+    expect(plan!.note).toContain("borrowed tab focus")
+    expect(plan!.note).toContain("scrolled page")
+    expect(plan!.note).toContain("restored")
+    expect(plan!.note).toContain("--no-fallback")
+    // Disclosure also present when options were dropped.
+    const dropped = planPixelFallback({ type: "screenshot", scale: 2 }, RENDER_FAIL)
+    expect(dropped!.note).toContain("dropped: --scale")
+    expect(dropped!.note).toContain("borrowed tab focus")
+  })
+
   test("#4: only falls back on a genuine render failure (fallbackEligible)", () => {
     // An actionable error (tab not found / restricted) is NOT eligible.
     const notEligible = { success: false, error: "tab 5 not found" }
