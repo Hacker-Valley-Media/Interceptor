@@ -102,4 +102,24 @@ describe("tab designate / tab self", () => {
     const action = await parseTabsCommand(["tab", "592791482"])
     expect(action).toEqual({ type: "tab_switch", tabId: 592791482 })
   })
+
+  test.each(["42oops", "12.5"])("tab designate %s rejects trailing-junk ids that parseInt would accept", async (raw) => {
+    const errors: string[] = []
+    const origError = console.error
+    const origExit = process.exit
+    console.error = (msg: string) => errors.push(msg)
+    let exitCode: number | undefined
+    process.exit = ((code?: number) => { exitCode = code; throw new Error("exit") }) as typeof process.exit
+    try {
+      await parseTabsCommand(["tab", "designate", raw])
+    } catch {
+      // expected: process.exit throws in this stub
+    } finally {
+      console.error = origError
+      process.exit = origExit
+    }
+    expect(exitCode).toBe(1)
+    expect(errors.join("\n")).toContain(`invalid tab id: ${raw}`)
+    expect(loadDesignatedTab()).toBeUndefined()
+  })
 })

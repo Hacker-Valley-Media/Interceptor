@@ -221,6 +221,10 @@ Multiple agents can share one browser context without touching each other's tabs
 - **Group identity travels inside the action payload** (`action.group`), injected at the CLI transport choke point — the daemon relays it untouched, and browsers without the `tabGroups` API (the MV2 Electron bridge, Firefox) degrade gracefully to ungrouped behavior.
 - **Monitor integration** — child tabs inherit their opener's group, and monitor auto-attach accepts any managed group.
 
+### Designated tab
+
+[`cli/commands/session-tab.ts`](cli/commands/session-tab.ts) persists a single tab id to `~/.interceptor/session-tab.json`, mirroring the `~/.interceptor/<subsystem>/state.json` convention used by the iOS surface (`daemon/ios/state.ts`) — a global file rather than per-PID state, since the CLI is a fresh process per invocation. `interceptor tab designate [id]` writes it (resolving to the most recently opened interceptor-managed tab when no id is given, via `resolveMostRecentTab` in `cli/commands/tabs.ts`); `interceptor tab self` reads it back; `interceptor read` with no `--tab` falls back to it through `resolveReadTargetTabId` in `cli/commands/compound.ts`. Unlike the per-group auto-target keys described above, the designated tab is global and is not scoped by `--group`/`INTERCEPTOR_GROUP`.
+
 ### Transport routing (daemon)
 
 The daemon talks to the extension via three channels, routed by [`daemon/outbound-routing.ts`](daemon/outbound-routing.ts):
