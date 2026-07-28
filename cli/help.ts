@@ -96,7 +96,7 @@ const MAP_BROWSER = `BROWSER — a signed-in Chrome/Brave profile, background ta
   Extract    table · links · images · forms · query <css> · exists · count · attr · style      structured JSON
   Act        act <ref> · click · type · select · focus · hover · drag · dblclick · rightclick · check · keys · scroll
   Navigate   navigate <url> · back · forward · scroll · wait <ms> · wait-stable
-  Tabs       tabs · tab new|close|switch · window · frames · session · group (per-agent isolation) · contexts
+  Tabs       tabs · tab new|close|switch|designate|self · window · frames · session · group (per-agent isolation) · contexts
   Network    net (passive log → HAR/pcapng) · headers · override (rewrite requests) · sse
   Capture    screenshot [ref] · canvas · ocr · save --out <path> <expr>  (page bytes straight to disk) · eval <js> (CSP-proof)
   Data       cookies · storage · history · bookmarks · downloads · clipboard · clear
@@ -171,7 +171,7 @@ Compound (agent-optimized):
   interceptor open <url> --no-wait           Return immediately after tab creation
   interceptor open <url> --reuse             Navigate the most recent Interceptor-group tab instead of opening a new one (cleans up long automation runs)
   interceptor open <url> --reuse --activate  Navigate the reused tab and bring it to the foreground
-  interceptor read                           Tree + text for active tab
+  interceptor read                           Tree + text for the designated tab (see 'tab designate'), else the active tab
   interceptor read <ref>                     Tree + text for element subtree
   interceptor read --tree-only               Skip text
   interceptor read --text-only               Skip tree
@@ -246,6 +246,8 @@ Tabs:
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
   interceptor tab close [id]                 Close tab
   interceptor tab switch <id>                Switch to tab (explicit focus move)
+  interceptor tab designate [id]             Pin a tab (default: most recently opened) as this session's working tab
+  interceptor tab self                       Print the session's designated tab id
   interceptor window new [url]               Open a new browser window
   interceptor window list                    List all browser windows
   interceptor window close <id>              Close a browser window
