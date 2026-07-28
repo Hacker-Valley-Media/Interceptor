@@ -225,6 +225,15 @@ async function main() {
   if (cmd === "monitor" && (filtered[1] === "status" || filtered[1] === "stop") && filtered.includes("--task")) {
     needsDaemon = false
   }
+  // `tab self` is a pure local file read; `tab designate <id>` with an
+  // explicit id needs no daemon round-trip either (only the no-id "most
+  // recent tab" lookup does).
+  if (cmd === "tab" && filtered[1] === "self") {
+    needsDaemon = false
+  }
+  if (cmd === "tab" && filtered[1] === "designate" && filtered[2] && !filtered[2].startsWith("--")) {
+    needsDaemon = false
+  }
 
   if (needsDaemon && !useWs) {
     await ensureDaemon()
@@ -309,7 +318,7 @@ async function main() {
   if (STATE_CMDS.has(cmd))       action = parseStateCommand(filtered)
   else if (ACTION_CMDS.has(cmd)) action = parseActionsCommand(filtered)
   else if (NAV_CMDS.has(cmd))    action = parseNavigationCommand(filtered)
-  else if (TAB_CMDS.has(cmd))    action = await parseTabsCommand(filtered)
+  else if (TAB_CMDS.has(cmd))    action = await parseTabsCommand(filtered, jsonMode, globalContextId)
   else if (NET_CMDS.has(cmd))    action = parseNetworkCommand(filtered)
   else if (SS_CMDS.has(cmd))     action = parseScreenshotCommand(filtered)
   else if (DATA_CMDS.has(cmd))   action = parseDataCommand(filtered)

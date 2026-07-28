@@ -1,6 +1,35 @@
-import { describe, expect, test } from "bun:test"
-import { buildReadTreeAction, buildTabCreateAction } from "../cli/commands/compound"
+import { describe, expect, test, afterEach } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { buildReadTreeAction, buildTabCreateAction, resolveReadTargetTabId } from "../cli/commands/compound"
+import { saveDesignatedTab } from "../cli/commands/session-tab"
 import { parseElementTarget } from "../cli/parse"
+
+describe("resolveReadTargetTabId — read's designated-tab fallback", () => {
+  let home: string
+
+  afterEach(() => {
+    if (home) rmSync(home, { recursive: true, force: true })
+  })
+
+  test("an explicit --tab wins over any designation", () => {
+    home = mkdtempSync(join(tmpdir(), "interceptor-read-fallback-"))
+    saveDesignatedTab(999, home)
+    expect(resolveReadTargetTabId(123, home)).toBe(123)
+  })
+
+  test("falls back to the designated tab when no --tab is given", () => {
+    home = mkdtempSync(join(tmpdir(), "interceptor-read-fallback-"))
+    saveDesignatedTab(592791482, home)
+    expect(resolveReadTargetTabId(undefined, home)).toBe(592791482)
+  })
+
+  test("resolves to undefined (daemon's active-tab default) when nothing is designated", () => {
+    home = mkdtempSync(join(tmpdir(), "interceptor-read-fallback-"))
+    expect(resolveReadTargetTabId(undefined, home)).toBeUndefined()
+  })
+})
 
 describe("buildReadTreeAction", () => {
   test("passes subtree targeting into get_a11y_tree for regular reads", () => {

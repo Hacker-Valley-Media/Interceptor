@@ -12,6 +12,17 @@ function activeTabKey(group?: string): string {
   return group ? `activeTabId:${group}` : "activeTabId"
 }
 
+// Some pages (and stray page scripts) rewrite document.title in a loop,
+// appending rather than replacing — chrome.tabs.query then hands back a
+// title that's grown to tens of KB of repeated text, which floods
+// `interceptor tabs` output (and any agent parsing it) with noise. Cap it
+// defensively rather than trusting the browser to hand back something sane.
+const MAX_TAB_TITLE_LENGTH = 200
+export function boundedTabTitle(title: string | undefined): string | undefined {
+  if (typeof title !== "string" || title.length <= MAX_TAB_TITLE_LENGTH) return title
+  return `${title.slice(0, MAX_TAB_TITLE_LENGTH)}… (truncated, ${title.length} chars total)`
+}
+
 export async function handleTabActions(
   action: { type: string; [key: string]: unknown },
   tabId: number
@@ -123,7 +134,7 @@ export async function handleTabActions(
       await hydrateNamedGroups()
       const namedIds = new Set(namedGroups.values())
       const tabData = tabs.map(t => ({
-        id: t.id, url: t.url, title: t.title, active: t.active,
+        id: t.id, url: t.url, title: boundedTabTitle(t.title), active: t.active,
         windowId: t.windowId, muted: t.mutedInfo?.muted, pinned: t.pinned,
         groupId: t.groupId,
         // managed = default group OR any named group; `group` names the owner.
