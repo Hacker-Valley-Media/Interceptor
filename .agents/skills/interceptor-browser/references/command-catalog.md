@@ -10,7 +10,7 @@ interceptor open <url> --full | --tree-only | --text-only
 interceptor open <url> --timeout 15000
 interceptor open <url> --reuse                     # Navigate latest Interceptor-group tab instead of creating
 
-interceptor read                                   # Current page tree + text
+interceptor read                                   # Designated tab (see 'tab designate'), else current page — tree + text
 interceptor read e12 [--tree-only | --text-only]   # Scoped sub-tree
 interceptor read --markdown [--text-only]          # Page text rendered as markdown (preserves headings, **bold**, lists, tables)
 interceptor read --include-style
@@ -177,7 +177,10 @@ interceptor tabs
 interceptor tab new <url>             # Background tab in the interceptor group
 interceptor tab new <url> --activate  # Explicit foregrounding
 interceptor tab switch <tab-id>
+interceptor tab <tab-id>              # Shorthand for tab switch
 interceptor tab close <tab-id>
+interceptor tab designate [tab-id]    # Pin a tab (default: most recently opened) as this session's working tab
+interceptor tab self                  # Print the session's designated tab id
 
 interceptor open <url> --group <label>   # Open into a named per-agent group "<brand>-<label>" (created on first use)
 interceptor read --group <label>         # Any command scopes to that group's tabs; env INTERCEPTOR_GROUP is the fallback

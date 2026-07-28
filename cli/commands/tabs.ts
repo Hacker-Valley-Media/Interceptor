@@ -1,5 +1,5 @@
 /**
- * cli/commands/tabs.ts — tabs, tab new/close/switch, window, frames, session
+ * cli/commands/tabs.ts — tabs, tab new/close/switch/designate/self, window, frames, session
  *
  * Returns null for "session" subcommands (handled locally, no daemon needed).
  */

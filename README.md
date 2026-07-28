@@ -319,6 +319,8 @@ The legacy individual commands (`interceptor tab new`, `interceptor tree`, `inte
 
 **Focus Model (Background-First Contract)** — Interceptor never steals focus from the tab you're working in. `interceptor open <url>` and `interceptor tab new <url>` create their tabs in the **background** by default — the tab you had active stays active. Only four browser verbs intentionally move focus: `open --activate`, `tab new --activate`, `tab switch <id>`, and `window focus <id>`. The reuse path preserves the reused tab's existing focus state; add `--activate` to bring it forward. All other operations (`click`, `type`, `read`, `screenshot`, `net`, `scene`, `monitor`, etc.) work against the target tab without touching whichever tab you're looking at. This mirrors the macOS surface's same background-first contract — see `AGENTS.md` "Background First (Browser + macOS)" for the full inventory.
 
+**Designated Tab** — `interceptor tab designate [id]` pins a tab id as this session's working tab (persisted at `~/.interceptor/session-tab.json`), defaulting to the most recently opened interceptor-group tab when no id is given. `interceptor tab self` prints it back. `interceptor read` with no `--tab` targets the designated tab instead of the browser's active tab, so an agent juggling multiple tabs doesn't have to thread a tab id through every read.
+
 **Named Contexts** — When two browser profiles (or Chrome + Brave) both connect to the same daemon, the daemon tracks each extension as a separate named context. Each profile's extension auto-generates a stable UUID on first run (stored in `chrome.storage.local`). Run `interceptor contexts` to list connected IDs, then pass `--context <id>` to route a command to a specific profile. Without `--context`, a command succeeds only when exactly one context is connected — the daemon errors (fail-fast) when zero or multiple contexts are present. Primary use case: cross-account security testing where you need Account A and Account B active simultaneously. If two profiles are configured with the same context ID, the second profile is rejected and the extension shows a red `!` badge; open that profile's Interceptor popup, choose a unique Context ID, and it will re-register without needing an extension reload.
 
 **Passive Network** — `fetch()` and `XMLHttpRequest` traffic on every page is captured automatically. SSE streams are exposed with `interceptor sse log`. WebSocket, Beacon, and BroadcastChannel activity is captured as page communication with `interceptor net page-comm log`; use `interceptor net monitor on --reload` when you need sockets opened during page startup. No debugger, no infobanner.
@@ -346,7 +348,7 @@ interceptor open "https://example.com" --full        # Full text (no 2000-char l
 interceptor open "https://example.com" --no-wait     # Don't wait for load
 interceptor open "https://example.com" --reuse        # Reuse the most recent Interceptor-group tab (long automation: avoids tab accumulation)
 interceptor open "https://example.com" --reuse --activate  # Reuse the tab and bring it to the foreground
-interceptor read                              # Tree + text for current page
+interceptor read                              # Tree + text for the designated tab (see 'tab designate'), else the active tab
 interceptor read e5                           # Tree + text for element subtree
 interceptor read --tree-only                  # Just tree
 interceptor read --include-style              # Inline computed styles (display, color, opacity, etc.) on each element
@@ -414,8 +416,12 @@ interceptor wait-stable                      # Wait for DOM to stop changing
 interceptor tabs                             # List all tabs (* = active)
 interceptor tab new "https://example.com"    # Open new tab
 interceptor tab switch 12345                 # Switch to tab by ID
+interceptor tab 12345                        # Shorthand for tab switch
 interceptor tab close                        # Close current tab
 interceptor tab close 12345                  # Close specific tab
+interceptor tab designate                    # Pin the most recently opened tab as this session's working tab
+interceptor tab designate 12345              # Pin a specific tab id instead
+interceptor tab self                         # Print the session's designated tab id
 interceptor window new "https://example.com" # New window
 interceptor window list                      # List all windows
 interceptor window focus 123                 # Focus a window (explicit focus move)
