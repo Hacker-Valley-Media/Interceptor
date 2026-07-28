@@ -25,6 +25,7 @@ describe("boundedTabTitle", () => {
     const runaway = "New chat - Claude" + unit.repeat(30)
     const result = boundedTabTitle(runaway)!
     expect(result.length).toBeLessThan(runaway.length)
+    expect(result.length).toBeLessThanOrEqual(200)
     expect(result.startsWith("New chat - Claude")).toBe(true)
     expect(result).toContain(`truncated, ${runaway.length} chars total`)
   })

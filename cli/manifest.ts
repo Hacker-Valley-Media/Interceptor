@@ -51,7 +51,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
     name: "read", surface: "browser",
     usage: "interceptor read [e<ref>] [--tree-only|--text-only] [--markdown] [--full] [--filter <mode>] [--tree-format compact|verbose] [--include-style] [--include-frames]",
     summary: "Tree + text for the designated tab (see 'tab designate'), else the active tab (or an element subtree)",
-    returns: "Same shapes as open. With no --tab: targets the session's designated tab (interceptor tab designate) when one is set, otherwise the browser's active tab. With e<ref>: element-scoped — element text uses textContent (INCLUDES display:none text, unlike page-level innerText).",
+    returns: "Same shapes as open. With no --tab: targets the session's designated tab (interceptor tab designate) when one is set, otherwise the browser's active tab. Designation persists for the whole session and is not scoped by --group. With e<ref>: element-scoped — element text uses textContent (INCLUDES display:none text, unlike page-level innerText).",
     flags: [
       { name: "--tree-only", description: "a11y tree only (the way to find refs for act)" },
       { name: "--text-only", description: "visible text only (innerText; flattens headings into prose)" },
@@ -146,7 +146,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   // ── tabs / network / capture / data ─────────────────────────────────────────
   { name: "tabs", surface: "browser", usage: "interceptor tabs", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
   { name: "tab", surface: "browser", usage: "interceptor tab new|close|activate|reload […]", summary: "Tab lifecycle", returns: "ok / tab info." },
-  { name: "tab designate", surface: "browser", usage: "interceptor tab designate [id]", summary: "Pin a tab (default: most recently opened) as this session's working tab", returns: "{tab_id, designated: true}. Used by 'read' when called with no --tab." },
+  { name: "tab designate", surface: "browser", usage: "interceptor tab designate [id]", summary: "Pin a tab as this session's working tab (default: the most recently opened interceptor-managed tab, falling back to any tab if none are managed). Persists for the whole session; not scoped by --group.", returns: "{tab_id, designated: true}. Used by 'read' when called with no --tab." },
   { name: "tab self", surface: "browser", usage: "interceptor tab self", summary: "Print the session's designated tab id", returns: "{tab_id} — errors if no tab has been designated." },
   { name: "network", surface: "browser", usage: "interceptor net [--filter <pattern>] [--limit <n>] [--format har|json|pcapng --out <path>]", summary: "Passive network log", returns: "Recent requests (method, url, status, type); exportable to HAR/pcapng." },
   { name: "headers", surface: "browser", usage: "interceptor headers [--filter <pattern>]", summary: "Request headers seen", returns: "Header sets per request." },

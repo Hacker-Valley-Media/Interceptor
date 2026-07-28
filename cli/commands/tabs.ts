@@ -123,9 +123,11 @@ export function buildWindowResizeAction(args: string[]): Action {
   return action
 }
 
-// `interceptor tab designate` with no id: pin the most recently opened
-// interceptor-managed tab (highest tab id among the interceptor group,
-// falling back to the highest id overall if none are managed).
+/**
+ * Resolve the tab `interceptor tab designate` should pin when called with no id:
+ * the most recently opened interceptor-managed tab (highest tab id among the
+ * interceptor group), falling back to the highest id overall if none are managed.
+ */
 async function resolveMostRecentTab(contextId?: string): Promise<number | undefined> {
   const resp = await sendCommand({ type: "tab_list" }, undefined, contextId)
   const result = resp.result
@@ -139,12 +141,16 @@ async function resolveMostRecentTab(contextId?: string): Promise<number | undefi
   return pool.reduce((a, b) => (b.id > a.id ? b : a)).id
 }
 
+/** Handle `interceptor tab designate [id]`: pin an explicit or resolved tab id as the session's working tab. */
 async function runTabDesignate(args: string[], jsonMode: boolean, contextId?: string): Promise<null> {
   let tabId: number
 
   if (args[0] && !args[0].startsWith("--")) {
-    tabId = parseInt(args[0], 10)
-    if (isNaN(tabId)) die(`invalid tab id: ${args[0]}`)
+    try {
+      tabId = parsePositiveIntegerArg("tab id", args[0])
+    } catch {
+      die(`invalid tab id: ${args[0]}`)
+    }
   } else {
     let resolved: number | undefined
     try {
@@ -168,6 +174,7 @@ async function runTabDesignate(args: string[], jsonMode: boolean, contextId?: st
   return null
 }
 
+/** Handle `interceptor tab self`: print the session's designated tab id, erroring if none is set. */
 function runTabSelf(jsonMode: boolean): null {
   const tabId = loadDesignatedTab()
   if (tabId === undefined) {
@@ -182,6 +189,7 @@ function runTabSelf(jsonMode: boolean): null {
   return null
 }
 
+/** Parse `tabs`/`tab ...`/`window ...`/`frames`/`session`/`group`/`contexts` into a daemon action, or handle it locally and return null. */
 export async function parseTabsCommand(filtered: string[], jsonMode = false, contextId?: string): Promise<Action | null> {
   const cmd = filtered[0]
 

@@ -15,24 +15,31 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-// Bun's os.homedir() resolves from the OS user database and ignores a
-// runtime override of $HOME, unlike Node — so honor $HOME explicitly. This
-// also happens to be the right Unix convention, and it's what makes this
-// module overridable in tests without touching the real machine's state.
+/**
+ * Resolve the user's home directory.
+ *
+ * Bun's os.homedir() resolves from the OS user database and ignores a
+ * runtime override of $HOME, unlike Node — so honor $HOME explicitly. This
+ * also happens to be the right Unix convention, and it's what makes this
+ * module overridable in tests without touching the real machine's state.
+ */
 function resolveHome(): string {
   return process.env.HOME || homedir()
 }
 
+/** Return (and ensure) the `~/.interceptor` directory under `home`. */
 function sessionTabDir(home: string): string {
   const dir = join(home, ".interceptor")
   try { mkdirSync(dir, { recursive: true }) } catch {}
   return dir
 }
 
+/** Path to the designated-tab state file under `home`. */
 function sessionTabPath(home: string): string {
   return join(sessionTabDir(home), "session-tab.json")
 }
 
+/** Read the currently designated tab id, or `undefined` if none is set. */
 export function loadDesignatedTab(home = resolveHome()): number | undefined {
   try {
     const raw = JSON.parse(readFileSync(sessionTabPath(home), "utf-8")) as { tabId?: number }
@@ -42,10 +49,12 @@ export function loadDesignatedTab(home = resolveHome()): number | undefined {
   }
 }
 
+/** Persist `tabId` as the session's designated working tab. */
 export function saveDesignatedTab(tabId: number, home = resolveHome()): void {
   writeFileSync(sessionTabPath(home), JSON.stringify({ tabId }, null, 2))
 }
 
+/** Clear the designated tab, if one is set. */
 export function clearDesignatedTab(home = resolveHome()): void {
   try { unlinkSync(sessionTabPath(home)) } catch {}
 }

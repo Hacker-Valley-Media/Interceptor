@@ -172,6 +172,7 @@ Compound (agent-optimized):
   interceptor open <url> --reuse             Navigate the most recent Interceptor-group tab instead of opening a new one (cleans up long automation runs)
   interceptor open <url> --reuse --activate  Navigate the reused tab and bring it to the foreground
   interceptor read                           Tree + text for the designated tab (see 'tab designate'), else the active tab
+                                              (designation persists for the whole session and is not scoped by --group)
   interceptor read <ref>                     Tree + text for element subtree
   interceptor read --tree-only               Skip text
   interceptor read --text-only               Skip tree
@@ -246,7 +247,8 @@ Tabs:
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
   interceptor tab close [id]                 Close tab
   interceptor tab switch <id>                Switch to tab (explicit focus move)
-  interceptor tab designate [id]             Pin a tab (default: most recently opened) as this session's working tab
+  interceptor tab designate [id]             Pin a tab as this session's working tab (default: the most recently opened
+                                              interceptor-managed tab, falling back to any tab if none are managed)
   interceptor tab self                       Print the session's designated tab id
   interceptor window new [url]               Open a new browser window
   interceptor window list                    List all browser windows

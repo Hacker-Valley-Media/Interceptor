@@ -12,15 +12,21 @@ function activeTabKey(group?: string): string {
   return group ? `activeTabId:${group}` : "activeTabId"
 }
 
-// Some pages (and stray page scripts) rewrite document.title in a loop,
-// appending rather than replacing — chrome.tabs.query then hands back a
-// title that's grown to tens of KB of repeated text, which floods
-// `interceptor tabs` output (and any agent parsing it) with noise. Cap it
-// defensively rather than trusting the browser to hand back something sane.
 const MAX_TAB_TITLE_LENGTH = 200
+
+/**
+ * Bound a tab title to `MAX_TAB_TITLE_LENGTH` characters.
+ *
+ * Some pages (and stray page scripts) rewrite document.title in a loop,
+ * appending rather than replacing — chrome.tabs.query then hands back a
+ * title that's grown to tens of KB of repeated text, which floods
+ * `interceptor tabs` output (and any agent parsing it) with noise. Cap it
+ * defensively rather than trusting the browser to hand back something sane.
+ */
 export function boundedTabTitle(title: string | undefined): string | undefined {
   if (typeof title !== "string" || title.length <= MAX_TAB_TITLE_LENGTH) return title
-  return `${title.slice(0, MAX_TAB_TITLE_LENGTH)}… (truncated, ${title.length} chars total)`
+  const suffix = `… (truncated, ${title.length} chars total)`
+  return `${title.slice(0, MAX_TAB_TITLE_LENGTH - suffix.length)}${suffix}`
 }
 
 export async function handleTabActions(

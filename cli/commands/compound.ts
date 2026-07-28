@@ -90,9 +90,14 @@ export function aggregateReadResults(opts: {
   return { success: true, tree: tree || undefined, text: text || undefined, warnings }
 }
 
-// No explicit --tab: fall back to the session's designated working tab (see
-// `interceptor tab designate`) rather than whatever tab the browser happens
-// to consider "active" right now. `home` is exposed purely for testing.
+/**
+ * Resolve which tab `read` should target.
+ *
+ * With no explicit --tab, fall back to the session's designated working tab
+ * (see `interceptor tab designate`) rather than whatever tab the browser
+ * happens to consider "active" right now. `home` is exposed purely for
+ * testing.
+ */
 export function resolveReadTargetTabId(globalTabId?: number, home?: string): number | undefined {
   return globalTabId ?? loadDesignatedTab(home)
 }
