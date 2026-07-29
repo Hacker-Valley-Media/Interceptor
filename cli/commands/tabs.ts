@@ -1,11 +1,13 @@
 /**
- * cli/commands/tabs.ts — tabs, tab new/close/switch, window, frames, session
+ * cli/commands/tabs.ts — tabs, tab new/close/switch/designate/self, window, frames, session
  *
  * Returns null for "session" subcommands (handled locally, no daemon needed).
  */
 
 import { unlinkSync } from "node:fs"
 import { writeFileSync } from "node:fs"
+import { sendCommand } from "../transport"
+import { loadDesignatedTab, saveDesignatedTab } from "./session-tab"
 
 type Action = { type: string; [key: string]: unknown }
 
@@ -121,7 +123,74 @@ export function buildWindowResizeAction(args: string[]): Action {
   return action
 }
 
-export async function parseTabsCommand(filtered: string[]): Promise<Action | null> {
+/**
+ * Resolve the tab `interceptor tab designate` should pin when called with no id:
+ * the most recently opened interceptor-managed tab (highest tab id among the
+ * interceptor group), falling back to the highest id overall if none are managed.
+ */
+async function resolveMostRecentTab(contextId?: string): Promise<number | undefined> {
+  const resp = await sendCommand({ type: "tab_list" }, undefined, contextId)
+  const result = resp.result
+  if (!result.success) {
+    throw new Error(result.error || "failed to list tabs")
+  }
+  const tabs = (result.data as Array<{ id?: number; managed?: boolean }>) || []
+  const withIds = tabs.filter((t): t is { id: number; managed?: boolean } => typeof t.id === "number")
+  const pool = withIds.some(t => t.managed) ? withIds.filter(t => t.managed) : withIds
+  if (pool.length === 0) return undefined
+  return pool.reduce((a, b) => (b.id > a.id ? b : a)).id
+}
+
+/** Handle `interceptor tab designate [id]`: pin an explicit or resolved tab id as the session's working tab. */
+async function runTabDesignate(args: string[], jsonMode: boolean, contextId?: string): Promise<null> {
+  let tabId: number
+
+  if (args[0] && !args[0].startsWith("--")) {
+    try {
+      tabId = parsePositiveIntegerArg("tab id", args[0])
+    } catch {
+      die(`invalid tab id: ${args[0]}`)
+    }
+  } else {
+    let resolved: number | undefined
+    try {
+      resolved = await resolveMostRecentTab(contextId)
+    } catch (err) {
+      die((err as Error).message)
+    }
+    if (resolved === undefined) {
+      die("no tabs found to designate. Open one with 'interceptor open <url>' first.")
+    }
+    tabId = resolved
+  }
+
+  saveDesignatedTab(tabId)
+
+  if (jsonMode) {
+    console.log(JSON.stringify({ tab_id: tabId, designated: true }))
+  } else {
+    console.log(`Designated tab ${tabId} as working tab`)
+  }
+  return null
+}
+
+/** Handle `interceptor tab self`: print the session's designated tab id, erroring if none is set. */
+function runTabSelf(jsonMode: boolean): null {
+  const tabId = loadDesignatedTab()
+  if (tabId === undefined) {
+    console.error("error: No tab designated. Run `interceptor tab designate [id]` first.")
+    process.exit(1)
+  }
+  if (jsonMode) {
+    console.log(JSON.stringify({ tab_id: tabId }))
+  } else {
+    console.log(String(tabId))
+  }
+  return null
+}
+
+/** Parse `tabs`/`tab ...`/`window ...`/`frames`/`session`/`group`/`contexts` into a daemon action, or handle it locally and return null. */
+export async function parseTabsCommand(filtered: string[], jsonMode = false, contextId?: string): Promise<Action | null> {
   const cmd = filtered[0]
 
   switch (cmd) {
@@ -142,8 +211,17 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
             : { type: "tab_close" }
         case "switch":
           return { type: "tab_switch", tabId: parseInt(filtered[2]) }
+        case "designate":
+          return runTabDesignate(filtered.slice(2), jsonMode, contextId)
+        case "self":
+          return runTabSelf(jsonMode)
         default:
-          console.error("error: unknown tab subcommand. Use: new, close, switch")
+          // Shorthand: `interceptor tab <id>` targets a specific tab by
+          // switching focus to it (mirrors `tab switch <id>`).
+          if (filtered[1] && /^\d+$/.test(filtered[1])) {
+            return { type: "tab_switch", tabId: parseInt(filtered[1], 10) }
+          }
+          console.error("error: unknown tab subcommand. Use: new, close, switch, designate, self")
           process.exit(1)
       }
       break

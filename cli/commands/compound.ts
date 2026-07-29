@@ -10,6 +10,7 @@ import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
 import { parseElementTarget } from "../parse"
 import { hasTrustedFlag } from "./flags"
 import { maybeEmitResearchHint } from "./research"
+import { loadDesignatedTab } from "./session-tab"
 
 type Action = { type: string; [key: string]: unknown }
 type Result = { success: boolean; error?: string; data?: unknown; tabId?: number }
@@ -87,6 +88,18 @@ export function aggregateReadResults(opts: {
   }
 
   return { success: true, tree: tree || undefined, text: text || undefined, warnings }
+}
+
+/**
+ * Resolve which tab `read` should target.
+ *
+ * With no explicit --tab, fall back to the session's designated working tab
+ * (see `interceptor tab designate`) rather than whatever tab the browser
+ * happens to consider "active" right now. `home` is exposed purely for
+ * testing.
+ */
+export function resolveReadTargetTabId(globalTabId?: number, home?: string): number | undefined {
+  return globalTabId ?? loadDesignatedTab(home)
 }
 
 type ReadTarget = ReturnType<typeof parseElementTarget> | Record<string, never>
@@ -264,6 +277,7 @@ export async function runRead(
   useWs = false,
   contextId?: string
 ): Promise<void> {
+  const targetTabId = resolveReadTargetTabId(globalTabId)
   const treeOnly = filtered.includes("--tree-only")
   const textOnly = filtered.includes("--text-only")
   const markdown = filtered.includes("--markdown")
@@ -290,7 +304,7 @@ export async function runRead(
     if (includeFrames) {
       const framesResp = await send(
         buildReadTreeAction({ target, filterMode, includeStyle, includeFrames, treeFormat }),
-        globalTabId, useWs, contextId
+        targetTabId, useWs, contextId
       )
       if (framesResp.success && framesResp.data && typeof framesResp.data === "object" && Array.isArray((framesResp.data as { frames?: unknown[] }).frames)) {
         type FrameEntry = { frameId: number; parentFrameId: number; url: string; opaque?: true; error?: string; tree?: string }
@@ -315,14 +329,14 @@ export async function runRead(
     } else {
       treeResult = await send(
         buildReadTreeAction({ target, filterMode, includeStyle, includeFrames, treeFormat }),
-        globalTabId, useWs, contextId
+        targetTabId, useWs, contextId
       )
     }
   }
 
   if (!treeOnly) {
     const textAction: Action = { type: markdown ? "extract_markdown" : "extract_text", ...target }
-    textResult = await send(textAction, globalTabId, useWs, contextId)
+    textResult = await send(textAction, targetTabId, useWs, contextId)
   }
 
   const aggregate = aggregateReadResults({

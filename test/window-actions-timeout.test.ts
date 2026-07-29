@@ -61,4 +61,31 @@ describe("window action timeout handling", () => {
       globals.chrome = originalChrome
     }
   })
+
+  test("window_list bounds runaway tab titles like tab_list does", async () => {
+    const globals = globalThis as any
+    const originalChrome = globals.chrome
+    const runaway = "New chat - Claude" + " - https://claude.ai/".repeat(30)
+    globals.chrome = {
+      windows: {
+        getAll: async () => [
+          {
+            id: 1, type: "normal", state: "normal", focused: true,
+            width: 800, height: 600, left: 0, top: 0, incognito: false,
+            tabs: [{ id: 1, url: "https://claude.ai/new", title: runaway, active: true }],
+          },
+        ],
+      },
+    } as unknown
+
+    try {
+      const result = await handleWindowActions({ type: "window_list" }, 0)
+      expect(result.success).toBe(true)
+      const tabs = (result.data as Array<{ tabs?: Array<{ title?: string }> }>)[0].tabs!
+      expect(tabs[0].title!.length).toBeLessThan(runaway.length)
+      expect(tabs[0].title).toContain("truncated")
+    } finally {
+      globals.chrome = originalChrome
+    }
+  })
 })
