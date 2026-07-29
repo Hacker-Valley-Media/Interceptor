@@ -46,4 +46,26 @@ describe("session-tab — designated working tab state", () => {
     await Bun.write(join(h, ".interceptor", "session-tab.json"), "not json")
     expect(loadDesignatedTab(h)).toBeUndefined()
   })
+
+  test("a write failure prints a clean error and exits 1 instead of throwing", async () => {
+    const h = freshHome()
+    // Put a plain file where ~/.interceptor should be a directory, so the
+    // write into it fails with ENOTDIR.
+    await Bun.write(join(h, ".interceptor"), "not a directory")
+
+    const errors: string[] = []
+    const origError = console.error
+    const origExit = process.exit
+    console.error = (msg: string) => errors.push(msg)
+    let exitCode: number | undefined
+    process.exit = ((code?: number) => { exitCode = code; throw new Error("exit") }) as typeof process.exit
+    try {
+      expect(() => saveDesignatedTab(555, h)).toThrow("exit")
+    } finally {
+      console.error = origError
+      process.exit = origExit
+    }
+    expect(exitCode).toBe(1)
+    expect(errors.join("\n")).toContain("error: failed to save designated tab")
+  })
 })

@@ -51,7 +51,12 @@ export function loadDesignatedTab(home = resolveHome()): number | undefined {
 
 /** Persist `tabId` as the session's designated working tab. */
 export function saveDesignatedTab(tabId: number, home = resolveHome()): void {
-  writeFileSync(sessionTabPath(home), JSON.stringify({ tabId }, null, 2))
+  try {
+    writeFileSync(sessionTabPath(home), JSON.stringify({ tabId }, null, 2))
+  } catch (err) {
+    console.error(`error: failed to save designated tab: ${(err as Error).message}`)
+    process.exit(1)
+  }
 }
 
 /** Clear the designated tab, if one is set. */
