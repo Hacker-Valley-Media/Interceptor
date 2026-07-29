@@ -12,6 +12,7 @@ Before assuming browser control is available:
 - Run `interceptor status`.
 - If `tab_create` or `open` times out, confirm the browser is open with the Interceptor extension actually loaded in the active profile.
 - A healthy packaged install can still fail browser commands if the extension is missing or the wrong browser profile is active.
+- For a single-command debugging snapshot (daemon pid/execPath, binary mismatches, per-context extension reachability, active tab, interactive element count, monitor sessions), run `interceptor diagnose` instead of chaining several probe commands. This is the fastest way to root-cause "no extensions connected" — it directly compares the running daemon's binary against each browser's native-messaging manifest.
 
 ## Use the right read surface
 
