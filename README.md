@@ -57,7 +57,7 @@ Interceptor was built from the opposite premise: use the browser and apps the hu
 | Uses your existing logged-in browser profile | Yes | Usually no |
 | Reads passive fetch/XHR/SSE/WebSocket/sendBeacon/BroadcastChannel using only standard Web APIs | Yes | Partial — typically requires the DevTools protocol |
 | Synthetic clicks/keys via `userActivation` override + `__interceptor_trust` event marker for `isTrusted`-gated handlers | Yes | Often requires DevTools-protocol fallback |
-| Drives canvas-rendered editors (Docs / Slides / Sheets / map viewers / design tools) without OS keyboard | Yes — dispatched events on the canvas | Usually requires `--os` or OS-level CGEvent |
+| Drives canvas-rendered editors (Docs / Slides / Sheets / map viewers / design tools) without OS keyboard | Yes — dispatched events on the canvas | Usually requires OS-level input injection (CGEvent / SendInput) |
 | Captures native client-side exports (PNG/PDF/SVG) without Save dialog | Yes — `URL.createObjectURL` patch + auto-download suppression | Not built in |
 | Records real human sessions and exports replay plans | Yes | Not built in |
 | Extends the same CLI to native macOS apps | Yes | No |
@@ -203,6 +203,24 @@ If the task is content **inside** a browser tab, use Browser. If the task is the
 
 The deep dives live in the per-surface sections below. Skill packages mirror this split: agent operators load `.agents/skills/interceptor-browser/` for web work, `.agents/skills/interceptor-macos/` for native work, and `.agents/skills/interceptor-ios/` for iPhone work.
 
+<a name="platform-capability-matrix"></a>
+
+### Platform capability matrix
+
+The Browser surface is cross-platform. Everything that reaches outside the browser tab is macOS-only. Windows is **browser-only** — not a reduced mode of the full product, but the whole supported surface.
+
+| Capability | macOS | Windows | Where it's implemented |
+|---|---|---|---|
+| Browser control (`open`, `read`, `act`, `click`, `type`, `tree`, `net`, `scene`, `monitor`) | ✅ | ✅ | Extension + daemon, no platform code |
+| Screenshots (DOM render, `--pixel`, `--region`) | ✅ | ✅ | `extension/src/content/dom-screenshot.ts` |
+| `--trusted` / `--os` HID-sourced input | ✅ | ❌ **not implemented** | `daemon/os-input.ts` (macOS CGEvent) vs `daemon/os-input-win.ts` (stub — returns `not supported on Windows` for all four verbs) |
+| `interceptor macos *` (AX tree, native apps, Vision/Speech/NLP) | ✅ | ❌ | Swift bridge, macOS-only by construction |
+| `interceptor ios *` | ✅ | ❌ | Requires the macOS toolchain |
+| `bridge:` line in `interceptor status` | ✅ | ➖ suppressed | `cli/lib/status-renderer.ts` gates on `IS_WIN` |
+| Native Windows UIA / Win32 surface | n/a | 🔜 reserved, not built | See [Future: Interceptor Windows](#future-interceptor-windows) |
+
+`--trusted` fails **loudly** on Windows — `error: os_click not supported on Windows` — so it is a visible dead end rather than a silent no-op. Note that the CLI currently exits `0` on that error (as it does on all command errors), so scripts must check stderr/stdout rather than the exit code.
+
 ---
 
 <a name="surface-1-interceptor-browser"></a>
@@ -217,7 +235,7 @@ Safari reuses the portable DOM/content engine and the same command envelope. API
 
 - **Your real browser session**: operate inside the browser you already use, with your cookies, logins, tabs, and context intact.
 - **Passive network visibility**: capture `fetch()`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `sendBeacon`, and `BroadcastChannel` traffic without turning on the debugger or triggering an infobanner.
-- **Synthetic events that sites accept**: a pre-load `userActivation` override + per-event `__interceptor_trust` marker satisfies `isTrusted` and transient-activation checks on the vast majority of sites — `--os` is a fallback, not the default. Synthetic clicks and keystrokes drive rich-editor typing, canvas pan/zoom/click, layer selection in design tools, form fills, and keyboard shortcuts.
+- **Synthetic events that sites accept**: a pre-load `userActivation` override + per-event `__interceptor_trust` marker satisfies `isTrusted` and transient-activation checks on the vast majority of sites — `--trusted` is a macOS-only fallback, not the default. Synthetic clicks and keystrokes drive rich-editor typing, canvas pan/zoom/click, layer selection in design tools, form fills, and keyboard shortcuts.
 - **Teach-and-replay workflows**: record real clicks, keystrokes, DOM changes, and correlated network calls, then export a replayable `interceptor` plan.
 - **Canvas-rendered editor input**: drive Google Docs / Slides / Sheets cell-precisely (caret positioning, table fills, paragraph styles) via dispatched iframe-window `KeyboardEvent`. See [`use-cases/interaction-skills/canvas-rendered-editor-input.md`](use-cases/interaction-skills/canvas-rendered-editor-input.md).
 - **Canvas camera apps**: pan/zoom WebGL viewers via dispatched `MouseEvent`/`WheelEvent`, anchor lat/lng overlays via Web Mercator projection, restyle the rendered viewport with CSS filters. See [`use-cases/interaction-skills/canvas-camera-overlays.md`](use-cases/interaction-skills/canvas-camera-overlays.md) and [`use-cases/interaction-skills/webgl-camera-control.md`](use-cases/interaction-skills/webgl-camera-control.md).
@@ -237,12 +255,12 @@ The recommended install path for end users is the signed `.pkg` documented in [I
   - **macOS:** `brew install --cask brave-browser`
   - **Windows:** `winget install Brave.Brave` (or `choco install brave`)
   - **Linux:** `sudo snap install brave` or `flatpak install flathub com.brave.Browser`. For native package-manager installs (apt/dnf/zypper/AUR), see the [official Linux guide](https://brave.com/linux/).
-- **Developer mode enabled** in the target Brave / Chrome profile. `--load-extension` is silently dropped by Chromium when Dev mode is off, leaving a dormant install with no error. `scripts/install.sh` preflights this and offers to flip it for you (Brave-closed only) or fail loudly with remediation steps. To enable manually: open `brave://extensions/` (or `chrome://extensions/`) and toggle Developer mode in the top-right.
+- **Developer mode enabled** in the target Brave / Chrome profile. `--load-extension` is silently dropped by Chromium when Dev mode is off, leaving a dormant install with no error. `scripts/install.sh` (macOS/Linux) and `scripts/install.ps1` (Windows) both preflight this and offer to flip it for you (browser-closed only) or fail loudly with remediation steps. To enable manually: open `brave://extensions/` (or `chrome://extensions/`) and toggle Developer mode in the top-right.
 - Xcode command line tools (only required if you want to build the macOS bridge)
 
 #### Two install modes
 
-`scripts/install.sh` ships with two named install modes. Pick by what you actually need:
+`scripts/install.sh` (macOS/Linux) ships with two named install modes. Pick by what you actually need. **On Windows use `scripts/install.ps1`** — see [Windows install from source](#windows-install-from-source) below; only browser-only exists there, so the choice doesn't arise.
 
 | Mode | What it installs | macOS TCC prompts | When to pick it |
 |---|---|---|---|
@@ -283,6 +301,36 @@ The dev install produces and uses these artifacts:
 | `~/.local/bin/interceptor-bridge` (symlink) | — | ✅ |
 | `~/Library/LaunchAgents/com.interceptor.bridge.plist` | — | ✅ |
 
+<a name="windows-install-from-source"></a>
+
+#### Windows install from source
+
+Windows has two install paths, and they are for different people:
+
+| Path | Use it when | What it installs into |
+|---|---|---|
+| **`Interceptor-<version>-windows-x64.exe`** (Inno Setup, built by `.github/workflows/windows-installer.yml` from `scripts/installer/interceptor.iss`) | You just want to run Interceptor | `%LOCALAPPDATA%\Programs\Interceptor` |
+| **`scripts\install.ps1`** | You are building from a source tree and want the daemon/extension wired to your checkout | Your repo working directory |
+
+The installer registers the native-messaging keys, manages user PATH, ships the skill packs, and runs `interceptor skills adopt`, but leaves Developer mode and loading the extension to you (see `scripts/installer/post-install.txt`). `install.ps1` does those last two steps and then verifies the result:
+
+```powershell
+bun install
+bash scripts/build.sh --target=windows
+
+pwsh -File scripts\install.ps1 -Browser edge -Profiles              # list profiles first
+pwsh -File scripts\install.ps1 -Browser edge -ProfileName Default   # install + verify
+pwsh -File scripts\install.ps1 -Browser both -DryRun                # print steps, change nothing
+```
+
+It generates the native-messaging manifest pointing at `daemon\interceptor-daemon.exe`, writes the `HKCU:\Software\...\NativeMessagingHosts\com.interceptor.host` key for each target browser, preflights `extensions.ui.developer_mode` in the chosen profile (auto-enabling it when the browser is closed, since Chromium silently drops `--load-extension` otherwise), launches with `--load-extension`, then polls `interceptor status --verbose` for `extension: reachable` for up to 8 seconds.
+
+Flags: `-Browser chrome|brave|edge|both`, `-ProfileName <dir>` (alias `-Profile`), `-Profiles`, `-SkipExtension`, `-BrowserOnly`, `-DryRun`. `-Full` is rejected — the Swift bridge is macOS-only, so browser-only is the only mode on Windows.
+
+Each browser needs its **own** registration; installing for Edge does not register Chrome or Brave. Re-run with a different `-Browser` (or `-Browser both`, which covers Chrome + Brave) for each one you want.
+
+**Rebuilding while the daemon runs is fine.** Windows locks a running `.exe` against write and delete, and the daemon is a *browser-launched* native-messaging host — it respawns within a second, so `taskkill` never opens a window to build in. `scripts/build.sh` handles this by renaming the live image aside (renaming a running image *is* permitted) to `daemon\interceptor-daemon.exe.old-<pid>` and compiling a fresh one at the original path. You'll see a `note:` line when that happens. The sidelined copy keeps serving its browser until that browser drops it, and a later build deletes it. Restart the browser (or run any `interceptor` command after it exits) to pick up the new daemon.
+
 #### Put the CLI on PATH
 
 Run commands from the repo with `./dist/interceptor ...`, or symlink the binary into an existing PATH directory:
@@ -291,6 +339,8 @@ Run commands from the repo with `./dist/interceptor ...`, or symlink the binary 
 mkdir -p ~/.local/bin
 ln -sf "$PWD/dist/interceptor" ~/.local/bin/interceptor
 ```
+
+On Windows, add the `dist\` directory to your user PATH (the Inno Setup installer does this for you via its `addtopath` task). Write the value as an **expandable** string — `setx` truncates at 1024 characters and plain `SetEnvironmentVariable` downgrades the type, breaking any `%…%` entries already in your PATH. A new terminal only inherits the change after Explorer picks it up, so restart the shell (and any editor with an integrated terminal).
 
 #### Chrome channels & the Development Path
 
@@ -311,6 +361,17 @@ All **branded** Google Chrome builds — stable, Beta, Canary, and Dev — ignor
 bash scripts/uninstall.sh                   # Remove everything (both modes)
 bash scripts/uninstall.sh --bridge-only     # Remove only the macOS bridge (downgrade to browser-only)
 ```
+
+`uninstall.sh` targets macOS paths only — there is **no Windows uninstaller for the source install**. For a packaged install, use Add/Remove Programs; Inno Setup deletes the three `NativeMessagingHosts` keys via `uninsdeletekey`. To undo `scripts\install.ps1` by hand:
+
+```powershell
+Remove-Item -Recurse HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.interceptor.host
+Remove-Item -Recurse HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.interceptor.host
+Remove-Item -Recurse HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.interceptor.host
+Remove-Item -Recurse .\daemon\.generated
+```
+
+Then remove the unpacked extension from the browser's extensions page. Developer mode stays on if the script enabled it — turn it back off manually if you want.
 
 #### Verify
 
@@ -334,10 +395,12 @@ bash scripts/uninstall.sh --bridge-only     # Remove only the macOS bridge (down
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `interceptor open <url>` returns `error: timeout: no response for 'tab_create' after 15s` | Browser extension is not loaded — most often because **Developer mode is off** in the target profile. Chromium silently drops `--load-extension` when Dev mode is off. | Open `brave://extensions/` or `chrome://extensions/`, toggle Developer mode ON. Quit the browser fully. Re-run `bash scripts/install.sh` (it will preflight Dev mode and re-launch). |
+| `interceptor open <url>` returns `error: timeout: no response for 'tab_create' after 15s` | Browser extension is not loaded — most often because **Developer mode is off** in the target profile. Chromium silently drops `--load-extension` when Dev mode is off. | Open `brave://extensions/` or `chrome://extensions/`, toggle Developer mode ON. Quit the browser fully (on Windows closing every window is not enough — the process lingers; use `taskkill /IM brave.exe /F`, or `msedge.exe` / `chrome.exe`). Re-run `bash scripts/install.sh` — on Windows `pwsh -File scripts\install.ps1` — which preflights Dev mode and re-launches. |
 | `interceptor status --verbose` says `extension: not reachable` | Same as above, or extension is registered but the Interceptor extension was disabled in the browser. | Open the extensions page, confirm Interceptor (ID `hkjbaciefhhgekldhncknbjkofbpenng`) is present and enabled. If missing, click **Load unpacked** and select `extension/dist/`. |
 | Chrome's extension error page shows `A preload for ... is found, but is not used because the request credentials mode does not match` attributed to `inject-net.js` | A page-level Chromium preload warning was attributed to Interceptor because the passive network shim calls through to the page's original `fetch()` there. The warning is not the same as an Interceptor connection failure. | Treat it as a site warning unless commands fail. If Interceptor commands fail, check the `extension: not reachable` row above. |
-| `chrome://extensions/` reports the extension as version `0.10.0` while `interceptor --version` reports a higher version | Extension manifest drift fixed in this release — rebuild from current source: `bash scripts/build.sh` then re-run `scripts/install.sh`. | Restart the browser after re-loading the extension so Chromium picks up the bumped manifest. |
+| `chrome://extensions/` reports the extension as version `0.10.0` while `interceptor --version` reports a higher version | Extension manifest drift fixed in this release — rebuild from current source: `bash scripts/build.sh` then re-run `scripts/install.sh` (Windows: `scripts\install.ps1`). | Restart the browser after re-loading the extension so Chromium picks up the bumped manifest. |
+| `interceptor status` on Windows prints no `bridge:` line at all | **Expected, not a broken install.** The bridge is the macOS native-automation helper; `cli/lib/status-renderer.ts` suppresses the whole block in `browser-only` mode and suppresses even the "To enable native macOS control" hint when `IS_WIN`. | Nothing to fix. Windows is browser-only — confirm `mode: browser-only` and `daemon: running` are present and ignore the absent bridge block. |
+| A command prints `error: os_click not supported on Windows` (or `os_key` / `os_type`) | You passed `--trusted` (or its deprecated alias `--os`), which routes through the OS input path. That path is a stub on Windows — see the [platform capability matrix](#platform-capability-matrix). | Drop the flag and use the synthetic default, which is the cross-platform path and works on most sites. There is no Windows equivalent; if a site genuinely requires HID-sourced input, it needs macOS. |
 
 In browser-only mode, running an `interceptor macos *` command returns a structured "requires full computer-use install" error within 1 second instead of timing out at 15 seconds.
 
@@ -400,7 +463,7 @@ interceptor style remove <handle>             # Remove a previously injected sty
 interceptor act e2_7                          # Act on element in frame 2 (routed automatically)
 interceptor act e5                            # Click + wait + return updated tree + diff
 interceptor act e3 "hello"                    # Type + wait + return updated tree
-interceptor act e5 --os                       # FALLBACK ONLY — OS-level CGEvent click; try synthetic first (pre-load userActivation override + __interceptor_trust marker satisfies most isTrusted checks)
+interceptor act e5 --trusted                  # FALLBACK ONLY, macOS only — OS-level CGEvent click; try synthetic first (pre-load userActivation override + __interceptor_trust marker satisfies most isTrusted checks)
 interceptor act e5 --keys "Enter"             # Send keyboard shortcut instead
 interceptor act e5 --no-read                  # Skip post-action tree read
 interceptor inspect                           # Tree + text + network log + headers
@@ -425,7 +488,7 @@ interceptor state                            # Full DOM tree + scroll + focused 
 ### Interact
 ```bash
 interceptor click e5                         # Click element (synthetic; default — userActivation override + __interceptor_trust marker handle most isTrusted gates)
-interceptor click e5 --os                    # FALLBACK — OS-level CGEvent click (only when synthetic input is observed to fail)
+interceptor click e5 --trusted               # FALLBACK, macOS only — OS-level CGEvent click (only when synthetic input is observed to fail)
 interceptor click e5 --at 10,20             # Click at offset within element
 interceptor type e3 "hello"                  # Type into element (synthetic; default)
 interceptor type e3 "more" --append          # Append without clearing
@@ -433,7 +496,7 @@ interceptor type "textbox:Search" "query"    # Type using semantic selector (rol
 interceptor select e7 "option-value"         # Select dropdown option
 interceptor hover e5                         # Hover over element
 interceptor keys "Control+A"                 # Keyboard shortcut (synthetic; default)
-interceptor keys "Enter" --os               # FALLBACK — OS-level CGEvent key
+interceptor keys "Enter" --trusted          # FALLBACK, macOS only — OS-level CGEvent key
 interceptor focus e5                         # Focus element
 interceptor drag e5 --from 0,0 --to 100,50  # Drag gesture
 interceptor dblclick e5                      # Double-click
@@ -593,7 +656,7 @@ interceptor click "button:Play"
 
 ### Screenshots
 
-Default capture is **DOM render** — no `chrome.tabs.captureVisibleTab` in the hot path. Works regardless of window focus, macOS Space, or service-worker activation context. A vendored `html-to-image` bundle is injected on demand and paired with a per-tab CORS-clearance DNR rule. Use `--pixel` for compositor-accurate capture (requires Chrome focused).
+Default capture is **DOM render** — no `chrome.tabs.captureVisibleTab` in the hot path. Works regardless of window focus, macOS Space, or service-worker activation context. The renderer is native to the content script (no injected library) and is paired with a per-tab CORS-clearance DNR rule. Use `--pixel` for compositor-accurate capture (requires Chrome focused).
 
 ```bash
 interceptor screenshot                       # Default DOM-render full-page (works without focus)
@@ -650,7 +713,7 @@ interceptor capabilities                     # Check available input layers
 | `--tab <id>` | Target specific tab by ID. When an action names its own tab (`tab close <id>`, `tab switch <id>`), the explicit id wins over `--tab`. |
 | `--any-tab` | Operate outside the interceptor group (also required to `tab close <id>` / `tab switch <id>` an unmanaged tab) |
 | `--context <id>` | Route command to a specific browser context (profile). See `interceptor contexts`. Omitting this flag succeeds only when exactly one context is connected; the daemon errors when zero or multiple contexts are present. |
-| `--os` | FALLBACK: use OS-level CGEvent (macOS) when synthetic input is observed to fail. Default to synthetic — the pre-load `userActivation` override + `__interceptor_trust` event marker satisfy most `isTrusted` checks. |
+| `--trusted` | **macOS only.** FALLBACK: use OS-level CGEvent when synthetic input is observed to fail; a stub on Windows (see [platform capability matrix](#platform-capability-matrix)). Default to synthetic — the pre-load `userActivation` override + `__interceptor_trust` event marker satisfy most `isTrusted` checks. `--os` is a deprecated alias. |
 | `--frame <id>` | Target specific iframe |
 | `--changes` | Include DOM diff in response |
 
@@ -707,17 +770,22 @@ interceptor override clear                    # Clean up
 
 ### Interact with sites that check isTrusted
 
-Try synthetic first. The pre-load `userActivation` override (`extension/src/inject-net.ts` at `document_start`, MAIN world) makes `navigator.userActivation.isActive` always read `true`, satisfying the transient-activation gate that most "isTrusted-checking" sites actually rely on. For sites that ALSO read `event.isTrusted` via the prototype, dispatched events tagged with `event.__interceptor_trust = true` (via `interceptor eval --main`) pass through. Only fall back to `--os` when synthetic input is observed to fail.
+Try synthetic first. The pre-load `userActivation` override (`extension/src/inject-net.ts` at `document_start`, MAIN world) makes `navigator.userActivation.isActive` always read `true`, satisfying the transient-activation gate that most "isTrusted-checking" sites actually rely on. For sites that ALSO read `event.isTrusted` via the prototype, dispatched events tagged with `event.__interceptor_trust = true` (via `interceptor eval --main`) pass through. Only fall back to `--trusted` when synthetic input is observed to fail.
+
+**`--trusted` is macOS-only.** It routes the action through the OS input path (`os_click` / `os_type` / `os_key`), which is implemented with CGEvent on macOS and is a stub on Windows — see the [platform capability matrix](#platform-capability-matrix). `--os` is a deprecated back-compat alias for `--trusted` (`cli/commands/flags.ts`); it still works and emits a one-time deprecation warning, but use `--trusted` in new work.
 
 ```bash
-# Default — synthetic, no --os needed. Works on most sites with rich-editor or canvas-rendered surfaces.
+# Default — synthetic, no --trusted needed. Works on most sites with rich-editor or canvas-rendered surfaces.
+# This is the cross-platform path: it works identically on macOS and Windows.
 interceptor open "https://strict-site.com"
 interceptor act e5
 interceptor act e3 "text"
 
-# Fallback — OS-level CGEvent. Use when synthetic input is observed to fail (banking/payment gateways, IME composition, sites that cache the per-instance own-property isTrusted at boot).
-interceptor click e5 --os
-interceptor type e3 "text" --os
+# Fallback — OS-level CGEvent, macOS only. Use when synthetic input is observed to fail (banking/payment
+# gateways, IME composition, sites that cache the per-instance own-property isTrusted at boot).
+# On Windows these return `error: os_click not supported on Windows` — there is no fallback.
+interceptor click e5 --trusted
+interceptor type e3 "text" --trusted
 ```
 
 ### Read a Google Doc programmatically

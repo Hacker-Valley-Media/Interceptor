@@ -13,14 +13,18 @@ Two install modes, same CLI binary. Check yours with `interceptor status` and re
 |---|---|
 | `Interceptor-Browser-<v>.pkg` (signed installer) | `mode: browser-only` |
 | `Interceptor-Full-<v>.pkg` (signed installer) | `mode: full` |
-| `bash scripts/install.sh --browser-only` (dev path) | `mode: browser-only` |
-| `bash scripts/install.sh --full` (dev path) | `mode: full` |
+| `bash scripts/install.sh --browser-only` (dev path, macOS/Linux) | `mode: browser-only` |
+| `bash scripts/install.sh --full` (dev path, macOS only) | `mode: full` |
+| `Interceptor-<v>-Setup.exe` (Inno Setup installer, Windows) | `mode: browser-only` |
+| `pwsh -File scripts\install.ps1` (dev path, Windows) | `mode: browser-only` |
 | `interceptor upgrade --full` (promote any browser-only install) | `mode: full` |
+
+On Windows, `mode: browser-only` is the only reachable mode: `install.ps1` rejects `-Full` outright, and `interceptor upgrade --full` exits 1 with `'interceptor upgrade --full' is macOS only` (`cli/commands/upgrade.ts:71`). Don't offer the upgrade to a Windows user. See [Windows install from source](README.md#windows-install-from-source).
 
 Operating rules:
 - The `interceptor macos *` preflight short-circuits in browser-only mode with an actionable error. Read it. Do not loop on the 15-second timeout.
-- If the user asks for something native and `interceptor status` reports `mode: browser-only`, respond: "I'm on a browser-only install. Run `interceptor upgrade --full` to enable that command." Don't run the macos command anyway "to see what happens."
-- Downgrade: `bash scripts/uninstall.sh --bridge-only` (or for pkg installs, `sudo bash "/Library/Application Support/Interceptor/uninstall.sh" --bridge-only`).
+- If the user asks for something native and `interceptor status` reports `mode: browser-only`, respond: "I'm on a browser-only install. Run `interceptor upgrade --full` to enable that command." Don't run the macos command anyway "to see what happens." **On Windows, don't suggest the upgrade** — say the capability needs macOS, because no Windows install can reach `mode: full`.
+- Downgrade: `bash scripts/uninstall.sh --bridge-only` (or for pkg installs, `sudo bash "/Library/Application Support/Interceptor/uninstall.sh" --bridge-only`). macOS only — `uninstall.sh` knows no Windows paths, so undoing a Windows source install means deleting the `HKCU:\...\NativeMessagingHosts\com.interceptor.host` keys by hand (see [README](README.md#uninstall)).
 
 ## Core Rules
 
@@ -101,11 +105,11 @@ See `.agents/rules/mcp-control-plane.md` and `docs/mcp.md`.
 | Layer | Use For | Avoid For |
 |---|---|---|
 | **Synthetic** (`act`, `click`, `type`, `keys`, dispatched events via `eval --main` with `event.__interceptor_trust = true`) | DEFAULT for all browser content. Rich-editor typing, canvas pan/zoom/click, design-tool layer select, form fills, button clicks. | Native macOS apps; OS-mediated dialogs that escape the page. |
-| **`--os`** (CGEvent) | ESCALATION ONLY when synthetic is proven not enough — sites with anti-automation that checks beyond `event.isTrusted`, IME composition, OS dialogs. | Default browser interaction — the pre-load `userActivation` override already satisfies the activation gate. |
+| **`--trusted`** (CGEvent, **macOS only**) | ESCALATION ONLY when synthetic is proven not enough — sites with anti-automation that checks beyond `event.isTrusted`, IME composition, OS dialogs. | Default browser interaction — the pre-load `userActivation` override already satisfies the activation gate. **All of Windows**: `daemon/os-input-win.ts` is a stub, so the flag errors with `os_click not supported on Windows`. |
 | **`interceptor macos`** | Native macOS apps. Browser chrome (URL bar, menu, Save/Open dialog). System notifications. Cross-app workflows. | Content inside a browser page — synthetic layer instead. |
 | **`eval --main`** (with `__interceptor_trust` marker on dispatched events) | Canvas-rendered surfaces (Docs/Slides/Sheets cell input, WebGL pan/zoom, design-tool exports), monkey-patching for protocol sniffing. | Tasks a built-in compound command already covers — prefer named commands first. |
 
-The historical reflex of "site checks `isTrusted` → use `--os`" is no longer correct on most sites. `userActivation.isActive` reads `true` because the pre-load override forces it; dispatched events tagged with `__interceptor_trust` satisfy the per-event check on sites that read `isTrusted` via the prototype. Try synthetic first.
+The historical reflex of "site checks `isTrusted` → use `--trusted`" is no longer correct on most sites. `userActivation.isActive` reads `true` because the pre-load override forces it; dispatched events tagged with `__interceptor_trust` satisfy the per-event check on sites that read `isTrusted` via the prototype. Try synthetic first. (`--os` still works as a deprecated back-compat alias for `--trusted` — `cli/commands/flags.ts` — and emits a one-time stderr deprecation warning. Use `--trusted` in new work.)
 
 Deep mechanic notes (the `userActivation` override + `__interceptor_trust` marker, canvas-rendered editor input, blob export capture): [`.agents/skills/interceptor-browser/references/rich-editors.md`](.agents/skills/interceptor-browser/references/rich-editors.md).
 
