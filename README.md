@@ -1358,6 +1358,18 @@ The skill packages mirror the surface split:
 - [`.agents/skills/interceptor/`](.agents/skills/interceptor/) — thin index skill: surface decision table + pointers. Kept as a compatibility shim for one release.
 - `.agents/skills/interceptor-windows/` — **reserved path, not yet created.** Slot for the future Windows surface; do not create until the surface ships.
 
+`interceptor skills adopt` links these into whichever AI runtimes it detects, and `interceptor skills status` reports one state per skill per runtime:
+
+| State | Meaning | What `adopt` does |
+|---|---|---|
+| `linked` | Symlink (junction on Windows) already resolves to this pack's skill | nothing |
+| `missing` | Nothing at that path | creates the link |
+| `foreign` | A symlink pointing somewhere else, or a dangling one | replaces it — `ln -sfn` semantics destroy no data |
+| `stale-copy` | A real directory, e.g. a physical copy from an older install | skipped; `--force` replaces it |
+| `name-collision` | A directory whose name differs from the skill's **only by case** | skipped, and **`--force` will not touch it either** |
+
+`name-collision` exists because Windows and default-configured APFS are case-insensitive: `lstat` on `skills/interceptor` happily resolves an unrelated `skills/Interceptor/` that another author hand-wrote, which `--force` would then delete. `readdir` reports the true casing, so the two are distinguishable. Rename or remove the existing directory yourself if you want this pack's skill linked there.
+
 ## Architecture Notes
 
 No CDP is used for any default operation on the browser surface. Network capture is done by monkey-patching `fetch`/`XHR` in the page's JavaScript context — operating fully in user-space rather than via the debugger protocol. The macOS surface uses Apple-blessed APIs only (Accessibility, ScreenCaptureKit, AVFoundation, Speech, Vision, NaturalLanguage, OSLogStore, NSAppleScript, container runtime). Both surfaces multiplex over the same `interceptor` daemon Unix socket — see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full transport diagram.
