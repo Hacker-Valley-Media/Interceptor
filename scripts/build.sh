@@ -249,6 +249,55 @@ build_macos() {
   bun build daemon/index.ts --compile --target=bun-darwin-arm64 --outfile=daemon/interceptor-daemon
 }
 
+# Windows keeps a mandatory write lock on a running .exe, so `bun build
+# --compile` over a live binary fails with a bare EPERM. This MUST run before the
+# first compile: build_host writes the CLI first (bun appends .exe on a Windows
+# host), so a locked daemon would otherwise leave a freshly-built CLI beside a
+# stale daemon — a half-updated pair that reads as a clean build (`set -e` does
+# exit 1, but the CLI on disk is already new, and the two then disagree on
+# protocol).
+#
+# taskkill is NOT the remedy: the daemon is a browser-launched native-messaging
+# host, so the browser respawns it within a second (measured — five kills in a
+# row never yielded an unlocked window). What DOES work is what Inno's Restart
+# Manager path does: the lock forbids write and delete but permits RENAME, so the
+# live image is moved aside and the compile writes a fresh file at the original
+# path. The sidelined copy keeps running until its browser drops it, and is
+# ignored by git (dist/ is wholly ignored; daemon/*.exe.old-* is an explicit rule
+# because daemon/*.exe does NOT match a .exe.old-NNN suffix).
+prepare_windows_outputs() {
+  local out bak stuck=()
+  for out in dist/interceptor.exe daemon/interceptor-daemon.exe; do
+    [[ -f "$out" ]] || continue
+    # Append zero bytes: opens for write without changing content. A running
+    # image refuses it; nothing else here does.
+    if (printf '' >> "$out") 2>/dev/null; then
+      continue
+    fi
+    # Reap earlier sidelined copies whose holder has since exited. Done BEFORE
+    # the rename below so the glob cannot match the copy we are about to create;
+    # still-locked ones simply refuse deletion and are left for the next run.
+    rm -f "${out}.old-"* 2>/dev/null || true
+    bak="${out}.old-$$"
+    if mv "$out" "$bak" 2>/dev/null; then
+      echo "  note: $out was locked by a running process — moved aside to $bak"
+    else
+      stuck+=("$out")
+    fi
+  done
+  if [[ ${#stuck[@]} -eq 0 ]]; then
+    return 0
+  fi
+  echo "" >&2
+  echo "ERROR: Windows build target(s) are locked and could not be moved aside:" >&2
+  for out in "${stuck[@]}"; do echo "  $out" >&2; done
+  echo "" >&2
+  echo "       Close the browser that owns the native-messaging host (the daemon is" >&2
+  echo "       respawned on demand, so taskkill alone will not free it), then re-run." >&2
+  echo "       Stopped before compiling so you don't get a new CLI beside a stale daemon." >&2
+  exit 1
+}
+
 build_windows_arch() {
   local arch="$1"
   local bun_target stage identity_flag
@@ -302,6 +351,16 @@ build_bridge() {
   echo "Building interceptor-bridge (macOS native)..."
   bash scripts/build-bridge.sh
 }
+
+# Preflight before any bundling: a locked .exe is a user-fixable condition, and
+# there is no point spending an extension build to discover it. The trigger is the
+# host target (the default) plus --all, because build_host is what writes
+# dist/interceptor.exe and daemon/interceptor-daemon.exe on a Windows host. The
+# windows-x64 / windows-arm64 targets stage into dist/windows/<arch>/ instead and
+# are not covered here.
+if [[ "$BUILD_ALL" == "1" || "$TARGET" == "host" ]]; then
+  prepare_windows_outputs
+fi
 
 if [[ "$BUILD_ALL" == "1" ]]; then
   build_extension

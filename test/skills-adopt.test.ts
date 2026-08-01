@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, lstatSync, realpathSync, symlinkSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, lstatSync, realpathSync, symlinkSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
@@ -18,6 +18,32 @@ function makeSkill(name: string): SkillInfo {
 
 function target(): SkillTarget {
   return { id: "claude", label: "Claude Code", parent: join(root, ".claude"), dir: targetDir }
+}
+
+/**
+ * Directory link matching what adoptSkill creates. Bare symlinkSync needs
+ * Developer Mode or elevation on Windows and otherwise throws EPERM; junctions
+ * need neither, which is why the implementation uses them there.
+ */
+function link(src: string, dst: string): void {
+  symlinkSync(src, dst, process.platform === "win32" ? "junction" : undefined)
+}
+
+/**
+ * Probed, not inferred from process.platform: macOS APFS is case-insensitive by
+ * default but can be formatted case-sensitive, and Linux can mount either way.
+ */
+function caseInsensitiveFs(): boolean {
+  const probe = join(root, "CaseProbe")
+  mkdirSync(probe, { recursive: true })
+  try {
+    lstatSync(join(root, "caseprobe"))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(probe, { recursive: true, force: true })
+  }
 }
 
 beforeEach(() => {
@@ -51,7 +77,7 @@ describe("classifyLink", () => {
   test("linked when symlink resolves to the pack skill", () => {
     const s = makeSkill("a")
     mkdirSync(targetDir, { recursive: true })
-    symlinkSync(s.dir, join(targetDir, "a"))
+    link(s.dir, join(targetDir, "a"))
     expect(classifyLink(targetDir, "a", s.dir)).toBe("linked")
   })
 
@@ -59,7 +85,7 @@ describe("classifyLink", () => {
     const s = makeSkill("a")
     const other = makeSkill("b")
     mkdirSync(targetDir, { recursive: true })
-    symlinkSync(other.dir, join(targetDir, "a"))
+    link(other.dir, join(targetDir, "a"))
     expect(classifyLink(targetDir, "a", s.dir)).toBe("foreign")
   })
 
@@ -68,6 +94,32 @@ describe("classifyLink", () => {
     mkdirSync(join(targetDir, "a"), { recursive: true })
     writeFileSync(join(targetDir, "a", "SKILL.md"), "old copy")
     expect(classifyLink(targetDir, "a", s.dir)).toBe("stale-copy")
+  })
+
+  test("name-collision when the on-disk entry differs only by case", () => {
+    const s = makeSkill("interceptor")
+    // Someone else's skill, capital I. On Windows / default APFS the lstat for
+    // ".../interceptor" resolves this directory; readdir reports the true name.
+    mkdirSync(join(targetDir, "Interceptor"), { recursive: true })
+    writeFileSync(join(targetDir, "Interceptor", "SKILL.md"), "hand-authored, unstaged")
+    const state = classifyLink(targetDir, "interceptor", s.dir)
+    if (caseInsensitiveFs()) {
+      expect(state).toBe("name-collision")
+    } else {
+      // Case-sensitive FS: the two names never collide, so nothing is at ours.
+      expect(state).toBe("missing")
+    }
+  })
+
+  test("exact-case match still classifies normally when a case variant exists too", () => {
+    const s = makeSkill("a")
+    mkdirSync(targetDir, { recursive: true })
+    link(s.dir, join(targetDir, "a"))
+    // Only meaningful where both can coexist; skip where the FS folds them.
+    if (!caseInsensitiveFs()) {
+      mkdirSync(join(targetDir, "A"), { recursive: true })
+    }
+    expect(classifyLink(targetDir, "a", s.dir)).toBe("linked")
   })
 })
 
@@ -90,7 +142,7 @@ describe("adoptSkill", () => {
     const s = makeSkill("a")
     const other = makeSkill("b")
     mkdirSync(targetDir, { recursive: true })
-    symlinkSync(other.dir, join(targetDir, "a"))
+    link(other.dir, join(targetDir, "a"))
     const r = adoptSkill(target(), s, false)
     expect(r.action).toBe("linked")
     expect(realpathSync(join(targetDir, "a"))).toBe(realpathSync(s.dir))
@@ -112,6 +164,28 @@ describe("adoptSkill", () => {
     const r = adoptSkill(target(), s, true)
     expect(r.action).toBe("replaced-copy")
     expect(lstatSync(join(targetDir, "a")).isSymbolicLink()).toBe(true)
+  })
+
+  test("--force NEVER deletes a case-only collision (another author's skill)", () => {
+    if (!caseInsensitiveFs()) return
+    const s = makeSkill("interceptor")
+    mkdirSync(join(targetDir, "Interceptor"), { recursive: true })
+    writeFileSync(join(targetDir, "Interceptor", "SKILL.md"), "hand-authored, unstaged")
+    const r = adoptSkill(target(), s, true)
+    expect(r.action).toBe("skipped")
+    expect(r.state).toBe("name-collision")
+    // The precious file survives — this is the whole point of the state.
+    expect(readFileSync(join(targetDir, "Interceptor", "SKILL.md"), "utf-8")).toBe("hand-authored, unstaged")
+  })
+
+  test("skip detail distinguishes a --force-able stale copy from a collision", () => {
+    const stale = makeSkill("a")
+    mkdirSync(join(targetDir, "a"), { recursive: true })
+    expect(adoptSkill(target(), stale, false).detail).toContain("--force")
+    if (!caseInsensitiveFs()) return
+    const collide = makeSkill("interceptor")
+    mkdirSync(join(targetDir, "Interceptor"), { recursive: true })
+    expect(adoptSkill(target(), collide, true).detail).toContain("not even with --force")
   })
 })
 

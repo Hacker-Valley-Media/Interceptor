@@ -435,7 +435,7 @@ Meta:
   interceptor help [<command>|--all]         Concise help / one command's contract / the full reference
   interceptor manifest                       Machine-readable capability manifest (verbs, flags, returns, skills)
   interceptor skills list                    Skill packs shipped with this install + adoption state
-  interceptor skills status                  Per-runtime link state (linked / stale-copy / foreign / missing)
+  interceptor skills status                  Per-runtime link state (linked / stale-copy / foreign / name-collision / missing)
   interceptor skills show <name>             One skill's purpose + which text verb returns what
   interceptor skills adopt [names…] [--into claude,codex,agents] [--all] [--force]
                                              Symlink skill packs into AI runtimes (junctions on Windows)
