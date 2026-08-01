@@ -17,8 +17,11 @@
   chrome | brave | edge | both. If omitted, prompts (or auto-picks the only installed one).
   (both = chrome + brave, matching scripts/install.sh.)
 
-.PARAMETER Profile
+.PARAMETER ProfileName
   Browser profile directory name (e.g. "Default", "Profile 2"). Defaults to "Default".
+  Named ProfileName rather than Profile because $Profile is a PowerShell automatic
+  variable (the path to the current profile script); a parameter named Profile
+  shadows it for the whole script scope.
 
 .PARAMETER SkipExtension
   Only install native-messaging manifest + registry keys; skip extension load.
@@ -36,7 +39,7 @@
   List browser profiles and exit.
 
 .EXAMPLE
-  pwsh -File scripts\install.ps1 -Browser brave -Profile Default
+  pwsh -File scripts\install.ps1 -Browser brave -ProfileName Default
 
 .EXAMPLE
   pwsh -File scripts\install.ps1 -Browser edge -Profiles
@@ -50,7 +53,9 @@ param(
   [ValidateSet('chrome', 'brave', 'edge', 'both')]
   [string]$Browser,
 
-  [string]$Profile = 'Default',
+  # NOT named $Profile — that is a PowerShell automatic variable.
+  [Alias('Profile')]
+  [string]$ProfileName = 'Default',
 
   [switch]$SkipExtension,
 
@@ -334,14 +339,14 @@ function Invoke-LoadExtension {
     return
   }
 
-  $profilePath = Join-Path $ProfileRoot $Profile
+  $profilePath = Join-Path $ProfileRoot $ProfileName
   $prefsPath   = Join-Path $profilePath 'Preferences'
   $devMode     = Get-DeveloperMode $prefsPath
   $extUrl      = Get-ExtensionsUrl $Target
 
   if ($devMode -eq 'false' -or $devMode -eq 'unknown') {
     Write-Host ""
-    Write-Host "==> [browser] $DisplayName profile '$Profile' has Developer mode OFF (or hasn't been opened yet)."
+    Write-Host "==> [browser] $DisplayName profile '$ProfileName' has Developer mode OFF (or hasn't been opened yet)."
     Write-Host ""
     Write-Host "    Without Developer mode, --load-extension is silently dropped by Chromium:"
     Write-Host "    the install reports success, the extension never registers, and every"
@@ -351,7 +356,7 @@ function Invoke-LoadExtension {
     Write-Host "      1. Quit $DisplayName entirely."
     Write-Host "      2. Re-launch $DisplayName, open $extUrl, toggle Developer mode ON."
     Write-Host "      3. Quit $DisplayName again."
-    Write-Host "      4. Re-run: pwsh -File scripts/install.ps1 -Browser $Target -Profile `"$Profile`""
+    Write-Host "      4. Re-run: pwsh -File scripts/install.ps1 -Browser $Target -ProfileName `"$ProfileName`""
 
     $procName = [System.IO.Path]::GetFileNameWithoutExtension($BrowserBinary)
     $isRunning = $null -ne (Get-Process -Name $procName -ErrorAction SilentlyContinue)
@@ -423,9 +428,9 @@ function Invoke-LoadExtension {
   Write-Host "    Extension: $ExtensionDir"
 
   $launchArgs = @("--load-extension=$ExtensionDir")
-  if ($Profile) {
-    $launchArgs += "--profile-directory=$Profile"
-    Write-Host "    Profile:   $Profile"
+  if ($ProfileName) {
+    $launchArgs += "--profile-directory=$ProfileName"
+    Write-Host "    Profile:   $ProfileName"
   }
 
   Start-Process -FilePath $BrowserBinary -ArgumentList $launchArgs | Out-Null
@@ -442,7 +447,7 @@ function Invoke-LoadExtension {
   if ($probed) {
     Write-Host "==> Extension loaded into $DisplayName and reachable."
     Write-Host "    Extension ID: hkjbaciefhhgekldhncknbjkofbpenng"
-    if ($Profile) { Write-Host "    Profile: $Profile" }
+    if ($ProfileName) { Write-Host "    Profile: $ProfileName" }
   } else {
     Write-Warning "==> $DisplayName launched, but the extension is NOT reachable after 8s."
     Write-Host ""
