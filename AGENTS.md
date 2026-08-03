@@ -15,7 +15,7 @@ Two install modes, same CLI binary. Check yours with `interceptor status` and re
 | `Interceptor-Full-<v>.pkg` (signed installer) | `mode: full` |
 | `bash scripts/install.sh --browser-only` (dev path, macOS/Linux) | `mode: browser-only` |
 | `bash scripts/install.sh --full` (dev path, macOS only) | `mode: full` |
-| `Interceptor-<v>-Setup.exe` (Inno Setup installer, Windows) | `mode: browser-only` |
+| `Interceptor-<version>-windows-x64.exe` (Inno Setup installer, Windows) | `mode: browser-only` |
 | `pwsh -File scripts\install.ps1` (dev path, Windows) | `mode: browser-only` |
 | `interceptor upgrade --full` (promote any browser-only install) | `mode: full` |
 

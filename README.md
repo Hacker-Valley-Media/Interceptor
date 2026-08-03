@@ -216,10 +216,10 @@ The Browser surface is cross-platform. Everything that reaches outside the brows
 | `--trusted` / `--os` HID-sourced input | ✅ | ❌ **not implemented** | `daemon/os-input.ts` (macOS CGEvent) vs `daemon/os-input-win.ts` (stub — returns `not supported on Windows` for all four verbs) |
 | `interceptor macos *` (AX tree, native apps, Vision/Speech/NLP) | ✅ | ❌ | Swift bridge, macOS-only by construction |
 | `interceptor ios *` | ✅ | ❌ | Requires the macOS toolchain |
-| `bridge:` line in `interceptor status` | ✅ | ➖ suppressed | `cli/lib/status-renderer.ts` gates on `IS_WIN` |
+| `bridge:` line in `interceptor status` | ✅ in full mode | ➖ suppressed | `cli/lib/status-renderer.ts` suppresses the block whenever mode is `browser-only` |
 | Native Windows UIA / Win32 surface | n/a | 🔜 reserved, not built | See [Future: Interceptor Windows](#future-interceptor-windows) |
 
-`--trusted` fails **loudly** on Windows — `error: os_click not supported on Windows` — so it is a visible dead end rather than a silent no-op. Note that the CLI currently exits `0` on that error (as it does on all command errors), so scripts must check stderr/stdout rather than the exit code.
+`--trusted` fails **loudly** on Windows — `error: os_click not supported on Windows` — so it is a visible dead end rather than a silent no-op. Note that the CLI currently exits `0` on that specific error, because it arrives as a daemon-returned action result rather than a CLI-level failure. Other errors do exit non-zero (unknown commands and `upgrade --full` on a non-macOS host both exit 1), so scripts checking for this one must read stderr/stdout rather than the exit code.
 
 ---
 
