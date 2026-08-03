@@ -312,12 +312,16 @@ Windows has two install paths, and they are for different people:
 | **`Interceptor-<version>-windows-x64.exe`** (Inno Setup, built by `.github/workflows/windows-installer.yml` from `scripts/installer/interceptor.iss`) | You just want to run Interceptor | `%LOCALAPPDATA%\Programs\Interceptor` |
 | **`scripts\install.ps1`** | You are building from a source tree and want the daemon/extension wired to your checkout | Your repo working directory |
 
-The installer registers the native-messaging keys, manages user PATH, ships the skill packs, and runs `interceptor skills adopt`, but leaves Developer mode and loading the extension to you (see `scripts/installer/post-install.txt`). `install.ps1` does those last two steps and then verifies the result:
+The installer registers the native-messaging keys, manages user PATH, ships the skill packs, and runs `interceptor skills adopt`, but leaves Developer mode and loading the extension to you (see `scripts/installer/post-install.txt`). `install.ps1` does those last two steps and then verifies the result.
 
-```powershell
+The source path needs **Bash** as well as PowerShell: `scripts/build.sh` is the only build entry point and there is no PowerShell equivalent. Git Bash (shipped with Git for Windows) or WSL both work. Run the build line in Bash and the `install.ps1` lines in PowerShell:
+
+```bash
 bun install
 bash scripts/build.sh --target=windows
+```
 
+```powershell
 pwsh -File scripts\install.ps1 -Browser edge -Profiles              # list profiles first
 pwsh -File scripts\install.ps1 -Browser edge -ProfileName Default   # install + verify
 pwsh -File scripts\install.ps1 -Browser both -DryRun                # print steps, change nothing
@@ -340,7 +344,9 @@ mkdir -p ~/.local/bin
 ln -sf "$PWD/dist/interceptor" ~/.local/bin/interceptor
 ```
 
-On Windows, add the `dist\` directory to your user PATH (the Inno Setup installer does this for you via its `addtopath` task). Write the value as an **expandable** string — `setx` truncates at 1024 characters and plain `SetEnvironmentVariable` downgrades the type, breaking any `%…%` entries already in your PATH. A new terminal only inherits the change after Explorer picks it up, so restart the shell (and any editor with an integrated terminal).
+On Windows, add your checkout's `dist\` directory to your user PATH. Write the value as an **expandable** string — `setx` truncates at 1024 characters and plain `SetEnvironmentVariable` downgrades the type, breaking any `%…%` entries already in your PATH. A new terminal only inherits the change after Explorer picks it up, so restart the shell (and any editor with an integrated terminal).
+
+Packaged installs need none of that: the Inno Setup installer's `addtopath` task adds its own install directory, `%LOCALAPPDATA%\Programs\Interceptor`, and removes it on uninstall. That is a different directory from the repo `dist\` — do not add both.
 
 #### Chrome channels & the Development Path
 
