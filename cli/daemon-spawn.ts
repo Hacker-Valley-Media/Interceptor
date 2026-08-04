@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import { IS_WIN, SOCKET_PATH, PID_PATH } from "../shared/platform"
+import { IS_WIN, SOCKET_PATH, PID_PATH, WS_PORT } from "../shared/platform"
 export const MACOS_PKG_DAEMON_PATH = "/Library/Application Support/Interceptor/interceptor-daemon"
 
 export type DaemonBinaryCandidateOptions = {
@@ -78,6 +78,15 @@ export function formatMissingDaemonBinaryError(
   return lines.join("\n")
 }
 
+async function isDaemonHealthyOnWsPort(): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${WS_PORT}/`, { timeout: 2000 })
+    return response.status === 200
+  } catch {
+    return false
+  }
+}
+
 /**
  * Ensure the daemon is running, spawning it if needed.
  * Call only when a daemon connection is required (i.e. not for "status", "help", "events", "session").
@@ -117,8 +126,11 @@ export async function ensureDaemon(): Promise<void> {
       }
 
       if (!IS_WIN && !existsSync(SOCKET_PATH)) {
-        console.error("error: daemon failed to start. Check /tmp/interceptor.log")
-        process.exit(1)
+        const isHealthy = await isDaemonHealthyOnWsPort()
+        if (!isHealthy) {
+          console.error("error: daemon failed to start. Check /tmp/interceptor.log")
+          process.exit(1)
+        }
       }
     } else {
       console.error(formatMissingDaemonBinaryError(candidates))
