@@ -123,6 +123,21 @@ export function clearDaemonRuntimeFiles(deps: Pick<LifecycleDeps, "unlinkSync" |
   try { deps.unlinkSync(deps.lockPath) } catch {}
 }
 
+export function clearOwnedDaemonRuntimeFiles(
+  deps: Pick<LifecycleDeps, "existsSync" | "readFileSync" | "unlinkSync" | "kill" | "currentPid" | "pidPath" | "lockPath" | "socketPath" | "isWin" | "log">,
+  reason: string,
+): boolean {
+  const state = readPidState(deps)
+  if (state.status !== "current") {
+    const owner = state.pid === null ? state.status : `${state.status} pid ${state.pid}`
+    deps.log(`preserving daemon runtime files: ${reason}; owner is ${owner}`)
+    return false
+  }
+
+  clearDaemonRuntimeFiles(deps, reason)
+  return true
+}
+
 export function decideDaemonStartupRole(standalone: boolean, state: PidState): StartupDecision {
   if (state.status === "alive") {
     return standalone ? { action: "exit", pid: state.pid } : { action: "relay", pid: state.pid }

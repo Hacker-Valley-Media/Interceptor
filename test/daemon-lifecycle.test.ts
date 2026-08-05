@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   clearDaemonRuntimeFiles,
+  clearOwnedDaemonRuntimeFiles,
   decideDaemonStartupRole,
   decideSingletonGate,
   parseDaemonPidFile,
@@ -73,6 +74,34 @@ describe("daemon lifecycle helpers", () => {
     expect(deps.unlinked).toEqual([deps.socketPath, deps.pidPath, deps.lockPath])
     expect(deps.files.has(deps.pidPath)).toBe(false)
     expect(deps.files.has(deps.socketPath)).toBe(false)
+  })
+
+  test("clears runtime files when the current daemon owns them", () => {
+    const deps = makeDeps() as LifecycleDeps & { files: Map<string, string>; unlinked: string[] }
+    deps.files.set(deps.pidPath, `${deps.currentPid}\n`)
+    deps.files.set(deps.socketPath, "")
+    deps.files.set(deps.lockPath, "{}")
+
+    expect(clearOwnedDaemonRuntimeFiles(deps, "shutdown")).toBe(true)
+    expect(deps.unlinked).toEqual([deps.socketPath, deps.pidPath, deps.lockPath])
+  })
+
+  test("preserves replacement daemon files when an older process exits", () => {
+    const deps = makeDeps() as LifecycleDeps & {
+      files: Map<string, string>
+      unlinked: string[]
+      alive: Set<number>
+    }
+    deps.files.set(deps.pidPath, "222\n")
+    deps.files.set(deps.socketPath, "")
+    deps.files.set(deps.lockPath, "{}")
+    deps.alive.add(222)
+
+    expect(clearOwnedDaemonRuntimeFiles(deps, "late exit")).toBe(false)
+    expect(deps.unlinked).toEqual([])
+    expect(deps.files.has(deps.socketPath)).toBe(true)
+    expect(deps.files.has(deps.pidPath)).toBe(true)
+    expect(deps.files.has(deps.lockPath)).toBe(true)
   })
 
   test("native mode relays to an existing live singleton", () => {

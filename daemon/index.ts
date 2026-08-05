@@ -20,7 +20,7 @@ import {
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
 import { claimContextId, type ContextSocket } from "./context-registration"
 import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
-import { clearDaemonRuntimeFiles, clearLockFile, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
+import { clearDaemonRuntimeFiles, clearOwnedDaemonRuntimeFiles, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
 import { VERSION } from "../cli/version"
 import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
 import { CDP_CONTEXT_PREFIX } from "../shared/cdp-app"
@@ -1777,18 +1777,14 @@ function gracefulShutdown(signal: string) {
     socketServer = null
   }
   if (wsServer) wsServer.stop(true)
-  try { unlinkSync(SOCKET_PATH) } catch {}
-  try { unlinkSync(PID_PATH) } catch {}
-  try { clearLockFile(LOCK_PATH) } catch {}
+  clearOwnedDaemonRuntimeFiles(lifecycleDeps(), `${signal} shutdown`)
   log("shutdown complete")
   process.exit(0)
 }
 
 process.on("exit", (code) => {
   log(`exiting with code ${code}`)
-  try { unlinkSync(SOCKET_PATH) } catch {}
-  try { unlinkSync(PID_PATH) } catch {}
-  try { clearLockFile(LOCK_PATH) } catch {}
+  clearOwnedDaemonRuntimeFiles(lifecycleDeps(), `exit ${code}`)
 })
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
 process.on("SIGINT", () => gracefulShutdown("SIGINT"))
