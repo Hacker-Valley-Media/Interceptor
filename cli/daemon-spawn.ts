@@ -5,6 +5,7 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { IS_WIN, SOCKET_PATH, PID_PATH } from "../shared/platform"
+import { isProcessAlive } from "../shared/process-liveness"
 export const MACOS_PKG_DAEMON_PATH = "/Library/Application Support/Interceptor/interceptor-daemon"
 
 export type DaemonBinaryCandidateOptions = {
@@ -90,7 +91,7 @@ export async function ensureDaemon(): Promise<void> {
       const pidContent = readFileSync(PID_PATH, "utf-8").trim()
       const pid = parseInt(pidContent.split("\n")[0])
       if (!isNaN(pid)) {
-        try { process.kill(pid, 0); daemonAlive = true } catch { daemonAlive = false }
+        daemonAlive = isProcessAlive(pid)
       }
     } catch {}
   }

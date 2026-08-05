@@ -64,6 +64,17 @@ describe("daemon lifecycle helpers", () => {
     expect(readPidState(deps)).toEqual({ status: "stale", pid: 222 })
   })
 
+  test("treats a permission-denied pid probe as a live daemon", () => {
+    const deps = makeDeps({
+      kill() {
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" })
+      },
+    }) as LifecycleDeps & { files: Map<string, string> }
+    deps.files.set(deps.pidPath, "222\n")
+
+    expect(readPidState(deps)).toEqual({ status: "alive", pid: 222 })
+  })
+
   test("clears stale pid and socket files on non-Windows platforms", () => {
     const deps = makeDeps() as LifecycleDeps & { files: Map<string, string>; unlinked: string[] }
     deps.files.set(deps.pidPath, "222\n")

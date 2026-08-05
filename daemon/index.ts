@@ -8,6 +8,7 @@ import { dirname } from "node:path"
 import { validateBinarySinkPath, binarySinkIntegrityError } from "./binary-sink"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOCK_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, MAX_UPLOAD_FRAME_BYTES, transportLabel } from "../shared/platform"
+import { isProcessAlive } from "../shared/process-liveness"
 import {
   MONITOR_EVENT_NAMES,
   appendSessionEvent,
@@ -69,8 +70,7 @@ function isBridgeAlive(): boolean {
   try {
     const pid = parseInt(readFileSync(BRIDGE_PID_PATH, "utf-8").trim())
     if (isNaN(pid)) return false
-    process.kill(pid, 0)
-    return true
+    return isProcessAlive(pid)
   } catch { return false }
 }
 

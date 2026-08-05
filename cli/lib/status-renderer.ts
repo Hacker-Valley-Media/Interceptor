@@ -7,6 +7,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs"
+import { isProcessAlive } from "../../shared/process-liveness"
 import { spawnSync } from "node:child_process"
 import { IS_WIN, SOCKET_PATH, PID_PATH, transportLabel } from "../../shared/platform"
 import { skillsStatusSummary } from "../commands/skills"
@@ -84,7 +85,7 @@ export function readStatusSnapshot(): StatusSnapshot {
       daemonPid = parseInt(lines[0])
       transport = lines[1] || transportLabel()
       if (!isNaN(daemonPid)) {
-        try { process.kill(daemonPid, 0); daemonAlive = true } catch { daemonAlive = false }
+        daemonAlive = isProcessAlive(daemonPid)
       }
     } catch {}
   }
@@ -111,7 +112,7 @@ export function readStatusSnapshot(): StatusSnapshot {
     try {
       bridgePid = parseInt(readFileSync(BRIDGE_PID_PATH, "utf-8").trim())
       if (!isNaN(bridgePid)) {
-        try { process.kill(bridgePid, 0); bridgeAlive = true } catch { bridgeAlive = false }
+        bridgeAlive = isProcessAlive(bridgePid)
       }
     } catch {}
   }
