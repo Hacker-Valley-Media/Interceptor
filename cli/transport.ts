@@ -88,6 +88,9 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
 const SCREENSHOT_TIMEOUT_MS = 175_000
 
 export function pickTimeoutForAction(action: Action): number {
+  if (action.type === "daemon_shutdown" && typeof action.timeoutMs === "number") {
+    return Math.min(62_000, Math.max(2_000, action.timeoutMs + 2_000))
+  }
   if (action.type === "screenshot") {
     return SCREENSHOT_TIMEOUT_MS
   }
@@ -98,6 +101,9 @@ export function pickTimeoutForAction(action: Action): number {
 // Chrome/Brave-extension troubleshooting hint.
 function timeoutMessage(actionType: string, ms: number): string {
   const seconds = Math.round(ms / 1000)
+  if (actionType === "daemon_shutdown") {
+    return `timeout: the daemon did not acknowledge shutdown within ${seconds}s.`
+  }
   if (actionType.startsWith("macos_")) {
     return `timeout: no response for '${actionType}' after ${seconds}s. The macOS bridge may be waiting on a TCC permission prompt (Microphone / Speech Recognition for listen/vad, Screen Recording for screenshot/capture/vision). Check System Settings → Privacy & Security.`
   }

@@ -50,7 +50,8 @@ const MONITOR = ["--capture", "--format", "--guard-policy", "--instruction", "--
 const SCENE = ["--profile", "--slide", "--type"]
 const SSE = ["--filter", "--limit", "--timeout"]
 const RESEARCH = ["--dir", "--effort", "--note", "--slug", "--status"]
-const SKILLS = ["--into"]
+const SKILLS = ["--into", "--owned-root"]
+const DAEMON = ["--reason", "--timeout"]
 
 const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   // compound
@@ -80,7 +81,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   eval: [], save: SAVE, brand: [], group: [], batch: BATCH, raw: BATCH,
   monitor: MONITOR, scene: SCENE, sse: SSE, override: [],
   upgrade: [], init: [], research: RESEARCH, extensions: [], contexts: [],
-  skills: SKILLS, manifest: [],
+  skills: SKILLS, daemon: DAEMON, manifest: [],
 }
 
 /**

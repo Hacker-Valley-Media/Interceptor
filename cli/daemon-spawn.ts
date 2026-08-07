@@ -4,7 +4,9 @@
 
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import { IS_WIN, SOCKET_PATH, PID_PATH } from "../shared/platform"
+import { IS_WIN, SOCKET_PATH, PID_PATH, LOCK_PATH, LOG_PATH, WS_PORT } from "../shared/platform"
+import { readLockFile } from "../daemon/lifecycle"
+import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 export const MACOS_PKG_DAEMON_PATH = "/Library/Application Support/Interceptor/interceptor-daemon"
 
 export type DaemonBinaryCandidateOptions = {
@@ -83,16 +85,31 @@ export function formatMissingDaemonBinaryError(
  * Call only when a daemon connection is required (i.e. not for "status", "help", "events", "session").
  */
 export async function ensureDaemon(): Promise<void> {
+  assertNoInstallMaintenance()
   let daemonAlive = false
+  let observedLivePid: number | null = null
 
   if (existsSync(PID_PATH)) {
     try {
       const pidContent = readFileSync(PID_PATH, "utf-8").trim()
       const pid = parseInt(pidContent.split("\n")[0])
       if (!isNaN(pid)) {
-        try { process.kill(pid, 0); daemonAlive = true } catch { daemonAlive = false }
+        try {
+          process.kill(pid, 0)
+          observedLivePid = pid
+          if (IS_WIN) {
+            const lock = readLockFile(LOCK_PATH)
+            daemonAlive = !!lock && lock.pid === pid && lock.wsPort === WS_PORT && lock.shutdownProtocolVersion === 1
+          } else {
+            daemonAlive = true
+          }
+        } catch { daemonAlive = false }
       }
     } catch {}
+  }
+
+  if (IS_WIN && observedLivePid && !daemonAlive) {
+    throw new Error(`daemon pid ${observedLivePid} is alive but its authenticated lock/readiness record is missing or inconsistent; run 'interceptor diagnose'`)
   }
 
   if (!daemonAlive) {
@@ -113,11 +130,23 @@ export async function ensureDaemon(): Promise<void> {
 
       for (let i = 0; i < 20; i++) {
         await Bun.sleep(250)
-        if (existsSync(SOCKET_PATH) || (IS_WIN && existsSync(PID_PATH))) break
+        if (IS_WIN) {
+          const lock = readLockFile(LOCK_PATH)
+          if (lock?.shutdownProtocolVersion === 1 && lock.wsPort === WS_PORT) {
+            try {
+              process.kill(lock.pid, 0)
+              daemonAlive = true
+              break
+            } catch {}
+          }
+        } else if (existsSync(SOCKET_PATH)) {
+          daemonAlive = true
+          break
+        }
       }
 
-      if (!IS_WIN && !existsSync(SOCKET_PATH)) {
-        console.error("error: daemon failed to start. Check /tmp/interceptor.log")
+      if (!daemonAlive) {
+        console.error(`error: daemon failed to start. Check ${LOG_PATH}`)
         process.exit(1)
       }
     } else {

@@ -18,6 +18,7 @@ import {
 } from "node:fs"
 import { join, dirname, resolve } from "node:path"
 import { homedir, tmpdir } from "node:os"
+import { isAbsoluteOwnedRoot } from "../../shared/install-maintenance"
 
 const PKG_SKILLS_DIR_DARWIN = "/Library/Application Support/Interceptor/skills"
 const SKILLS_REFRESH_MARKER_DARWIN = "/Library/Application Support/Interceptor/.skills-refresh"
@@ -130,6 +131,59 @@ export type AdoptResult = {
   skill: string
   action: "linked" | "already-linked" | "skipped" | "replaced-copy" | "error"
   detail?: string
+}
+
+export type UnadoptResult = {
+  target: string
+  skill: string
+  action: "removed" | "missing" | "foreign" | "not-link" | "error"
+  detail?: string
+}
+
+function comparablePath(path: string, platform = process.platform): string {
+  let normalized = resolve(path)
+  if (platform === "win32") {
+    normalized = normalized.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/i, "")
+    normalized = normalized.replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase()
+  } else {
+    normalized = normalized.replace(/\/+$/, "") || "/"
+  }
+  return normalized
+}
+
+export function unadoptSkill(target: SkillTarget, skillName: string, ownedRoot: string): UnadoptResult {
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(skillName)) {
+    return { target: target.id, skill: skillName, action: "error", detail: "invalid skill name" }
+  }
+  if (!isAbsoluteOwnedRoot(ownedRoot)) {
+    return { target: target.id, skill: skillName, action: "error", detail: "--owned-root must be absolute" }
+  }
+
+  const destination = join(target.dir, skillName)
+  let stat
+  try {
+    stat = lstatSync(destination)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "ENOENT") return { target: target.id, skill: skillName, action: "missing" }
+    return { target: target.id, skill: skillName, action: "error", detail: (error as Error).message }
+  }
+  if (!stat.isSymbolicLink()) {
+    return { target: target.id, skill: skillName, action: "not-link", detail: "destination is a real file or directory" }
+  }
+
+  try {
+    const recorded = readlinkSync(destination)
+    const recordedAbsolute = resolve(dirname(destination), recorded)
+    const expected = resolve(ownedRoot, skillName)
+    if (comparablePath(recordedAbsolute) !== comparablePath(expected)) {
+      return { target: target.id, skill: skillName, action: "foreign", detail: "link target is outside the owned skill root" }
+    }
+    unlinkSync(destination)
+    return { target: target.id, skill: skillName, action: "removed" }
+  } catch (error) {
+    return { target: target.id, skill: skillName, action: "error", detail: (error as Error).message }
+  }
 }
 
 export function adoptSkill(target: SkillTarget, skill: SkillInfo, force: boolean): AdoptResult {
@@ -377,6 +431,59 @@ export function runSkillsCommand(filtered: string[], jsonMode: boolean): null {
     return null
   }
 
-  console.error(`error: unknown skills subcommand '${sub}'. Usage: interceptor skills [list|status|show <name>|adopt [names…] [--into t1,t2] [--all] [--force]]`)
+  if (sub === "unadopt") {
+    if (filtered.includes("--force")) {
+      console.error("error: skills unadopt never accepts --force")
+      process.exit(1)
+    }
+    const rootIndex = filtered.indexOf("--owned-root")
+    const ownedRoot = rootIndex >= 0 ? filtered[rootIndex + 1] : ""
+    if (!ownedRoot || ownedRoot.startsWith("--") || !isAbsoluteOwnedRoot(ownedRoot)) {
+      console.error("error: skills unadopt requires --owned-root <absolute-path>")
+      process.exit(1)
+    }
+    const all = filtered.includes("--all")
+    const intoIds = parseInto(filtered)
+    const targets = intoIds
+      ? allTargets().filter(target => intoIds.includes(target.id))
+      : detectedTargets()
+    if (intoIds) {
+      const known = new Set(allTargets().map(target => target.id))
+      const bad = intoIds.filter(id => !known.has(id))
+      if (bad.length > 0) {
+        console.error(`error: unknown target(s) ${bad.join(", ")} (valid: claude, codex, agents, openclaw, opencode)`)
+        process.exit(1)
+      }
+    }
+    const nameArgs: string[] = []
+    for (let index = 2; index < filtered.length; index++) {
+      if (filtered[index].startsWith("--")) break
+      nameArgs.push(filtered[index])
+    }
+    const knownNames = new Set(skills.map(skill => skill.name))
+    const unknown = nameArgs.filter(name => !knownNames.has(name))
+    if (unknown.length > 0) {
+      console.error(`error: unknown skill(s) ${unknown.join(", ")}. Installed: ${skills.map(skill => skill.name).join(", ")}`)
+      process.exit(1)
+    }
+    const requestedNames = all || nameArgs.length === 0 ? skills.map(skill => skill.name) : nameArgs
+    const results: UnadoptResult[] = []
+    for (const target of targets) {
+      for (const skillName of requestedNames) results.push(unadoptSkill(target, skillName, ownedRoot))
+    }
+    const success = results.every(result => result.action !== "error")
+    if (jsonMode) {
+      console.log(JSON.stringify({ success, results }, null, 2))
+    } else {
+      for (const result of results) {
+        const mark = result.action === "error" ? "✗" : result.action === "removed" ? "✓" : "·"
+        console.log(`${mark} ${result.target}/${result.skill}: ${result.action}${result.detail ? ` — ${result.detail}` : ""}`)
+      }
+    }
+    if (!success) process.exit(1)
+    return null
+  }
+
+  console.error(`error: unknown skills subcommand '${sub}'. Usage: interceptor skills [list|status|show <name>|adopt ...|unadopt [names…] [--into t1,t2] [--all] --owned-root <path>]`)
   process.exit(1)
 }

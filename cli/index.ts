@@ -40,6 +40,7 @@ import { runInitCommand } from "./commands/init"
 import { runResearchCommand } from "./commands/research"
 import { runDiagnoseCommand } from "./commands/diagnose"
 import { runExtensionsCommand } from "./commands/extensions"
+import { runDaemonCommand } from "./commands/daemon"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs } from "./global-flags"
 import { normalizeArgs } from "./normalize"
@@ -72,6 +73,7 @@ const INIT_CMDS = new Set(["init"])
 const RESEARCH_CMDS = new Set(["research"])
 const DIAGNOSE_CMDS = new Set(["diagnose"])
 const EXTENSIONS_CMDS = new Set(["extensions"])
+const DAEMON_CMDS = new Set(["daemon"])
 const SKILLS_CMDS = new Set(["skills"])
 const MANIFEST_CMDS = new Set(["manifest"])
 const MCP_CMDS = new Set(["mcp"])
@@ -80,7 +82,7 @@ const MCP_CMDS = new Set(["mcp"])
 // bootstrap it themselves rather than relying on the pre-dispatch auto-spawn).
 // `research` prints guidance / manages an on-disk ledger — no browser, no daemon.
 // `diagnose` reads local state + optionally probes the daemon — never auto-spawns.
-const NO_DAEMON = new Set(["status", "help", "events", "delegate", "session", "upgrade", "init", "research", "extensions", "skills", "manifest", "diagnose", "mcp"])
+const NO_DAEMON = new Set(["status", "help", "events", "delegate", "session", "upgrade", "init", "research", "extensions", "skills", "manifest", "diagnose", "mcp", "daemon"])
 
 // Every command the CLI dispatches. Used to reject unknown commands
 // before any daemon-spawning side effect runs.
@@ -90,7 +92,7 @@ const ALL_KNOWN_CMDS = new Set<string>([
   ...SAVE_CMDS, ...BRAND_CMDS, ...GROUP_CMDS, ...BATCH_CMDS, ...MONITOR_CMDS, ...SCENE_CMDS, ...SSE_CMDS,
   ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...MACOS_CMDS, ...IOS_CMDS,
   ...UPGRADE_CMDS, ...INIT_CMDS, ...RESEARCH_CMDS, ...EXTENSIONS_CMDS,
-  ...SKILLS_CMDS, ...MANIFEST_CMDS, ...DIAGNOSE_CMDS, ...MCP_CMDS,
+  ...SKILLS_CMDS, ...MANIFEST_CMDS, ...DIAGNOSE_CMDS, ...MCP_CMDS, ...DAEMON_CMDS,
   ...POWER_CMDS, ...DELEGATE_CMDS,
   "help", "contexts",
 ])
@@ -282,6 +284,11 @@ async function main() {
 
   if (EXTENSIONS_CMDS.has(cmd)) {
     runExtensionsCommand(filtered, jsonMode)
+    return
+  }
+
+  if (DAEMON_CMDS.has(cmd)) {
+    await runDaemonCommand(filtered, jsonMode)
     return
   }
 

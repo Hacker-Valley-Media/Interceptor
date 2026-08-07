@@ -47,6 +47,7 @@ VERSION=""
 MODE_FLAG=""   # "" | "browser-only" | "full"
 DRY_RUN=0
 DEPLOY=1       # default: try rwh deploy. --no-deploy to stop after appcast.xml write.
+TAG=1          # default: tag vVERSION + push, so the Windows tag-gated lane fires. --no-tag to skip.
 
 i=1
 while [[ $i -le $# ]]; do
@@ -62,6 +63,7 @@ while [[ $i -le $# ]]; do
     --version)
       i=$((i + 1)); VERSION="${!i:-}" ;;
     --no-deploy) DEPLOY=0 ;;
+    --no-tag) TAG=0 ;;
     --dry-run) DRY_RUN=1 ;;
     *)
       echo "Unknown flag: $arg" >&2
@@ -79,6 +81,7 @@ while [[ $i -le $# ]]; do
       echo "Options:"
       echo "  --version=X.Y.Z  Override version (else read from package.json)"
       echo "  --no-deploy      Update appcast.xml locally; skip the rwh deploy step"
+      echo "  --no-tag         Skip creating/pushing the vX.Y.Z release tag"
       echo "  --dry-run        Print steps without copying / signing / mutating"
       exit 1 ;;
   esac
@@ -347,6 +350,38 @@ elif command -v rwh >/dev/null 2>&1; then
     echo "    WARN: rwh up exited non-zero — appcast may not be live" >&2
 else
   echo "    WARN: rwh CLI not on PATH — push $HOST_PUBLIC manually to deploy." >&2
+fi
+
+# ── Step 6: Tag the release ───────────────────────────────────────────────────
+# The Windows installer lane (windows-installer.yml) builds ONLY on a pushed
+# vX.Y.Z tag whose version equals package.json. Tagging here — at the moment a
+# macOS version goes public — is what keeps macOS and Windows on the same
+# version. 0.22.36/0.22.37 shipped untagged, so that lane never fired for them.
+echo "==> Step 6: Tagging release v${VERSION}"
+if (( ! TAG )); then
+  echo "    --no-tag passed; skipping. The Windows release lane will NOT fire for ${VERSION}."
+elif (( DRY_RUN )); then
+  echo "    DRY: git tag -a v${VERSION} && git push origin v${VERSION}"
+else
+  HEAD_PKG_VERSION="$(git show HEAD:package.json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)"
+  if [[ "$HEAD_PKG_VERSION" != "$VERSION" ]]; then
+    echo "ERROR: HEAD's package.json says '${HEAD_PKG_VERSION}' but you are publishing '${VERSION}'." >&2
+    echo "       Check out the release commit (or pass --no-tag to skip tagging)." >&2
+    exit 1
+  fi
+  if EXISTING="$(git rev-parse -q --verify "refs/tags/v${VERSION}^{commit}")"; then
+    if [[ "$EXISTING" == "$(git rev-parse HEAD)" ]]; then
+      echo "    Tag v${VERSION} already exists at HEAD; ensuring it is pushed."
+      git push origin "v${VERSION}" || { echo "ERROR: tag push failed" >&2; exit 1; }
+    else
+      echo "ERROR: tag v${VERSION} exists at ${EXISTING}, which is not HEAD. Versions are immutable — bump instead." >&2
+      exit 1
+    fi
+  else
+    git tag -a "v${VERSION}" -m "Release ${VERSION}" || { echo "ERROR: tag creation failed" >&2; exit 1; }
+    git push origin "v${VERSION}" || { echo "ERROR: tag push failed — Windows lane will not fire until it is pushed" >&2; exit 1; }
+    echo "    Tagged and pushed v${VERSION} (Windows lane fires from this tag once its workflow is on main)."
+  fi
 fi
 
 echo "================================================================"

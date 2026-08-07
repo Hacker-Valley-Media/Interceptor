@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
-import { spawn } from "node:child_process"
+import { chmodSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { spawn, spawnSync } from "node:child_process"
+import { randomBytes, timingSafeEqual } from "node:crypto"
 
 export type PidState =
   | { status: "missing"; pid: null }
@@ -29,20 +30,67 @@ export type LockFileData = {
   // "native-singleton": a non-standalone process that fell back to serving
   // in-process after failing to spawn a detached standalone daemon.
   mode: "standalone" | "native-singleton"
+  shutdownProtocolVersion?: 1
+  shutdownToken?: string
 }
 
 export function readLockFile(lockPath: string): LockFileData | null {
   try {
-    return JSON.parse(readFileSync(lockPath, "utf-8")) as LockFileData
+    if (statSync(lockPath).size > 65_536) return null
+    const value = JSON.parse(readFileSync(lockPath, "utf-8")) as Record<string, unknown>
+    if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0) return null
+    if (typeof value.version !== "string" || typeof value.execPath !== "string" || typeof value.startedAt !== "string") return null
+    if (typeof value.socketPath !== "string" || !Number.isSafeInteger(value.wsPort)) return null
+    if (value.mode !== "standalone" && value.mode !== "native-singleton") return null
+    if (value.shutdownProtocolVersion !== undefined && value.shutdownProtocolVersion !== 1) return null
+    if (value.shutdownToken !== undefined && (typeof value.shutdownToken !== "string" || !/^[0-9a-f]{64}$/.test(value.shutdownToken))) return null
+    if ((value.shutdownProtocolVersion === 1) !== (typeof value.shutdownToken === "string")) return null
+    return value as LockFileData
   } catch {
     return null
   }
 }
 
+export function generateShutdownToken(): string {
+  return randomBytes(32).toString("hex")
+}
+
+export function constantTimeTokenEquals(actual: unknown, expected: string): boolean {
+  if (typeof actual !== "string" || !/^[0-9a-f]{64}$/.test(actual) || !/^[0-9a-f]{64}$/.test(expected)) return false
+  return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"))
+}
+
+function currentWindowsSid(): string {
+  const result = spawnSync("whoami.exe", ["/user", "/fo", "csv", "/nh"], { encoding: "utf-8", windowsHide: true })
+  if (result.status !== 0) throw new Error("cannot resolve the current Windows SID for lock-file ACL")
+  const match = result.stdout.match(/S-1-(?:\d+-)+\d+/i)
+  if (!match) throw new Error("whoami did not return a Windows SID")
+  return match[0]
+}
+
+function restrictFileToCurrentUser(path: string): void {
+  if (process.platform !== "win32") {
+    chmodSync(path, 0o600)
+    return
+  }
+  const sid = currentWindowsSid()
+  const result = spawnSync("icacls.exe", [path, "/inheritance:r", "/grant:r", `*${sid}:(F)`], {
+    encoding: "utf-8",
+    windowsHide: true,
+  })
+  if (result.status !== 0) throw new Error(`cannot restrict lock-file ACL: ${result.stderr.trim() || result.stdout.trim()}`)
+}
+
 export function writeLockFile(lockPath: string, data: LockFileData): void {
+  const tempPath = `${lockPath}.${process.pid}.${crypto.randomUUID()}.tmp`
   try {
-    writeFileSync(lockPath, JSON.stringify(data, null, 2), "utf-8")
-  } catch {}
+    writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf-8", mode: 0o600, flag: "wx" })
+    restrictFileToCurrentUser(tempPath)
+    renameSync(tempPath, lockPath)
+  } catch (error) {
+    try { unlinkSync(tempPath) } catch {}
+    throw error
+  }
 }
 
 export function clearLockFile(lockPath: string): void {

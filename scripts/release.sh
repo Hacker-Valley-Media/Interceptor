@@ -335,7 +335,15 @@ echo ""
 # ── Step 4: Stage payload tree ────────────────────────────────────────────────
 echo "==> Step 4: Staging payload tree under dist/release/staging/"
 
-run rm -rf "$RELEASE_DIR"
+run mkdir -p "$RELEASE_DIR"
+run rm -rf "$STAGING_DIR" "$COMPONENTS_DIR" "$SCRIPTS_BROWSER_DIR" "$SCRIPTS_FULL_DIR"
+run rm -f "$PAYLOAD_ZIP"
+if [[ "$BUILD_BROWSER" == "1" ]]; then
+  run rm -f "$UNSIGNED_BROWSER_PKG" "$SIGNED_BROWSER_PKG"
+fi
+if [[ "$BUILD_FULL" == "1" ]]; then
+  run rm -f "$UNSIGNED_FULL_PKG" "$SIGNED_FULL_PKG"
+fi
 run mkdir -p "$STAGING_DIR/cli/$DEST_CLI_DIR"
 run mkdir -p "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR"
 run mkdir -p "$STAGING_DIR/extension/$DEST_EXTENSION_DIR"

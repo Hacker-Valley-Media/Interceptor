@@ -20,7 +20,8 @@ import {
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
 import { claimContextId, type ContextSocket } from "./context-registration"
 import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
-import { clearDaemonRuntimeFiles, clearLockFile, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
+import { clearDaemonRuntimeFiles, clearLockFile, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
+import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 import { VERSION } from "../cli/version"
 import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
 import { CDP_CONTEXT_PREFIX } from "../shared/cdp-app"
@@ -462,6 +463,13 @@ const NATIVE_STANDALONE_BOOT_TIMEOUT_MS = 5_000
 
 log(`daemon starting (mode: ${STANDALONE ? "standalone" : "native-messaging"})`)
 
+try {
+  assertNoInstallMaintenance()
+} catch (error) {
+  log((error as Error).message)
+  process.exit(20)
+}
+
 // ── Native Relay ─────────────────────────────────────────────────────────────
 // When Chrome spawns a new daemon (native-messaging mode) and a singleton is
 // already running, the new process becomes a transparent stdio↔IPC bridge
@@ -569,6 +577,12 @@ await bootstrapDaemonRole()
 let wsServer: ReturnType<typeof Bun.serve> | null = null
 let wsBindError: Error | null = null
 try {
+  assertNoInstallMaintenance()
+} catch (error) {
+  log((error as Error).message)
+  process.exit(20)
+}
+try {
   wsServer = startWsServer()
 } catch (err) {
   wsBindError = err as Error
@@ -586,15 +600,18 @@ log(`ws server listening on port ${WS_PORT}`)
 // Duplicate *prevention* is the WS-port gate above, not this file.
 // A non-standalone process only reaches here via the spawn-failure fallback,
 // where it serves as the daemon in-process — hence "native-singleton".
-writeLockFile(LOCK_PATH, {
+const daemonIdentity = {
   pid: process.pid,
   version: VERSION,
   execPath: process.execPath,
   startedAt: new Date().toISOString(),
   socketPath: SOCKET_PATH,
   wsPort: WS_PORT,
-  mode: STANDALONE ? "standalone" : "native-singleton",
-})
+  mode: (STANDALONE ? "standalone" : "native-singleton") as "standalone" | "native-singleton",
+  shutdownProtocolVersion: 1 as const,
+  shutdownToken: generateShutdownToken(),
+}
+writeLockFile(LOCK_PATH, daemonIdentity)
 // Lock cleanup rides the existing shutdown paths (gracefulShutdown + the
 // process "exit" listener below) — a separate signal handler here would
 // register first and its process.exit(0) would stop gracefulShutdown from
@@ -614,6 +631,14 @@ const socketWriteQueues = new Map<object, Buffer[]>()
 const LARGE_PAYLOAD_THRESHOLD = 16 * 1024
 const MAX_RESPONSE_CHARS = 50000
 const NATIVE_HOST_TO_CHROME_MAX_BYTES = 1024 * 1024
+
+function actionLogSummary(action: unknown): string {
+  if (action && typeof action === "object" && !Array.isArray(action) && (action as { type?: string }).type === "daemon_shutdown") {
+    const value = action as { type: string; protocolVersion?: unknown; reason?: unknown }
+    return JSON.stringify({ type: value.type, protocolVersion: value.protocolVersion, reason: value.reason, token: "<redacted>" })
+  }
+  return JSON.stringify(action).slice(0, 100)
+}
 
 function socketWriteFramed(socket: { write: (data: Buffer | string) => number }, json: string): boolean {
   try {
@@ -1345,8 +1370,33 @@ try {
           const id = request.id ?? crypto.randomUUID()
           const action = request.action as { type?: string; [key: string]: unknown } | undefined
           const actionType = action?.type || "unknown"
-          log(`cli request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
+          log(`cli request: ${id} ${actionLogSummary(request.action)}`)
           emitEvent("request_received", { requestId: id, action: actionType })
+
+          if (action?.type === "daemon_shutdown") {
+            const valid = action.protocolVersion === 1 && constantTimeTokenEquals(action.token, daemonIdentity.shutdownToken)
+            if (!valid) {
+              socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "authenticated daemon shutdown rejected" } }))
+              emitEvent("daemon_shutdown_rejected", { requestId: id })
+              continue
+            }
+            socketWriteFramed(socket, JSON.stringify({
+              id,
+              result: {
+                success: true,
+                data: {
+                  accepted: true,
+                  protocolVersion: 1,
+                  pid: daemonIdentity.pid,
+                  execPath: daemonIdentity.execPath,
+                  startedAt: daemonIdentity.startedAt,
+                },
+              },
+            }))
+            emitEvent("daemon_shutdown_accepted", { requestId: id, reason: typeof action.reason === "string" ? action.reason.slice(0, 64) : "unspecified" })
+            setTimeout(() => gracefulShutdown("authenticated shutdown"), 50)
+            continue
+          }
 
           if (action?.type === "contexts") {
             const list = [...extensionWsMap.keys(), ...cdpManager.contextIds(), ...iosManager.contextIds()]
@@ -1658,9 +1708,14 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         }
 
         const id = request.id ?? crypto.randomUUID()
-        log(`ws request: ${id} ${JSON.stringify(request.action).slice(0, 100)}`)
+        log(`ws request: ${id} ${actionLogSummary(request.action)}`)
 
         const actionType = (request.action as { type?: string })?.type || "unknown"
+
+        if (actionType === "daemon_shutdown") {
+          ws.send(JSON.stringify({ id, result: { success: false, error: "daemon shutdown is accepted only on the local IPC transport" } }))
+          return
+        }
 
         // CDP-app surface over the WebSocket transport (screenshot etc.).
         if (CDP_ACTION_TYPES.has(actionType)) {
@@ -1763,7 +1818,11 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
   })
 }
 
+let shuttingDown = false
+
 function gracefulShutdown(signal: string) {
+  if (shuttingDown) return
+  shuttingDown = true
   log(`${signal} received, draining ${pendingRequests.size} pending requests`)
   for (const [id, req] of pendingRequests) {
     clearTimeout(req.timer)

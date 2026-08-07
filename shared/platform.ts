@@ -12,6 +12,7 @@ export type PlatformConfig = {
   logPath: string
   eventsPath: string
   monitorSessionsDir: string
+  maintenanceGuardPath: string
   transportLabel: string
 }
 
@@ -28,8 +29,9 @@ export function resolvePlatformConfig(platform: PlatformName = process.platform,
   const logPath = process.env.INTERCEPTOR_LOG_PATH || `${temp}${sep}interceptor.log`
   const eventsPath = process.env.INTERCEPTOR_EVENTS_PATH || `${temp}${sep}interceptor-events.jsonl`
   const monitorSessionsDir = process.env.INTERCEPTOR_MONITOR_SESSIONS_DIR || `${temp}${sep}interceptor-monitor-sessions`
+  const maintenanceGuardPath = process.env.INTERCEPTOR_INSTALL_MAINTENANCE_PATH || `${temp}${sep}interceptor.installing`
   const transportLabel = isWin ? `tcp:127.0.0.1:${ipcPort}` : `unix:${socketPath}`
-  return { isWin, temp, sep, socketPath, ipcPort, wsPort, pidPath, lockPath, logPath, eventsPath, monitorSessionsDir, transportLabel }
+  return { isWin, temp, sep, socketPath, ipcPort, wsPort, pidPath, lockPath, logPath, eventsPath, monitorSessionsDir, maintenanceGuardPath, transportLabel }
 }
 
 const current = resolvePlatformConfig()
@@ -45,6 +47,7 @@ export const LOCK_PATH = current.lockPath
 export const LOG_PATH = current.logPath
 export const EVENTS_PATH = current.eventsPath
 export const MONITOR_SESSIONS_DIR = current.monitorSessionsDir
+export const MAINTENANCE_GUARD_PATH = current.maintenanceGuardPath
 export const EVENTS_MAX_SIZE = 10 * 1024 * 1024
 
 // File-upload transport sizing. The `upload` verb ships file bytes
