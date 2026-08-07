@@ -2,6 +2,7 @@ import { connectToHost, connectWsChannel, registerAlarmListener, registerSwKeepa
 import { registerCdpListeners } from "./background/cdp"
 import { registerTabGroupListeners, ensureInterceptorGroup } from "./background/tab-group"
 import { registerBrandTabGroup } from "./background/brand-tab-group"
+import { registerTabLifecycle } from "./background/tab-lifecycle"
 import { registerDelegationListeners } from "./background/delegation"
 import { registerPowerIdleListeners } from "./background/keepawake"
 import { initializeActionRouter } from "./background/router"
@@ -14,6 +15,7 @@ registerAlarmListener()
 registerSwKeepaliveListener()
 registerStorageContextListener()
 registerBrandTabGroup()
+registerTabLifecycle()
 registerDelegationListeners()
 registerPowerIdleListeners()
 

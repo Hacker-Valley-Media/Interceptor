@@ -6,6 +6,7 @@ import {
 import { routeAction } from "./router"
 import { needsTab } from "./no-tab-actions"
 import { resolveWorkingTabId } from "./resolve-tab"
+import { recordGroupActivity } from "./tab-lifecycle"
 
 export const MESSAGE_QUEUE_CAP = 50
 export const messageQueue: Array<{
@@ -130,6 +131,13 @@ export async function handleDaemonMessage(msg: {
     fail(`invalid group label '${groupLabel}' — must match [A-Za-z0-9_-]{1,32}`)
     return
   }
+
+  // Liveness stamp for the idle sweeper: any grouped command marks its
+  // group alive; any ungrouped tab-touching command (plus tab_create, which is a
+  // NO_TAB action but births tabs) marks the default group alive. Meta polls like
+  // `status`/`group_list` deliberately do NOT count as tab activity.
+  if (groupLabel) recordGroupActivity(groupLabel)
+  else if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity("")
 
   if (!tabId && needsTab(action.type)) {
     tabId = await getActiveTabId(groupLabel)

@@ -6,6 +6,19 @@
 import { COMMAND_SPECS } from "./manifest"
 
 const COMMAND_HELP: Record<string, string> = {
+  update: [
+    "interceptor update — update Interceptor itself",
+    "",
+    "  interceptor update             macOS: user-initiated Sparkle check — surfaces the update alert immediately",
+    "  interceptor update status      macOS: Sparkle state — feed URL, last check, automatic-check schedule",
+    "",
+    "Notes:",
+    "  - macOS: requires the full install (the updater lives in the bridge app); browser-only",
+    "    installs get 'interceptor upgrade --full' guidance instead. The check always shows a",
+    "    visible prompt when an update exists — no waiting on the scheduled-check cadence.",
+    "  - Windows: updates ship as a signed installer — this command prints the Releases link",
+    "    (run the newer architecture-matched Setup; downgrades are refused).",
+  ].join("\n"),
   daemon: [
     "interceptor daemon — local daemon lifecycle control",
     "",
@@ -140,6 +153,7 @@ const MAP_UPGRADE = `macOS + iPhone control are NOT enabled on this browser-only
 
 const MAP_FOOTER = `LOCAL (no browser needed):
   status · init · daemon stop · skills (adopt packs into Claude Code / Codex / ~/.agents) · manifest · research · upgrade · help
+  update — update Interceptor itself (fires the Sparkle update check; 'update status' shows the schedule)
 
 GLOBAL FLAGS (any command, any position — flag order never changes meaning):
   --json  --context <id>  --tab <id>  --group <label>  --frame <id>  --all-surfaces
@@ -177,8 +191,10 @@ Compound (agent-optimized):
   interceptor open <url> --full              Full text (200K cap) instead of the 8000-char summary
   interceptor open <url> --timeout <ms>      Override wait-stable timeout (default 5000)
   interceptor open <url> --no-wait           Return immediately after tab creation
-  interceptor open <url> --reuse             Navigate the most recent Interceptor-group tab instead of opening a new one (cleans up long automation runs)
+  interceptor open <url> --reuse             Navigate the most recent managed tab instead of opening a new one (cleans up long automation runs)
+  interceptor open <url> --no-reuse          Force a new tab (overrides the named-group reuse default)
   interceptor open <url> --reuse --activate  Navigate the reused tab and bring it to the foreground
+                                             With --group <label>, open reuses that group's most-recent tab BY DEFAULT (policy: extension popup)
   interceptor read                           Tree + text for active tab
   interceptor read <ref>                     Tree + text for element subtree
   interceptor read --tree-only               Skip text
@@ -250,8 +266,9 @@ Navigation:
 
 Tabs:
   interceptor tabs                           List all tabs
-  interceptor tab new [url]                  Open new tab in background (default)
+  interceptor tab new [url]                  Open new tab in background (default; always creates — the ⌘T verb)
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
+  interceptor tab new [url] --reuse          Navigate the group's most-recent tab instead of creating
   interceptor tab close [id]                 Close tab
   interceptor tab switch <id>                Switch to tab (explicit focus move)
   interceptor window new [url]               Open a new browser window

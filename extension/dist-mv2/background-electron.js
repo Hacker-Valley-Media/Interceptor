@@ -1806,11 +1806,63 @@ async function handleCanvasActions(action, tabId) {
   return { success: false, error: `unknown canvas action: ${action.type}` };
 }
 
+// extension/src/background/tab-lifecycle.ts
+var DEFAULT_TAB_LIFECYCLE = { reuse: true, idleCloseMinutes: 10 };
+var STORAGE_KEY = "tabLifecycle";
+var GROUP_LAST_SEEN_PREFIX = "groupLastSeen:";
+function normalizeTabLifecycle(raw) {
+  const obj = raw && typeof raw === "object" ? raw : {};
+  const reuse = typeof obj.reuse === "boolean" ? obj.reuse : DEFAULT_TAB_LIFECYCLE.reuse;
+  let idle = DEFAULT_TAB_LIFECYCLE.idleCloseMinutes;
+  if (typeof obj.idleCloseMinutes === "number" && Number.isFinite(obj.idleCloseMinutes)) {
+    idle = Math.max(0, Math.round(obj.idleCloseMinutes));
+  }
+  return { reuse, idleCloseMinutes: idle };
+}
+function policyMayDecideReuse(action) {
+  return action.reuse === undefined && action.reusePolicy === true && typeof action.group === "string" && action.group.length > 0;
+}
+async function readArea(area) {
+  try {
+    const storageArea = chrome.storage[area];
+    if (!storageArea || typeof storageArea.get !== "function")
+      return;
+    const stored = await storageArea.get(STORAGE_KEY);
+    const raw = stored?.[STORAGE_KEY];
+    if (raw === undefined || raw === null)
+      return;
+    return normalizeTabLifecycle(raw);
+  } catch {
+    return;
+  }
+}
+async function resolveTabLifecycle() {
+  const managed = await readArea("managed");
+  if (managed)
+    return { policy: managed, source: "managed" };
+  const local = await readArea("local");
+  if (local)
+    return { policy: local, source: "local" };
+  return { policy: { ...DEFAULT_TAB_LIFECYCLE }, source: "default" };
+}
+function sessionArea3() {
+  const storage = chrome.storage;
+  return storage.session ?? chrome.storage.local;
+}
+function stampKey(label) {
+  return `${GROUP_LAST_SEEN_PREFIX}${label}`;
+}
+function recordGroupActivity(label) {
+  try {
+    sessionArea3().set({ [stampKey(label ?? "")]: Date.now() }).catch(() => {});
+  } catch {}
+}
+
 // extension/src/background/capabilities/tabs.ts
 function activeTabKey(group) {
   return group ? `activeTabId:${group}` : "activeTabId";
 }
-function sessionArea3() {
+function sessionArea4() {
   const storage = chrome.storage;
   return storage.session ?? chrome.storage.local;
 }
@@ -1843,7 +1895,15 @@ async function handleTabActions(action, tabId) {
       if (group && !GROUP_LABEL_RE.test(group)) {
         return { success: false, error: `invalid group label '${group}' — must match [A-Za-z0-9_-]{1,32}` };
       }
-      if (action.reuse) {
+      let reuseWanted = action.reuse === true;
+      if (!reuseWanted && policyMayDecideReuse(action)) {
+        try {
+          reuseWanted = (await resolveTabLifecycle()).policy.reuse;
+        } catch {
+          reuseWanted = false;
+        }
+      }
+      if (reuseWanted) {
         const groupId = group ? await ensureNamedGroup(group) : await ensureInterceptorGroup();
         if (groupId !== -1) {
           const groupTabs = await chrome.tabs.query({ groupId });
@@ -1858,7 +1918,7 @@ async function handleTabActions(action, tabId) {
                   updateProps.active = true;
                 const updated = await chrome.tabs.update(candidate.id, updateProps);
                 await waitForTabLoad(candidate.id);
-                await sessionArea3().set({ [activeTabKey(group)]: candidate.id });
+                await sessionArea4().set({ [activeTabKey(group)]: candidate.id });
                 return {
                   success: true,
                   data: { tabId: candidate.id, url: updated?.url ?? targetUrl, groupId, group, reused: true }
@@ -1877,7 +1937,7 @@ async function handleTabActions(action, tabId) {
       });
       if (newTab.id) {
         const groupId = group ? await addTabToNamedGroup(newTab.id, group, action.groupColor) : await addTabToInterceptorGroup(newTab.id);
-        await sessionArea3().set({ [activeTabKey(group)]: newTab.id });
+        await sessionArea4().set({ [activeTabKey(group)]: newTab.id });
         const data = { tabId: newTab.id, url: newTab.url, groupId, group, reused: false };
         const groupWarning = groupWarningFor(groupId, hasTabGroupApi());
         if (groupWarning)
@@ -1890,10 +1950,10 @@ async function handleTabActions(action, tabId) {
       const closedId = action.tabId || tabId;
       await chrome.tabs.remove(closedId);
       const keys = ["activeTabId", typeof action.group === "string" ? activeTabKey(action.group) : null].filter((k) => !!k);
-      const stored = await sessionArea3().get(keys);
+      const stored = await sessionArea4().get(keys);
       for (const key of keys) {
         if (stored[key] === closedId)
-          await sessionArea3().remove(key);
+          await sessionArea4().remove(key);
       }
       return { success: true };
     }
@@ -3146,8 +3206,21 @@ async function handleFrameActions(action, tabId) {
 // extension/src/background/capabilities/meta.ts
 async function handleMetaActions(action, tabId) {
   switch (action.type) {
-    case "status":
-      return { success: true, data: { connected: true, version: chrome.runtime.getManifest().version } };
+    case "status": {
+      let tabLifecycle;
+      try {
+        const resolved = await resolveTabLifecycle();
+        tabLifecycle = { ...resolved.policy, source: resolved.source };
+      } catch {}
+      return {
+        success: true,
+        data: {
+          connected: true,
+          version: chrome.runtime.getManifest().version,
+          ...tabLifecycle ? { tabLifecycle } : {}
+        }
+      };
+    }
     case "reload_extension":
       setTimeout(() => chrome.runtime.reload(), 100);
       return { success: true, data: "reloading in 100ms" };
@@ -4608,6 +4681,10 @@ async function handleDaemonMessage(msg) {
     fail(`invalid group label '${groupLabel}' — must match [A-Za-z0-9_-]{1,32}`);
     return;
   }
+  if (groupLabel)
+    recordGroupActivity(groupLabel);
+  else if (needsTab(action.type) || action.type === "tab_create")
+    recordGroupActivity("");
   if (!tabId && needsTab(action.type)) {
     tabId = await getActiveTabId(groupLabel);
     if (tabId && groupLabel) {

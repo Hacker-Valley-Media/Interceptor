@@ -123,12 +123,28 @@ export function buildReadTreeAction(opts: {
 
 // ── interceptor open <url> ──────────────────────────────────────────────────────────
 
+export type TabCreateAction = {
+  type: "tab_create"
+  url: string
+  reuse?: boolean
+  reusePolicy?: boolean
+  active?: boolean
+}
+
 export function buildTabCreateAction(
   filtered: string[],
-  url: string
-): { type: "tab_create"; url: string; reuse?: boolean; active?: boolean } {
-  const action: { type: "tab_create"; url: string; reuse?: boolean; active?: boolean } = { type: "tab_create", url }
+  url: string,
+  opts?: { policyDefault?: boolean }
+): TabCreateAction {
+  const action: TabCreateAction = { type: "tab_create", url }
+  // --reuse / --no-reuse are the explicit per-call decisions. Without either,
+  // `open` (policyDefault) marks the action reuse-undecided via `reusePolicy`
+  // and the extension's resolved tabLifecycle policy decides — named groups
+  // only. `tab new` never sets policyDefault: it is the ⌘T verb and
+  // always creates unless --reuse is passed.
   if (filtered.includes("--reuse")) action.reuse = true
+  else if (filtered.includes("--no-reuse")) action.reuse = false
+  else if (opts?.policyDefault) action.reusePolicy = true
   // --activate is the explicit opt-in for foregrounding the new tab.
   // Default is background-first; the extension's tab_create handler reads
   // `action.active === true` and only then passes `active: true` to
@@ -158,8 +174,9 @@ export async function runOpen(
   const timeoutIdx = filtered.indexOf("--timeout")
   const timeout = timeoutIdx !== -1 ? parseInt(filtered[timeoutIdx + 1]) : 5000
 
-  // Step 1: Create tab (or reuse an existing managed one when --reuse is set)
-  const createAction = buildTabCreateAction(filtered, url)
+  // Step 1: Create tab (or reuse an existing managed one when --reuse is set,
+  // or by policy default for named-group calls)
+  const createAction = buildTabCreateAction(filtered, url, { policyDefault: true })
   const createResult = await send(createAction, globalTabId, useWs, contextId)
   if (!createResult.success) {
     output(jsonMode, { success: false, error: createResult.error || "failed to create tab" })

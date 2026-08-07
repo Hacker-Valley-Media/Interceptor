@@ -32,7 +32,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   // ── compound (agent-optimized) ──────────────────────────────────────────────
   {
     name: "open", surface: "browser",
-    usage: "interceptor open <url> [--tree-only|--text-only] [--markdown] [--full] [--reuse] [--activate] [--no-wait] [--timeout <ms>]",
+    usage: "interceptor open <url> [--tree-only|--text-only] [--markdown] [--full] [--reuse|--no-reuse] [--activate] [--no-wait] [--timeout <ms>]",
     summary: "Open URL in a background tab, wait for stability, return a11y tree + page text",
     returns: "tree: a11y tree (interactive elements + e<n> refs). text: document.body.innerText (visible rendered text), capped at 8,000 chars unless --full (200K). --markdown swaps text for a structure-preserving markdown render.",
     flags: [
@@ -40,7 +40,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
       { name: "--text-only", description: "skip tree" },
       { name: "--markdown", description: "render text as markdown (headings/bold/lists/tables preserved)" },
       { name: "--full", description: "lift the 8K text cap (up to 200K)" },
-      { name: "--reuse", description: "navigate the most recent managed tab instead of opening a new one" },
+      { name: "--reuse", description: "navigate the most recent managed tab instead of opening a new one (the DEFAULT for --group calls, per the extension's tab-lifecycle policy)" },
+      { name: "--no-reuse", description: "force a new tab (overrides the named-group reuse default)" },
       { name: "--activate", description: "foreground the tab (default is background-first)" },
       { name: "--no-wait", description: "return immediately after tab creation" },
       { name: "--timeout", value: "<ms>", description: "wait-stable timeout (default 5000)" },
@@ -150,6 +151,13 @@ export const COMMAND_SPECS: CommandSpec[] = [
   // ── tabs / network / capture / data ─────────────────────────────────────────
   { name: "tabs", surface: "browser", usage: "interceptor tabs", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
   { name: "tab", surface: "browser", usage: "interceptor tab new|close|activate|reload […]", summary: "Tab lifecycle", returns: "ok / tab info." },
+  {
+    name: "update", surface: "local",
+    usage: "interceptor update [status]",
+    summary: "Update Interceptor itself — fires a user-initiated Sparkle update check (full install only)",
+    returns: "check: confirmation the update alert was fired + feed URL. status: feed, lastCheck, automaticChecks, checkInterval, canCheckForUpdates, sessionInProgress.",
+    example: "interceptor update",
+  },
   { name: "network", surface: "browser", usage: "interceptor net [--filter <pattern>] [--limit <n>] [--format har|json|pcapng --out <path>]", summary: "Passive network log", returns: "Recent requests (method, url, status, type); exportable to HAR/pcapng." },
   { name: "headers", surface: "browser", usage: "interceptor headers [--filter <pattern>]", summary: "Request headers seen", returns: "Header sets per request." },
   { name: "screenshot", surface: "browser", usage: "interceptor screenshot [e<ref>] [--save] [--format png|jpeg|webp] [--quality <n>]", summary: "Screenshot page/element", returns: "Image (saved to disk with --save; path on stderr)." },

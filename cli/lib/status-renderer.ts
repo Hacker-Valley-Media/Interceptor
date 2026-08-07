@@ -40,6 +40,13 @@ export type StatusSnapshot = {
     reachable: boolean
     reason?: string
   }
+  // tab-lifecycle policy as the extension resolved it — populated only
+  // when verbose + extension reachable
+  tabLifecycle?: {
+    reuse: boolean
+    idleCloseMinutes: number
+    source: string
+  }
   // skills-adoption block — pack presence + per-runtime link counts
   skills?: {
     packDir: string | null
@@ -360,6 +367,13 @@ export function formatStatus(snap: StatusSnapshot, opts: { verbose?: boolean }):
     }
   }
 
+  // tab-lifecycle policy — verbose-only when extension reachable
+  if (snap.tabLifecycle) {
+    const lc = snap.tabLifecycle
+    const idle = lc.idleCloseMinutes > 0 ? `close idle groups after ${lc.idleCloseMinutes}m` : "idle-close off"
+    lines.push(`tab lifecycle: reuse ${lc.reuse ? "on (named groups)" : "off"} · ${idle} (source: ${lc.source})`)
+  }
+
   // skills adoption block — pack presence + per-runtime link counts
   if (snap.skills && snap.skills.targets.length > 0) {
     lines.push("")
@@ -403,6 +417,7 @@ export function snapshotToJson(snap: StatusSnapshot): Record<string, unknown> {
   }
   if (snap.browser) base.browser = snap.browser
   if (snap.extension) base.extension = snap.extension
+  if (snap.tabLifecycle) base.tabLifecycle = snap.tabLifecycle
   if (snap.skills) base.skills = snap.skills
   return base
 }
