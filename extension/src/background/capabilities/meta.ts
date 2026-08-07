@@ -1,5 +1,6 @@
 import { activeTransport } from "../transport"
 import { debuggerAttached, cdpAttachActDetach } from "../cdp"
+import { resolveTabLifecycle } from "../tab-lifecycle"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -8,8 +9,23 @@ export async function handleMetaActions(
   tabId: number
 ): Promise<ActionResult> {
   switch (action.type) {
-    case "status":
-      return { success: true, data: { connected: true, version: chrome.runtime.getManifest().version } }
+    case "status": {
+      // tabLifecycle: the resolved policy + which tier supplied it,
+      // so agents can observe the reuse/idle-close behavior instead of fighting it.
+      let tabLifecycle: Record<string, unknown> | undefined
+      try {
+        const resolved = await resolveTabLifecycle()
+        tabLifecycle = { ...resolved.policy, source: resolved.source }
+      } catch {}
+      return {
+        success: true,
+        data: {
+          connected: true,
+          version: chrome.runtime.getManifest().version,
+          ...(tabLifecycle ? { tabLifecycle } : {})
+        }
+      }
+    }
 
     case "reload_extension":
       setTimeout(() => chrome.runtime.reload(), 100)

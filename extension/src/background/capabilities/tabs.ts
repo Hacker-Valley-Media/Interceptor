@@ -3,6 +3,7 @@ import {
   GROUP_LABEL_RE, ensureNamedGroup, addTabToNamedGroup, labelForGroupId,
   namedGroups, hydrateNamedGroups, groupTitleFor, hasTabGroupApi
 } from "../tab-group"
+import { resolveTabLifecycle, policyMayDecideReuse } from "../tab-lifecycle"
 import { waitForTabLoad } from "../content-bridge"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
@@ -81,7 +82,22 @@ export async function handleTabActions(
       // keeps one agent's --reuse from hijacking another agent's tab
       // (per-agent isolation). Falls back to creating a new tab if the group is empty
       // or the candidate tab disappeared between query and update.
-      if (action.reuse) {
+      //
+      // Policy default: `open` marks reuse-undecided calls with
+      // `reusePolicy` and the resolved tabLifecycle policy decides — but ONLY
+      // for named groups. In the shared default group "most recent tab" can be
+      // a sibling agent's, so the policy never engages there; explicit --reuse
+      // (action.reuse === true) still works everywhere, --no-reuse
+      // (action.reuse === false) blocks both paths.
+      let reuseWanted = action.reuse === true
+      if (!reuseWanted && policyMayDecideReuse(action)) {
+        try {
+          reuseWanted = (await resolveTabLifecycle()).policy.reuse
+        } catch {
+          reuseWanted = false
+        }
+      }
+      if (reuseWanted) {
         const groupId = group ? await ensureNamedGroup(group) : await ensureInterceptorGroup()
         if (groupId !== -1) {
           const groupTabs = await chrome.tabs.query({ groupId })

@@ -15,7 +15,9 @@ This installed skill is self-contained. Source checkouts also have `AGENTS.md`, 
 
 - Use compound commands (`open`, `read`, `act`, `inspect`) before low-level verbs.
 - Browser commands operate inside managed Interceptor tab groups. Do not use `--any-tab` unless the user explicitly authorizes acting outside those groups.
-- When other agents may share this browser, scope yourself with `--group <label>` on every command (or set `INTERCEPTOR_GROUP` once): your tabs live in their own colored group, resolution never leaves it, and cross-group targets are rejected. Run `interceptor group close <label>` when your job is done; `interceptor group list` shows what's running.
+- Pick a stable `--group <label>` (your agent name or session id) at the start of browser work, or set `INTERCEPTOR_GROUP` once. A named label buys three things at once: your tabs live in their own colored group and resolution never leaves it (isolation from sibling agents), `open` reuses your group's most-recent tab instead of piling up new ones, and the idle sweeper has a clean unit to reap if you crash. `interceptor group list` shows what's running.
+- Close your group with `interceptor group close <label>` the moment the job is done — tabs you leave open are tabs the user has to close by hand. The extension auto-closes idle groups (default: after 10 minutes without a command; configurable in the extension popup), but that is the crash-safety floor, not a substitute for cleaning up.
+- In a named group, `open` navigates your group's most-recent tab by default (address-bar semantics; the reused tab stays in the background unless you add `--activate`). Pass `--no-reuse` when you need to keep the current page and open another — e.g. before comparing two pages or fanning out. `tab new` always creates (⌘T semantics). Ungrouped `open` always creates.
 - `interceptor open <url>` and `interceptor tab new <url>` create background tabs by default. Only `open --activate`, `tab new --activate`, `tab switch <id>`, and `window focus <id>` intentionally move browser focus.
 - If multiple browser profiles are connected, run `interceptor contexts` and pass `--context <id>`.
 - Safari registers as the stable context `safari`; route with `interceptor --context safari <verb>`. If it is absent, verify the notarized Interceptor Safari extension is enabled before attempting page commands. Safari's enable switch is a protected user-present action; never try to bypass its Touch ID/password gate.
@@ -79,8 +81,20 @@ If the target is **outside the page** - a native dialog, browser chrome (URL bar
 
 If the target is an **Electron / Chromium desktop app's web contents** (Slack, VS Code, Notion, Descript, etc.), use the CDP/app reference from `interceptor-macos`: `references/cdp-app.md`.
 
+If the task is **breadth research** — "investigate / go deep on / find everything about X" across many sources — load `interceptor-research`, which layers a planner loop, source ledger, and verification pass on top of this surface.
+
 ## Do Not Default To Troubleshooting
 
 - User wants a browser task completed → run Interceptor commands.
 - User wants Interceptor fixed, installed, or explained → that's a separate task; ask before diving into repo state.
 - Inside the Interceptor repo, use this skill for live browser validation, not as the primary source of repo-development instructions.
+
+## Completion
+
+A browser job is complete only when:
+
+- every claim about page state comes from a re-read (`read`/`inspect`) taken *after* the last mutation, not from the action's success alone;
+- artifacts you produced (screenshots, saved files, captured payloads) are named by absolute path in the report;
+- your tab group is closed (`interceptor group close <label>`) and `interceptor group list` no longer shows it — the list output is the proof, not the close command's exit code.
+
+Report what failed or was skipped as prominently as what worked. Never report only the happy fields.

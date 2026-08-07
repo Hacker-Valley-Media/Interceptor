@@ -127,6 +127,15 @@ WRITE    - Last. Durable artifact mapped back to the sub-questions, every fact
            dated + attributed + confidence-tagged. Run a coverage critic: what
            source TYPE / counter-view / search angle is still missing?
 
+TEARDOWN - After WRITE. Research fans out across many tabs; they are yours to
+           close, not the user's. Run:
+             interceptor group close <label>     (the group you opened at PLAN)
+             interceptor group list              (proof it is gone)
+           The extension auto-closes idle groups (default 10 min without a
+           command) as a crash-safety floor — do not lean on it. The ledger at
+           ./.interceptor-research/<slug>/ is a deliberate artifact: it SURVIVES
+           the task; name it in the final report so the user knows it exists.
+
 Full version: interceptor research --full   |   Skill: interceptor-research`
 
 /**

@@ -26,10 +26,10 @@ type Action = { type: string; [key: string]: unknown }
  * interceptor-group tab. Probe is skipped silently when the daemon isn't
  * running, so `status` stays a true local-pre-spawn check by default.
  */
-async function probeExtensionReachability(): Promise<{ reachable: boolean; reason?: string }> {
+async function probeExtensionReachability(contextId?: string): Promise<{ reachable: boolean; reason?: string }> {
   try {
     const resp = await Promise.race([
-      sendCommand({ type: "tab_list" }, undefined),
+      sendCommand({ type: "tab_list" }, undefined, contextId),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("probe timed out after 2s")), 2000)
       ),
@@ -48,7 +48,7 @@ async function probeExtensionReachability(): Promise<{ reachable: boolean; reaso
   }
 }
 
-export async function parseMetaCommand(filtered: string[], jsonMode = false): Promise<Action | null> {
+export async function parseMetaCommand(filtered: string[], jsonMode = false, contextId?: string): Promise<Action | null> {
   const cmd = filtered[0]
 
   switch (cmd) {
@@ -76,8 +76,22 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
       // Extension-reachability probe (#49) — verbose-only, daemon-alive-only.
       // Stays a true local-pre-spawn check otherwise.
       if (verbose && snap.daemon) {
-        const probe = await probeExtensionReachability()
+        const probe = await probeExtensionReachability(contextId)
         snap.extension = { probed: true, ...probe }
+        // Surface the extension-resolved tab-lifecycle policy so agents
+        // can observe the reuse/idle-close behavior. Best-effort, 2s-bounded.
+        if (probe.reachable) {
+          try {
+            const resp = await Promise.race([
+              sendCommand({ type: "status" }, undefined, contextId),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("status probe timed out after 2s")), 2000)
+              ),
+            ])
+            const data = resp.result?.data as { tabLifecycle?: StatusSnapshot["tabLifecycle"] } | undefined
+            if (data?.tabLifecycle) snap.tabLifecycle = data.tabLifecycle
+          } catch {}
+        }
       } else if (verbose && !snap.daemon) {
         snap.extension = { probed: false, reachable: false, reason: "daemon not running" }
       }
@@ -200,9 +214,20 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false): Pr
 
     case "sessions":
       if (filtered[1] === "restore") {
-        return { type: "session_restore", sessionId: filtered[2] }
+        // First non-flag argument (previously `filtered[2]`, which swallowed
+        // flags — `sessions restore --json` sent "--json" as the sessionId).
+        const sessionId = filtered.slice(2).find(a => !a.startsWith("-"))
+        // No-arg restore is deliberately refused: Chrome restores "whatever
+        // closed most recently", which can be the user's own window. An undo
+        // must name its target.
+        if (!sessionId) {
+          console.error("error: sessions restore requires a <sessionId> — run 'interceptor sessions' to list recently closed tabs/windows. (No-arg restore is disabled: it reopens whatever closed most recently, which may be the user's own window.)")
+          process.exit(1)
+        }
+        return { type: "session_restore", sessionId }
       } else {
-        return { type: "session_list", maxResults: filtered[1] ? parseInt(filtered[1]) : 10 }
+        const max = filtered.slice(1).find(a => !a.startsWith("-"))
+        return { type: "session_list", maxResults: max ? parseInt(max) : 10 }
       }
 
     case "capabilities":

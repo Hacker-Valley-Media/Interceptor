@@ -86,4 +86,67 @@ if (hasTabGroups) {
     await chrome.storage.local.set({ brandTabGroup: { title, color: colorSelect.value } })
     showStatus("Tab group label saved.")
   })
+
+  // --- tab lifecycle policy ---
+  // This popup is the ONLY writer for the `tabLifecycle` key. Same dynamic-injection
+  // gating as the brand block above: no tabGroups API (MV2 Electron) → no controls.
+  const DEFAULT_LIFECYCLE = { reuse: true, idleCloseMinutes: 10 }
+
+  const lcWrap = document.createElement("div")
+  lcWrap.style.marginTop = "14px"
+
+  const lcLabel = document.createElement("label")
+  lcLabel.textContent = "Tab lifecycle"
+  lcWrap.appendChild(lcLabel)
+
+  const reuseRow = document.createElement("label")
+  reuseRow.style.cssText = "display:flex;align-items:center;gap:6px;font-weight:400;margin-bottom:6px;"
+  const reuseCheck = document.createElement("input")
+  reuseCheck.id = "lcReuse"
+  reuseCheck.type = "checkbox"
+  reuseCheck.style.cssText = "width:auto;"
+  reuseCheck.checked = DEFAULT_LIFECYCLE.reuse
+  reuseRow.appendChild(reuseCheck)
+  reuseRow.appendChild(document.createTextNode("Reuse tabs (named groups)"))
+  lcWrap.appendChild(reuseRow)
+
+  const idleRow = document.createElement("label")
+  idleRow.style.cssText = "display:flex;align-items:center;gap:6px;font-weight:400;"
+  idleRow.appendChild(document.createTextNode("Close idle groups after"))
+  const idleInput = document.createElement("input")
+  idleInput.id = "lcIdle"
+  idleInput.type = "number"
+  idleInput.min = "0"
+  idleInput.step = "1"
+  idleInput.style.cssText = "width:64px;"
+  idleInput.value = String(DEFAULT_LIFECYCLE.idleCloseMinutes)
+  idleRow.appendChild(idleInput)
+  idleRow.appendChild(document.createTextNode("min (0 = never)"))
+  lcWrap.appendChild(idleRow)
+
+  const lcRow = document.createElement("div")
+  lcRow.className = "row"
+  const lcSave = document.createElement("button")
+  lcSave.id = "lcSave"
+  lcSave.textContent = "Save lifecycle"
+  lcSave.style.cssText = "background:#0071e3;color:#fff;"
+  lcRow.appendChild(lcSave)
+  lcWrap.appendChild(lcRow)
+
+  statusEl.parentElement?.insertBefore(lcWrap, statusEl)
+
+  void chrome.storage.local.get("tabLifecycle").then((stored) => {
+    const lc = (stored as { tabLifecycle?: { reuse?: unknown; idleCloseMinutes?: unknown } }).tabLifecycle
+    if (lc && typeof lc.reuse === "boolean") reuseCheck.checked = lc.reuse
+    if (lc && typeof lc.idleCloseMinutes === "number" && Number.isFinite(lc.idleCloseMinutes)) {
+      idleInput.value = String(Math.max(0, Math.round(lc.idleCloseMinutes)))
+    }
+  })
+
+  lcSave.addEventListener("click", async () => {
+    const idle = Math.max(0, Math.round(Number(idleInput.value)))
+    if (!Number.isFinite(idle)) { showStatus("Idle minutes must be a number."); return }
+    await chrome.storage.local.set({ tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle } })
+    showStatus("Tab lifecycle saved.")
+  })
 }

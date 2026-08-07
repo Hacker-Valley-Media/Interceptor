@@ -8,7 +8,8 @@ Full surface for `interceptor` (no prefix). Reference doc — load when you need
 interceptor open <url>                             # Open + wait + tree + text
 interceptor open <url> --full | --tree-only | --text-only
 interceptor open <url> --timeout 15000
-interceptor open <url> --reuse                     # Navigate latest Interceptor-group tab instead of creating
+interceptor open <url> --reuse                     # Navigate latest managed tab instead of creating
+interceptor open <url> --no-reuse                  # Force a new tab (overrides the named-group reuse default)
 
 interceptor read                                   # Current page tree + text
 interceptor read e12 [--tree-only | --text-only]   # Scoped sub-tree
@@ -20,7 +21,7 @@ interceptor text --markdown                        # Standalone markdown dump
 interceptor text e12 --markdown                    # Element rendered as markdown
 ```
 
-`--reuse` for long automation — without it, dead tabs accumulate. Reading strategy: start with `read`/`open`, not a screenshot. Re-read after every mutating action.
+In a **named group** (`--group <label>`), `open` reuses that group's most-recent tab **by default** (address-bar semantics; policy set in the extension popup) — pass `--no-reuse` to keep the current page and open another. Ungrouped `open` and `tab new` always create; `--reuse` opts in per call. Reading strategy: start with `read`/`open`, not a screenshot. Re-read after every mutating action.
 
 **`--markdown` is a SWAP for `--text-only`, not an extra command.** It renders the same content with structure preserved (`<strong>` → `**bold**`, `<h1-6>` → `#`/`##`/..., lists, tables). Use it *instead of* plain `--text-only` when the task asks for the "exact text" / "exact summary" of a section, or the page has visually emphasized text near plain descriptive copy — markdown lets you tell the real answer from decoy or instructional prose. **Never run both modes** — pick one and commit. Skip markdown for raw fact lookups (single date, name, number) where flat text is enough.
 
@@ -176,6 +177,7 @@ interceptor wait-stable
 interceptor tabs
 interceptor tab new <url>             # Background tab in the interceptor group
 interceptor tab new <url> --activate  # Explicit foregrounding
+interceptor tab new <url> --reuse     # Navigate the group's most-recent tab instead of creating
 interceptor tab switch <tab-id>
 interceptor tab close <tab-id>
 
@@ -193,7 +195,7 @@ interceptor window resize --state maximized               # Don't combine maximi
 
 Use `--tab <id>` for a specific tab; `--any-tab` only when explicitly authorized.
 
-When several agents share one browser context, give each its own `--group <label>` (or set `INTERCEPTOR_GROUP` once per agent): every command then resolves and acts only within that agent's tab group, `--reuse` reuses only that group's tabs, and cross-group targets are rejected. Labels match `[A-Za-z0-9_-]{1,32}`; pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done.
+Give each agent its own `--group <label>` (or set `INTERCEPTOR_GROUP` once per agent): every command then resolves and acts only within that agent's tab group, reuse applies only to that group's tabs, and cross-group targets are rejected. Labels match `[A-Za-z0-9_-]{1,32}`; pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done — `interceptor group close <label>`, then `group list` as proof. The extension auto-closes groups idle for 10+ minutes by default (popup-configurable, 0 disables); treat that as crash safety, not as your cleanup.
 
 ## Cookies / Storage / History / Bookmarks
 

@@ -6,6 +6,7 @@
 
 import { unlinkSync } from "node:fs"
 import { writeFileSync } from "node:fs"
+import { buildTabCreateAction } from "./compound"
 
 type Action = { type: string; [key: string]: unknown }
 
@@ -131,10 +132,11 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
     case "tab":
       switch (filtered[1]) {
         case "new": {
-          // Background-first by default; --activate is the opt-in.
-          const action: Action = { type: "tab_create", url: filtered[2] }
-          if (filtered.includes("--activate")) action.active = true
-          return action
+          // Background-first by default; --activate is the opt-in. Shares the
+          // open-verb parser so --reuse works here too (it was silently ignored
+          // before), but never sets policyDefault: `tab new` is
+          // the ⌘T verb and always creates unless --reuse is explicit.
+          return buildTabCreateAction(filtered, filtered[2])
         }
         case "close": {
           // The id is the first non-flag argument (`tab close --json` is a
