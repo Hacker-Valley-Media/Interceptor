@@ -1,30 +1,42 @@
+#requires -Version 7
 <#
 .SYNOPSIS
-  Install Interceptor on Windows (browser-only).
+  Register the Interceptor native-messaging host on Windows from a source checkout.
 
 .DESCRIPTION
-  Windows analogue of scripts/install.sh. The macOS Swift bridge is mac-only,
-  so on Windows -Full is rejected and only -BrowserOnly is supported.
+  DEVELOPER HELPER — not the product installer. This script only registers the
+  native-messaging host for a built source checkout and prints the manual
+  "Load unpacked" steps. The shipping Windows product is the signed per-user
+  installer built from scripts/installer/interceptor.iss; see
+  docs/windows-install.md.
+
+  Deliberately out of scope, because none of it is safe or truthful here:
+    * editing browser Preferences / enabling Developer mode
+    * launching browsers with --load-extension (current branded Chrome ignores
+      the switch on Windows; Chrome 137 removed it)
+    * quitting or restarting a running browser
+    * asserting that a specific browser/profile can reach the extension
 
   Steps performed:
-    1. Generate native-messaging manifest pointing at daemon/interceptor-daemon.exe
-    2. Write registry keys under HKCU:\Software\{Google\Chrome,BraveSoftware\Brave-Browser,Microsoft\Edge}\NativeMessagingHosts
-    3. Preflight extensions.ui.developer_mode in the target profile's Preferences JSON
-    4. Launch the chosen browser with --load-extension=...\extension\dist
-    5. Probe `interceptor.exe status --verbose` for `extension: reachable`
+    1. Generate a native-messaging manifest pointing at the built daemon
+    2. Snapshot, then write HKCU native-host keys for Chrome, Brave, and Edge
+       (all three always — Brave resolves the Google Chrome key as well as its
+       own), restoring the snapshot if any write fails
+    3. Print manual Load-unpacked instructions for the chosen browser
 
 .PARAMETER Browser
-  chrome | brave | edge | both. If omitted, prompts (or auto-picks the only installed one).
-  (both = chrome + brave, matching scripts/install.sh.)
+  chrome | brave | edge | both. Only selects which instructions are printed;
+  registry registration always covers all three. Required in non-interactive
+  sessions — there is no silent default.
 
 .PARAMETER ProfileName
-  Browser profile directory name (e.g. "Default", "Profile 2"). Defaults to "Default".
-  Named ProfileName rather than Profile because $Profile is a PowerShell automatic
-  variable (the path to the current profile script); a parameter named Profile
-  shadows it for the whole script scope.
+  Browser profile directory name used by -Profiles listing (e.g. "Default",
+  "Profile 2"). Named ProfileName rather than Profile because $Profile is a
+  PowerShell automatic variable (the path to the current profile script); a
+  parameter named Profile shadows it for the whole script scope.
 
 .PARAMETER SkipExtension
-  Only install native-messaging manifest + registry keys; skip extension load.
+  Register the native-messaging host only; print no extension instructions.
 
 .PARAMETER BrowserOnly
   Explicit browser-only mode. (Implicit on Windows; flag exists for parity with install.sh.)
@@ -39,7 +51,7 @@
   List browser profiles and exit.
 
 .EXAMPLE
-  pwsh -File scripts\install.ps1 -Browser brave -ProfileName Default
+  pwsh -File scripts\install.ps1 -Browser brave
 
 .EXAMPLE
   pwsh -File scripts\install.ps1 -Browser edge -Profiles
@@ -71,6 +83,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+if ($Full) {
+  Write-Error "ERROR: -Full is macOS only (the Swift bridge does not build on Windows). Windows installs are browser-only."
+  exit 1
+}
+
 # ── Paths ────────────────────────────────────────────────────────────────────────
 $Root              = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $TemplatePath      = Join-Path $Root 'daemon\com.interceptor.host.json'
@@ -84,39 +101,23 @@ $ChromeUserData = Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data'
 $BraveUserData  = Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\User Data'
 $EdgeUserData   = Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'
 
-$ChromeBinaryCandidates = @(
+$ChromeBinary = @(
   (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
   (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
   (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe')
-)
-$BraveBinaryCandidates = @(
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+
+$BraveBinary = @(
   (Join-Path $env:ProgramFiles 'BraveSoftware\Brave-Browser\Application\brave.exe'),
   (Join-Path ${env:ProgramFiles(x86)} 'BraveSoftware\Brave-Browser\Application\brave.exe'),
   (Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\Application\brave.exe')
-)
-$EdgeBinaryCandidates = @(
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+
+$EdgeBinary = @(
   (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
-  (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
-  (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application\msedge.exe')
-)
+  (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe')
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
 
-function Find-Binary {
-  param([string[]]$Candidates)
-  foreach ($c in $Candidates) {
-    if ($c -and (Test-Path -LiteralPath $c)) { return $c }
-  }
-  return $null
-}
-
-$ChromeBinary = Find-Binary $ChromeBinaryCandidates
-$BraveBinary  = Find-Binary $BraveBinaryCandidates
-$EdgeBinary   = Find-Binary $EdgeBinaryCandidates
-
-# ── Mode resolution (browser-only is the only valid mode on Windows) ─────────────
-if ($Full) {
-  Write-Error "ERROR: -Full is rejected on Windows. The Swift bridge is macOS-only.`n       Use -BrowserOnly (or omit; browser-only is implicit on Windows)."
-  exit 1
-}
 $Mode = 'browser-only'
 
 # ── Helper: run-or-print ─────────────────────────────────────────────────────────
@@ -183,6 +184,10 @@ if ($Profiles) {
 }
 
 # ── Browser resolution ───────────────────────────────────────────────────────────
+# Instruction targeting only. Registration always covers all three browsers, so a
+# wrong guess here cannot mis-register anything — but a silent default in a
+# non-interactive session still prints instructions for a browser that may not be
+# installed, so require an explicit choice there.
 if (-not $Browser) {
   $installed = @()
   if ($ChromeBinary) { $installed += 'chrome' }
@@ -197,9 +202,9 @@ if (-not $Browser) {
   if ($installed.Count -eq 1) {
     $Browser = $installed[0]
     Write-Host "==> Browser: $Browser (only supported browser found)"
-  } elseif ($DryRun -or -not [Environment]::UserInteractive) {
-    $Browser = 'chrome'
-    Write-Host "==> Browser not specified; defaulting to '$Browser' (non-interactive)."
+  } elseif (-not [Environment]::UserInteractive) {
+    Write-Error "ERROR: multiple browsers found ($($installed -join ', ')). Pass -Browser explicitly in a non-interactive session."
+    exit 1
   } else {
     Write-Host ""
     Write-Host "Choose target browser:"
@@ -207,8 +212,7 @@ if (-not $Browser) {
     if ($BraveBinary)  { Write-Host "  brave    Brave Browser" }
     if ($EdgeBinary)   { Write-Host "  edge     Microsoft Edge" }
     if ($ChromeBinary -and $BraveBinary) { Write-Host "  both     Chrome and Brave" }
-    $answer = Read-Host "Browser (default: chrome)"
-    if (-not $answer) { $answer = 'chrome' }
+    $answer = Read-Host "Browser"
     if ($answer -notin @('chrome', 'brave', 'edge', 'both')) {
       Write-Error "Unrecognized browser '$answer'. Use chrome, brave, edge, or both."
       exit 1
@@ -217,17 +221,17 @@ if (-not $Browser) {
   }
 }
 
-Write-Host "==> Mode: $Mode"
+Write-Host "==> Mode: $Mode (source-checkout developer registration)"
 Write-Host "==> Browser: $Browser"
 if ($DryRun) { Write-Host "==> DRY RUN — no files will be created or modified." }
 
 # ── Preflight ────────────────────────────────────────────────────────────────────
 if (-not (Test-Path -LiteralPath $DaemonPath)) {
-  Write-Error "ERROR: daemon binary not found at $DaemonPath`n       Build it first: bash scripts/build.sh --target=windows"
+  Write-Error "ERROR: daemon binary not found at $DaemonPath`n       Build it first: bash scripts/build.sh --target=windows-x64 (or --target=windows-arm64)"
   exit 1
 }
 if (-not $SkipExtension -and -not (Test-Path -LiteralPath $ExtensionDir) -and -not $DryRun) {
-  Write-Error "ERROR: extension bundle not found at $ExtensionDir`n       Build it first: bash scripts/build.sh --target=windows"
+  Write-Error "ERROR: extension bundle not found at $ExtensionDir`n       Build it first: bash scripts/build.sh"
   exit 1
 }
 
@@ -238,243 +242,74 @@ Invoke-Step -Description "mkdir $GeneratedDir; write $GeneratedManifest with pat
   $template = Get-Content -LiteralPath $TemplatePath -Raw | ConvertFrom-Json
   $template.path = $DaemonPath
   $template | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $GeneratedManifest -NoNewline
+  if (-not (Test-Path -LiteralPath $GeneratedManifest)) { throw "manifest was not written to $GeneratedManifest" }
   Write-Host "    Manifest: $GeneratedManifest"
 }
 
 # ── Step 2: Write native-messaging registry keys ─────────────────────────────────
-Write-Host "==> [browser] Writing native messaging registry keys..."
-$registryTargets = @()
-switch ($Browser) {
-  'chrome' { $registryTargets += @{ Name = 'Chrome'; Key = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.interceptor.host' } }
-  'brave'  { $registryTargets += @{ Name = 'Brave';  Key = 'HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.interceptor.host' } }
-  'edge'   { $registryTargets += @{ Name = 'Edge';   Key = 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.interceptor.host' } }
-  'both'   {
-    $registryTargets += @{ Name = 'Chrome'; Key = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.interceptor.host' }
-    $registryTargets += @{ Name = 'Brave';  Key = 'HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.interceptor.host' }
-  }
-}
-foreach ($t in $registryTargets) {
-  Invoke-Step -Description "registry: $($t.Key) (default) = $GeneratedManifest" -Action {
-    New-Item -Path $t.Key -Force | Out-Null
-    Set-ItemProperty -Path $t.Key -Name '(default)' -Value $GeneratedManifest
-    Write-Host "    $($t.Name): $($t.Key)"
-  }
-}
+# All three always: Brave resolves the Google Chrome native-host key in addition to
+# its own, so a Brave-only registration leaves the host unreachable.
+Write-Host "==> [browser] Writing native messaging registry keys (Chrome, Brave, Edge)..."
+$registryTargets = @(
+  @{ Name = 'Chrome'; Key = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.interceptor.host' }
+  @{ Name = 'Brave';  Key = 'HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.interceptor.host' }
+  @{ Name = 'Edge';   Key = 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.interceptor.host' }
+)
 
-# ── Step 3: Load extension into chosen browser(s) ────────────────────────────────
-function Get-DeveloperMode {
-  param([string]$PrefsPath)
-  if (-not (Test-Path -LiteralPath $PrefsPath)) { return 'unknown' }
+if ($DryRun) {
+  foreach ($t in $registryTargets) { Write-Host "    DRY: registry: $($t.Key) (default) = $GeneratedManifest" }
+} else {
+  # Snapshot every key before touching it so a partial failure can be undone.
+  $snapshots = @{}
+  foreach ($t in $registryTargets) {
+    $existed = Test-Path -LiteralPath $t.Key
+    $prior = $null
+    if ($existed) { $prior = (Get-ItemProperty -LiteralPath $t.Key -ErrorAction SilentlyContinue).'(default)' }
+    $snapshots[$t.Key] = @{ Existed = $existed; Value = $prior }
+  }
   try {
-    $json = Get-Content -LiteralPath $PrefsPath -Raw | ConvertFrom-Json
-    if ($json.PSObject.Properties.Match('extensions').Count -gt 0 -and
-        $json.extensions.PSObject.Properties.Match('ui').Count -gt 0 -and
-        $json.extensions.ui.PSObject.Properties.Match('developer_mode').Count -gt 0) {
-      if ($json.extensions.ui.developer_mode) { return 'true' }
-      return 'false'
+    foreach ($t in $registryTargets) {
+      New-Item -Path $t.Key -Force | Out-Null
+      Set-ItemProperty -Path $t.Key -Name '(default)' -Value $GeneratedManifest
+      Write-Host "    $($t.Name): $($t.Key)"
     }
-    return 'unknown'
   } catch {
-    return 'unknown'
+    Write-Warning "Registry write failed — restoring prior native-host values."
+    foreach ($key in $snapshots.Keys) {
+      $snap = $snapshots[$key]
+      try {
+        if (-not $snap.Existed) { Remove-Item -LiteralPath $key -Force -Recurse -ErrorAction SilentlyContinue }
+        elseif ($null -ne $snap.Value) { Set-ItemProperty -Path $key -Name '(default)' -Value $snap.Value }
+      } catch {}
+    }
+    Write-Error "ERROR: could not register the native messaging host: $($_.Exception.Message)"
+    exit 1
   }
 }
 
-function Set-DeveloperModeTrue {
-  param([string]$PrefsPath, [string]$BrowserBinary)
-  if (-not (Test-Path -LiteralPath $PrefsPath)) { return $false }
-  $procName = [System.IO.Path]::GetFileNameWithoutExtension($BrowserBinary)
-  if (Get-Process -Name $procName -ErrorAction SilentlyContinue) { return $false }
-  try {
-    $json = Get-Content -LiteralPath $PrefsPath -Raw | ConvertFrom-Json
-    if (-not $json.PSObject.Properties.Match('extensions').Count) {
-      $json | Add-Member -NotePropertyName 'extensions' -NotePropertyValue ([pscustomobject]@{})
-    }
-    if (-not $json.extensions.PSObject.Properties.Match('ui').Count) {
-      $json.extensions | Add-Member -NotePropertyName 'ui' -NotePropertyValue ([pscustomobject]@{})
-    }
-    if (-not $json.extensions.ui.PSObject.Properties.Match('developer_mode').Count) {
-      $json.extensions.ui | Add-Member -NotePropertyName 'developer_mode' -NotePropertyValue $true
-    } else {
-      $json.extensions.ui.developer_mode = $true
-    }
-    # Atomic-ish write: write sibling, then move into place.
-    $tmp = "$PrefsPath.tmp"
-    $json | ConvertTo-Json -Depth 100 -Compress | Set-Content -LiteralPath $tmp -NoNewline
-    Move-Item -LiteralPath $tmp -Destination $PrefsPath -Force
-    return $true
-  } catch {
-    return $false
-  }
-}
-
-function Test-ExtensionReachable {
-  if (-not (Test-Path -LiteralPath $CliPath)) { return $true }  # nothing to probe with; skip silently
-  $output = & $CliPath status --verbose 2>$null
-  return ($output -match '(?m)^extension:\s+reachable')
-}
-
-function Invoke-LoadExtension {
-  param(
-    [string]$Target,
-    [string]$BrowserBinary,
-    [string]$ProfileRoot,
-    [string]$DisplayName
-  )
-
-  if ($SkipExtension) {
-    Write-Host "==> [browser] Skipping extension loading (-SkipExtension)"
-    return
-  }
-
-  if ($DryRun) {
-    Write-Host "==> [browser] DRY: would launch $DisplayName --load-extension=$ExtensionDir"
-    return
-  }
-
-  if (-not $BrowserBinary) {
-    Write-Host "==> [browser] $DisplayName binary not found — skipping extension load."
-    Write-Host "    Native messaging registry key has been installed."
-    Write-Host "    Load manually: open the browser, navigate to $(Get-ExtensionsUrl $Target),"
-    Write-Host "    enable Developer mode, click 'Load unpacked', select: $ExtensionDir"
-    return
-  }
-
-  $profilePath = Join-Path $ProfileRoot $ProfileName
-  $prefsPath   = Join-Path $profilePath 'Preferences'
-  $devMode     = Get-DeveloperMode $prefsPath
-  $extUrl      = Get-ExtensionsUrl $Target
-
-  if ($devMode -eq 'false' -or $devMode -eq 'unknown') {
-    Write-Host ""
-    Write-Host "==> [browser] $DisplayName profile '$ProfileName' has Developer mode OFF (or hasn't been opened yet)."
-    Write-Host ""
-    Write-Host "    Without Developer mode, --load-extension is silently dropped by Chromium:"
-    Write-Host "    the install reports success, the extension never registers, and every"
-    Write-Host "    'interceptor open / read / act / ...' will time out at 15s."
-    Write-Host ""
-    Write-Host "    Manual remediation:"
-    Write-Host "      1. Quit $DisplayName entirely."
-    Write-Host "      2. Re-launch $DisplayName, open $extUrl, toggle Developer mode ON."
-    Write-Host "      3. Quit $DisplayName again."
-    Write-Host "      4. Re-run: pwsh -File scripts/install.ps1 -Browser $Target -ProfileName `"$ProfileName`""
-
-    $procName = [System.IO.Path]::GetFileNameWithoutExtension($BrowserBinary)
-    $isRunning = $null -ne (Get-Process -Name $procName -ErrorAction SilentlyContinue)
-    $canAuto = (Test-Path -LiteralPath $prefsPath) -and -not $isRunning
-
-    if ($canAuto -and [Environment]::UserInteractive) {
-      Write-Host ""
-      $answer = Read-Host "    Or: enable Developer mode now (writes Preferences while $DisplayName is closed)? [y/N]"
-      if ($answer -and ($answer -eq 'y' -or $answer -eq 'Y')) {
-        if (Set-DeveloperModeTrue $prefsPath $BrowserBinary) {
-          Write-Host "    Developer mode enabled in $prefsPath."
-        } else {
-          Write-Error "    Failed to write Preferences (browser may have launched, file missing, or JSON malformed). Use the manual path above."
-          exit 1
-        }
-      } else {
-        Write-Error "    Skipped auto-enable. Use the manual path above, then re-run."
-        exit 1
-      }
-    } elseif ([Environment]::UserInteractive) {
-      Write-Error "    Auto-enable unavailable (no Preferences file at '$prefsPath' or $DisplayName is still running). Use the manual path."
-      exit 1
-    } else {
-      exit 1
-    }
-  }
-
-  $procName = [System.IO.Path]::GetFileNameWithoutExtension($BrowserBinary)
-  $running = Get-Process -Name $procName -ErrorAction SilentlyContinue
-  if ($running) {
-    Write-Host ""
-    Write-Host "==> $DisplayName is already running."
-    Write-Host "    To load the extension without browser intervention, $DisplayName must be restarted."
-    Write-Host "    Option 1 — Quit $DisplayName, then re-run this script."
-    Write-Host "    Option 2 — Load manually:"
-    Write-Host "      1. Open $extUrl"
-    Write-Host "      2. Enable Developer Mode"
-    Write-Host "      3. Load unpacked -> $ExtensionDir"
-    Write-Host "    Option 3 — Force quit and relaunch (will restore tabs)."
-    if ([Environment]::UserInteractive) {
-      $confirm = Read-Host "      Quit $DisplayName and relaunch with extension? [y/N]"
-      if ($confirm -and ($confirm -eq 'y' -or $confirm -eq 'Y')) {
-        Write-Host "    Quitting $DisplayName..."
-        Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        for ($j = 0; $j -lt 10; $j++) {
-          if (-not (Get-Process -Name $procName -ErrorAction SilentlyContinue)) { break }
-          Start-Sleep -Seconds 1
-        }
-      } else {
-        Write-Host "    Skipping extension loading."
-        return
-      }
-    } else {
-      Write-Host "    Skipping (non-interactive)."
-      return
-    }
-  }
-
-  if ($Target -eq 'chrome' -or $Target -eq 'edge') {
-    Write-Host ""
-    Write-Host "==> $DisplayName on Windows accepts --load-extension but treats it as a developer flag."
-    Write-Host "    Each launch may show 'Disable developer mode extensions' banner."
-    Write-Host "    For a quieter setup, load manually via $extUrl -> Load unpacked -> $ExtensionDir"
-  }
-
+# ── Step 3: Manual extension instructions ────────────────────────────────────────
+# No browser launch, no profile edits, no process control. Current branded Chrome
+# ignores --load-extension on Windows, so automating it would report success while
+# loading nothing.
+if ($SkipExtension) {
+  Write-Host "==> [browser] Skipping extension instructions (-SkipExtension)"
+} else {
+  $targets = if ($Browser -eq 'both') { @('chrome', 'brave') } else { @($Browser) }
   Write-Host ""
-  Write-Host "==> [browser] Launching $DisplayName with --load-extension..."
-  Write-Host "    Extension: $ExtensionDir"
-
-  $launchArgs = @("--load-extension=$ExtensionDir")
-  if ($ProfileName) {
-    $launchArgs += "--profile-directory=$ProfileName"
-    Write-Host "    Profile:   $ProfileName"
+  Write-Host "==> [browser] Load the unpacked extension manually:"
+  foreach ($target in $targets) {
+    Write-Host ""
+    Write-Host "    $(Get-ExtensionsUrl $target)"
+    Write-Host "      1. Enable Developer mode (top-right toggle)."
+    Write-Host "      2. Click 'Load unpacked'."
+    Write-Host "      3. Select: $ExtensionDir"
   }
-
-  Start-Process -FilePath $BrowserBinary -ArgumentList $launchArgs | Out-Null
-
-  # ── Reachability probe ─────────────────────────────────────────────────────────
   Write-Host ""
-  Write-Host "==> Verifying extension reachability (waits up to 8s)..."
-  $probed = $false
-  for ($i = 0; $i -lt 8; $i++) {
-    Start-Sleep -Seconds 1
-    if (Test-ExtensionReachable) { $probed = $true; break }
-  }
-
-  if ($probed) {
-    Write-Host "==> Extension loaded into $DisplayName and reachable."
-    Write-Host "    Extension ID: hkjbaciefhhgekldhncknbjkofbpenng"
-    if ($ProfileName) { Write-Host "    Profile: $ProfileName" }
-  } else {
-    Write-Warning "==> $DisplayName launched, but the extension is NOT reachable after 8s."
-    Write-Host ""
-    Write-Host "    Most common cause: Developer mode is off in the profile $DisplayName actually opened"
-    Write-Host "    (which may differ from the profile this script targeted)."
-    Write-Host ""
-    Write-Host "    Verify in ${DisplayName}:"
-    Write-Host "      1. Open $extUrl"
-    Write-Host "      2. Confirm Developer mode is ON (top-right toggle)."
-    Write-Host "      3. Confirm 'Interceptor' appears with ID hkjbaciefhhgekldhncknbjkofbpenng."
-    Write-Host "      4. If missing, click 'Load unpacked' and select: $ExtensionDir"
-    Write-Host ""
-    Write-Host "    Diagnose with: $CliPath status --verbose"
-  }
-}
-
-switch ($Browser) {
-  'chrome' { Invoke-LoadExtension -Target 'chrome' -BrowserBinary $ChromeBinary -ProfileRoot $ChromeUserData -DisplayName 'Chrome' }
-  'brave'  { Invoke-LoadExtension -Target 'brave'  -BrowserBinary $BraveBinary  -ProfileRoot $BraveUserData  -DisplayName 'Brave'  }
-  'edge'   { Invoke-LoadExtension -Target 'edge'   -BrowserBinary $EdgeBinary   -ProfileRoot $EdgeUserData   -DisplayName 'Edge'   }
-  'both'   {
-    Invoke-LoadExtension -Target 'chrome' -BrowserBinary $ChromeBinary -ProfileRoot $ChromeUserData -DisplayName 'Chrome'
-    Invoke-LoadExtension -Target 'brave'  -BrowserBinary $BraveBinary  -ProfileRoot $BraveUserData  -DisplayName 'Brave'
-  }
+  Write-Host "    Restart the browser afterward so it picks up the native-host registration."
 }
 
 Write-Host ""
-Write-Host "==> Done. Installed in browser-only mode."
-Write-Host "    Test:    $CliPath status   (expect 'mode: browser-only')"
-Write-Host "    Open:    $CliPath open https://example.com"
+Write-Host "==> Native messaging host registered (browser-only, source checkout)."
+Write-Host "    Verify:  $CliPath status --verbose"
+Write-Host "             (reports global extension reachability, not a specific browser/profile)"
+Write-Host "    Product installer: docs/windows-install.md"

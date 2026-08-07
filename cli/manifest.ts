@@ -163,10 +163,16 @@ export const COMMAND_SPECS: CommandSpec[] = [
   // ── local (no daemon) ───────────────────────────────────────────────────────
   {
     name: "skills", surface: "local",
-    usage: "interceptor skills [list|status|show <name>|adopt [names…] [--into claude,codex,agents] [--all] [--force]]",
-    summary: "List installed skill packs and link them into AI runtimes (Claude Code, Codex, ~/.agents)",
-    returns: "Adoption state per runtime; adopt creates symlinks (junctions on Windows) that stay current across updates.",
+    usage: "interceptor skills [list|status|show <name>|adopt …|unadopt [names…] [--into targets] [--all] --owned-root <path>]",
+    summary: "List installed skill packs, link them into AI runtimes, or remove only installer-owned links",
+    returns: "Adoption state per runtime; adopt creates links; unadopt returns per-target removed/missing/foreign/not-link/error results and never deletes a real directory.",
     example: "interceptor skills adopt --into claude",
+  },
+  {
+    name: "daemon", surface: "local",
+    usage: "interceptor daemon stop [--reason installer|manual] [--timeout 10000]",
+    summary: "Stop the current-user daemon through an authenticated local control frame without auto-spawning",
+    returns: "Text or JSON indicating stopped/alreadyStopped and the verified PID; shutdown tokens are never rendered.",
   },
   {
     name: "manifest", surface: "local",

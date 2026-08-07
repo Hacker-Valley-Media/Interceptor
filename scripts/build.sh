@@ -7,6 +7,7 @@ TARGET="host"
 BUILD_ALL=0
 ORIG_MANIFEST_VERSION=""
 ORIG_NATIVE_BUILD_CONFIG=""
+ORIG_VERSION_SOURCE=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -19,8 +20,11 @@ done
 stamp_version() {
   local sha date pkg_version platform_targets agent_dylibs_bundled
   sha=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
-  date=$(date -u +%Y-%m-%d)
+  date=$(git show -s --format=%cs HEAD 2>/dev/null || date -u +%Y-%m-%d)
   pkg_version=$(grep '"version"' package.json | head -1 | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+  if [[ -f cli/version.ts && -z "$ORIG_VERSION_SOURCE" ]]; then
+    ORIG_VERSION_SOURCE="$(cat cli/version.ts)"
+  fi
   if [[ -f shared/native-build-config.ts && -z "$ORIG_NATIVE_BUILD_CONFIG" ]]; then
     ORIG_NATIVE_BUILD_CONFIG="$(cat shared/native-build-config.ts)"
   fi
@@ -67,7 +71,9 @@ EOF
 }
 
 restore_version() {
-  git checkout cli/version.ts 2>/dev/null || true
+  if [[ -n "$ORIG_VERSION_SOURCE" ]]; then
+    printf '%s\n' "$ORIG_VERSION_SOURCE" > cli/version.ts
+  fi
   if [[ -n "$ORIG_NATIVE_BUILD_CONFIG" ]]; then
     printf '%s\n' "$ORIG_NATIVE_BUILD_CONFIG" > shared/native-build-config.ts
   else
@@ -243,19 +249,31 @@ build_macos() {
   bun build daemon/index.ts --compile --target=bun-darwin-arm64 --outfile=daemon/interceptor-daemon
 }
 
-build_windows() {
-  # Modern (default) target. We tried -baseline (which drops the AVX2
-  # requirement so the .exe runs on older/virtualized CPUs), but bun's baseline
-  # Windows runtime currently fails to extract ("Failed to extract executable
-  # for 'bun-windows-x64-baseline-...'") on bun 1.3.x — so the modern target is
-  # the only working build today. CAVEAT: the resulting .exe needs an
-  # AVX2-capable CPU (≈ any machine from 2013+); on hardware without AVX2 it
-  # crashes at launch with "Illegal instruction". Revisit -baseline once bun
-  # ships a working baseline Windows artifact.
-  echo "Building CLI (Windows x64)..."
-  bun build cli/index.ts --compile --target=bun-windows-x64 --outfile=dist/interceptor.exe
-  echo "Building daemon (Windows x64)..."
-  bun build daemon/index.ts --compile --target=bun-windows-x64 --outfile=daemon/interceptor-daemon.exe
+build_windows_arch() {
+  local arch="$1"
+  local bun_target stage identity_flag
+  case "$arch" in
+    x64) bun_target="bun-windows-x64-baseline" ;;
+    arm64) bun_target="bun-windows-arm64" ;;
+    *) echo "Unsupported Windows architecture: $arch" >&2; exit 1 ;;
+  esac
+
+  stage="dist/windows/$arch"
+  rm -rf "$stage"
+  mkdir -p "$stage/daemon"
+
+  echo "Building CLI (Windows $arch, $bun_target)..."
+  bun build cli/index.ts --compile --target="$bun_target" --outfile="$stage/interceptor.exe"
+  echo "Building daemon (Windows $arch, $bun_target)..."
+  bun build daemon/index.ts --compile --target="$bun_target" --outfile="$stage/daemon/interceptor-daemon.exe"
+
+  cp assets/windows/interceptor.ico "$stage/interceptor.ico"
+  identity_flag=()
+  if [[ "${INTERCEPTOR_WINDOWS_IDENTITY_MODE:-production}" == "development" ]]; then
+    identity_flag=(--development)
+  fi
+  bun scripts/installer/generate-native-host.ts "${identity_flag[@]}" \
+    --output "$stage/daemon/com.interceptor.host.json"
 }
 
 build_bridge() {
@@ -272,23 +290,34 @@ build_bridge() {
   bash scripts/build-bridge.sh
 }
 
-build_extension
-build_extension_mv2
-build_extension_safari
-
 if [[ "$BUILD_ALL" == "1" ]]; then
+  build_extension
+  build_extension_mv2
+  build_extension_safari
   build_host
   build_macos
-  build_windows
+  build_windows_arch x64
+  build_windows_arch arm64
   build_bridge
 elif [[ "$TARGET" == "host" ]]; then
+  build_extension
+  build_extension_mv2
+  build_extension_safari
   build_host
   build_bridge
 elif [[ "$TARGET" == "macos" ]]; then
+  build_extension
+  build_extension_mv2
+  build_extension_safari
   build_macos
   build_bridge
+elif [[ "$TARGET" == "windows-x64" ]]; then
+  build_windows_arch x64
+elif [[ "$TARGET" == "windows-arm64" ]]; then
+  build_windows_arch arm64
 elif [[ "$TARGET" == "windows" ]]; then
-  build_windows
+  echo "Unsupported target: windows. Use --target=windows-x64 or --target=windows-arm64." >&2
+  exit 1
 else
   echo "Unsupported target: $TARGET" >&2
   exit 1
@@ -301,7 +330,7 @@ fi
 # No --entitlements here: entitlement enforcement only applies under the
 # hardened runtime, which ad-hoc signing doesn't enable. Release builds are
 # re-signed (--force) with the real identity + entitlements by release.sh.
-if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+if [[ "$(uname -s)" == "Darwin" && "$TARGET" != windows-* ]] && command -v codesign >/dev/null 2>&1; then
   for b in dist/interceptor daemon/interceptor-daemon dist/interceptor-bridge; do
     if [[ -f "$b" ]]; then
       codesign --remove-signature "$b" 2>/dev/null || true
@@ -311,28 +340,32 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
   done
   # Smoke check: the exact failure this signing step fixes is a silent
   # Killed:9 at first run, so prove the CLI actually executes.
-  if [[ "$TARGET" != "windows" && -x dist/interceptor ]]; then
+  if [[ "$TARGET" != windows-* && -x dist/interceptor ]]; then
     ./dist/interceptor --version >/dev/null
     echo "  smoke check: dist/interceptor --version OK"
   fi
 fi
 
 echo "Build complete."
-echo "  Extension: extension/dist/"
-echo "  Electron extension: extension/dist-mv2/"
-echo "  Safari extension: extension/dist-safari/"
 if [[ "$BUILD_ALL" == "1" ]]; then
+  echo "  Extension: extension/dist/"
+  echo "  Electron extension: extension/dist-mv2/"
+  echo "  Safari extension: extension/dist-safari/"
   echo "  Host CLI:   dist/interceptor"
   echo "  Host Daemon: daemon/interceptor-daemon"
   echo "  macOS CLI:  dist/interceptor"
   echo "  macOS Daemon: daemon/interceptor-daemon"
   echo "  macOS Bridge: dist/interceptor-bridge"
-  echo "  Windows CLI: dist/interceptor.exe"
-  echo "  Windows Daemon: daemon/interceptor-daemon.exe"
-elif [[ "$TARGET" == "windows" ]]; then
-  echo "  CLI:       dist/interceptor.exe"
-  echo "  Daemon:    daemon/interceptor-daemon.exe"
+  echo "  Windows x64: dist/windows/x64/"
+  echo "  Windows ARM64: dist/windows/arm64/"
+elif [[ "$TARGET" == "windows-x64" ]]; then
+  echo "  Windows x64: dist/windows/x64/"
+elif [[ "$TARGET" == "windows-arm64" ]]; then
+  echo "  Windows ARM64: dist/windows/arm64/"
 else
+  echo "  Extension: extension/dist/"
+  echo "  Electron extension: extension/dist-mv2/"
+  echo "  Safari extension: extension/dist-safari/"
   echo "  CLI:       dist/interceptor"
   echo "  Daemon:    daemon/interceptor-daemon"
   if [[ "$(uname -s)" == "Darwin" ]]; then

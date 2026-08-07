@@ -83,6 +83,8 @@ Two core installers ship per release, plus an optional Safari add-on. Pick the c
 
 Both download from the same [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases) page. Start with **Browser** unless you know you need native macOS commands — you can always upgrade to Full later via `interceptor upgrade --full`.
 
+**Windows (browser-only):** a signed per-user installer (`Interceptor-Browser-<version>-windows-{x64,arm64}.exe`, Windows 11 24H2+) is in preparation — see [docs/windows-install.md](docs/windows-install.md) for the install, silent-install, upgrade, and uninstall contract. Windows extension acquisition is store-based (Chrome Web Store for Chrome/Brave, Edge Add-ons for Edge); the installer never edits browser profiles or force-loads an unpacked extension. Until the signed installer ships, Windows developers can build from source with `scripts/install.ps1` (PowerShell 7, source checkout).
+
 ### Install steps
 
 1. Download the matching `.pkg` from Releases.
@@ -237,7 +239,7 @@ The recommended install path for end users is the signed `.pkg` documented in [I
   - **macOS:** `brew install --cask brave-browser`
   - **Windows:** `winget install Brave.Brave` (or `choco install brave`)
   - **Linux:** `sudo snap install brave` or `flatpak install flathub com.brave.Browser`. For native package-manager installs (apt/dnf/zypper/AUR), see the [official Linux guide](https://brave.com/linux/).
-- **Developer mode enabled** in the target Brave / Chrome profile. `--load-extension` is silently dropped by Chromium when Dev mode is off, leaving a dormant install with no error. `scripts/install.sh` preflights this and offers to flip it for you (Brave-closed only) or fail loudly with remediation steps. To enable manually: open `brave://extensions/` (or `chrome://extensions/`) and toggle Developer mode in the top-right.
+- **Developer mode enabled** in the target Brave / Chrome profile. `--load-extension` is silently dropped by Chromium when Dev mode is off, leaving a dormant install with no error. `scripts/install.sh` preflights this and offers to flip it for you (Brave-closed only) or fail loudly with remediation steps. To enable manually: open `brave://extensions/` (or `chrome://extensions/`) and toggle Developer mode in the top-right. On Windows, `scripts/install.ps1` registers the native-messaging host and prints **Load unpacked** instructions instead — current branded Chrome ignores `--load-extension` on Windows, and the script never edits browser profiles.
 - Xcode command line tools (only required if you want to build the macOS bridge)
 
 #### Two install modes

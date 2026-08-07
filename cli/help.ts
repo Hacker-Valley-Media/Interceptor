@@ -6,6 +6,14 @@
 import { COMMAND_SPECS } from "./manifest"
 
 const COMMAND_HELP: Record<string, string> = {
+  daemon: [
+    "interceptor daemon — local daemon lifecycle control",
+    "",
+    "  interceptor daemon stop [--reason installer|manual] [--timeout 10000]",
+    "",
+    "The stop command never auto-starts a daemon. It authenticates with the current-user lock token,",
+    "waits for the locked PID to exit and both loopback ports to close, and never prints the token.",
+  ].join("\n"),
   save: [
     "interceptor save — write page-produced bytes to disk (no downloads shelf, Save dialog, clipboard, or CDP)",
     "",
@@ -131,7 +139,7 @@ const MAP_UPGRADE = `macOS + iPhone control are NOT enabled on this browser-only
   interceptor upgrade --full     Add native macOS + iPhone control (macOS host only)`
 
 const MAP_FOOTER = `LOCAL (no browser needed):
-  status · init · skills (adopt packs into Claude Code / Codex / ~/.agents) · manifest · research · upgrade · help
+  status · init · daemon stop · skills (adopt packs into Claude Code / Codex / ~/.agents) · manifest · research · upgrade · help
 
 GLOBAL FLAGS (any command, any position — flag order never changes meaning):
   --json  --context <id>  --tab <id>  --group <label>  --frame <id>  --all-surfaces
@@ -403,6 +411,8 @@ Meta:
   interceptor diagnose                       Post-failure snapshot: daemon binary, all contexts, tabs, elements, monitor
   interceptor diagnose --context <id>        Probe a specific browser context only
   interceptor diagnose --json                Same snapshot as JSON
+  interceptor daemon stop [--reason manual] [--timeout 10000]
+                                             Authenticated local stop; never auto-spawns the daemon
   interceptor help [<command>|--all]         Concise help / one command's contract / the full reference
   interceptor manifest                       Machine-readable capability manifest (verbs, flags, returns, skills)
   interceptor skills list                    Skill packs shipped with this install + adoption state
@@ -410,6 +420,8 @@ Meta:
   interceptor skills show <name>             One skill's purpose + which text verb returns what
   interceptor skills adopt [names…] [--into claude,codex,agents] [--all] [--force]
                                              Symlink skill packs into AI runtimes (junctions on Windows)
+  interceptor skills unadopt [names…] [--into claude,codex,agents] [--all] --owned-root <path>
+                                             Remove only links proven to target the owned installed skill root
 
 Branding:
   interceptor brand tab-group --title <label> [--color <color>]

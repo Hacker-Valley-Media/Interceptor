@@ -1,35 +1,23 @@
-Interceptor is installed. Two manual steps remain before the browser surface
-will respond:
+Interceptor (Browser-Only) is installed.
 
-1. Enable Developer mode in your target Chromium-family browser.
-   - Brave: open  brave://extensions/   and toggle Developer mode (top-right).
-   - Chrome: open chrome://extensions/  and toggle Developer mode (top-right).
-   - Edge:   open edge://extensions/    and toggle Developer mode (left side).
-   Without Developer mode the browser silently ignores unpacked extensions.
+1. Install the Interceptor extension from your browser's approved store.
+   Chrome and Brave use the Chrome Web Store; Edge uses Microsoft Edge Add-ons.
+2. Open a new terminal so Windows loads the updated user PATH.
+3. Run:
 
-2. Load the Interceptor extension as an unpacked extension.
-   - On the same extensions page, click "Load unpacked".
-   - Select the folder:   <install-dir>\extension
-     (Default: %LOCALAPPDATA%\Programs\Interceptor\extension)
-   - The Interceptor extension card should appear and be enabled.
+       interceptor init --verbose
 
-Once both steps are done, open a fresh terminal and run:
+Optional AI skill packs are bundled but are never linked without your consent:
 
-    interceptor status
-    interceptor open https://example.com
+    interceptor skills adopt
 
-AI skill packs: if you selected "Link Interceptor AI skill packs" during
-setup, the interceptor + interceptor-browser skills are already linked into
-%USERPROFILE%\.claude\skills (Claude Code). To manage links yourself:
+The installer does not change browser profiles, enable developer mode, load an
+unpacked extension, start the daemon, or install extensions without consent.
+The daemon starts on demand after a CLI or browser-extension request.
 
-    interceptor skills status
-    interceptor skills adopt --into claude
-    interceptor skills adopt --into codex     (Codex: %USERPROFILE%\.codex\skills)
+Windows support: Windows 11 24H2 or newer, x64 or ARM64, one active interactive
+user per machine. The native macOS commands (interceptor macos *) are not
+available in this browser-only Windows package.
 
-If "interceptor" is not recognised in your terminal, close and reopen it so
-Windows picks up the updated user PATH. Or call the executable directly:
-
-    "%LOCALAPPDATA%\Programs\Interceptor\interceptor.exe" status
-
-The macOS-only commands (interceptor macos *) are not available on Windows.
-The Windows-native UIA / Win32 surface is reserved but not yet shipped.
+Setup, repair, uninstall, logs, and troubleshooting:
+https://github.com/Hacker-Valley-Media/Interceptor/blob/main/docs/windows-install.md
