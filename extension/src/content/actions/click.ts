@@ -18,6 +18,46 @@ export async function handleClick(action: Action): Promise<ActionResult> {
   return { success: true, data: clickMsg }
 }
 
+/**
+ * Click by CSS selector.
+ *
+ * The gap this closes: `handleClick` resolves only a11y refs and indices, so a
+ * page whose accessibility tree is empty is unclickable even when `query`
+ * locates the element perfectly. That is not hypothetical — perplexity.ai
+ * answer pages return an empty tree while `query "button span"` finds the
+ * sources control exactly, so the sources panel could be seen and never opened.
+ *
+ * `nth` disambiguates rather than guessing: a selector matching several
+ * elements is a caller error to surface, not one to silently resolve to the
+ * first match, so the count comes back in the error.
+ */
+export async function handleClickSelector(action: Action): Promise<ActionResult> {
+  const selector = String(action.selector ?? "")
+  if (!selector) return { success: false, error: "click_selector: no selector given" }
+  let matches: NodeListOf<Element>
+  try {
+    matches = document.querySelectorAll(selector)
+  } catch {
+    return { success: false, error: `click_selector: invalid CSS selector ${JSON.stringify(selector)}` }
+  }
+  const nth = typeof action.nth === "number" ? action.nth : 0
+  const el = matches[nth] as HTMLElement | undefined
+  if (!el) {
+    return {
+      success: false,
+      error: `click_selector: ${selector} matched ${matches.length} element(s); no index ${nth}`,
+    }
+  }
+  scrollIntoViewIfNeeded(el)
+  dispatchClickSequence(el, action.x as number | undefined, action.y as number | undefined)
+  const mutated = await waitForMutation(200)
+  const msg = `clicked ${selector}[${nth}] of ${matches.length}`
+  if (!mutated) {
+    return { success: true, data: msg, warning: "no DOM change after click — the site may require trusted events" }
+  }
+  return { success: true, data: msg }
+}
+
 export async function handleDblclick(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
   if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
