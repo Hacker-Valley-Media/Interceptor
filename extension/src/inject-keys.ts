@@ -57,7 +57,3 @@ export const K_GETCTX_WRAPPED = Symbol.for(IK_GETCTX_WRAPPED);
 export const TT_POLICY_NAME = "tt-e";
 export const TT_NET_POLICY_NAME = "tt-n";
 export const SINK_TT_POLICY_NAME = "tt-s";
-
-// Prefix for the ephemeral staged-bytes global (binary sink). Stays a string
-// because it is used as a property-name string passed across executeScript calls.
-export const STAGED_BYTES_PREFIX = "z9s_";

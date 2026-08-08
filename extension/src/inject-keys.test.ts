@@ -4,7 +4,7 @@ import {
   IK_GETCTX_WRAPPED, IK_NET, IK_SINK_TT_POLICY, IK_TT_POLICY, IK_WS,
   K_BEACON, K_BROADCAST, K_CANVAS, K_CANVAS_OBSERVER, K_CANVAS_WRAPPED,
   K_GETCTX_WRAPPED, K_NET, K_TT_POLICY, K_WS,
-  SINK_TT_POLICY_NAME, STAGED_BYTES_PREFIX, TT_NET_POLICY_NAME, TT_POLICY_NAME,
+  SINK_TT_POLICY_NAME, TT_NET_POLICY_NAME, TT_POLICY_NAME,
 } from "./inject-keys"
 
 // The whole fix (issue #178) rests on one cross-context invariant: the inject
@@ -66,7 +66,7 @@ describe("inject-keys are not page-detectable by name", () => {
   test("registry strings and policy names carry no vendor name", () => {
     const strings = [IK_NET, IK_CANVAS, IK_WS, IK_BROADCAST, IK_BEACON, IK_TT_POLICY,
       IK_SINK_TT_POLICY, IK_CANVAS_OBSERVER, IK_CANVAS_WRAPPED, IK_GETCTX_WRAPPED,
-      TT_POLICY_NAME, TT_NET_POLICY_NAME, SINK_TT_POLICY_NAME, STAGED_BYTES_PREFIX]
+      TT_POLICY_NAME, TT_NET_POLICY_NAME, SINK_TT_POLICY_NAME]
     for (const s of strings) expect(s.toLowerCase()).not.toContain("interceptor")
   })
 })

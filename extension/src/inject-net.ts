@@ -10,6 +10,13 @@ if ((window as any)[K_NET]) {
   // trusted-input semantics. Used to defeat user-activation gates on
   // canvas-rendered editors (Google Docs, Slides, Sheets) where the only path
   // to the editing model is through dispatched InputEvent / MouseEvent.
+  //
+  // NB: `__interceptor_trust` is a DOCUMENTED PUBLIC CONTRACT — user/agent
+  // `eval --main` code sets it by this exact string name (README, AGENTS.md, and
+  // the use-cases/ recipes). It is therefore intentionally NOT de-branded here:
+  // symbol-keying the getter would silently break every external caller. Hiding
+  // it from page listeners needs a per-session random namespace shared with the
+  // eval tooling, tracked with the deferred CustomEvent-channel work (#178).
   try {
     const origIsTrusted = Object.getOwnPropertyDescriptor(Event.prototype, "isTrusted")
     Object.defineProperty(Event.prototype, "isTrusted", {

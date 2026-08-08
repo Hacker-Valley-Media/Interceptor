@@ -201,6 +201,9 @@ async function stageByteSource(tabId: number, source: ByteSource): Promise<Stage
         throw new Error(`source fetch failed: ${response.status} ${response.statusText}`)
       }
       const bytes = new Uint8Array(await response.arrayBuffer())
+      // Staged in the ISOLATED content-script world (see world: "ISOLATED" above),
+      // not the page's MAIN world — so this key is not enumerable by the page and
+      // is intentionally left as a plain string rather than de-branded (#178).
       const key = "__interceptor_binary_sink_" + crypto.randomUUID().replace(/-/g, "")
       ;(globalThis as any)[key] = bytes
       return { key, bytes: bytes.byteLength }
