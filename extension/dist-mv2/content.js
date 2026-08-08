@@ -1804,6 +1804,34 @@ async function handleClick(action) {
   }
   return { success: true, data: clickMsg };
 }
+async function handleClickSelector(action) {
+  const selector = String(action.selector ?? "");
+  if (!selector)
+    return { success: false, error: "click_selector: no selector given" };
+  let matches;
+  try {
+    matches = document.querySelectorAll(selector);
+  } catch {
+    return { success: false, error: `click_selector: invalid CSS selector ${JSON.stringify(selector)}` };
+  }
+  const nth = typeof action.nth === "number" ? action.nth : 0;
+  const el = matches[nth];
+  if (!el) {
+    return {
+      success: false,
+      error: `click_selector: ${selector} matched ${matches.length} element(s); no index ${nth}`
+    };
+  }
+  scrollIntoViewIfNeeded(el);
+  dispatchClickSequence(el, action.x, action.y);
+  const clickedRef = getOrAssignRef(el);
+  const mutated = await waitForMutation(200);
+  const msg = `clicked ${clickedRef} — ${selector}[${nth}] of ${matches.length}`;
+  if (!mutated) {
+    return { success: true, data: msg, refId: clickedRef, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` };
+  }
+  return { success: true, data: msg, refId: clickedRef };
+}
 async function handleDblclick(action) {
   const el = resolveElement(action.index, action.ref);
   if (!el)
@@ -2660,6 +2688,7 @@ async function handleExtractHtml(action) {
 
 // extension/src/content/data/query.ts
 init_input_simulation();
+init_ref_registry();
 async function handleQuery(action) {
   const selector = action.selector;
   const els = document.querySelectorAll(selector);
@@ -2669,6 +2698,7 @@ async function handleQuery(action) {
       count: els.length,
       elements: Array.from(els).slice(0, 20).map((el, i) => ({
         index: i,
+        ref: getOrAssignRef(el),
         tag: el.tagName.toLowerCase(),
         text: (el.textContent || "").trim().slice(0, 80),
         id: el.id || undefined,
@@ -4665,6 +4695,8 @@ async function executeAction(action) {
         return getPageState(action.full);
       case "click":
         return handleClick(action);
+      case "click_selector":
+        return handleClickSelector(action);
       case "dblclick":
         return handleDblclick(action);
       case "rightclick":

@@ -17,7 +17,7 @@ function rejectIfBogusRef(cmdName: string, raw: string, target: ReturnType<typeo
   if (!isValidRef && !isValidIndex && !isValidSemantic) {
     console.error(
       `error: ${cmdName} got '${raw}' but requires an element ref (e.g. 'e2'), an index (e.g. '5'), or 'role:name' (e.g. 'button:Submit'). ` +
-      `Tag names and CSS selectors are not supported. Use 'interceptor read --tree-only' to find refs.`,
+      `Tag names and bare CSS selectors are not positional targets — for selectors use 'interceptor click --selector "<css>"'. Use 'interceptor read --tree-only' to find refs.`,
     )
     process.exit(1)
   }

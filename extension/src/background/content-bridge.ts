@@ -1,4 +1,4 @@
-import { shouldRetryContentScript } from "../../../shared/content-script-retry"
+import { shouldRetryContentScript, INPUT_ACTIONS, isResponseLoss } from "../../../shared/content-script-retry"
 
 async function injectContentScript(
   tabId: number,
@@ -18,7 +18,7 @@ async function injectContentScript(
 
 type ContentScriptResult = { success: boolean; error?: string; data?: unknown }
 
-const NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click"])
+const NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector"])
 
 /**
  * Safari can unload a content script before delivering its async sendResponse
@@ -127,6 +127,30 @@ export async function sendToContentScript(
 ): Promise<unknown> {
   const first = await sendToContentScriptOnce(tabId, action, frameId)
   if (first.success || !shouldRetryContentScript(first.error)) return first
+
+  // A dead reply channel on a DELIVERED input action must not trigger a blind
+  // re-execution — the action may have landed (a click that navigates tears
+  // the channel down as a side effect of succeeding). Navigation cases for
+  // click-like actions already resolve as {navigated:true} in
+  // sendToContentScriptOnce; this guards the rest (worker death with the
+  // reply in flight, same-URL reloads). Delivery failures ("Receiving end
+  // does not exist") mean no receiver existed — those stay on the retry path
+  // below for every action type.
+  if (INPUT_ACTIONS.has(action.type) && isResponseLoss(first.error)) {
+    let navigating = false
+    try { navigating = (await chrome.tabs.get(tabId)).status === "loading" } catch {}
+    if (navigating) {
+      return {
+        success: true,
+        data: `${action.type} delivered; the page began navigating before the reply arrived`,
+        warning: "reply channel closed during navigation — re-read page state to confirm the outcome",
+      }
+    }
+    return {
+      success: false,
+      error: `${action.type} was delivered but the reply channel closed (${first.error}) — not auto-retried to avoid firing it twice; re-read page state to confirm the outcome, then retry deliberately`,
+    }
+  }
 
   // Before reinjecting via executeScript (which re-evaluates content.js and
   // blows away the in-page refRegistry the consumer has been using), give the

@@ -44,11 +44,14 @@ interceptor act e20 --no-read
 
 ```bash
 interceptor click e7
+interceptor click --selector "button span" --nth 4   # CSS-selector click; 0-based --nth matches query output; quote selectors with spaces
 interceptor type e9 "..."
 interceptor keys "Meta+K"
 interceptor select e12 "Option label"
 interceptor hover e3 | drag e4 e8 | dblclick e5 | rightclick e5
 ```
+
+On pages whose a11y tree comes back empty (some SPAs render nothing tree-visible), `interceptor query "<css>"` still finds elements — and each result carries a clickable `e<ref>`, so every ref verb (`click`, `type`, `check`, …) works on what query found. A navigating click resolves as `{navigated: true, url}` rather than an error; a selector click that produces no DOM change auto-escalates to an OS-level click when the OS transport is available.
 
 ## Inspection + Network
 

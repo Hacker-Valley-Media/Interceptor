@@ -241,6 +241,7 @@ State:
 
 Actions:
   interceptor click <index|ref>              Click element (e.g. interceptor click e5)
+  interceptor click --selector "<css>" [--nth N]  Click by CSS selector (0-based --nth matches query output; quote selectors with spaces)
   interceptor click <index> --at X,Y        Click at coordinates on element
   interceptor dblclick <index> --at X,Y     Double-click at coordinates
   interceptor rightclick <index> --at X,Y   Right-click at coordinates

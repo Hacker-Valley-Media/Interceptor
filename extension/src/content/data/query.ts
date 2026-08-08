@@ -1,4 +1,5 @@
 import { resolveElement } from "../input-simulation"
+import { getOrAssignRef } from "../ref-registry"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
@@ -9,8 +10,12 @@ export async function handleQuery(action: Action): Promise<ActionResult> {
   return {
     success: true, data: {
       count: els.length,
+      // ref bridges DOM discovery to the ref-side verbs: an element found by
+      // selector is directly actionable (click e<N>, type e<N>, …) even on
+      // pages whose a11y tree comes back empty and never minted refs.
       elements: Array.from(els).slice(0, 20).map((el, i) => ({
         index: i,
+        ref: getOrAssignRef(el),
         tag: el.tagName.toLowerCase(),
         text: (el.textContent || "").trim().slice(0, 80),
         id: el.id || undefined,

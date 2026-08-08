@@ -3,7 +3,10 @@ import { getOrAssignRef } from "../ref-registry"
 import { getEffectiveRole, getAccessibleName } from "../a11y-tree"
 
 type Action = { type: string; [key: string]: unknown }
-type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
+// refId: structured ref of the acted-on element, for callers (the background
+// router's OS-click escalation) that need to re-target it without parsing
+// the human-facing data string.
+type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; refId?: string }
 
 export async function handleClick(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
@@ -16,6 +19,47 @@ export async function handleClick(action: Action): Promise<ActionResult> {
     return { success: true, data: clickMsg, warning: "no DOM change after click — if the site requires trusted events, try: interceptor click --trusted " + (action.ref || action.index) }
   }
   return { success: true, data: clickMsg }
+}
+
+/**
+ * Click by CSS selector.
+ *
+ * The gap this closes: `handleClick` resolves only a11y refs and indices, so a
+ * page whose accessibility tree is empty is unclickable even when `query`
+ * locates the element perfectly. That is not hypothetical — perplexity.ai
+ * answer pages return an empty tree while `query "button span"` finds the
+ * sources control exactly, so the sources panel could be seen and never opened.
+ *
+ * `nth` disambiguates rather than guessing: a selector matching several
+ * elements is a caller error to surface, not one to silently resolve to the
+ * first match, so the count comes back in the error.
+ */
+export async function handleClickSelector(action: Action): Promise<ActionResult> {
+  const selector = String(action.selector ?? "")
+  if (!selector) return { success: false, error: "click_selector: no selector given" }
+  let matches: NodeListOf<Element>
+  try {
+    matches = document.querySelectorAll(selector)
+  } catch {
+    return { success: false, error: `click_selector: invalid CSS selector ${JSON.stringify(selector)}` }
+  }
+  const nth = typeof action.nth === "number" ? action.nth : 0
+  const el = matches[nth] as HTMLElement | undefined
+  if (!el) {
+    return {
+      success: false,
+      error: `click_selector: ${selector} matched ${matches.length} element(s); no index ${nth}`,
+    }
+  }
+  scrollIntoViewIfNeeded(el)
+  dispatchClickSequence(el, action.x as number | undefined, action.y as number | undefined)
+  const clickedRef = getOrAssignRef(el)
+  const mutated = await waitForMutation(200)
+  const msg = `clicked ${clickedRef} — ${selector}[${nth}] of ${matches.length}`
+  if (!mutated) {
+    return { success: true, data: msg, refId: clickedRef, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` }
+  }
+  return { success: true, data: msg, refId: clickedRef }
 }
 
 export async function handleDblclick(action: Action): Promise<ActionResult> {

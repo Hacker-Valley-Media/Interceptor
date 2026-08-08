@@ -277,6 +277,32 @@ function shouldRetryContentScript(error) {
     return false;
   return error.includes("Receiving end does not exist") || error.includes("Could not establish connection") || error.includes("disconnected port") || error.includes("message channel is closed") || error.includes("no response from content script");
 }
+var INPUT_ACTIONS = new Set([
+  "click",
+  "click_selector",
+  "click_at",
+  "dblclick",
+  "rightclick",
+  "drag",
+  "input_text",
+  "send_keys",
+  "select_option",
+  "check",
+  "file_upload",
+  "file_upload_chunk",
+  "find_and_click",
+  "find_and_type",
+  "find_and_check",
+  "scene_click",
+  "scene_dblclick",
+  "scene_select",
+  "scene_insert"
+]);
+function isResponseLoss(error) {
+  if (!error)
+    return false;
+  return error.includes("message channel is closed") || error.includes("disconnected port") || error.includes("no response from content script");
+}
 
 // extension/src/background/content-bridge.ts
 async function injectContentScript(tabId, frameId) {
@@ -289,7 +315,7 @@ async function injectContentScript(tabId, frameId) {
     return { success: false, error: err.message };
   }
 }
-var NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click"]);
+var NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector"]);
 async function sendToContentScriptOnce(tabId, action, frameId) {
   const watchesNavigation = NAVIGATION_CAPABLE_ACTIONS.has(action.type);
   let initialUrl;
@@ -359,6 +385,23 @@ async function sendToContentScript(tabId, action, frameId) {
   const first = await sendToContentScriptOnce(tabId, action, frameId);
   if (first.success || !shouldRetryContentScript(first.error))
     return first;
+  if (INPUT_ACTIONS.has(action.type) && isResponseLoss(first.error)) {
+    let navigating = false;
+    try {
+      navigating = (await chrome.tabs.get(tabId)).status === "loading";
+    } catch {}
+    if (navigating) {
+      return {
+        success: true,
+        data: `${action.type} delivered; the page began navigating before the reply arrived`,
+        warning: "reply channel closed during navigation — re-read page state to confirm the outcome"
+      };
+    }
+    return {
+      success: false,
+      error: `${action.type} was delivered but the reply channel closed (${first.error}) — not auto-retried to avoid firing it twice; re-read page state to confirm the outcome, then retry deliberately`
+    };
+  }
   await new Promise((resolve) => setTimeout(resolve, 250));
   const retryWithoutInject = await sendToContentScriptOnce(tabId, action, frameId);
   if (retryWithoutInject.success)
@@ -4507,13 +4550,14 @@ async function routeAction(action, tabId) {
     return handlePowerIdleActions(action);
   const contentResult = await sendToContentScript(tabId, action, action.frameId);
   const shouldSceneEscalate = action.type === "scene_click" && contentResult.success && (action.os === true || contentResult.warning?.includes("no DOM change")) && activeTransport !== "none";
-  const shouldClickEscalate = action.type === "click" && contentResult.success && contentResult.warning?.includes("no DOM change") && activeTransport !== "none";
+  const shouldClickEscalate = (action.type === "click" || action.type === "click_selector") && contentResult.success && contentResult.warning?.includes("no DOM change") && activeTransport !== "none";
   if (shouldClickEscalate || shouldSceneEscalate) {
     const resolvedAt = typeof contentResult.data === "object" && contentResult.data ? contentResult.data.at : undefined;
     console.log(`auto-escalating ${action.type} to OS-level input`);
     const osResult = await handleOsInputActions({
       ...action,
       type: "os_click",
+      ref: contentResult.refId ?? action.ref,
       x: resolvedAt?.x ?? action.x,
       y: resolvedAt?.y ?? action.y
     }, tabId);
