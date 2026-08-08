@@ -1,3 +1,4 @@
+import { IK_CANVAS_OBSERVER } from "../../inject-keys"
 import { sendNetDirect } from "../content-bridge"
 import { sendToOffscreen } from "../offscreen"
 
@@ -57,7 +58,7 @@ async function executeInMainWorld<T>(
   return results[0]?.result as T
 }
 
-function hostCanvasSignals(limit = 20) {
+function hostCanvasSignals(limit = 20, obsKey?: string) {
   const canvases = Array.from(document.querySelectorAll("canvas"))
   const max = Number.isFinite(limit) && limit > 0 ? limit : 20
   const safeSlice = <T>(arr: T[]): T[] => arr.slice(0, max)
@@ -108,7 +109,7 @@ function hostCanvasSignals(limit = 20) {
     })
   )
 
-  const observer = (window as any).__interceptorCanvasObserver || null
+  const observer = (obsKey ? (window as any)[Symbol.for(obsKey)] : null) || null
   const excalidrawScene = parseLocalStorageJson("excalidraw")
   const docsSemanticMirror = !!docsTextboxSummary.exists
   const observerReasons: string[] = Array.isArray(observer?.partialCoverageReasons) ? observer.partialCoverageReasons.slice() : []
@@ -221,7 +222,7 @@ function canvasAccessibleText(canvasIndex: number) {
   }
 }
 
-function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: number) {
+function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: number, obsKey?: string) {
   function normalize(kind: unknown): string {
     return String(kind || "").trim()
   }
@@ -249,7 +250,7 @@ function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: numb
     return typeof canvasId === "string" && canvasId ? canvasId : null
   }
 
-  const observer = (window as any).__interceptorCanvasObserver || null
+  const observer = (obsKey ? (window as any)[Symbol.for(obsKey)] : null) || null
   if (!observer || !Array.isArray(observer.log)) {
     return {
       installed: false,
@@ -276,7 +277,7 @@ function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: numb
   }
 }
 
-function canvasObserverObjectsSummary(limit = 100, kind?: string, canvasIndex?: number) {
+function canvasObserverObjectsSummary(limit = 100, kind?: string, canvasIndex?: number, obsKey?: string) {
   function normalize(value: unknown): string {
     return String(value || "").trim()
   }
@@ -294,7 +295,7 @@ function canvasObserverObjectsSummary(limit = 100, kind?: string, canvasIndex?: 
     return typeof canvasId === "string" && canvasId ? canvasId : null
   }
 
-  const observer = (window as any).__interceptorCanvasObserver || null
+  const observer = (obsKey ? (window as any)[Symbol.for(obsKey)] : null) || null
   if (!observer || !Array.isArray(observer.objects)) {
     return {
       installed: false,
@@ -451,7 +452,7 @@ export async function handleCanvasActions(
 
     case "canvas_status": {
       const list = await executeInMainWorld<CanvasListEntry[]>(tabId, walkCanvasElements)
-      const host = await executeInMainWorld<ReturnType<typeof hostCanvasSignals>>(tabId, hostCanvasSignals, [action.limit as number | undefined])
+      const host = await executeInMainWorld<ReturnType<typeof hostCanvasSignals>>(tabId, hostCanvasSignals, [action.limit as number | undefined, IK_CANVAS_OBSERVER])
       return {
         success: true,
         data: {
@@ -470,7 +471,7 @@ export async function handleCanvasActions(
       const data = await executeInMainWorld<ReturnType<typeof canvasObserverSummary>>(
         tabId,
         canvasObserverSummary,
-        [action.limit as number | undefined, action.kinds as string[] | undefined, action.canvasIndex as number | undefined]
+        [action.limit as number | undefined, action.kinds as string[] | undefined, action.canvasIndex as number | undefined, IK_CANVAS_OBSERVER]
       )
       return { success: true, data }
     }
@@ -479,7 +480,7 @@ export async function handleCanvasActions(
       const data = await executeInMainWorld<ReturnType<typeof canvasObserverObjectsSummary>>(
         tabId,
         canvasObserverObjectsSummary,
-        [action.limit as number | undefined, action.kind as string | undefined, action.canvasIndex as number | undefined]
+        [action.limit as number | undefined, action.kind as string | undefined, action.canvasIndex as number | undefined, IK_CANVAS_OBSERVER]
       )
       return { success: true, data }
     }

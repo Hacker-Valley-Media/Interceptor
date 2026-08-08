@@ -1,3 +1,4 @@
+import { IK_SINK_TT_POLICY, SINK_TT_POLICY_NAME } from "../../inject-keys"
 import { runWithCspStripBypass } from "./evaluate"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
@@ -20,8 +21,9 @@ async function executeNormalize(
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world,
-    args: [code],
-    func: async (sourceCode: string) => {
+    args: [code, IK_SINK_TT_POLICY, SINK_TT_POLICY_NAME],
+    func: async (sourceCode: string, ttKey: string, ttName: string) => {
+      const TT = Symbol.for(ttKey)
       async function normalize(value: unknown): Promise<{
         url: string
         size: number
@@ -109,12 +111,12 @@ async function executeNormalize(
         const w = window as any
         let evalSource: any = sourceCode
         if (w.trustedTypes) {
-          if (!w.__interceptor_sink_tt_policy) {
-            w.__interceptor_sink_tt_policy = w.trustedTypes.createPolicy("interceptor-binary-sink", {
+          if (!w[TT]) {
+            w[TT] = w.trustedTypes.createPolicy(ttName, {
               createScript: (s: string) => s
             })
           }
-          evalSource = w.__interceptor_sink_tt_policy.createScript(sourceCode)
+          evalSource = w[TT].createScript(sourceCode)
         }
         const value = (0, eval)(evalSource as string)
         return { success: true, data: await normalize(value) }
