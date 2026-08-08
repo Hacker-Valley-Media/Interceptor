@@ -1342,24 +1342,12 @@ var TT_POLICY_NAME = "tt-e";
 var SINK_TT_POLICY_NAME = "tt-s";
 
 // extension/src/background/capabilities/canvas.ts
-function normalizeCanvasLogKind(kind) {
-  return String(kind || "").trim();
-}
-function summarizeCanvasKinds(entries) {
-  const out = {};
-  for (const entry of entries) {
-    const kind = normalizeCanvasLogKind(entry.kind);
-    if (!kind)
-      continue;
-    out[kind] = (out[kind] || 0) + 1;
-  }
-  return out;
-}
 async function executeInMainWorld(tabId, func, args = []) {
   const mapped = args.map((arg) => arg === undefined ? null : arg);
   if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
     try {
-      const code = `(${func.toString()}).apply(null, ${JSON.stringify(mapped)})`;
+      const argsLiteral = "[" + args.map((a) => a === undefined ? "undefined" : JSON.stringify(a)).join(",") + "]";
+      const code = `(${func.toString()}).apply(null, ${argsLiteral})`;
       const results2 = await chrome.userScripts.execute({
         target: { tabId },
         world: "MAIN",
@@ -1379,6 +1367,16 @@ async function executeInMainWorld(tabId, func, args = []) {
   return results[0]?.result;
 }
 function hostCanvasSignals(limit = 20, obsKey) {
+  function summarizeCanvasKinds(entries) {
+    const out = {};
+    for (const entry of entries) {
+      const kind = String(entry.kind || "").trim();
+      if (!kind)
+        continue;
+      out[kind] = (out[kind] || 0) + 1;
+    }
+    return out;
+  }
   const canvases = Array.from(document.querySelectorAll("canvas"));
   const max = Number.isFinite(limit) && limit > 0 ? limit : 20;
   const safeSlice = (arr) => arr.slice(0, max);
