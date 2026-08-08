@@ -54,7 +54,15 @@ async function executeInMainWorld<T>(
   // stringifying + re-deriving args for userScripts carries the same constraint.
   if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
     try {
-      const code = `(${func.toString()}).apply(null, ${JSON.stringify(mapped)})`
+      // Preserve `undefined` holes rather than JSON-coercing them to `null`: the
+      // reader functions distinguish `canvasIndex === undefined` (no canvas
+      // filter) from `null`, which resolveCanvasId reads as "canvas not found"
+      // and then empties the result — so a coerced null zeroes every summary even
+      // when the observer is full. Emit a bare `undefined` token per undefined
+      // arg and JSON-encode the rest.
+      const argsLiteral =
+        "[" + args.map((a) => (a === undefined ? "undefined" : JSON.stringify(a))).join(",") + "]"
+      const code = `(${func.toString()}).apply(null, ${argsLiteral})`
       const results = await chrome.userScripts.execute({
         target: { tabId },
         world: "MAIN",
