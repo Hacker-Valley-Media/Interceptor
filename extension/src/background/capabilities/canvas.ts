@@ -30,20 +30,6 @@ type PassiveCapturedEntry = {
   truncated?: boolean
 }
 
-function normalizeCanvasLogKind(kind: unknown): string {
-  return String(kind || "").trim()
-}
-
-function summarizeCanvasKinds(entries: Array<{ kind?: string }>): Record<string, number> {
-  const out: Record<string, number> = {}
-  for (const entry of entries) {
-    const kind = normalizeCanvasLogKind(entry.kind)
-    if (!kind) continue
-    out[kind] = (out[kind] || 0) + 1
-  }
-  return out
-}
-
 async function executeInMainWorld<T>(
   tabId: number,
   func: (...args: any[]) => T,
@@ -90,6 +76,19 @@ async function executeInMainWorld<T>(
 }
 
 function hostCanvasSignals(limit = 20, obsKey?: string) {
+  // Inlined so this reader stays self-contained when serialised via
+  // Function.prototype.toString() for chrome.userScripts.execute (a module-scope
+  // helper reference would throw ReferenceError in the page realm). See
+  // executeInMainWorld above.
+  function summarizeCanvasKinds(entries: Array<{ kind?: string }>): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const entry of entries) {
+      const kind = String(entry.kind || "").trim()
+      if (!kind) continue
+      out[kind] = (out[kind] || 0) + 1
+    }
+    return out
+  }
   const canvases = Array.from(document.querySelectorAll("canvas"))
   const max = Number.isFinite(limit) && limit > 0 ? limit : 20
   const safeSlice = <T>(arr: T[]): T[] => arr.slice(0, max)
