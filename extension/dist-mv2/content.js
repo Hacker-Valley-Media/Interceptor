@@ -1824,10 +1824,11 @@ async function handleClickSelector(action) {
   }
   scrollIntoViewIfNeeded(el);
   dispatchClickSequence(el, action.x, action.y);
+  const clickedRef = getOrAssignRef(el);
   const mutated = await waitForMutation(200);
-  const msg = `clicked ${selector}[${nth}] of ${matches.length}`;
+  const msg = `clicked ${clickedRef} — ${selector}[${nth}] of ${matches.length}`;
   if (!mutated) {
-    return { success: true, data: msg, warning: "no DOM change after click — the site may require trusted events" };
+    return { success: true, data: msg, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` };
   }
   return { success: true, data: msg };
 }
@@ -2687,6 +2688,7 @@ async function handleExtractHtml(action) {
 
 // extension/src/content/data/query.ts
 init_input_simulation();
+init_ref_registry();
 async function handleQuery(action) {
   const selector = action.selector;
   const els = document.querySelectorAll(selector);
@@ -2696,6 +2698,7 @@ async function handleQuery(action) {
       count: els.length,
       elements: Array.from(els).slice(0, 20).map((el, i) => ({
         index: i,
+        ref: getOrAssignRef(el),
         tag: el.tagName.toLowerCase(),
         text: (el.textContent || "").trim().slice(0, 80),
         id: el.id || undefined,
