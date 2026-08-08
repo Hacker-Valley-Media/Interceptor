@@ -1,3 +1,4 @@
+import { IK_TT_POLICY, TT_POLICY_NAME } from "../../inject-keys"
 import { waitForTabLoad } from "../content-bridge"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
@@ -74,8 +75,9 @@ async function executeEval(
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world,
-    args: [code],
-    func: async (c: string) => {
+    args: [code, IK_TT_POLICY, TT_POLICY_NAME],
+    func: async (c: string, ttKey: string, ttName: string) => {
+      const TT = Symbol.for(ttKey)
       function clone(v: unknown): unknown {
         if (v === null || v === undefined) return v
         const t = typeof v
@@ -91,21 +93,21 @@ async function executeEval(
         const w = window as any
         let source = c
         if (w.trustedTypes) {
-          if (!w.__interceptor_tt_policy) {
+          if (!w[TT]) {
             try {
-              w.__interceptor_tt_policy = w.trustedTypes.createPolicy("interceptor-eval", {
+              w[TT] = w.trustedTypes.createPolicy(ttName, {
                 createScript: (s: string) => s
               })
             } catch {
               try {
-                w.__interceptor_tt_policy = w.trustedTypes.createPolicy("interceptor-eval-" + Date.now(), {
+                w[TT] = w.trustedTypes.createPolicy(ttName + "-" + Date.now(), {
                   createScript: (s: string) => s
                 })
               } catch {}
             }
           }
-          if (w.__interceptor_tt_policy) {
-            source = w.__interceptor_tt_policy.createScript(c)
+          if (w[TT]) {
+            source = w[TT].createScript(c)
           }
         }
         let r: unknown = (0, eval)(source as string)

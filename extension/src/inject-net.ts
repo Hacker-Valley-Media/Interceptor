@@ -1,13 +1,22 @@
-if ((window as any).__interceptor_net_installed) {
+import { K_BEACON, K_BROADCAST, K_NET, K_TT_POLICY, K_WS, TT_NET_POLICY_NAME, TT_POLICY_NAME } from "./inject-keys"
+
+if ((window as any)[K_NET]) {
   // already patched — skip
 } else {
-  (window as any).__interceptor_net_installed = true
+  (window as any)[K_NET] = true
 
   // Trust overrides — must run before any page bundle captures native getters.
   // Pages tag synthetic events with `event.__interceptor_trust = true` to claim
   // trusted-input semantics. Used to defeat user-activation gates on
   // canvas-rendered editors (Google Docs, Slides, Sheets) where the only path
   // to the editing model is through dispatched InputEvent / MouseEvent.
+  //
+  // NB: `__interceptor_trust` is a DOCUMENTED PUBLIC CONTRACT — user/agent
+  // `eval --main` code sets it by this exact string name (README, AGENTS.md, and
+  // the use-cases/ recipes). It is therefore intentionally NOT de-branded here:
+  // symbol-keying the getter would silently break every external caller. Hiding
+  // it from page listeners needs a per-session random namespace shared with the
+  // eval tooling, tracked with the deferred CustomEvent-channel work (#178).
   try {
     const origIsTrusted = Object.getOwnPropertyDescriptor(Event.prototype, "isTrusted")
     Object.defineProperty(Event.prototype, "isTrusted", {
@@ -30,20 +39,20 @@ if ((window as any).__interceptor_net_installed) {
 
   if ((window as any).trustedTypes?.createPolicy) {
     try {
-      (window as any).trustedTypes.createPolicy("interceptor-net", {
+      (window as any).trustedTypes.createPolicy(TT_NET_POLICY_NAME, {
         createHTML: (input: string) => input,
         createScriptURL: (input: string) => input,
         createScript: (input: string) => input,
       })
     } catch {}
-    if (!(window as any).__interceptor_tt_policy) {
+    if (!(window as any)[K_TT_POLICY]) {
       try {
-        (window as any).__interceptor_tt_policy = (window as any).trustedTypes.createPolicy("interceptor-eval", {
+        (window as any)[K_TT_POLICY] = (window as any).trustedTypes.createPolicy(TT_POLICY_NAME, {
           createScript: (input: string) => input,
         })
       } catch {
         try {
-          (window as any).__interceptor_tt_policy = (window as any).trustedTypes.createPolicy("interceptor-eval-" + Date.now(), {
+          (window as any)[K_TT_POLICY] = (window as any).trustedTypes.createPolicy(TT_POLICY_NAME + "-" + Date.now(), {
             createScript: (input: string) => input,
           })
         } catch {}
@@ -52,7 +61,10 @@ if ((window as any).__interceptor_net_installed) {
   }
 
   type OverrideRule = { urlPattern: string; queryAddOrReplace?: Record<string, string | number | boolean>; queryRemove?: string[] }
-  const overrideRules: OverrideRule[] = (window as any).__interceptor_override_rules = []
+  // NB: kept as a closure-local. The window property (`__interceptor_override_rules`)
+  // this used to publish was vestigial — every read below goes through this const —
+  // and it was a page-visible tell, so it is no longer assigned to `window`.
+  const overrideRules: OverrideRule[] = []
 
   document.addEventListener("__interceptor_set_overrides", ((e: CustomEvent) => {
     overrideRules.length = 0
@@ -690,8 +702,8 @@ if ((window as any).__interceptor_net_installed) {
 	  }
 
   const OriginalWebSocket = (window as any).WebSocket as typeof WebSocket | undefined
-  if (OriginalWebSocket && !(window as any).__interceptor_ws_installed) {
-    ;(window as any).__interceptor_ws_installed = true
+  if (OriginalWebSocket && !(window as any)[K_WS]) {
+    ;(window as any)[K_WS] = true
     let wsSeq = 0
     const InterceptorWebSocket = function (this: WebSocket, url: string | URL, protocols?: string | string[]) {
       const socketId = `ws-${Date.now()}-${++wsSeq}`
@@ -788,8 +800,8 @@ if ((window as any).__interceptor_net_installed) {
   }
 
   const originalBeacon = navigator.sendBeacon?.bind(navigator)
-  if (originalBeacon && !(navigator as Navigator & { __interceptor_beacon_installed?: boolean }).__interceptor_beacon_installed) {
-    ;(navigator as Navigator & { __interceptor_beacon_installed?: boolean }).__interceptor_beacon_installed = true
+  if (originalBeacon && !(navigator as any)[K_BEACON]) {
+    ;(navigator as any)[K_BEACON] = true
     navigator.sendBeacon = function (url: string | URL, data?: BodyInit | null): boolean {
       const resolvedUrl = typeof url === "string" ? url : url.toString()
       try {
@@ -820,8 +832,8 @@ if ((window as any).__interceptor_net_installed) {
   }
 
   const OriginalBroadcastChannel = (window as any).BroadcastChannel as typeof BroadcastChannel | undefined
-  if (OriginalBroadcastChannel && !(window as any).__interceptor_broadcast_installed) {
-    ;(window as any).__interceptor_broadcast_installed = true
+  if (OriginalBroadcastChannel && !(window as any)[K_BROADCAST]) {
+    ;(window as any)[K_BROADCAST] = true
     let bcSeq = 0
     const InterceptorBroadcastChannel = function (this: BroadcastChannel, name: string) {
       const channelId = `bc-${Date.now()}-${++bcSeq}`

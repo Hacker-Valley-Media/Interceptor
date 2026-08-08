@@ -1318,30 +1318,65 @@ async function handleCaptureStreamActions(action, tabId) {
   return { success: false, error: `unknown capture action: ${action.type}` };
 }
 
+// extension/src/inject-keys.ts
+var IK_NET = "z9n0";
+var IK_CANVAS = "z9c0";
+var IK_WS = "z9w0";
+var IK_BROADCAST = "z9b0";
+var IK_BEACON = "z9k0";
+var IK_TT_POLICY = "z9t0";
+var IK_SINK_TT_POLICY = "z9t1";
+var IK_CANVAS_OBSERVER = "z9o0";
+var IK_CANVAS_WRAPPED = "z9r0";
+var IK_GETCTX_WRAPPED = "z9r1";
+var K_NET = Symbol.for(IK_NET);
+var K_CANVAS = Symbol.for(IK_CANVAS);
+var K_WS = Symbol.for(IK_WS);
+var K_BROADCAST = Symbol.for(IK_BROADCAST);
+var K_BEACON = Symbol.for(IK_BEACON);
+var K_TT_POLICY = Symbol.for(IK_TT_POLICY);
+var K_CANVAS_OBSERVER = Symbol.for(IK_CANVAS_OBSERVER);
+var K_CANVAS_WRAPPED = Symbol.for(IK_CANVAS_WRAPPED);
+var K_GETCTX_WRAPPED = Symbol.for(IK_GETCTX_WRAPPED);
+var TT_POLICY_NAME = "tt-e";
+var SINK_TT_POLICY_NAME = "tt-s";
+
 // extension/src/background/capabilities/canvas.ts
-function normalizeCanvasLogKind(kind) {
-  return String(kind || "").trim();
-}
-function summarizeCanvasKinds(entries) {
-  const out = {};
-  for (const entry of entries) {
-    const kind = normalizeCanvasLogKind(entry.kind);
-    if (!kind)
-      continue;
-    out[kind] = (out[kind] || 0) + 1;
-  }
-  return out;
-}
 async function executeInMainWorld(tabId, func, args = []) {
+  const mapped = args.map((arg) => arg === undefined ? null : arg);
+  if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
+    try {
+      const argsLiteral = "[" + args.map((a) => a === undefined ? "undefined" : JSON.stringify(a)).join(",") + "]";
+      const code = `(${func.toString()}).apply(null, ${argsLiteral})`;
+      const results2 = await chrome.userScripts.execute({
+        target: { tabId },
+        world: "MAIN",
+        js: [{ code }]
+      });
+      const first = results2?.[0];
+      if (first && !first.error)
+        return first.result;
+    } catch {}
+  }
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    args: args.map((arg) => arg === undefined ? null : arg),
+    args: mapped,
     func
   });
   return results[0]?.result;
 }
-function hostCanvasSignals(limit = 20) {
+function hostCanvasSignals(limit = 20, obsKey) {
+  function summarizeCanvasKinds(entries) {
+    const out = {};
+    for (const entry of entries) {
+      const kind = String(entry.kind || "").trim();
+      if (!kind)
+        continue;
+      out[kind] = (out[kind] || 0) + 1;
+    }
+    return out;
+  }
   const canvases = Array.from(document.querySelectorAll("canvas"));
   const max = Number.isFinite(limit) && limit > 0 ? limit : 20;
   const safeSlice = (arr) => arr.slice(0, max);
@@ -1382,7 +1417,7 @@ function hostCanvasSignals(limit = 20) {
       keys: value && typeof value === "object" ? Object.keys(value).slice(0, 12) : undefined
     }];
   }));
-  const observer = window.__interceptorCanvasObserver || null;
+  const observer = (obsKey ? window[Symbol.for(obsKey)] : null) || null;
   const excalidrawScene = parseLocalStorageJson("excalidraw");
   const docsSemanticMirror = !!docsTextboxSummary.exists;
   const observerReasons = Array.isArray(observer?.partialCoverageReasons) ? observer.partialCoverageReasons.slice() : [];
@@ -1480,7 +1515,7 @@ function canvasAccessibleText(canvasIndex) {
     canvasCount: canvases.length
   };
 }
-function canvasObserverSummary(limit = 100, kinds, canvasIndex) {
+function canvasObserverSummary(limit = 100, kinds, canvasIndex, obsKey) {
   function normalize(kind) {
     return String(kind || "").trim();
   }
@@ -1495,7 +1530,7 @@ function canvasObserverSummary(limit = 100, kinds, canvasIndex) {
     return out;
   }
   function resolveCanvasId(observer2, canvasIndex2) {
-    if (canvasIndex2 === undefined)
+    if (canvasIndex2 === undefined || canvasIndex2 === null)
       return;
     const canvases = Array.isArray(observer2?.canvases) ? observer2.canvases.slice() : [];
     const ordered = canvases.sort((a, b) => {
@@ -1508,7 +1543,7 @@ function canvasObserverSummary(limit = 100, kinds, canvasIndex) {
     const canvasId2 = ordered[canvasIndex2]?.canvasId;
     return typeof canvasId2 === "string" && canvasId2 ? canvasId2 : null;
   }
-  const observer = window.__interceptorCanvasObserver || null;
+  const observer = (obsKey ? window[Symbol.for(obsKey)] : null) || null;
   if (!observer || !Array.isArray(observer.log)) {
     return {
       installed: false,
@@ -1536,12 +1571,12 @@ function canvasObserverSummary(limit = 100, kinds, canvasIndex) {
     entries: bounded
   };
 }
-function canvasObserverObjectsSummary(limit = 100, kind, canvasIndex) {
+function canvasObserverObjectsSummary(limit = 100, kind, canvasIndex, obsKey) {
   function normalize(value) {
     return String(value || "").trim();
   }
   function resolveCanvasId(observer2, canvasIndex2) {
-    if (canvasIndex2 === undefined)
+    if (canvasIndex2 === undefined || canvasIndex2 === null)
       return;
     const canvases = Array.isArray(observer2?.canvases) ? observer2.canvases.slice() : [];
     const ordered = canvases.sort((a, b) => {
@@ -1554,7 +1589,7 @@ function canvasObserverObjectsSummary(limit = 100, kind, canvasIndex) {
     const canvasId2 = ordered[canvasIndex2]?.canvasId;
     return typeof canvasId2 === "string" && canvasId2 ? canvasId2 : null;
   }
-  const observer = window.__interceptorCanvasObserver || null;
+  const observer = (obsKey ? window[Symbol.for(obsKey)] : null) || null;
   if (!observer || !Array.isArray(observer.objects)) {
     return {
       installed: false,
@@ -1694,7 +1729,7 @@ async function handleCanvasActions(action, tabId) {
     }
     case "canvas_status": {
       const list = await executeInMainWorld(tabId, walkCanvasElements);
-      const host = await executeInMainWorld(tabId, hostCanvasSignals, [action.limit]);
+      const host = await executeInMainWorld(tabId, hostCanvasSignals, [action.limit, IK_CANVAS_OBSERVER]);
       return {
         success: true,
         data: {
@@ -1708,11 +1743,11 @@ async function handleCanvasActions(action, tabId) {
       return { success: true, data };
     }
     case "canvas_log": {
-      const data = await executeInMainWorld(tabId, canvasObserverSummary, [action.limit, action.kinds, action.canvasIndex]);
+      const data = await executeInMainWorld(tabId, canvasObserverSummary, [action.limit, action.kinds, action.canvasIndex, IK_CANVAS_OBSERVER]);
       return { success: true, data };
     }
     case "canvas_objects": {
-      const data = await executeInMainWorld(tabId, canvasObserverObjectsSummary, [action.limit, action.kind, action.canvasIndex]);
+      const data = await executeInMainWorld(tabId, canvasObserverObjectsSummary, [action.limit, action.kind, action.canvasIndex, IK_CANVAS_OBSERVER]);
       return { success: true, data };
     }
     case "canvas_routes": {
@@ -2584,8 +2619,9 @@ async function executeEval(tabId, world, code) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world,
-    args: [code],
-    func: async (c) => {
+    args: [code, IK_TT_POLICY, TT_POLICY_NAME],
+    func: async (c, ttKey, ttName) => {
+      const TT = Symbol.for(ttKey);
       function clone(v) {
         if (v === null || v === undefined)
           return v;
@@ -2608,21 +2644,21 @@ async function executeEval(tabId, world, code) {
         const w = window;
         let source = c;
         if (w.trustedTypes) {
-          if (!w.__interceptor_tt_policy) {
+          if (!w[TT]) {
             try {
-              w.__interceptor_tt_policy = w.trustedTypes.createPolicy("interceptor-eval", {
+              w[TT] = w.trustedTypes.createPolicy(ttName, {
                 createScript: (s) => s
               });
             } catch {
               try {
-                w.__interceptor_tt_policy = w.trustedTypes.createPolicy("interceptor-eval-" + Date.now(), {
+                w[TT] = w.trustedTypes.createPolicy(ttName + "-" + Date.now(), {
                   createScript: (s) => s
                 });
               } catch {}
             }
           }
-          if (w.__interceptor_tt_policy) {
-            source = w.__interceptor_tt_policy.createScript(c);
+          if (w[TT]) {
+            source = w[TT].createScript(c);
           }
         }
         let r = (0, eval)(source);
@@ -2726,8 +2762,9 @@ async function executeNormalize(tabId, world, code) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world,
-    args: [code],
-    func: async (sourceCode) => {
+    args: [code, IK_SINK_TT_POLICY, SINK_TT_POLICY_NAME],
+    func: async (sourceCode, ttKey, ttName) => {
+      const TT = Symbol.for(ttKey);
       async function normalize(value) {
         if (value && typeof value.then === "function") {
           value = await value;
@@ -2802,12 +2839,12 @@ async function executeNormalize(tabId, world, code) {
         const w = window;
         let evalSource = sourceCode;
         if (w.trustedTypes) {
-          if (!w.__interceptor_sink_tt_policy) {
-            w.__interceptor_sink_tt_policy = w.trustedTypes.createPolicy("interceptor-binary-sink", {
+          if (!w[TT]) {
+            w[TT] = w.trustedTypes.createPolicy(ttName, {
               createScript: (s) => s
             });
           }
-          evalSource = w.__interceptor_sink_tt_policy.createScript(sourceCode);
+          evalSource = w[TT].createScript(sourceCode);
         }
         const value = (0, eval)(evalSource);
         return { success: true, data: await normalize(value) };

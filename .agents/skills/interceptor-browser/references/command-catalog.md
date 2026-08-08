@@ -136,6 +136,8 @@ interceptor canvas log [N] [--kind fillText]
 interceptor canvas objects [N] [--kind text]
 ```
 
+`log` / `objects` / `status` read the observer that runs in the page's own MAIN-world realm, so they reflect what the page actually drew. Pass `N` (a `canvas list` index) to scope to one canvas; omit it for all canvases.
+
 Pixels only when observer data is insufficient:
 
 ```bash

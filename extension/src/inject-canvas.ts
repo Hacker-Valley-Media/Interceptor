@@ -1,5 +1,7 @@
-if (!(window as any).__interceptor_canvas_installed) {
-  ;(window as any).__interceptor_canvas_installed = true
+import { K_CANVAS, K_CANVAS_OBSERVER, K_CANVAS_WRAPPED, K_GETCTX_WRAPPED } from "./inject-keys"
+
+if (!(window as any)[K_CANVAS]) {
+  ;(window as any)[K_CANVAS] = true
 
   type CanvasLike = HTMLCanvasElement | OffscreenCanvas
   type CanvasObserverEntry = Record<string, unknown> & { t: number; kind: string; canvasId?: string }
@@ -181,8 +183,8 @@ if (!(window as any).__interceptor_canvas_installed) {
   }
 
   function patch2DPrototype(proto: CanvasRenderingContext2D | any): void {
-    if (!proto || proto.__interceptor_canvas_wrapped) return
-    proto.__interceptor_canvas_wrapped = true
+    if (!proto || (proto as any)[K_CANVAS_WRAPPED]) return
+    ;(proto as any)[K_CANVAS_WRAPPED] = true
 
     const wrap = (name: string, handler: (ctx: CanvasRenderingContext2D, args: unknown[], out: unknown) => void) => {
       const orig = proto[name]
@@ -380,10 +382,10 @@ if (!(window as any).__interceptor_canvas_installed) {
   }
 
   function patchGetContext(Ctor: any, label: string): void {
-    if (!Ctor || !Ctor.prototype || Ctor.prototype.__interceptor_canvas_get_context_wrapped) return
+    if (!Ctor || !Ctor.prototype || (Ctor.prototype as any)[K_GETCTX_WRAPPED]) return
     const orig = Ctor.prototype.getContext
     if (typeof orig !== "function") return
-    Ctor.prototype.__interceptor_canvas_get_context_wrapped = true
+    ;(Ctor.prototype as any)[K_GETCTX_WRAPPED] = true
     Ctor.prototype.getContext = function (type: string, ...rest: unknown[]) {
       const ctx = orig.call(this, type, ...rest)
       const canvasId = registerCanvas(this)
@@ -411,5 +413,5 @@ if (!(window as any).__interceptor_canvas_installed) {
   patchGetContext((window as any).HTMLCanvasElement, "HTMLCanvasElement")
   patchGetContext((window as any).OffscreenCanvas, "OffscreenCanvas")
 
-  ;(window as any).__interceptorCanvasObserver = observer
+  ;(window as any)[K_CANVAS_OBSERVER] = observer
 }

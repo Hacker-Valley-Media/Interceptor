@@ -1,3 +1,4 @@
+import { IK_CANVAS_OBSERVER } from "../../inject-keys"
 import { sendNetDirect } from "../content-bridge"
 import { sendToOffscreen } from "../offscreen"
 
@@ -29,35 +30,73 @@ type PassiveCapturedEntry = {
   truncated?: boolean
 }
 
-function normalizeCanvasLogKind(kind: unknown): string {
-  return String(kind || "").trim()
-}
-
-function summarizeCanvasKinds(entries: Array<{ kind?: string }>): Record<string, number> {
-  const out: Record<string, number> = {}
-  for (const entry of entries) {
-    const kind = normalizeCanvasLogKind(entry.kind)
-    if (!kind) continue
-    out[kind] = (out[kind] || 0) + 1
-  }
-  return out
-}
-
 async function executeInMainWorld<T>(
   tabId: number,
   func: (...args: any[]) => T,
   args: unknown[] = []
 ): Promise<T> {
+  const mapped = args.map((arg) => arg === undefined ? null : arg)
+  // chrome.scripting.executeScript's MAIN world and chrome.userScripts.execute's
+  // MAIN world resolve to DIFFERENT realms in Chrome. The page's own scripts and
+  // our inject-canvas content script (manifest world:MAIN) — and therefore the
+  // canvas observer that records draws — live in the userScripts / page-canonical
+  // realm. Reading the observer through scripting.executeScript lands in a separate
+  // MAIN realm whose observer is present (guard re-runs there) but empty, so
+  // canvas_log / canvas_objects came back empty even while the page was drawing.
+  // Prefer userScripts.execute so the reader runs in the realm where draws actually
+  // accumulate (same path the eval capability uses); fall back to
+  // scripting.executeScript when userScripts is unavailable — DOM-only readers
+  // (walkCanvasElements, canvasAccessibleText) still work there since the DOM is
+  // shared across a frame's realms; observer reads degrade to empty as before.
+  //
+  // These reader functions are already self-contained (they are handed to
+  // scripting.executeScript's `func`, which serialises with no lexical scope), so
+  // stringifying + re-deriving args for userScripts carries the same constraint.
+  if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
+    try {
+      // Preserve `undefined` holes rather than JSON-coercing them to `null`: the
+      // reader functions distinguish `canvasIndex === undefined` (no canvas
+      // filter) from `null`, which resolveCanvasId reads as "canvas not found"
+      // and then empties the result — so a coerced null zeroes every summary even
+      // when the observer is full. Emit a bare `undefined` token per undefined
+      // arg and JSON-encode the rest.
+      const argsLiteral =
+        "[" + args.map((a) => (a === undefined ? "undefined" : JSON.stringify(a))).join(",") + "]"
+      const code = `(${func.toString()}).apply(null, ${argsLiteral})`
+      const results = await chrome.userScripts.execute({
+        target: { tabId },
+        world: "MAIN",
+        js: [{ code }]
+      })
+      const first = results?.[0]
+      if (first && !first.error) return first.result as T
+    } catch {
+      // userScripts disabled / not permitted / threw — fall through to scripting.
+    }
+  }
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    args: args.map((arg) => arg === undefined ? null : arg),
+    args: mapped,
     func
   })
   return results[0]?.result as T
 }
 
-function hostCanvasSignals(limit = 20) {
+function hostCanvasSignals(limit = 20, obsKey?: string) {
+  // Inlined so this reader stays self-contained when serialised via
+  // Function.prototype.toString() for chrome.userScripts.execute (a module-scope
+  // helper reference would throw ReferenceError in the page realm). See
+  // executeInMainWorld above.
+  function summarizeCanvasKinds(entries: Array<{ kind?: string }>): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const entry of entries) {
+      const kind = String(entry.kind || "").trim()
+      if (!kind) continue
+      out[kind] = (out[kind] || 0) + 1
+    }
+    return out
+  }
   const canvases = Array.from(document.querySelectorAll("canvas"))
   const max = Number.isFinite(limit) && limit > 0 ? limit : 20
   const safeSlice = <T>(arr: T[]): T[] => arr.slice(0, max)
@@ -108,7 +147,7 @@ function hostCanvasSignals(limit = 20) {
     })
   )
 
-  const observer = (window as any).__interceptorCanvasObserver || null
+  const observer = (obsKey ? (window as any)[Symbol.for(obsKey)] : null) || null
   const excalidrawScene = parseLocalStorageJson("excalidraw")
   const docsSemanticMirror = !!docsTextboxSummary.exists
   const observerReasons: string[] = Array.isArray(observer?.partialCoverageReasons) ? observer.partialCoverageReasons.slice() : []
@@ -221,7 +260,7 @@ function canvasAccessibleText(canvasIndex: number) {
   }
 }
 
-function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: number) {
+function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: number, obsKey?: string) {
   function normalize(kind: unknown): string {
     return String(kind || "").trim()
   }
@@ -237,7 +276,7 @@ function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: numb
   }
 
   function resolveCanvasId(observer: { canvases?: Array<Record<string, unknown>> } | null, canvasIndex?: number): string | null | undefined {
-    if (canvasIndex === undefined) return undefined
+    if (canvasIndex === undefined || canvasIndex === null) return undefined
     const canvases = Array.isArray(observer?.canvases) ? observer.canvases.slice() : []
     const ordered = canvases.sort((a, b) => {
       const left = typeof a.domIndex === "number" ? a.domIndex : Number.MAX_SAFE_INTEGER
@@ -249,7 +288,7 @@ function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: numb
     return typeof canvasId === "string" && canvasId ? canvasId : null
   }
 
-  const observer = (window as any).__interceptorCanvasObserver || null
+  const observer = (obsKey ? (window as any)[Symbol.for(obsKey)] : null) || null
   if (!observer || !Array.isArray(observer.log)) {
     return {
       installed: false,
@@ -276,13 +315,13 @@ function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: numb
   }
 }
 
-function canvasObserverObjectsSummary(limit = 100, kind?: string, canvasIndex?: number) {
+function canvasObserverObjectsSummary(limit = 100, kind?: string, canvasIndex?: number, obsKey?: string) {
   function normalize(value: unknown): string {
     return String(value || "").trim()
   }
 
   function resolveCanvasId(observer: { canvases?: Array<Record<string, unknown>> } | null, canvasIndex?: number): string | null | undefined {
-    if (canvasIndex === undefined) return undefined
+    if (canvasIndex === undefined || canvasIndex === null) return undefined
     const canvases = Array.isArray(observer?.canvases) ? observer.canvases.slice() : []
     const ordered = canvases.sort((a, b) => {
       const left = typeof a.domIndex === "number" ? a.domIndex : Number.MAX_SAFE_INTEGER
@@ -294,7 +333,7 @@ function canvasObserverObjectsSummary(limit = 100, kind?: string, canvasIndex?: 
     return typeof canvasId === "string" && canvasId ? canvasId : null
   }
 
-  const observer = (window as any).__interceptorCanvasObserver || null
+  const observer = (obsKey ? (window as any)[Symbol.for(obsKey)] : null) || null
   if (!observer || !Array.isArray(observer.objects)) {
     return {
       installed: false,
@@ -451,7 +490,7 @@ export async function handleCanvasActions(
 
     case "canvas_status": {
       const list = await executeInMainWorld<CanvasListEntry[]>(tabId, walkCanvasElements)
-      const host = await executeInMainWorld<ReturnType<typeof hostCanvasSignals>>(tabId, hostCanvasSignals, [action.limit as number | undefined])
+      const host = await executeInMainWorld<ReturnType<typeof hostCanvasSignals>>(tabId, hostCanvasSignals, [action.limit as number | undefined, IK_CANVAS_OBSERVER])
       return {
         success: true,
         data: {
@@ -470,7 +509,7 @@ export async function handleCanvasActions(
       const data = await executeInMainWorld<ReturnType<typeof canvasObserverSummary>>(
         tabId,
         canvasObserverSummary,
-        [action.limit as number | undefined, action.kinds as string[] | undefined, action.canvasIndex as number | undefined]
+        [action.limit as number | undefined, action.kinds as string[] | undefined, action.canvasIndex as number | undefined, IK_CANVAS_OBSERVER]
       )
       return { success: true, data }
     }
@@ -479,7 +518,7 @@ export async function handleCanvasActions(
       const data = await executeInMainWorld<ReturnType<typeof canvasObserverObjectsSummary>>(
         tabId,
         canvasObserverObjectsSummary,
-        [action.limit as number | undefined, action.kind as string | undefined, action.canvasIndex as number | undefined]
+        [action.limit as number | undefined, action.kind as string | undefined, action.canvasIndex as number | undefined, IK_CANVAS_OBSERVER]
       )
       return { success: true, data }
     }

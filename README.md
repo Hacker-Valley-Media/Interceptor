@@ -227,6 +227,7 @@ Safari reuses the portable DOM/content engine and the same command envelope. API
 - **Canvas camera apps**: pan/zoom WebGL viewers via dispatched `MouseEvent`/`WheelEvent`, anchor lat/lng overlays via Web Mercator projection, restyle the rendered viewport with CSS filters. See [`use-cases/interaction-skills/canvas-camera-overlays.md`](use-cases/interaction-skills/canvas-camera-overlays.md) and [`use-cases/interaction-skills/webgl-camera-control.md`](use-cases/interaction-skills/webgl-camera-control.md).
 - **Native client-side export capture**: intercept any webapp's "export as PNG/PDF/SVG" by patching `URL.createObjectURL` and suppressing the auto-download. No clipboard hop, no Save dialog. See [`use-cases/interaction-skills/blob-export-capture.md`](use-cases/interaction-skills/blob-export-capture.md).
 - **Non-CDP architecture**: avoid the debugger-protocol footprint that separate automated browsers depend on.
+- **Unbranded page-world footprint**: the MAIN-world scripts key their install guards, canvas observer, and Trusted-Types policies with opaque `Symbol.for()` keys rather than vendor-named globals, so a page can't fingerprint the extension with a one-line `window`-key scan. Hardening, not invisibility — `Object.getOwnPropertySymbols(window)` still lists them.
 
 ## Browser Install
 
