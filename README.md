@@ -434,6 +434,8 @@ interceptor state                            # Full DOM tree + scroll + focused 
 interceptor click e5                         # Click element (synthetic; default — userActivation override + __interceptor_trust marker handle most isTrusted gates)
 interceptor click e5 --os                    # FALLBACK — OS-level CGEvent click (only when synthetic input is observed to fail)
 interceptor click e5 --at 10,20             # Click at offset within element
+interceptor click --selector "button span" --nth 4   # Click by CSS selector (0-based --nth matches query output; quote selectors with spaces)
+interceptor query "button span"              # Elements matching a CSS selector — each carries a clickable e<ref>, so any verb can act on it
 interceptor type e3 "hello"                  # Type into element (synthetic; default)
 interceptor type e3 "more" --append          # Append without clearing
 interceptor type "textbox:Search" "query"    # Type using semantic selector (role:name)
