@@ -25,6 +25,25 @@ export function parseActionsCommand(filtered: string[]): Action {
   switch (cmd) {
     case "click": {
       const useOs = hasTrustedFlag(filtered)
+      // Click by CSS SELECTOR.
+      //
+      // `click` resolved only a11y refs/indices, while `query` locates elements
+      // by selector and returns no ref. On any page whose a11y tree comes back
+      // empty the tool could therefore SEE an element and be unable to click
+      // it — the two halves never met. Observed on perplexity.ai answer pages,
+      // where the tree is empty while `query "button span"` finds the control
+      // exactly.
+      const selIdx = filtered.indexOf("--selector")
+      if (selIdx !== -1 && filtered[selIdx + 1]) {
+        const nthIdx = filtered.indexOf("--nth")
+        const nth = nthIdx !== -1 ? Number(filtered[nthIdx + 1]) : 0
+        return {
+          type: "click_selector",
+          selector: filtered[selIdx + 1],
+          nth: Number.isFinite(nth) ? nth : 0,
+          ...parseAt(filtered),
+        }
+      }
       const target = parseElementTarget(filtered[1])
       const at = parseAt(filtered)
       if (useOs) {

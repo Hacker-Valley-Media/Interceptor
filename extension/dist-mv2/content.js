@@ -1804,6 +1804,33 @@ async function handleClick(action) {
   }
   return { success: true, data: clickMsg };
 }
+async function handleClickSelector(action) {
+  const selector = String(action.selector ?? "");
+  if (!selector)
+    return { success: false, error: "click_selector: no selector given" };
+  let matches;
+  try {
+    matches = document.querySelectorAll(selector);
+  } catch {
+    return { success: false, error: `click_selector: invalid CSS selector ${JSON.stringify(selector)}` };
+  }
+  const nth = typeof action.nth === "number" ? action.nth : 0;
+  const el = matches[nth];
+  if (!el) {
+    return {
+      success: false,
+      error: `click_selector: ${selector} matched ${matches.length} element(s); no index ${nth}`
+    };
+  }
+  scrollIntoViewIfNeeded(el);
+  dispatchClickSequence(el, action.x, action.y);
+  const mutated = await waitForMutation(200);
+  const msg = `clicked ${selector}[${nth}] of ${matches.length}`;
+  if (!mutated) {
+    return { success: true, data: msg, warning: "no DOM change after click — the site may require trusted events" };
+  }
+  return { success: true, data: msg };
+}
 async function handleDblclick(action) {
   const el = resolveElement(action.index, action.ref);
   if (!el)
@@ -4665,6 +4692,8 @@ async function executeAction(action) {
         return getPageState(action.full);
       case "click":
         return handleClick(action);
+      case "click_selector":
+        return handleClickSelector(action);
       case "dblclick":
         return handleDblclick(action);
       case "rightclick":

@@ -133,7 +133,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "attr", surface: "browser", usage: "interceptor attr e<ref> <name> | attr set e<ref> <name> <value>", summary: "Get/set an attribute", returns: "Attribute value." },
   { name: "style", surface: "browser", usage: "interceptor style e<ref> <property> | style inject --css \"<rules>\" | style remove <handle>", summary: "Computed style / stylesheet injection", returns: "Computed value, or an injection handle." },
   // ── actions ─────────────────────────────────────────────────────────────────
-  { name: "click", surface: "browser", usage: "interceptor click e<ref>", summary: "Click an element", returns: "ok / error." },
+  { name: "click", surface: "browser", usage: "interceptor click e<ref> | --selector <css> [--nth N]", summary: "Click an element by a11y ref, index, or CSS selector", returns: "ok / error." },
   { name: "type", surface: "browser", usage: "interceptor type e<ref> <text…>", summary: "Type into a field", returns: "ok / error." },
   { name: "select", surface: "browser", usage: "interceptor select e<ref> <value>", summary: "Select an option", returns: "ok / error." },
   { name: "keys", surface: "browser", usage: "interceptor keys <combo>", summary: "Send a keyboard shortcut", returns: "ok / error." },
