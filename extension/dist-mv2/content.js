@@ -1828,9 +1828,9 @@ async function handleClickSelector(action) {
   const mutated = await waitForMutation(200);
   const msg = `clicked ${clickedRef} — ${selector}[${nth}] of ${matches.length}`;
   if (!mutated) {
-    return { success: true, data: msg, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` };
+    return { success: true, data: msg, refId: clickedRef, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` };
   }
-  return { success: true, data: msg };
+  return { success: true, data: msg, refId: clickedRef };
 }
 async function handleDblclick(action) {
   const el = resolveElement(action.index, action.ref);
