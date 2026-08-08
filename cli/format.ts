@@ -48,15 +48,20 @@ export function formatCookies(cookies: { name: string; value: string; domain: st
   return cookies.map(c => `${c.domain}${c.path}  ${c.name}=${c.value}`).join("\n")
 }
 
-export function formatResult(result: { success: boolean; error?: string; data?: unknown }, jsonMode: boolean): string {
+export function formatResult(result: { success: boolean; error?: string; data?: unknown; warning?: string }, jsonMode: boolean): string {
   if (jsonMode) return JSON.stringify(result, null, 2)
 
   if (!result.success) {
     const cleaned = rewriteCspEvalError(result.error)
     return `error: ${cleaned}`
   }
-  if (result.data === undefined || result.data === null) return "ok"
-  if (typeof result.data === "string") return result.data
-  if (typeof result.data === "number" || typeof result.data === "boolean") return String(result.data)
-  return JSON.stringify(result.data, null, 2)
+  let body: string
+  if (result.data === undefined || result.data === null) body = "ok"
+  else if (typeof result.data === "string") body = result.data
+  else if (typeof result.data === "number" || typeof result.data === "boolean") body = String(result.data)
+  else body = JSON.stringify(result.data, null, 2)
+  // Handlers put actionable hints (trusted-retry suggestions, side-effect
+  // disclosures) in `warning`; dropping it in text mode hid them from every
+  // non-JSON caller.
+  return result.warning ? `${body}\nwarning: ${result.warning}` : body
 }
