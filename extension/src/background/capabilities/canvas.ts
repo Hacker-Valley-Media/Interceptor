@@ -276,7 +276,7 @@ function canvasObserverSummary(limit = 100, kinds?: string[], canvasIndex?: numb
   }
 
   function resolveCanvasId(observer: { canvases?: Array<Record<string, unknown>> } | null, canvasIndex?: number): string | null | undefined {
-    if (canvasIndex === undefined) return undefined
+    if (canvasIndex === undefined || canvasIndex === null) return undefined
     const canvases = Array.isArray(observer?.canvases) ? observer.canvases.slice() : []
     const ordered = canvases.sort((a, b) => {
       const left = typeof a.domIndex === "number" ? a.domIndex : Number.MAX_SAFE_INTEGER
@@ -321,7 +321,7 @@ function canvasObserverObjectsSummary(limit = 100, kind?: string, canvasIndex?: 
   }
 
   function resolveCanvasId(observer: { canvases?: Array<Record<string, unknown>> } | null, canvasIndex?: number): string | null | undefined {
-    if (canvasIndex === undefined) return undefined
+    if (canvasIndex === undefined || canvasIndex === null) return undefined
     const canvases = Array.isArray(observer?.canvases) ? observer.canvases.slice() : []
     const ordered = canvases.sort((a, b) => {
       const left = typeof a.domIndex === "number" ? a.domIndex : Number.MAX_SAFE_INTEGER
