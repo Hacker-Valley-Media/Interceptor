@@ -3,7 +3,10 @@ import { getOrAssignRef } from "../ref-registry"
 import { getEffectiveRole, getAccessibleName } from "../a11y-tree"
 
 type Action = { type: string; [key: string]: unknown }
-type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
+// refId: structured ref of the acted-on element, for callers (the background
+// router's OS-click escalation) that need to re-target it without parsing
+// the human-facing data string.
+type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; refId?: string }
 
 export async function handleClick(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
@@ -54,9 +57,9 @@ export async function handleClickSelector(action: Action): Promise<ActionResult>
   const mutated = await waitForMutation(200)
   const msg = `clicked ${clickedRef} — ${selector}[${nth}] of ${matches.length}`
   if (!mutated) {
-    return { success: true, data: msg, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` }
+    return { success: true, data: msg, refId: clickedRef, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` }
   }
-  return { success: true, data: msg }
+  return { success: true, data: msg, refId: clickedRef }
 }
 
 export async function handleDblclick(action: Action): Promise<ActionResult> {

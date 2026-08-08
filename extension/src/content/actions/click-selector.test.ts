@@ -45,6 +45,10 @@ describe("handleClickSelector", () => {
     expect(res.success).toBe(true)
     expect(clicked).toEqual([1])
     expect(String(res.data)).toMatch(/clicked e\d+ — button\[1\] of 3/)
+    // Structured refId lets the background router escalate to os_click
+    // without parsing the human-facing string.
+    expect(res.refId).toMatch(/^e\d+$/)
+    expect(String(res.data)).toContain(`clicked ${res.refId}`)
     // warning presence is not asserted here: whether the observer catches the
     // listener's async mutation is a happy-dom timing detail. The warning
     // path is covered deterministically below.
@@ -88,5 +92,7 @@ describe("handleClickSelector", () => {
     const res = await handleClickSelector({ type: "click_selector", selector: "button", nth: 0 })
     expect(res.success).toBe(true)
     expect(res.warning).toMatch(/interceptor click --trusted e\d+/)
+    expect(res.refId).toMatch(/^e\d+$/)
+    expect(res.warning).toContain(`--trusted ${res.refId}`)
   })
 })
