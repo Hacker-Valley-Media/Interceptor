@@ -49,10 +49,41 @@ async function executeInMainWorld<T>(
   func: (...args: any[]) => T,
   args: unknown[] = []
 ): Promise<T> {
+  const mapped = args.map((arg) => arg === undefined ? null : arg)
+  // chrome.scripting.executeScript's MAIN world and chrome.userScripts.execute's
+  // MAIN world resolve to DIFFERENT realms in Chrome. The page's own scripts and
+  // our inject-canvas content script (manifest world:MAIN) — and therefore the
+  // canvas observer that records draws — live in the userScripts / page-canonical
+  // realm. Reading the observer through scripting.executeScript lands in a separate
+  // MAIN realm whose observer is present (guard re-runs there) but empty, so
+  // canvas_log / canvas_objects came back empty even while the page was drawing.
+  // Prefer userScripts.execute so the reader runs in the realm where draws actually
+  // accumulate (same path the eval capability uses); fall back to
+  // scripting.executeScript when userScripts is unavailable — DOM-only readers
+  // (walkCanvasElements, canvasAccessibleText) still work there since the DOM is
+  // shared across a frame's realms; observer reads degrade to empty as before.
+  //
+  // These reader functions are already self-contained (they are handed to
+  // scripting.executeScript's `func`, which serialises with no lexical scope), so
+  // stringifying + re-deriving args for userScripts carries the same constraint.
+  if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
+    try {
+      const code = `(${func.toString()}).apply(null, ${JSON.stringify(mapped)})`
+      const results = await chrome.userScripts.execute({
+        target: { tabId },
+        world: "MAIN",
+        js: [{ code }]
+      })
+      const first = results?.[0]
+      if (first && !first.error) return first.result as T
+    } catch {
+      // userScripts disabled / not permitted / threw — fall through to scripting.
+    }
+  }
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    args: args.map((arg) => arg === undefined ? null : arg),
+    args: mapped,
     func
   })
   return results[0]?.result as T
