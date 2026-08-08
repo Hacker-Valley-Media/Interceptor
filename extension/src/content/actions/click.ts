@@ -50,10 +50,11 @@ export async function handleClickSelector(action: Action): Promise<ActionResult>
   }
   scrollIntoViewIfNeeded(el)
   dispatchClickSequence(el, action.x as number | undefined, action.y as number | undefined)
+  const clickedRef = getOrAssignRef(el)
   const mutated = await waitForMutation(200)
-  const msg = `clicked ${selector}[${nth}] of ${matches.length}`
+  const msg = `clicked ${clickedRef} — ${selector}[${nth}] of ${matches.length}`
   if (!mutated) {
-    return { success: true, data: msg, warning: "no DOM change after click — the site may require trusted events" }
+    return { success: true, data: msg, warning: `no DOM change after click — if the site requires trusted events, try: interceptor click --trusted ${clickedRef}` }
   }
   return { success: true, data: msg }
 }
