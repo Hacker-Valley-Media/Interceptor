@@ -1530,7 +1530,7 @@ function canvasObserverSummary(limit = 100, kinds, canvasIndex, obsKey) {
     return out;
   }
   function resolveCanvasId(observer2, canvasIndex2) {
-    if (canvasIndex2 === undefined)
+    if (canvasIndex2 === undefined || canvasIndex2 === null)
       return;
     const canvases = Array.isArray(observer2?.canvases) ? observer2.canvases.slice() : [];
     const ordered = canvases.sort((a, b) => {
@@ -1576,7 +1576,7 @@ function canvasObserverObjectsSummary(limit = 100, kind, canvasIndex, obsKey) {
     return String(value || "").trim();
   }
   function resolveCanvasId(observer2, canvasIndex2) {
-    if (canvasIndex2 === undefined)
+    if (canvasIndex2 === undefined || canvasIndex2 === null)
       return;
     const canvases = Array.isArray(observer2?.canvases) ? observer2.canvases.slice() : [];
     const ordered = canvases.sort((a, b) => {
