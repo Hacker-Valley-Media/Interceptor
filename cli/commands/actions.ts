@@ -34,15 +34,29 @@ export function parseActionsCommand(filtered: string[]): Action {
       // where the tree is empty while `query "button span"` finds the control
       // exactly.
       const selIdx = filtered.indexOf("--selector")
-      if (selIdx !== -1 && filtered[selIdx + 1]) {
-        const nthIdx = filtered.indexOf("--nth")
-        const nth = nthIdx !== -1 ? Number(filtered[nthIdx + 1]) : 0
-        return {
-          type: "click_selector",
-          selector: filtered[selIdx + 1],
-          nth: Number.isFinite(nth) ? nth : 0,
-          ...parseAt(filtered),
+      const nthIdx = filtered.indexOf("--nth")
+      if (selIdx !== -1) {
+        const selector = filtered[selIdx + 1]
+        // A missing operand leaves the next token undefined or another flag —
+        // erroring beats falling through to parseElementTarget("--selector").
+        if (!selector || selector.startsWith("--")) {
+          console.error('error: --selector requires a CSS selector value. Quote selectors containing spaces, e.g. --selector "button span"')
+          process.exit(1)
         }
+        let nth = 0
+        if (nthIdx !== -1) {
+          const rawNth = filtered[nthIdx + 1]
+          nth = Number(rawNth)
+          if (!Number.isInteger(nth) || nth < 0) {
+            console.error(`error: --nth requires a non-negative integer (0-based, matching query output), got '${rawNth ?? ""}'`)
+            process.exit(1)
+          }
+        }
+        return { type: "click_selector", selector, nth, ...parseAt(filtered) }
+      }
+      if (nthIdx !== -1) {
+        console.error("error: --nth requires --selector")
+        process.exit(1)
       }
       const target = parseElementTarget(filtered[1])
       const at = parseAt(filtered)

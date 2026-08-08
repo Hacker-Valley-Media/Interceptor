@@ -127,7 +127,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "links", surface: "browser", usage: "interceptor links", summary: "All links on the page", returns: "Array of {text, href}." },
   { name: "images", surface: "browser", usage: "interceptor images", summary: "All images", returns: "Array of {alt, src}." },
   { name: "forms", surface: "browser", usage: "interceptor forms", summary: "All forms and fields", returns: "Form structure with field names/types/values." },
-  { name: "query", surface: "browser", usage: "interceptor query <css-selector>", summary: "Query elements by CSS selector", returns: "Matching elements with attributes." },
+  { name: "query", surface: "browser", usage: "interceptor query <css-selector>", summary: "Query elements by CSS selector", returns: "Matching elements with attributes and clickable e<ref>s." },
   { name: "exists", surface: "browser", usage: "interceptor exists <css-selector>", summary: "Does a selector match?", returns: "Boolean." },
   { name: "count", surface: "browser", usage: "interceptor count <css-selector>", summary: "How many elements match", returns: "Number." },
   { name: "attr", surface: "browser", usage: "interceptor attr e<ref> <name> | attr set e<ref> <name> <value>", summary: "Get/set an attribute", returns: "Attribute value." },

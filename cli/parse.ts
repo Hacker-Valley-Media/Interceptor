@@ -3,6 +3,17 @@
  */
 
 export function parseElementTarget(arg: string): { index?: number; ref?: string; frameId?: number; semantic?: { role: string; name: string } } {
+  // Every caller that allows an absent target guards before calling (focus,
+  // upload, text, html, read, act) — reaching here with no arg is always a
+  // caller mistake, and without this gate it surfaced as a raw TypeError from
+  // the compiled binary instead of usage.
+  if (!arg) {
+    console.error(
+      "error: this command requires an element target — a ref (e.g. 'e2'), an index (e.g. '5'), or 'role:name' (e.g. 'button:Submit'). " +
+      "Run 'interceptor read --tree-only' to find refs.",
+    )
+    process.exit(1)
+  }
   const framed = /^e(\d+)_(\d+)$/.exec(arg)
   if (framed) {
     return { ref: `e${framed[2]}`, frameId: parseInt(framed[1], 10) }
