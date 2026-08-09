@@ -71,7 +71,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
     returns: "Updated a11y tree + '--- diff ---' of what changed. 'ok (page navigated…)' when the action triggered navigation.",
     flags: [
       { name: "--keys", value: "<combo>", description: "send a keyboard shortcut instead (e.g. Enter, cmd+shift+p)" },
-      { name: "--trusted", description: "HID-sourced input — page sees isTrusted: true" },
+      { name: "--trusted", description: "HID-sourced input — page sees isTrusted: true; requires the target tab active in the OS-focused window (refuses otherwise, never moves focus)" },
       { name: "--append", description: "type without clearing the field first" },
       { name: "--no-read", description: "skip the post-action tree read" },
     ],

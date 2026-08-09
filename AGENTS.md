@@ -105,6 +105,8 @@ See `.agents/rules/mcp-control-plane.md` and `docs/mcp.md`.
 | **`interceptor macos`** | Native macOS apps. Browser chrome (URL bar, menu, Save/Open dialog). System notifications. Cross-app workflows. | Content inside a browser page — synthetic layer instead. |
 | **`eval --main`** (with `__interceptor_trust` marker on dispatched events) | Canvas-rendered surfaces (Docs/Slides/Sheets cell input, WebGL pan/zoom, design-tool exports), monkey-patching for protocol sniffing. | Tasks a built-in compound command already covers — prefer named commands first. |
 
+Trusted OS input (`--trusted`/`--os`, including the automatic os_click escalation layer) is **delivery-gated, not focus-moving**: OS-level events are routed by macOS to whatever is frontmost, so the verbs refuse — with a `hint` — unless the target tab is the active tab of the OS-focused, non-minimized window (issue #166). They never move focus themselves; foreground the tab first via the explicit opt-in verbs (`tab switch <id>` / `window focus <id>`) or stay on synthetic input, which is background-safe.
+
 The historical reflex of "site checks `isTrusted` → use `--os`" is no longer correct on most sites. `userActivation.isActive` reads `true` because the pre-load override forces it; dispatched events tagged with `__interceptor_trust` satisfy the per-event check on sites that read `isTrusted` via the prototype. Try synthetic first.
 
 Deep mechanic notes (the `userActivation` override + `__interceptor_trust` marker, canvas-rendered editor input, blob export capture): [`.agents/skills/interceptor-browser/references/rich-editors.md`](.agents/skills/interceptor-browser/references/rich-editors.md).
