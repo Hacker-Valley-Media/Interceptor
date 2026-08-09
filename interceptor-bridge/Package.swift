@@ -53,6 +53,9 @@ let package = Package(
             exclude: ["InterceptorVDHelper", "Resources"],
             linkerSettings: [
                 .linkedFramework("ApplicationServices"),
+                // SecCode signing introspection (SigningInfoProvider — trust
+                // signing status + the router's Accessibility gate adhoc hint).
+                .linkedFramework("Security"),
                 .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("Speech"),
                 .linkedFramework("SoundAnalysis"),

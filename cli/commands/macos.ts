@@ -136,6 +136,10 @@ export async function runMacosCommand(
       markMonitorTaskSourceAttachFailed(pendingMonitorTaskId, undefined, result.error || "macos monitor start failed")
     }
     console.error("error:", result.error || "unknown error")
+    // Bridge errors may carry an actionable `remediation` command (e.g. the
+    // Accessibility trust gate, monitor's TCC preflight). Surface it.
+    const remediation = (result as Record<string, unknown>).remediation
+    if (typeof remediation === "string") console.error("fix:", remediation)
     process.exit(1)
   }
 

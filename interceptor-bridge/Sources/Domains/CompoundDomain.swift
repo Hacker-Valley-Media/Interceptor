@@ -189,6 +189,13 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
         let treeAction: [String: Any] = buildAction("macos_tree", app: appName, pid: pid, extra: ["filter": filter, "depth": depth])
 
         router.route(action: treeAction) { [router, appName, pid] treeResult in
+            // Propagate sub-call failures (e.g. the Accessibility trust
+            // gate) instead of composing a success around an empty tree —
+            // same pattern handleAct uses.
+            guard treeResult["success"] as? Bool == true else {
+                completion(treeResult)
+                return
+            }
             let treeData: String = (treeResult["data"] as? String) ?? ""
             let windowsAction: [String: Any] = self.buildAction("macos_windows", app: appName, pid: pid)
             router.route(action: windowsAction) { windowsResult in
@@ -211,6 +218,10 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
         let treeAction = buildAction("macos_tree", app: appName, pid: pid, extra: ["filter": filter, "depth": depth])
 
         router.route(action: treeAction) { treeResult in
+            guard treeResult["success"] as? Bool == true else {
+                completion(treeResult)
+                return
+            }
             let appInfo = self.describeApp(named: appName, pid: pid)
             completion(WireFormat.success([
                 "tree": treeResult["data"] ?? "",
@@ -258,6 +269,10 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
         let treeAction = buildAction("macos_tree", app: appName, pid: pid, extra: ["filter": "interactive", "depth": 10])
 
         router.route(action: treeAction) { [appName, pid] treeResult in
+            guard treeResult["success"] as? Bool == true else {
+                completion(treeResult)
+                return
+            }
             let treeData: String = (treeResult["data"] as? String) ?? ""
             let appInfo = self.describeApp(named: appName, pid: pid)
             completion(WireFormat.success([

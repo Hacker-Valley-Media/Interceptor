@@ -33,6 +33,9 @@ final class MonitorPersistenceTests: XCTestCase {
     func testAppendMonitorEventWritesSessionLocalNDJSON() {
         let sid = "test\(UUID().uuidString.prefix(4))".lowercased()
         Platform.appendMonitorEvent(sid: sid, event: "click", data: ["x": 100, "y": 200])
+        // appendMonitorEvent hands the write to MonitorEventWriter's serial
+        // queue; flush() is a sync barrier that drains it before we assert.
+        MonitorEventWriter.shared.flush()
         let path = Platform.sessionEventsPath(sid)
         XCTAssertTrue(FileManager.default.fileExists(atPath: path), "session events.jsonl must exist after append")
 
@@ -45,6 +48,7 @@ final class MonitorPersistenceTests: XCTestCase {
     func testAppendMonitorEventAlsoWritesToBridgeRollingLog() {
         let sid = "test\(UUID().uuidString.prefix(4))".lowercased()
         Platform.appendMonitorEvent(sid: sid, event: "frontmost", data: ["app": "TestApp"])
+        MonitorEventWriter.shared.flush()
         XCTAssertTrue(FileManager.default.fileExists(atPath: Platform.bridgeEventsPath))
         let bridgeContent = (try? String(contentsOfFile: Platform.bridgeEventsPath, encoding: .utf8)) ?? ""
         XCTAssertTrue(bridgeContent.contains("\"sid\":\"\(sid)\""))

@@ -278,6 +278,8 @@ else
   else
     echo "==> Signing identity not present in keychain — performing ad-hoc sign for development."
     echo "    Set INTERCEPTOR_SIGNING_IDENTITY to a real Developer ID for distribution."
+    echo "    NOTE: TCC grants (Accessibility etc.) pin to this exact ad-hoc build and will NOT"
+    echo "    survive a rebuild — remove the stale System Settings row (−) and re-grant each time."
     if [ -d "$APP_DIR/Contents/Frameworks/Sparkle.framework" ]; then
       codesign --force --deep --sign - "$APP_DIR/Contents/Frameworks/Sparkle.framework" 2>/dev/null || true
     fi
