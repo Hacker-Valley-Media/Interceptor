@@ -181,7 +181,10 @@ export async function routeAction(
           reason: action.os === true
             ? "trusted scene click failed"
             : "synthetic produced no DOM change, os_click failed",
-          suggestion: "verify element is interactive and Chrome window is visible"
+          os_error: osResult.error,
+          suggestion: (typeof osResult.data === "object" && osResult.data &&
+            (osResult.data as { hint?: string }).hint) ||
+            "verify element is interactive and Chrome window is visible"
         }
       }
     }

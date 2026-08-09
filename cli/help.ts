@@ -209,7 +209,8 @@ Compound (agent-optimized):
   interceptor style remove <handle>          Remove a previously injected stylesheet
   interceptor act <ref>                      Click + wait + return updated tree + diff
   interceptor act <ref> "value"              Type into field + wait + return updated tree
-  interceptor act <ref> --trusted            Use HID-sourced trusted input (page sees isTrusted: true)
+  interceptor act <ref> --trusted            HID-sourced trusted input (isTrusted: true); requires the target tab
+                                             active in the OS-focused window — refuses otherwise, never moves focus
   interceptor act <ref> --keys "Enter"       Send keyboard shortcut instead
   interceptor act <ref> --no-read            Skip post-action tree read
   interceptor inspect                        Tree + text + network log + headers
