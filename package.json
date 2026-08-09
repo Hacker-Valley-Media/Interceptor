@@ -1,6 +1,6 @@
 {
   "name": "interceptor",
-  "version": "0.23.13",
+  "version": "0.23.14",
   "type": "module",
   "license": "Elastic-2.0",
   "bin": {
@@ -24,5 +24,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "tesseract.js": "^7.0.0"
+  },
+  "patchedDependencies": {
+    "@modelcontextprotocol/sdk@1.29.0": "patches/@modelcontextprotocol%2Fsdk@1.29.0.patch"
   }
 }
