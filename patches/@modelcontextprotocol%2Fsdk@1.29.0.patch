@@ -1,0 +1,47 @@
+diff --git a/dist/cjs/client/stdio.js b/dist/cjs/client/stdio.js
+index 1dd822e1012f85015f6ec274e5828dfa5b24e777..632fd4ce2a2f45f76f5f2fa3260160f7f1d0fb61 100644
+--- a/dist/cjs/client/stdio.js
++++ b/dist/cjs/client/stdio.js
+@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.StdioClientTransport = exports.DEFAULT_INHERITED_ENV_VARS = void 0;
+ exports.getDefaultEnvironment = getDefaultEnvironment;
+ const cross_spawn_1 = __importDefault(require("cross-spawn"));
+-const node_process_1 = __importDefault(require("node:process"));
++const node_process_1 = { default: globalThis.process };
+ const node_stream_1 = require("node:stream");
+ const stdio_js_1 = require("../shared/stdio.js");
+ /**
+diff --git a/dist/cjs/server/stdio.js b/dist/cjs/server/stdio.js
+index 0edcbf325fc4c40826c621c598abf55d64da5ba5..0d368274b5dc8f556d433827922ad753792b6dcb 100644
+--- a/dist/cjs/server/stdio.js
++++ b/dist/cjs/server/stdio.js
+@@ -4,7 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
+ };
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.StdioServerTransport = void 0;
+-const node_process_1 = __importDefault(require("node:process"));
++const node_process_1 = { default: globalThis.process };
+ const stdio_js_1 = require("../shared/stdio.js");
+ /**
+  * Server transport for stdio: this communicates with an MCP client by reading from the current process' stdin and writing to stdout.
+diff --git a/dist/esm/client/stdio.js b/dist/esm/client/stdio.js
+index 3118783c5d4e8c65dfb2e555293f89ce6d67bb6e..f69090f49731a0b6f329b48e144a9d6976889eac 100644
+--- a/dist/esm/client/stdio.js
++++ b/dist/esm/client/stdio.js
+@@ -1,5 +1,5 @@
+ import spawn from 'cross-spawn';
+-import process from 'node:process';
++const process = globalThis.process;
+ import { PassThrough } from 'node:stream';
+ import { ReadBuffer, serializeMessage } from '../shared/stdio.js';
+ /**
+diff --git a/dist/esm/server/stdio.js b/dist/esm/server/stdio.js
+index 727fe70a5575e44e10d3224d4e01d39ce2faf4cc..28f2f883cca51a73442b275db878f32f33f2e07e 100644
+--- a/dist/esm/server/stdio.js
++++ b/dist/esm/server/stdio.js
+@@ -1,4 +1,4 @@
+-import process from 'node:process';
++const process = globalThis.process;
+ import { ReadBuffer, serializeMessage } from '../shared/stdio.js';
+ /**
+  * Server transport for stdio: this communicates with an MCP client by reading from the current process' stdin and writing to stdout.
