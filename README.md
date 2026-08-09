@@ -91,7 +91,7 @@ Both download from the same [Releases](https://github.com/Hacker-Valley-Media/In
 
 1. Download the matching `.pkg` from Releases.
 2. Double-click it. Walk through the installer (admin password required once).
-3. *(Full pkg only)* Open **System Settings → Privacy & Security**. The first time you run `interceptor macos *`, macOS will prompt for **Accessibility**, **Screen Recording**, and **Apple Events** access for `interceptor-bridge` — allow each. The Browser pkg never triggers these prompts.
+3. *(Full pkg only)* Open **System Settings → Privacy & Security**. The first time you run `interceptor macos *`, macOS will prompt for **Accessibility**, **Screen Recording**, and **Apple Events** access for `interceptor-bridge` — allow each. The Browser pkg never triggers these prompts. If Accessibility is missing, AX verbs (`tree`, `find`, `click`, …) fail with an actionable error and non-zero exit — run `interceptor macos trust --walkthrough` to fix. Note for source builds: an ad-hoc-signed dev bridge loses its TCC grants on every rebuild (the System Settings row can stay visibly on without applying) — remove the stale row (−) and re-grant, or use the signed pkg; `interceptor macos trust` reports the running binary's signing status.
 4. *(Safari add-on only)* Install `Interceptor-Safari-<version>.pkg`, open **InterceptorSafari** once, then enable **Interceptor** in **Safari → Settings → Extensions** and grant website access.
 5. Open a terminal:
 

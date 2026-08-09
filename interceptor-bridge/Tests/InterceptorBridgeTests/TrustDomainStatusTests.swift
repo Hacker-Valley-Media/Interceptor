@@ -138,8 +138,21 @@ final class TrustDomainStatusTests: XCTestCase {
         }
     }
 
-    private func runTrust(action: [String: Any], provider: MicrophoneAuthorizationProvider) -> [String: Any] {
-        let domain = TrustDomain(microphoneProvider: provider)
+    // MARK: - Signing provider stub (issue #163 follow-up)
+
+    struct StubSigningProvider: SigningInfoProvider {
+        let info: SigningInfo
+        func signingInfo() -> SigningInfo { info }
+    }
+
+    private func runTrust(
+        action: [String: Any],
+        provider: MicrophoneAuthorizationProvider,
+        signing: SigningInfo? = nil
+    ) -> [String: Any] {
+        let signingProvider: any SigningInfoProvider =
+            signing.map { StubSigningProvider(info: $0) } ?? LiveSigningInfoProvider()
+        let domain = TrustDomain(microphoneProvider: provider, signingProvider: signingProvider)
         let box = ResultBox()
         let exp = expectation(description: "trust completion")
         domain.handle("trust", action: action) { result in
@@ -234,14 +247,14 @@ final class TrustDomainStatusTests: XCTestCase {
 
     // MARK: - Permissions array shape
 
-    func testPermissionsArrayCarriesAllThreeWithStatus() {
+    func testPermissionsArrayCarriesAllFourWithStatus() {
         let provider = StubMicrophoneProvider(initialStatus: .authorized)
         let result = runTrust(action: [:], provider: provider)
         let perms = permissions(from: result)
 
-        XCTAssertEqual(perms.count, 3)
+        XCTAssertEqual(perms.count, 4)
         let names = perms.compactMap { $0["name"] as? String }
-        XCTAssertEqual(Set(names), Set(["Accessibility", "Microphone", "Screen Recording"]))
+        XCTAssertEqual(Set(names), Set(["Accessibility", "Microphone", "Screen Recording", "Speech Recognition"]))
 
         for perm in perms {
             XCTAssertNotNil(perm["status"] as? String, "every entry must have a string status")
@@ -271,5 +284,43 @@ final class TrustDomainStatusTests: XCTestCase {
         XCTAssertNotNil(payload["accessibility"] as? String)
         XCTAssertNotNil(payload["screenRecording"] as? String)
         XCTAssertEqual(payload["microphone"] as? String, "denied")
+    }
+
+    // MARK: - Signing status surfacing (issue #163 follow-up)
+
+    func testSigningBlockCarriesIdentityForSignedBuild() {
+        let provider = StubMicrophoneProvider(initialStatus: .authorized)
+        let result = runTrust(
+            action: [:],
+            provider: provider,
+            signing: SigningInfo(adhoc: false, teamId: "TPWBZD35WW", identifier: "com.interceptor.bridge", cdhash: "ab12")
+        )
+        let payload = data(from: result)
+
+        let signing = payload["signing"] as? [String: Any]
+        XCTAssertEqual(signing?["adhoc"] as? Bool, false)
+        XCTAssertEqual(signing?["teamId"] as? String, "TPWBZD35WW")
+        XCTAssertEqual(signing?["identifier"] as? String, "com.interceptor.bridge")
+        XCTAssertEqual(signing?["cdhash"] as? String, "ab12")
+        XCTAssertNil(payload["warnings"], "signed builds must not emit the ad-hoc warning")
+    }
+
+    func testAdhocSigningEmitsPinnedGrantWarning() {
+        let provider = StubMicrophoneProvider(initialStatus: .authorized)
+        let result = runTrust(
+            action: [:],
+            provider: provider,
+            signing: SigningInfo(adhoc: true, teamId: nil, identifier: nil, cdhash: "ff00")
+        )
+        let payload = data(from: result)
+
+        let signing = payload["signing"] as? [String: Any]
+        XCTAssertEqual(signing?["adhoc"] as? Bool, true)
+        XCTAssertTrue(signing?["teamId"] is NSNull, "ad-hoc has no team identity")
+
+        let warnings = payload["warnings"] as? [String] ?? []
+        XCTAssertEqual(warnings.count, 1)
+        XCTAssertTrue(warnings[0].contains("ad-hoc signed"), "warning must name the cause")
+        XCTAssertTrue(warnings[0].contains("NOT survive a rebuild"), "warning must state the consequence")
     }
 }
