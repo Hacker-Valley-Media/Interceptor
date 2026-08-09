@@ -6,6 +6,8 @@ paths:
   - "cli/mcp/adapter.ts"
   - "cli/mcp/output.ts"
   - "cli/mcp/install.ts"
+  - "package.json"
+  - "patches/**"
 ---
 
 # MCP control plane contract
@@ -44,3 +46,15 @@ invariants; extend `test/mcp-*.test.ts` whenever you touch this surface.
    config for Claude Code, Codex, Gemini CLI, Cursor, and Claude Desktop
    (`install.ts`); the command self-locates via `process.execPath`. Merges are
    idempotent and preserve unrelated config. Never tell a user to hand-edit JSON.
+
+6. **The MCP SDK ships patched — never drop `patchedDependencies`.** The SDK's
+   stdio transports import `node:process`, which triggers a Bun `--compile` bug
+   (present through at least Bun 1.3.14): any compiled binary bundling that
+   import silently truncates piped stdout at 64 KiB on exit — for every verb,
+   even though the SDK only loads for `mcp serve` (issue #183). The patch in
+   `patches/` rewrites those imports to the `process` global and is applied via
+   `package.json` `"patchedDependencies"`. Bun keys patches to the exact package
+   version, so bumping `@modelcontextprotocol/sdk` requires regenerating the
+   patch (`bun patch` → re-apply the edit → `bun patch --commit`), not deleting
+   it. `test/compiled-stdout-pipe.test.ts` fails if the patch is missing or
+   ineffective.
