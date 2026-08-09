@@ -595,16 +595,51 @@ async function cdpAttachActDetach(tabId, method, params) {
 }
 
 // extension/src/background/capabilities/os-input.ts
+var FOREGROUND_HINT = "trusted OS input needs the target tab visible in the OS-focused window — " + "`interceptor tab switch <id>` foregrounds it (explicit focus-moving opt-in), " + "or drop --trusted for background-safe synthetic input";
+async function requireForegroundTab(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) {
+    return { ok: false, result: { success: false, error: `tab ${tabId} not found` } };
+  }
+  const win = await chrome.windows.get(tab.windowId).catch(() => null);
+  if (!win) {
+    return { ok: false, result: { success: false, error: `window ${tab.windowId} not found for tab ${tabId}` } };
+  }
+  if (win.state === "minimized") {
+    return { ok: false, result: {
+      success: false,
+      error: `window ${tab.windowId} is minimized — trusted OS input needs on-screen pixels to hit`,
+      data: { hint: FOREGROUND_HINT, windowState: win.state }
+    } };
+  }
+  if (!tab.active) {
+    return { ok: false, result: {
+      success: false,
+      error: `tab ${tabId} is not the active tab of window ${tab.windowId} — a trusted OS event would hit the window's visible tab instead`,
+      data: { hint: FOREGROUND_HINT }
+    } };
+  }
+  if (!win.focused) {
+    return { ok: false, result: {
+      success: false,
+      error: `window ${tab.windowId} is not the OS-focused window — trusted OS events are routed by the OS to whatever is frontmost, not to the target tab`,
+      data: { hint: FOREGROUND_HINT }
+    } };
+  }
+  return { ok: true, windowBounds: {
+    left: win.left || 0,
+    top: win.top || 0,
+    width: win.width || 0,
+    height: win.height || 0
+  } };
+}
 async function handleOsInputActions(action, tabId) {
   switch (action.type) {
     case "os_click": {
-      const win = await chrome.windows.getCurrent();
-      const windowBounds = {
-        left: win.left || 0,
-        top: win.top || 0,
-        width: win.width || 0,
-        height: win.height || 0
-      };
+      const fg = await requireForegroundTab(tabId);
+      if (!fg.ok)
+        return fg.result;
+      const windowBounds = fg.windowBounds;
       let pageX = action.x;
       let pageY = action.y;
       if ((action.index !== undefined || action.ref) && (pageX === undefined || pageY === undefined)) {
@@ -636,9 +671,16 @@ async function handleOsInputActions(action, tabId) {
         }
       };
     }
-    case "os_key":
+    case "os_key": {
+      const fg = await requireForegroundTab(tabId);
+      if (!fg.ok)
+        return fg.result;
       return { success: true, data: { method: "os_event", key: action.key, modifiers: action.modifiers || [] } };
+    }
     case "os_type": {
+      const fg = await requireForegroundTab(tabId);
+      if (!fg.ok)
+        return fg.result;
       if (action.index !== undefined || action.ref) {
         await sendToContentScript(tabId, { type: "focus", index: action.index, ref: action.ref });
         await new Promise((r) => setTimeout(r, 50));
@@ -646,13 +688,10 @@ async function handleOsInputActions(action, tabId) {
       return { success: true, data: { method: "os_event", text: action.text } };
     }
     case "os_move": {
-      const win = await chrome.windows.getCurrent();
-      const windowBounds = {
-        left: win.left || 0,
-        top: win.top || 0,
-        width: win.width || 0,
-        height: win.height || 0
-      };
+      const fg = await requireForegroundTab(tabId);
+      if (!fg.ok)
+        return fg.result;
+      const windowBounds = fg.windowBounds;
       const chromeUiHeight = action.chromeUiHeight || 88 + (debuggerAttached.has(tabId) ? 35 : 0);
       return {
         success: true,
@@ -4619,7 +4658,8 @@ async function routeAction(action, tabId) {
         diagnostics: {
           layers_tried: ["synthetic", "os_click"],
           reason: action.os === true ? "trusted scene click failed" : "synthetic produced no DOM change, os_click failed",
-          suggestion: "verify element is interactive and Chrome window is visible"
+          os_error: osResult.error,
+          suggestion: typeof osResult.data === "object" && osResult.data && osResult.data.hint || "verify element is interactive and Chrome window is visible"
         }
       }
     };
