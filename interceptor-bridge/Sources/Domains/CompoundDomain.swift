@@ -14,7 +14,12 @@ protocol AppLauncher {
     // Launches a not-running app. The `activates` flag flows directly
     // into NSWorkspace.OpenConfiguration.activates per Apple docs:
     // false means "open in the background, do not steal focus."
-    func launch(_ name: String, activates: Bool, completion: @escaping () -> Void)
+    // Completion receives the launched app's pid when NSWorkspace
+    // provides one: openApplication's completion can fire before the app
+    // registers in NSWorkspace.runningApplications, so a by-name lookup
+    // immediately after launch can miss. The pid addresses the app
+    // without that race.
+    func launch(_ name: String, activates: Bool, completion: @escaping (pid_t?) -> Void)
 }
 
 final class DefaultAppLauncher: AppLauncher {
@@ -70,7 +75,7 @@ final class DefaultAppLauncher: AppLauncher {
         }
     }
 
-    func launch(_ name: String, activates: Bool, completion: @escaping () -> Void) {
+    func launch(_ name: String, activates: Bool, completion: @escaping (pid_t?) -> Void) {
         // Modern URL resolution path. Per Apple docs:
         //   - `urlForApplication(withBundleIdentifier:)` is the modern
         //     replacement for `absolutePathForApplication(...)`.
@@ -88,7 +93,7 @@ final class DefaultAppLauncher: AppLauncher {
         guard let appURL = appURL else {
             // No URL resolved by any modern API — fail closed instead
             // of foregrounding via the deprecated path.
-            completion()
+            completion(nil)
             return
         }
         let config = NSWorkspace.OpenConfiguration()
@@ -96,8 +101,8 @@ final class DefaultAppLauncher: AppLauncher {
         config.addsToRecentItems = false
         // Reuse a running instance if there happens to be one (default).
         // createsNewApplicationInstance defaults to false; we leave it.
-        workspace.openApplication(at: appURL, configuration: config) { _, _ in
-            completion()
+        workspace.openApplication(at: appURL, configuration: config) { app, _ in
+            completion(app?.processIdentifier)
         }
     }
 
@@ -155,9 +160,18 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
+    // Thread-safe pid handoff from the launch completion (which runs on
+    // an arbitrary NSWorkspace queue) back to handleOpen's thread.
+    private final class LaunchedPidBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pid: pid_t?
+        func set(_ p: pid_t?) { lock.lock(); pid = p; lock.unlock() }
+        func get() -> pid_t? { lock.lock(); defer { lock.unlock() }; return pid }
+    }
+
     private func handleOpen(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let appName = action["app"] as? String
-        let pid = action["pid"] as? Int32
+        var pid = action["pid"] as? Int32
         // Background-first: only foreground when the caller explicitly
         // sets activate=true on the action. The default is therefore
         // "open and read AX state without stealing focus."
@@ -177,10 +191,20 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
                 // and don't move focus.
             } else {
                 let semaphore = DispatchSemaphore(value: 0)
-                launcher.launch(appName, activates: shouldActivate) {
+                let launchedPid = LaunchedPidBox()
+                launcher.launch(appName, activates: shouldActivate) { launchPid in
+                    launchedPid.set(launchPid)
                     semaphore.signal()
                 }
                 _ = semaphore.wait(timeout: .now() + 5.0)
+                // Address the freshly-launched app by pid: openApplication's
+                // completion can fire before the app shows up in
+                // NSWorkspace.runningApplications, so the by-name lookup in
+                // the tree read below would miss and (post issue #163) fail
+                // loud instead of returning an empty tree.
+                if pid == nil, let launched = launchedPid.get() {
+                    pid = launched
+                }
             }
         }
 
