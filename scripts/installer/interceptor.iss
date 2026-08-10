@@ -83,9 +83,19 @@ Source: "{#StageDir}\interceptor.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\interceptor.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\daemon\interceptor-daemon.exe"; DestDir: "{app}\daemon"; Flags: ignoreversion
 Source: "{#StageDir}\daemon\com.interceptor.host.json"; DestDir: "{app}\daemon"; Flags: ignoreversion
+; Unpacked browser extension dropped on disk so the user has one stable place to
+; point "Load unpacked" (Developer mode). Setup still never touches a browser
+; profile or loads it automatically — it only stages the files.
+Source: "{#StageDir}\extension\*"; DestDir: "{app}\extension"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\.agents\skills\interceptor\*"; DestDir: "{app}\skills\interceptor"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\.agents\skills\interceptor-browser\*"; DestDir: "{app}\skills\interceptor-browser"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\.agents\skills\interceptor-research\*"; DestDir: "{app}\skills\interceptor-research"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[UninstallDelete]
+; recursesubdirs leaves the extension's (empty) subdir tree behind on uninstall;
+; remove the whole staged extension folder explicitly. filesandordirs also clears
+; anything a user dropped in — the browser only reads from here, never writes.
+Type: filesandordirs; Name: "{app}\extension"
 
 [Run]
 Filename: "https://github.com/Hacker-Valley-Media/Interceptor/blob/v{#AppVersion}/docs/windows-install.md"; Description: "Open the Windows setup guide"; Flags: shellexec postinstall skipifsilent unchecked nowait

@@ -1,7 +1,14 @@
 Interceptor (Browser-Only) is installed.
 
-1. Install the Interceptor extension from your browser's approved store.
-   Chrome and Brave use the Chrome Web Store; Edge uses Microsoft Edge Add-ons.
+1. Load the bundled Interceptor extension. Setup dropped an unpacked copy on
+   disk at:
+
+       %LOCALAPPDATA%\Programs\Interceptor\extension
+
+   In Chrome, Brave, or Edge: open the extensions page (chrome://extensions,
+   brave://extensions, or edge://extensions), turn on Developer mode, click
+   "Load unpacked", and select that folder. (Once the store listing is public
+   you can install from the Chrome Web Store / Microsoft Edge Add-ons instead.)
 2. Open a new terminal so Windows loads the updated user PATH.
 3. Run:
 
@@ -11,9 +18,10 @@ Optional AI skill packs are bundled but are never linked without your consent:
 
     interceptor skills adopt
 
-The installer does not change browser profiles, enable developer mode, load an
-unpacked extension, start the daemon, or install extensions without consent.
-The daemon starts on demand after a CLI or browser-extension request.
+The installer stages the extension files on disk but does not change browser
+profiles, enable developer mode, load the extension, start the daemon, or
+install anything into a browser without consent. The daemon starts on demand
+after a CLI or browser-extension request.
 
 Windows support: Windows 11 24H2 or newer, x64 or ARM64, one active interactive
 user per machine. The native macOS commands (interceptor macos *) are not

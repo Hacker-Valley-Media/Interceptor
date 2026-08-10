@@ -126,14 +126,24 @@ describe("Windows production release contract", () => {
     expect(installer).toContain("Interceptor-Browser-1.2.3-windows-arm64.exe")
   })
 
-  test("removes PR 156's developer-mode and unpacked-extension behavior", () => {
+  test("ships the extension on disk for Load unpacked without auto-loading it", () => {
     const postInstall = read("scripts/installer/post-install.txt")
     const docs = read("docs/windows-install.md")
-    expect(postInstall).not.toMatch(/toggle developer|click ["']?load unpacked|enable developer mode\./i)
-    expect(postInstall).toContain("does not change browser profiles")
+    const iss = read("scripts/installer/interceptor.iss")
+    // The unpacked extension is staged on disk at {app}\extension, and both the
+    // installer copy and the uninstaller cleanup are declared.
+    expect(iss).toContain('Source: "{#StageDir}\\extension\\*"; DestDir: "{app}\\extension"')
+    expect(iss).toMatch(/\[UninstallDelete\][\s\S]*Type: filesandordirs; Name: "\{app\}\\extension"/)
+    expect(read("scripts/build.sh")).toContain('cp -R extension/dist "$stage/extension"')
+    // Docs/post-install point users at that on-disk folder for Load unpacked.
+    expect(postInstall).toContain("%LOCALAPPDATA%\\Programs\\Interceptor\\extension")
+    expect(docs).toContain("%LOCALAPPDATA%\\Programs\\Interceptor\\extension")
     expect(docs).toContain("Chrome Web Store")
     expect(docs).toContain("Microsoft Edge Add-ons")
     expect(docs).toContain("one active interactive user")
-    expect(docs).not.toMatch(/click ["']?load unpacked|enable developer mode\./i)
+    // Staging files is not loading them: Setup must never load the extension or
+    // change a browser profile on the user's behalf.
+    expect(postInstall).toMatch(/does not change browser[\s\S]*profiles/)
+    expect(postInstall).toMatch(/never (linked|loads?)|without your consent|without consent/i)
   })
 })
