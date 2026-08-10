@@ -315,4 +315,24 @@ describe("macos parser", () => {
     expect(w.type).toBe("macos_windows")
     expect(w.pid).toBe(99)
   })
+
+  // PhotosDomain casts size with `as? Int` — a string forward is silently
+  // dropped and the resize/encode branch becomes unreachable (#187).
+  test("photos export forwards --size as an int and --format as a string", () => {
+    const action = parseMacosCommand([
+      "macos", "photos", "export", "ABC/L0/001", "--out", "/tmp/x.png", "--size", "400", "--format", "png",
+    ]) as Record<string, unknown>
+    expect(action.type).toBe("macos_photos")
+    expect(action.size).toBe(400)
+    expect(action.format).toBe("png")
+    expect(action.out).toBe("/tmp/x.png")
+  })
+
+  test("photos thumbnail forwards --size as an int", () => {
+    const action = parseMacosCommand([
+      "macos", "photos", "thumbnail", "ABC/L0/001", "--size", "512",
+    ]) as Record<string, unknown>
+    expect(action.type).toBe("macos_photos")
+    expect(action.size).toBe(512)
+  })
 })

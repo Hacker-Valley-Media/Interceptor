@@ -109,10 +109,10 @@ interceptor macos photos assets [--album <id>] [--media image|video|audio]
    [--since <ISO> --until <ISO>] [--favorite] [--hidden] [--burst]
    [--limit N --offset N]
 interceptor macos photos asset <id>
-interceptor macos photos export <id> [--size N] --out <path>
+interceptor macos photos export <id> [--size N] [--format jpeg|png] --out <path>
 interceptor macos photos export-video <id> --out <path>
 interceptor macos photos export-live <id> --out <path-prefix>
-interceptor macos photos thumbnail <id> [--size N] [--save] [--out <path>]
+interceptor macos photos thumbnail <id> [--size N] [--out <path>]
 interceptor macos photos favorite <id> --on|--off
 interceptor macos photos hide <id> --on|--off
 interceptor macos photos delete <id>[,<id>...]
