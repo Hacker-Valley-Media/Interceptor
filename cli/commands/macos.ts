@@ -1783,7 +1783,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       // remap to album_type. --limit/--offset must be int-typed because
       // PhotosDomain casts them with `as? Int` (verified — string casts
       // silently drop the value, causing accidental full-library fetches).
-      for (const flag of ["--level","--name","--media","--subtype","--since","--until","--where","--out","--size","--asset","--file","--album","--token"]) {
+      for (const flag of ["--level","--name","--media","--subtype","--since","--until","--where","--out","--asset","--file","--album","--token","--format"]) {
         const val = flagVal(filtered, flag)
         if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
       }
@@ -1791,6 +1791,11 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       if (pType !== undefined) action.album_type = pType
       const pLimit = flagInt(filtered, "--limit"); if (pLimit !== undefined) action.limit = pLimit
       const pOffset = flagInt(filtered, "--offset"); if (pOffset !== undefined) action.offset = pOffset
+      // Same `as? Int` trap the --limit/--offset comment above describes: PhotosDomain
+      // reads --size with `as? Int`, so passing it as a string silently drops it. That
+      // made export's resize+JPEG branch unreachable from the CLI (it always fell
+      // through to the raw-original branch) and pinned thumbnail to its 256px default.
+      const pSize = flagInt(filtered, "--size"); if (pSize !== undefined) action.size = pSize
       if (filtered.includes("--favorite")) action.favorite = true
       if (filtered.includes("--hidden")) action.hidden = true
       if (filtered.includes("--burst")) action.burst = true

@@ -65,6 +65,43 @@ final class PhotosDomainTests: XCTestCase {
         XCTAssertEqual(r["success"] as? Bool, false)
     }
 
+    func testExport_rejectsUnsupportedFormat() {
+        // --format used to be accepted and silently discarded, so a bad value looked
+        // identical to a good one. Validate before any asset lookup can mask it.
+        let r = runVerb("export", action: ["id": "bogus/L0/001", "out": "/tmp/x.jpg", "format": "webp"])
+        XCTAssertEqual(r["success"] as? Bool, false)
+    }
+
+    func testExport_live_formatJpegTranscodesHEIC() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_PHOTOS"] == "1")
+        let assets = runVerb("assets", action: ["limit": 1])
+        guard let list = assets["assets"] as? [[String: Any]], let id = list.first?["id"] as? String else {
+            throw XCTSkip("no assets in library")
+        }
+        let out = NSTemporaryDirectory() + "interceptor-photos-format-test.jpg"
+        let r = runVerb("export", action: ["id": id, "out": out, "format": "jpeg"])
+        XCTAssertEqual(r["success"] as? Bool, true)
+        XCTAssertEqual(r["uti"] as? String, "public.jpeg")
+        try? FileManager.default.removeItem(atPath: out)
+    }
+
+    func testThumbnail_live_outImpliesSave() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_PHOTOS"] == "1")
+        let assets = runVerb("assets", action: ["limit": 1])
+        guard let list = assets["assets"] as? [[String: Any]], let id = list.first?["id"] as? String else {
+            throw XCTSkip("no assets in library")
+        }
+        let out = NSTemporaryDirectory() + "interceptor-photos-thumb-test.jpg"
+        try? FileManager.default.removeItem(atPath: out)
+        // --out alone, no --save: must write the file rather than return a base64 dataUrl.
+        let r = runVerb("thumbnail", action: ["id": id, "out": out])
+        XCTAssertEqual(r["success"] as? Bool, true)
+        XCTAssertNil(r["dataUrl"])
+        XCTAssertEqual(r["filePath"] as? String, out)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: out))
+        try? FileManager.default.removeItem(atPath: out)
+    }
+
     func testAlbums_live() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_PHOTOS"] == "1")
         let r = runVerb("albums")
