@@ -1577,6 +1577,13 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
       return new Response("interceptor daemon", { status: 200 })
     },
     websocket: {
+      // Bun's default maxPayloadLength is 16 MiB and the server responds to a
+      // larger message by CLOSING the connection — killing every in-flight
+      // request on that socket (verified live: 15 MiB accepted, 17 MiB →
+      // close 1006). This is the transport screenshots/save are auto-routed
+      // to precisely because it carries large payloads, so align its ceiling
+      // with the unix-socket transport's frame cap.
+      maxPayloadLength: MAX_UPLOAD_FRAME_BYTES,
       open(ws) {
         log(`ws client connected`)
       },
@@ -1799,7 +1806,13 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
 
         sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
       },
-      close(ws) {
+      close(ws, code, reason) {
+        // A 1009 here means a client message exceeded maxPayloadLength and
+        // Bun killed the connection — log it so the failure is diagnosable
+        // from the daemon log instead of surfacing only as a CLI timeout.
+        if (code !== 1000 && code !== 1001) {
+          log(`ws client closed: code ${code}${reason ? ` reason ${reason}` : ""}`)
+        }
         // iOS InterceptorRunner socket closed → drop its channel + context.
         if (iosManager.isRunnerSocket(ws as any)) {
           iosManager.handleRunnerClose(ws as any)
