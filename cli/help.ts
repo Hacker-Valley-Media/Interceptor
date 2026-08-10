@@ -635,6 +635,8 @@ macOS Bridge (full install only):
   interceptor macos contacts status|request|containers|groups|list|contact|me|find|create|update|delete|vcard|import-vcard|current-token|changes
   interceptor macos contacts find "<query>" | --email <addr> | --phone <num>
   interceptor macos photos status|request|albums|album|assets|asset|export|export-video|export-live|thumbnail|favorite|hide|delete|add-to-album|remove-from-album|import|import-video|current-token|changes
+  interceptor macos photos export <id> --out <path> [--size N] [--format jpeg|png]   Originals are HEIC; --format transcodes
+  interceptor macos photos thumbnail <id> [--size N] [--out <path>]                  --out writes a file; without it, returns a base64 dataUrl
   interceptor macos location status|request|request-temporary-accuracy|current|monitor|significant|visits|heading|geocode|reverse|distance|postal-geocode
   interceptor macos location current                                              (one-shot CLLocationManager.requestLocation)
   interceptor macos location reverse <lat,lng>
