@@ -325,17 +325,25 @@ final class PhotosDomain: DomainHandler, @unchecked Sendable {
         opts.isNetworkAccessAllowed = true
 
         if let sizePx = action["size"] as? Int, sizePx > 0 {
+            // --format composes with --size: encode the resized image as PNG when asked,
+            // else JPEG (the long-standing default). Otherwise --size + --format png
+            // writes JPEG bytes under a .png name — the same trusts-the-extension
+            // breakage the no-size branch below exists to prevent.
+            let usePNG = wantFormat == "png"
             let target = CGSize(width: sizePx, height: sizePx)
             manager.requestImage(for: a, targetSize: target, contentMode: .aspectFit, options: opts) { image, _ in
                 guard let image = image,
                       let tiff = image.tiffRepresentation,
                       let rep = NSBitmapImageRep(data: tiff),
-                      let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+                      let data = rep.representation(
+                        using: usePNG ? .png : .jpeg,
+                        properties: usePNG ? [:] : [.compressionFactor: 0.85])
                 else { completion(WireFormat.error("photos.export: encode failed")); return }
                 do {
                     try data.write(to: outURL)
                     completion(WireFormat.success([
-                        "ok": true, "assetId": id, "filePath": outURL.path, "uti": "public.jpeg",
+                        "ok": true, "assetId": id, "filePath": outURL.path,
+                        "uti": usePNG ? "public.png" : "public.jpeg",
                         "bytes": data.count,
                         "originalWidth": a.pixelWidth, "originalHeight": a.pixelHeight,
                         "exportWidth": Int(image.size.width), "exportHeight": Int(image.size.height),
@@ -360,7 +368,7 @@ final class PhotosDomain: DomainHandler, @unchecked Sendable {
                         guard let rep = NSBitmapImageRep(data: data),
                               let converted = rep.representation(
                                 using: want == "jpeg" ? .jpeg : .png,
-                                properties: want == "jpeg" ? [.compressionFactor: 0.9] : [:])
+                                properties: want == "jpeg" ? [.compressionFactor: 0.85] : [:])
                         else {
                             completion(WireFormat.error("photos.export: transcode to \(want) failed")); return
                         }

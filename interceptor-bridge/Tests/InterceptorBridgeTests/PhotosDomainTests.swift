@@ -85,6 +85,26 @@ final class PhotosDomainTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: out)
     }
 
+    func testExport_live_sizeComposesWithFormatPng() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_PHOTOS"] == "1")
+        let assets = runVerb("assets", action: ["limit": 1])
+        guard let list = assets["assets"] as? [[String: Any]], let id = list.first?["id"] as? String else {
+            throw XCTSkip("no assets in library")
+        }
+        let out = NSTemporaryDirectory() + "interceptor-photos-size-png-test.png"
+        // The resize branch used to hardcode JPEG, so --size + --format png wrote
+        // JPEG bytes under a .png name. The two flags must compose.
+        let r = runVerb("export", action: ["id": id, "out": out, "size": 200, "format": "png"])
+        XCTAssertEqual(r["success"] as? Bool, true)
+        XCTAssertEqual(r["uti"] as? String, "public.png")
+        if let data = FileManager.default.contents(atPath: out) {
+            XCTAssertEqual([UInt8](data.prefix(4)), [0x89, 0x50, 0x4E, 0x47]) // PNG magic
+        } else {
+            XCTFail("no file written at \(out)")
+        }
+        try? FileManager.default.removeItem(atPath: out)
+    }
+
     func testThumbnail_live_outImpliesSave() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_PHOTOS"] == "1")
         let assets = runVerb("assets", action: ["limit": 1])
