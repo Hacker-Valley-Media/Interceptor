@@ -278,11 +278,12 @@ build_windows_arch() {
   # Bundle the unpacked browser extension so the installer drops it on disk at
   # {app}\extension — a single, stable place for the user to point "Load
   # unpacked" (Developer mode). Mirrors the macOS package, which ships it under
-  # ~/Library/Application Support/Interceptor/extension. The extension is
-  # arch-independent (browser JS) and gitignored, so build it once if the
-  # windows-only target skipped build_extension, then stage a copy per arch.
+  # ~/Library/Application Support/Interceptor/extension. Every target that calls
+  # build_windows_arch builds the extension first (see the dispatch below), so
+  # dist is always current here; fail loud rather than stage a stale copy.
   if [[ ! -f extension/dist/manifest.json ]]; then
-    build_extension
+    echo "extension/dist is missing — build_extension must run before build_windows_arch" >&2
+    exit 1
   fi
   rm -rf "$stage/extension"
   cp -R extension/dist "$stage/extension"
@@ -324,8 +325,10 @@ elif [[ "$TARGET" == "macos" ]]; then
   build_macos
   build_bridge
 elif [[ "$TARGET" == "windows-x64" ]]; then
+  build_extension
   build_windows_arch x64
 elif [[ "$TARGET" == "windows-arm64" ]]; then
+  build_extension
   build_windows_arch arm64
 elif [[ "$TARGET" == "windows" ]]; then
   echo "Unsupported target: windows. Use --target=windows-x64 or --target=windows-arm64." >&2
