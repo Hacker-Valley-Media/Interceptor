@@ -1,3 +1,4 @@
+import { format } from "node:util"
 import { HELP, shortHelp, fullHelp, helpForCommand } from "./help"
 import { detectSurfaces, SURFACE_UPGRADE_HINT } from "./lib/surfaces"
 import { runSkillsCommand, maybeEmitSkillsHint } from "./commands/skills"
@@ -44,6 +45,17 @@ import { runDaemonCommand } from "./commands/daemon"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs } from "./global-flags"
 import { normalizeArgs } from "./normalize"
+
+// console.log must not be used for CLI output: Bun's console.log writer
+// silently drops everything past 64 KiB at exit when stderr and stdout share
+// one pipe (`2>&1`) and a stderr write (our transport trace line) precedes the
+// payload — on Bun 1.3.11 and 1.3.14, interpreted and compiled, any size.
+// process.stdout.write does not exhibit this, so route every console.log in
+// the process through it. console.error stays native: stderr payloads are
+// always smaller than the 64 KiB pipe buffer and never at risk.
+console.log = (...args: unknown[]): void => {
+  process.stdout.write(format(...args) + "\n")
+}
 
 // Command → module routing
 const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
