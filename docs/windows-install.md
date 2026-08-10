@@ -7,7 +7,7 @@ Interceptor for Windows is browser-only. It supports Windows 11 24H2 or newer on
 1. Download the architecture-matched `Interceptor-Browser-X.Y.Z-windows-x64.exe` or `Interceptor-Browser-X.Y.Z-windows-arm64.exe` from the matching GitHub release.
 2. Verify that Windows reports the publisher as **Hacker Valley Media**. Do not continue with an unsigned or differently signed production artifact.
 3. Run Setup. New installs use `%LOCALAPPDATA%\Programs\Interceptor`; upgrades and repairs preserve the existing same-product directory.
-4. Install the Interceptor extension from the Chrome Web Store for Chrome or Brave, or Microsoft Edge Add-ons for Edge. Setup never changes a browser profile or installs an extension without consent.
+4. Load the Interceptor extension. Setup drops an unpacked copy on disk at `%LOCALAPPDATA%\Programs\Interceptor\extension`; open your browser's extensions page (`chrome://extensions`, `brave://extensions`, or `edge://extensions`), enable **Developer mode**, click **Load unpacked**, and select that folder. Once the store listing is public you can install from the Chrome Web Store (Chrome/Brave) or Microsoft Edge Add-ons (Edge) instead. Setup never changes a browser profile or loads the extension without consent — it only stages the files.
 5. Open a new terminal and run:
 
    ```powershell
@@ -51,7 +51,7 @@ Uninstall removes only installer-owned PATH/native-host state and owned skill li
 
 - **Command not found:** open a new terminal, then run the executable directly from the install directory once to confirm the install.
 - **Unknown command or stale behavior:** run `where.exe interceptor`. If another copy resolves before `%LOCALAPPDATA%\Programs\Interceptor` (for example a leftover development install), remove that earlier PATH entry; the installer never edits PATH entries it does not own.
-- **Extension not connected:** confirm the store extension is enabled, then run `interceptor init --verbose`.
+- **Extension not connected:** confirm the extension is loaded (via **Load unpacked** from `%LOCALAPPDATA%\Programs\Interceptor\extension`, or the store listing once public) and enabled, then run `interceptor init --verbose`.
 - **Install/upgrade in progress:** wait for Setup to finish. If Setup was interrupted, rerun the same signed installer so its pending transaction can recover.
 - **Ports 19221/19222 already in use:** Interceptor v1 supports one active interactive Windows user. Stop the other Interceptor/development instance; Setup never terminates an unidentified process.
 - **Legacy administrator preview detected:** remove that copy from Installed apps with an administrator account, then rerun the per-user installer.

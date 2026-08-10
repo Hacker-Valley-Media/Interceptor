@@ -103,7 +103,9 @@ try {
   $icon = Join-Path $installRoot 'interceptor.ico'
   $uninstaller = Join-Path $installRoot 'unins000.exe'
   foreach ($path in @($cli, $daemon, $manifest, $icon, $uninstaller)) { Assert-True (Test-Path -LiteralPath $path) "Missing installed payload: $path" }
-  Assert-True (-not (Test-Path -LiteralPath (Join-Path $installRoot 'extension'))) 'Production installer included an unpacked extension.'
+  $extensionManifest = Join-Path $installRoot 'extension\manifest.json'
+  Assert-True (Test-Path -LiteralPath $extensionManifest) 'Unpacked extension was not dropped on disk for Load unpacked.'
+  Assert-True ((Get-Content -LiteralPath $extensionManifest -Raw | ConvertFrom-Json).manifest_version -eq 3) 'Bundled extension manifest is not a valid MV3 manifest.'
   Assert-True ((Get-Machine $cli) -eq $expectedMachine) 'Installed CLI architecture mismatch.'
   Assert-True ((Get-Machine $daemon) -eq $expectedMachine) 'Installed daemon architecture mismatch.'
   Assert-True ((& $cli --version) -match [regex]::Escape($Version)) 'Installed CLI version mismatch.'
@@ -143,6 +145,7 @@ try {
   $installed = $false
 
   Assert-True (-not (Test-Path -LiteralPath $cli)) 'CLI remained after uninstall.'
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $installRoot 'extension'))) 'Bundled extension remained after uninstall.'
   $pathAfterUninstall = Read-RegistryValue 'Environment' 'Path'
   Assert-True ($pathAfterUninstall.Exists -eq $pathSnapshot.Exists) 'PATH value presence was not restored.'
   if ($pathSnapshot.Exists) {

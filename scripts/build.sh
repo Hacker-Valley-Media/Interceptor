@@ -274,6 +274,18 @@ build_windows_arch() {
   fi
   bun scripts/installer/generate-native-host.ts "${identity_flag[@]}" \
     --output "$stage/daemon/com.interceptor.host.json"
+
+  # Bundle the unpacked browser extension so the installer drops it on disk at
+  # {app}\extension — a single, stable place for the user to point "Load
+  # unpacked" (Developer mode). Mirrors the macOS package, which ships it under
+  # ~/Library/Application Support/Interceptor/extension. The extension is
+  # arch-independent (browser JS) and gitignored, so build it once if the
+  # windows-only target skipped build_extension, then stage a copy per arch.
+  if [[ ! -f extension/dist/manifest.json ]]; then
+    build_extension
+  fi
+  rm -rf "$stage/extension"
+  cp -R extension/dist "$stage/extension"
 }
 
 build_bridge() {
