@@ -98,4 +98,48 @@ describe("compiled stdout pipe integrity (issue #183)", () => {
       rmSync(outdir, { recursive: true, force: true })
     }
   }, 30_000)
+
+  // Second, independent Bun bug (runtime, not compile): when stderr and stdout
+  // share one pipe (`2>&1`) and a stderr write precedes a large console.log,
+  // everything past 64 KiB is lost — interpreted AND compiled, Bun 1.3.11 and
+  // 1.3.14. The CLI writes a stderr trace line before every payload, so it
+  // routes console.log through process.stdout.write (override at the top of
+  // cli/index.ts), which does not exhibit the bug.
+  test("cli/index.ts routes console.log through process.stdout.write", () => {
+    const src = readFileSync(resolve(REPO_ROOT, "cli/index.ts"), "utf-8")
+    expect(src.includes("console.log = ")).toBe(true)
+    expect(src.includes("process.stdout.write(format(...args)")).toBe(true)
+  })
+
+  test("compiled binary with stderr-first writes delivers full output through a merged (2>&1) pipe", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ic-merged-pipe-"))
+    try {
+      const entry = join(dir, "fixture.ts")
+      // The exact pattern the CLI ships: stderr trace line first, then the
+      // console.log override, then a >64 KiB payload.
+      writeFileSync(entry, [
+        `import { format } from "node:util"`,
+        `process.stderr.write("[trace] header\\n")`,
+        `console.log = (...args: unknown[]): void => {`,
+        `  process.stdout.write(format(...args) + "\\n")`,
+        `}`,
+        `console.log("x".repeat(${PAYLOAD_CHARS}))`,
+      ].join("\n"))
+      const outfile = join(dir, "fixture-bin")
+      const build = Bun.spawnSync(["bun", "build", "--compile", entry, "--outfile", outfile], {
+        cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe",
+      })
+      expect(build.exitCode).toBe(0)
+      // 2>&1 inside the shell so stderr and stdout share one pipe — the
+      // failing consumer topology.
+      const run = Bun.spawnSync(["/bin/sh", "-c", '"$1" 2>&1 | wc -c', "_", outfile], {
+        stdout: "pipe", stderr: "ignore",
+      })
+      expect(run.exitCode).toBe(0)
+      // payload + newline + 15-byte stderr trace line
+      expect(parseInt(run.stdout.toString().trim(), 10)).toBe(PAYLOAD_CHARS + 1 + 15)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
