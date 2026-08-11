@@ -325,6 +325,9 @@ jobs:
           $code = $LASTEXITCODE
           Write-Host "winget validate exit code: $code"
           if ($code -ne 0 -and $code -ne -1978335192 -and $code -ne 2316632104) { throw "WinGet validation failed (exit $code)" }
+          # The Actions pwsh epilogue re-exits with $LASTEXITCODE, which is
+          # still winget's warning code after the guard passes.
+          exit 0
       - name: Create or verify immutable draft and upload once
         shell: pwsh
         env:
