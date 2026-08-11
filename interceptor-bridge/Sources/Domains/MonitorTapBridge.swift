@@ -105,6 +105,10 @@ final class MonitorTapBridge: @unchecked Sendable {
         }
         guard let cb = (lock.withLock { self.callback }) else { return }
 
+        // Per-event live resolution: one bounded AX IPC (sub-ms) against the
+        // tap's ~1s disable threshold, and the timeout branch above re-enables.
+        // If sustained-input profiling ever shows pressure, the upgrade path is
+        // a bounded-rate async snapshot — not a return to the frozen cache.
         let frontmost = FrontmostResolver.frontmostApplication()
         let location = event.location
         var data: [String: Any] = [

@@ -131,7 +131,10 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
                 "name": app.localizedName ?? "(unknown)",
                 "pid": app.processIdentifier,
                 "bundleId": app.bundleIdentifier ?? "",
-                "isActive": app.isActive
+                // Not app.isActive: that reads the frozen push cache (issue
+                // #168) and can contradict the live resolution that just
+                // named this app frontmost.
+                "isActive": true
             ]
         )
     }
