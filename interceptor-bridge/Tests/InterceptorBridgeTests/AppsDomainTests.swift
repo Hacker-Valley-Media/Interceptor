@@ -2,11 +2,13 @@ import XCTest
 @testable import interceptor_bridge
 
 final class AppsDomainTests: XCTestCase {
+    // Issue #168: live frontmost pid equality is the whole signal — the old
+    // `appIsActive` conjunct read the frozen NSRunningApplication cache and
+    // could veto real activations.
     func testActivationReachedTargetRequiresMatchingFrontmostPID() {
-        XCTAssertTrue(AppsDomain.activationReachedTarget(targetPID: 123, appIsActive: true, frontmostPID: 123))
-        XCTAssertFalse(AppsDomain.activationReachedTarget(targetPID: 123, appIsActive: true, frontmostPID: 456))
-        XCTAssertFalse(AppsDomain.activationReachedTarget(targetPID: 123, appIsActive: false, frontmostPID: 123))
-        XCTAssertFalse(AppsDomain.activationReachedTarget(targetPID: 123, appIsActive: false, frontmostPID: nil))
+        XCTAssertTrue(AppsDomain.activationReachedTarget(targetPID: 123, frontmostPID: 123))
+        XCTAssertFalse(AppsDomain.activationReachedTarget(targetPID: 123, frontmostPID: 456))
+        XCTAssertFalse(AppsDomain.activationReachedTarget(targetPID: 123, frontmostPID: nil))
     }
 
     func testPreferredCompoundAppIdentityPrefersExplicitTargetOverFrontmost() {

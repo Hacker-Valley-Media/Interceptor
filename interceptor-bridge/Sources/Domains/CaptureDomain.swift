@@ -131,7 +131,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                     filter = SCContentFilter(desktopIndependentWindow: window)
                     targetWindow = window
                 } else {
-                    let frontApp = NSWorkspace.shared.frontmostApplication
+                    let frontApp = FrontmostResolver.frontmostApplication()
                     if let frontPid = frontApp?.processIdentifier,
                        let _ = content.applications.first(where: { $0.processID == frontPid }),
                        let window = content.windows.first(where: { $0.owningApplication?.processID == frontPid }) {

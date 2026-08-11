@@ -334,7 +334,7 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
                 frontmost: nil
             )
         }
-        let frontApp = NSWorkspace.shared.frontmostApplication
+        let frontApp = FrontmostResolver.frontmostApplication()
         return Self.preferredAppIdentity(
             requested: nil,
             frontmost: (

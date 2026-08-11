@@ -274,6 +274,33 @@ func resolveRunningApp(_ query: String?) -> NSRunningApplication? {
     if let trimmed, !trimmed.isEmpty {
         return NSWorkspace.shared.runningApplications.first { appMatches($0, query: trimmed) }
     }
+    return liveFrontmostApplication()
+}
+
+// Live frontmost pull (issue #168): NSWorkspace.frontmostApplication is a
+// main-run-loop push cache that freezes in daemon processes like this one.
+// Ask the AX server, then the window server, before trusting the cache.
+// Inline copy of the host bridge's FrontmostResolver — separate SwiftPM
+// target, intentionally minimal deps.
+func liveFrontmostApplication() -> NSRunningApplication? {
+    var focused: CFTypeRef?
+    if AXUIElementCopyAttributeValue(
+        AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &focused) == .success,
+        let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
+        var pid: pid_t = 0
+        if AXUIElementGetPid(unsafeDowncast(focused, to: AXUIElement.self), &pid) == .success, pid > 0 {
+            return NSRunningApplication(processIdentifier: pid)
+        }
+    }
+    if let list = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+        for window in list {
+            guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
+                  let pid = window[kCGWindowOwnerPID as String] as? Int
+            else { continue }
+            return NSRunningApplication(processIdentifier: pid_t(pid))
+        }
+    }
     return NSWorkspace.shared.frontmostApplication
 }
 

@@ -41,7 +41,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func getFrontmostApp() -> NSRunningApplication? {
-        return NSWorkspace.shared.frontmostApplication
+        return FrontmostResolver.frontmostApplication(transport: transport)
     }
 
     private func getTargetApp(action: [String: Any]) -> NSRunningApplication? {

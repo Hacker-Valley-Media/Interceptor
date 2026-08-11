@@ -105,7 +105,7 @@ final class MonitorTapBridge: @unchecked Sendable {
         }
         guard let cb = (lock.withLock { self.callback }) else { return }
 
-        let frontmost = NSWorkspace.shared.frontmostApplication
+        let frontmost = FrontmostResolver.frontmostApplication()
         let location = event.location
         var data: [String: Any] = [
             "tr": true,

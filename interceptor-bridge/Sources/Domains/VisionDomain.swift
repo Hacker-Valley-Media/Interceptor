@@ -66,7 +66,7 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
                    let window = largestWindow(app.processID) {
                     filter = SCContentFilter(desktopIndependentWindow: window)
                     targetWindow = window
-                } else if let frontApp = NSWorkspace.shared.frontmostApplication,
+                } else if let frontApp = FrontmostResolver.frontmostApplication(),
                           let window = largestWindow(frontApp.processIdentifier) {
                     filter = SCContentFilter(desktopIndependentWindow: window)
                     targetWindow = window

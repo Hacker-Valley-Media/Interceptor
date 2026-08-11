@@ -150,7 +150,7 @@ final class MonitorInputBridge: @unchecked Sendable {
     private func handle(_ event: NSEvent) {
         guard let cb = (lock.withLock { self.callback }) else { return }
 
-        let frontmost = NSWorkspace.shared.frontmostApplication
+        let frontmost = FrontmostResolver.frontmostApplication(transport: transport)
         var data: [String: Any] = [
             "tr": true,
             "app": frontmost?.localizedName ?? "",

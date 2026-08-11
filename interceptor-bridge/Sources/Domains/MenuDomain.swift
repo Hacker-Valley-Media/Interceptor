@@ -31,7 +31,7 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
            let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }) {
             return app.processIdentifier
         }
-        return NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        return FrontmostResolver.resolvePID(transport: transport) ?? 0
     }
 
     private func listMenu(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
