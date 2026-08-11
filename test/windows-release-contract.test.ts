@@ -22,7 +22,7 @@ describe("Windows production release contract", () => {
     expect(read(".bun-version").trim()).toBe("1.3.14")
     expect(lock.bun.version).toBe("1.3.14")
     expect(lock.runner.label).toBe("windows-2025")
-    expect(lock.runner.imageOS).toBe("win25")
+    expect(lock.runner.imageOS).toBe("win25-vs2026")
     expect(lock.innoSetup.version).toBe("7.0.2")
     expect(lock.innoSetup.commercialLicenseEvidenceRequired).toBe(true)
     for (const sha of Object.values(lock.actions) as string[]) expect(sha).toMatch(/^[0-9a-f]{40}$/)
