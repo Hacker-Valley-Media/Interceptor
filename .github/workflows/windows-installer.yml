@@ -54,11 +54,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Validate approved store identity
-        run: bun scripts/installer/generate-native-host.ts --output native-host-production.json
+      # Store listings are not approved yet, so releases ship the development
+      # (pinned-key / Load-unpacked) identity — the only one that works today.
+      # Flip back to production mode once store-identities.json is approved.
+      - name: Validate store identity consistency
+        run: bun scripts/installer/generate-native-host.ts --development --output native-host-development.json
 
       - name: Build native Windows payloads
         shell: bash
+        env:
+          INTERCEPTOR_WINDOWS_IDENTITY_MODE: development
         run: |
           bash scripts/build.sh --target=windows-x64
           bash scripts/build.sh --target=windows-arm64
