@@ -272,7 +272,7 @@ build_windows_arch() {
   if [[ "${INTERCEPTOR_WINDOWS_IDENTITY_MODE:-production}" == "development" ]]; then
     identity_flag=(--development)
   fi
-  bun scripts/installer/generate-native-host.ts "${identity_flag[@]}" \
+  bun scripts/installer/generate-native-host.ts ${identity_flag[@]+"${identity_flag[@]}"} \
     --output "$stage/daemon/com.interceptor.host.json"
 
   # Bundle the unpacked browser extension so the installer drops it on disk at
