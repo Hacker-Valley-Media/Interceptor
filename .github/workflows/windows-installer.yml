@@ -319,9 +319,12 @@ jobs:
           winget validate --manifest "dist/release/winget/HackerValleyMedia.Interceptor/$version"
           # 0x8A150081 = APPINSTALLER_CLI_ERROR_MANIFEST_VALIDATION_WARNING:
           # the manifests are valid; the runner's winget build may still warn
-          # about the schema header line. Real validation failures (0x8A150082
-          # and anything else) still throw.
-          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335103) { throw 'WinGet validation failed' }
+          # about the schema header line. pwsh surfaces the DWORD as signed or
+          # unsigned depending on host, so accept both spellings. Real
+          # validation failures (0x8A150082 and anything else) still throw.
+          $code = $LASTEXITCODE
+          Write-Host "winget validate exit code: $code"
+          if ($code -ne 0 -and $code -ne -1978335103 -and $code -ne 2316632193) { throw "WinGet validation failed (exit $code)" }
       - name: Create or verify immutable draft and upload once
         shell: pwsh
         env:
