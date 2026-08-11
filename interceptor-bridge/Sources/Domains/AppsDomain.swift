@@ -120,18 +120,21 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
                 $0.localizedName?.lowercased() == name.lowercased()
             }
         }
-        return NSWorkspace.shared.frontmostApplication
+        return FrontmostResolver.frontmostApplication()
     }
 
     private func frontmostInfo() -> FrontmostInfo? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        guard let app = FrontmostResolver.frontmostApplication() else { return nil }
         return FrontmostInfo(
             app: app,
             payload: [
                 "name": app.localizedName ?? "(unknown)",
                 "pid": app.processIdentifier,
                 "bundleId": app.bundleIdentifier ?? "",
-                "isActive": app.isActive
+                // Not app.isActive: that reads the frozen push cache (issue
+                // #168) and can contradict the live resolution that just
+                // named this app frontmost.
+                "isActive": true
             ]
         )
     }
@@ -141,7 +144,6 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
         while Date() < deadline {
             if Self.activationReachedTarget(
                 targetPID: app.processIdentifier,
-                appIsActive: app.isActive,
                 frontmostPID: frontmostInfo()?.app.processIdentifier
             ) {
                 return true
@@ -151,7 +153,10 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
         return false
     }
 
-    static func activationReachedTarget(targetPID: pid_t, appIsActive: Bool, frontmostPID: pid_t?) -> Bool {
-        appIsActive && frontmostPID == targetPID
+    // Live frontmost pid alone is the activation signal. The old
+    // `app.isActive` conjunct read the frozen NSRunningApplication cache
+    // (issue #168) and could veto real activations forever.
+    static func activationReachedTarget(targetPID: pid_t, frontmostPID: pid_t?) -> Bool {
+        frontmostPID == targetPID
     }
 }

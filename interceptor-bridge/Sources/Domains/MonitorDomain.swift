@@ -549,7 +549,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     private func resolveInitialPids(scope: MonitorScope) -> [(pid_t, String?, String?)] {
         switch scope.mode {
         case .frontmost:
-            if let app = NSWorkspace.shared.frontmostApplication {
+            if let app = FrontmostResolver.frontmostApplication() {
                 return [(app.processIdentifier, app.bundleIdentifier, app.localizedName)]
             }
             return []
