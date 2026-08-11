@@ -214,7 +214,12 @@ jobs:
           $dlib = '${{ steps.tools.outputs.dlib }}'
           $metadata = '${{ steps.tools.outputs.metadata }}'
           $timestamp = (Get-Content scripts/installer/windows-toolchain.lock.json -Raw | ConvertFrom-Json).artifactSigningClient.timestampUrl
-          $signCommand = "`"$signTool`" sign /v /fd SHA256 /tr $timestamp /td SHA256 /dlib `"$dlib`" /dmdf `"$metadata`" `$f"
+          # Literal double-quotes are mangled on the way into ISCC; use Inno's
+          # $q quote token, and backslash paths so CreateProcess resolves them.
+          $signTool = $signTool -replace '/','\'
+          $dlib = $dlib -replace '/','\'
+          $metadata = $metadata -replace '/','\'
+          $signCommand = "`$q$signTool`$q sign /v /fd SHA256 /tr $timestamp /td SHA256 /dlib `$q$dlib`$q /dmdf `$q$metadata`$q `$f"
           foreach ($arch in @('x64','arm64')) {
             & '${{ steps.tools.outputs.iscc }}' "/SInterceptorSign=$signCommand" "/DSigningEnabled=1" "/DAppVersion=$version" "/DArtifactArch=$arch" scripts/installer/interceptor.iss
             if ($LASTEXITCODE -ne 0) { throw "Inno compile failed: $arch" }
