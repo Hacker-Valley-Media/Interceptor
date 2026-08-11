@@ -23,6 +23,15 @@ describe("Windows production release contract", () => {
     expect(lock.bun.version).toBe("1.3.14")
     expect(lock.runner.label).toBe("windows-2025")
     expect(lock.runner.imageOS).toBe("win25-vs2026")
+    // Cross-compile target seeds must track the pinned Bun version exactly —
+    // bumping .bun-version forces a lock refresh here.
+    expect(lock.bunCompileTargets).toHaveLength(2)
+    for (const target of lock.bunCompileTargets) {
+      expect(target.seedFile.endsWith(`-v${lock.bun.version}`)).toBe(true)
+      expect(target.url).toStartWith("https://registry.npmjs.org/@oven/bun-windows-")
+      expect(target.url).toContain(`-${lock.bun.version}.tgz`)
+      expect(target.sha256).toMatch(/^[0-9a-f]{64}$/)
+    }
     expect(lock.innoSetup.version).toBe("7.0.2")
     expect(lock.innoSetup.commercialLicenseEvidenceRequired).toBe(true)
     for (const sha of Object.values(lock.actions) as string[]) expect(sha).toMatch(/^[0-9a-f]{40}$/)

@@ -60,6 +60,24 @@ jobs:
       - name: Validate store identity consistency
         run: bun scripts/installer/generate-native-host.ts --development --output native-host-development.json
 
+      # Bun's own cross-target fetch renames across drives (workspace on D:,
+      # cache on C:) and fails on these runners, so pre-seed the pinned target
+      # executables in the workspace root, where bun looks before downloading.
+      - name: Pre-seed pinned Bun cross-compile targets
+        shell: pwsh
+        run: |
+          $lock = Get-Content scripts/installer/windows-toolchain.lock.json -Raw | ConvertFrom-Json
+          foreach ($target in $lock.bunCompileTargets) {
+            $tarball = Join-Path $env:RUNNER_TEMP "$($target.seedFile).tgz"
+            Invoke-WebRequest -Uri $target.url -OutFile $tarball
+            if ((Get-FileHash $tarball -Algorithm SHA256).Hash.ToLowerInvariant() -ne $target.sha256) { throw "Hash mismatch: $($target.seedFile)" }
+            $extract = Join-Path $env:RUNNER_TEMP "$($target.seedFile)-extract"
+            New-Item -ItemType Directory -Force -Path $extract | Out-Null
+            tar -xzf $tarball -C $extract
+            if ($LASTEXITCODE -ne 0) { throw "Extraction failed: $($target.seedFile)" }
+            Move-Item (Join-Path $extract 'package/bin/bun.exe') $target.seedFile
+          }
+
       - name: Build native Windows payloads
         shell: bash
         env:
