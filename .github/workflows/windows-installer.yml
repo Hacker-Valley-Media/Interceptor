@@ -317,14 +317,14 @@ jobs:
           $arm64 = Get-FileHash "dist/release/windows/Interceptor-Browser-$version-windows-arm64.exe" -Algorithm SHA256
           bun scripts/release/generate-winget.ts --version $version --base-url "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v$version" --x64-sha256 $x64.Hash --arm64-sha256 $arm64.Hash --output dist/release/winget
           winget validate --manifest "dist/release/winget/HackerValleyMedia.Interceptor/$version"
-          # 0x8A150081 = APPINSTALLER_CLI_ERROR_MANIFEST_VALIDATION_WARNING:
-          # the manifests are valid; the runner's winget build may still warn
-          # about the schema header line. pwsh surfaces the DWORD as signed or
-          # unsigned depending on host, so accept both spellings. Real
-          # validation failures (0x8A150082 and anything else) still throw.
+          # 0x8A150028 = APPINSTALLER_CLI_ERROR_MANIFEST_VALIDATION_WARNING
+          # (AppInstallerErrors.h): the manifests are valid; the runner's
+          # winget build still warns on the schema header line. Accept the
+          # signed and unsigned spellings of exactly that code; real
+          # validation failures still throw.
           $code = $LASTEXITCODE
           Write-Host "winget validate exit code: $code"
-          if ($code -ne 0 -and $code -ne -1978335103 -and $code -ne 2316632193) { throw "WinGet validation failed (exit $code)" }
+          if ($code -ne 0 -and $code -ne -1978335192 -and $code -ne 2316632104) { throw "WinGet validation failed (exit $code)" }
       - name: Create or verify immutable draft and upload once
         shell: pwsh
         env:
