@@ -452,7 +452,9 @@ begin
   else if CountPathTokens(Current, Target) = 0 then
   begin
     if Current = '' then Intended := Target
-    else if Current[Length(Current)] = ';' then Intended := Current + Target
+    { A trailing separator belongs to the prior value: append "Target;" so the
+      uninstall splice removes "Target;" and restores the value byte-exactly. }
+    else if Current[Length(Current)] = ';' then Intended := Current + Target + ';'
     else Intended := Current + ';' + Target;
     Added := 1;
   end
