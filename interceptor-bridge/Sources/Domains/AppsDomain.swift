@@ -124,7 +124,8 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func frontmostInfo() -> FrontmostInfo? {
-        guard let app = FrontmostResolver.frontmostApplication() else { return nil }
+        guard let (pid, source) = FrontmostResolver.resolvePID(transport: LiveAXTransport()),
+              let app = NSRunningApplication(processIdentifier: pid) else { return nil }
         return FrontmostInfo(
             app: app,
             payload: [
@@ -134,7 +135,10 @@ final class AppsDomain: DomainHandler, @unchecked Sendable {
                 // Not app.isActive: that reads the frozen push cache (issue
                 // #168) and can contradict the live resolution that just
                 // named this app frontmost.
-                "isActive": true
+                "isActive": true,
+                // Which ladder stage answered (issue #198): callers can tell
+                // a focus-derived answer (ax/axScan) from a degraded one.
+                "source": source.rawValue
             ]
         )
     }
