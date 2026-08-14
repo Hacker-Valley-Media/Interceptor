@@ -227,7 +227,7 @@ if ($DryRun) { Write-Host "==> DRY RUN — no files will be created or modified.
 
 # ── Preflight ────────────────────────────────────────────────────────────────────
 if (-not (Test-Path -LiteralPath $DaemonPath)) {
-  Write-Error "ERROR: daemon binary not found at $DaemonPath`n       Build it first: bash scripts/build.sh --target=windows-x64 (or --target=windows-arm64)"
+  Write-Error "ERROR: daemon binary not found at $DaemonPath`n       Build it first: bash scripts/build.sh`n       (The windows-x64 / windows-arm64 targets stage into dist\windows\<arch>\ for the Inno Setup payload, not the paths this script reads.)"
   exit 1
 }
 if (-not $SkipExtension -and -not (Test-Path -LiteralPath $ExtensionDir) -and -not $DryRun) {
