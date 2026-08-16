@@ -25,7 +25,8 @@ Operating rules:
 ## Core Rules
 
 - Use `./dist/interceptor ...` inside this repo when the binary isn't on `PATH`.
-- Prefer compound commands (`open`, `read`, `act`, `inspect`) over low-level verbs.
+- Prefer compound commands (`open`, `websearch`, `read`, `act`, `inspect`) over low-level verbs.
+- Use `websearch "<query>"` for browser-provider web search. It targets the browser's configured default provider in a managed, background-first tab; it is not guaranteed to be Google. Use `find "<query>"` for the current page: bounded rendered-text snippets plus accessible element refs, with no navigation or mutation.
 - Prefer structured reads (DOM tree, AX tree, scene graph) over screenshots — see `.agents/skills/interceptor-browser/references/screenshot-policy.md` for budgets and the agent-default recipe.
 - Use the user's existing browser session. No clean profiles, no isolated automation contexts, no synthetic fingerprint profile unless the user asks for that.
 - For page-produced bytes (`Blob`, `ArrayBuffer`, typed arrays, or `blob:` URLs), use `interceptor save --json --context <id> --tab <id> --out <absolute-path> <expr>` instead of CDP, browser downloads, Save dialogs, or clipboard.

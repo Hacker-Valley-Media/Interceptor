@@ -2030,11 +2030,16 @@ async function handleTabActions(action, tabId) {
             if (candidate?.id !== undefined) {
               try {
                 const reuseActivate = action.active === true;
-                const updateProps = { url: targetUrl };
-                if (reuseActivate)
-                  updateProps.active = true;
-                const updated = await chrome.tabs.update(candidate.id, updateProps);
-                await waitForTabLoad(candidate.id);
+                let updated = candidate;
+                if (action.prepareOnly === true) {
+                  updated = reuseActivate ? await chrome.tabs.update(candidate.id, { active: true }) : await chrome.tabs.get(candidate.id);
+                } else {
+                  const updateProps = { url: targetUrl };
+                  if (reuseActivate)
+                    updateProps.active = true;
+                  updated = await chrome.tabs.update(candidate.id, updateProps);
+                  await waitForTabLoad(candidate.id);
+                }
                 await sessionArea4().set({ [activeTabKey(group)]: candidate.id });
                 return {
                   success: true,
@@ -2507,10 +2512,33 @@ async function handleNotificationActions(action, _tabId) {
 }
 
 // extension/src/background/capabilities/search.ts
-async function handleSearchActions(action, _tabId) {
+async function handleSearchActions(action, tabId) {
+  const searchApi = chrome.search;
+  if (action.type === "search_capability") {
+    return {
+      success: true,
+      data: { available: typeof searchApi?.query === "function" }
+    };
+  }
   if (action.type === "search_query") {
-    await chrome.search.query({ text: action.query, disposition: "NEW_TAB" });
-    return { success: true };
+    if (typeof searchApi?.query !== "function") {
+      return {
+        success: false,
+        error: "websearch is unavailable in this browser context: chrome.search.query is not exposed; no fallback provider was used"
+      };
+    }
+    const query = String(action.query || "");
+    if (!query.trim())
+      return { success: false, error: "websearch requires a non-empty query" };
+    if (!Number.isInteger(tabId) || tabId <= 0) {
+      return { success: false, error: "websearch requires a managed target tab" };
+    }
+    try {
+      await searchApi.query({ text: query, tabId });
+      return { success: true, data: { tabId, query } };
+    } catch (err) {
+      return { success: false, error: `default-provider search failed: ${err.message}` };
+    }
   }
   return { success: false, error: `unknown search action: ${action.type}` };
 }
@@ -3245,7 +3273,7 @@ async function handleStyleActions(action, tabId) {
 }
 
 // extension/src/background/capabilities/frames.ts
-async function handleFrameActions(action, tabId) {
+async function handleFrameActions(action, tabId, sendFrame = sendToContentScript) {
   if (action.type === "frames_list") {
     const frames = await chrome.webNavigation.getAllFrames({ tabId });
     return {
@@ -3292,7 +3320,7 @@ async function handleFrameActions(action, tabId) {
           treeAction.index = targetIndex;
         if (targetRef)
           treeAction.ref = targetRef;
-        const treeResp = await sendToContentScript(tabId, treeAction, f.frameId);
+        const treeResp = await sendFrame(tabId, treeAction, f.frameId);
         if (!treeResp.success) {
           entry.opaque = true;
           entry.error = treeResp.error || "unreachable frame";
@@ -3306,7 +3334,7 @@ async function handleFrameActions(action, tabId) {
             textAction.index = targetIndex;
           if (targetRef)
             textAction.ref = targetRef;
-          const textResp = await sendToContentScript(tabId, textAction, f.frameId);
+          const textResp = await sendFrame(tabId, textAction, f.frameId);
           if (textResp.success && typeof textResp.data === "string") {
             entry.text = textResp.data;
           }
@@ -3318,6 +3346,123 @@ async function handleFrameActions(action, tabId) {
       return entry;
     }));
     return { success: true, data: { frames: results }, tabId };
+  }
+  if (action.type === "frames_find") {
+    const query = String(action.query || "").trim();
+    if (!query)
+      return { success: false, error: "find requires a non-empty query" };
+    const limit = typeof action.limit === "number" ? Math.max(0, Math.floor(action.limit)) : 10;
+    const role = typeof action.role === "string" ? action.role : "";
+    const mode = role ? "elements" : action.mode === "text" || action.mode === "elements" ? action.mode : "hybrid";
+    let frames;
+    try {
+      frames = await chrome.webNavigation.getAllFrames({ tabId }) || undefined;
+    } catch (err) {
+      return { success: false, error: `getAllFrames failed: ${err.message}` };
+    }
+    if (!frames?.length) {
+      const data2 = { query, mode, frames: [] };
+      if (mode !== "elements") {
+        data2.text = {
+          total: 0,
+          returned: 0,
+          truncated: false,
+          scannedCharacters: 0,
+          scanTruncated: false,
+          matches: []
+        };
+      }
+      if (mode !== "text") {
+        data2.elements = { total: 0, returned: 0, truncated: false, matches: [] };
+      }
+      return { success: true, data: data2, tabId };
+    }
+    const perFrameResults = await Promise.all(frames.map(async (frame) => {
+      const frameMeta = {
+        frameId: frame.frameId,
+        parentFrameId: frame.parentFrameId,
+        url: frame.url
+      };
+      const result = {
+        frameMeta,
+        textMatches: [],
+        elementMatches: [],
+        textTotal: 0,
+        elementTotal: 0,
+        scannedCharacters: 0,
+        scanTruncated: false
+      };
+      try {
+        const response = await sendFrame(tabId, {
+          type: "find_element",
+          query,
+          role,
+          mode,
+          limit,
+          frameId: frame.frameId
+        }, frame.frameId);
+        if (!response.success || !response.data || typeof response.data !== "object") {
+          frameMeta.opaque = true;
+          frameMeta.error = response.error || "unreachable frame";
+          return result;
+        }
+        const data2 = response.data;
+        if (data2.text) {
+          result.textTotal = data2.text.total;
+          result.scannedCharacters = data2.text.scannedCharacters || 0;
+          result.scanTruncated = data2.text.scanTruncated === true;
+          result.textMatches = data2.text.matches.map((match) => ({ ...match, frameId: frame.frameId }));
+        }
+        if (data2.elements) {
+          result.elementTotal = data2.elements.total;
+          for (const match of data2.elements.matches) {
+            const refId = frame.frameId === 0 ? match.refId : match.refId.replace(/^e(\d+)$/, `e${frame.frameId}_$1`);
+            result.elementMatches.push({ ...match, refId, frameId: frame.frameId });
+          }
+        }
+      } catch (err) {
+        frameMeta.opaque = true;
+        frameMeta.error = err.message || "injection failed";
+      }
+      return result;
+    }));
+    const frameResults = perFrameResults.map((result) => result.frameMeta);
+    const textMatches = [];
+    const elementMatches = [];
+    let textTotal = 0;
+    let elementTotal = 0;
+    let scannedCharacters = 0;
+    let scanTruncated = false;
+    for (const result of perFrameResults) {
+      textTotal += result.textTotal;
+      elementTotal += result.elementTotal;
+      scannedCharacters += result.scannedCharacters;
+      scanTruncated ||= result.scanTruncated;
+      textMatches.push(...result.textMatches);
+      elementMatches.push(...result.elementMatches);
+    }
+    const data = { query, mode, frames: frameResults };
+    if (mode !== "elements") {
+      const matches = textMatches.slice(0, limit);
+      data.text = {
+        total: textTotal,
+        returned: matches.length,
+        truncated: textTotal > matches.length,
+        scannedCharacters,
+        scanTruncated,
+        matches
+      };
+    }
+    if (mode !== "text") {
+      const matches = elementMatches.slice(0, limit);
+      data.elements = {
+        total: elementTotal,
+        returned: matches.length,
+        truncated: elementTotal > matches.length,
+        matches
+      };
+    }
+    return { success: true, data, tabId };
   }
   return { success: false, error: `unknown frame action: ${action.type}` };
 }
@@ -4529,12 +4674,13 @@ var DOWNLOAD_ACTIONS = new Set([
 ]);
 var SESSION_ACTIONS = new Set(["session_list", "session_restore"]);
 var NOTIFICATION_ACTIONS = new Set(["notification_create", "notification_clear"]);
+var SEARCH_ACTIONS = new Set(["search_capability", "search_query"]);
 var BROWSING_DATA_ACTIONS = new Set(["browsing_data_remove"]);
 var HEADER_ACTIONS = new Set(["headers_modify"]);
 var EVALUATE_ACTIONS = new Set(["evaluate"]);
 var BINARY_SINK_ACTIONS = new Set(["binary_sink_save"]);
 var STYLE_ACTIONS = new Set(["style_inject", "style_remove"]);
-var FRAME_ACTIONS = new Set(["frames_list", "frames_read_tree"]);
+var FRAME_ACTIONS = new Set(["frames_list", "frames_read_tree", "frames_find"]);
 var META_ACTIONS = new Set(["status", "reload_extension", "capabilities", "cdp_tree", "brand_set_tab_group"]);
 var PASSIVE_NET_ACTIONS = new Set([
   "net_log",
@@ -4600,7 +4746,7 @@ async function routeAction(action, tabId) {
     return handleSessionActions(action, tabId);
   if (NOTIFICATION_ACTIONS.has(action.type))
     return handleNotificationActions(action, tabId);
-  if (action.type === "search_query")
+  if (SEARCH_ACTIONS.has(action.type))
     return handleSearchActions(action, tabId);
   if (BROWSING_DATA_ACTIONS.has(action.type))
     return handleBrowsingDataActions(action, tabId);
@@ -4700,7 +4846,7 @@ var NO_TAB_ACTIONS = new Set([
   "session_restore",
   "notification_create",
   "notification_clear",
-  "search_query",
+  "search_capability",
   "monitor_status",
   "monitor_start",
   "monitor_pause",
@@ -5119,6 +5265,7 @@ var lastNativeActivityAt = 0;
 var WS_URL = "ws://localhost:19222";
 var configuredContextId = null;
 var forceWebSocketTransport = false;
+var WebSocketImpl = globalThis.WebSocket;
 var safariNativeRelayEnabled = false;
 var safariNativeRelayClient = null;
 var WS_KEEPALIVE_MISS_LIMIT = 2;
@@ -5172,7 +5319,7 @@ function postNative(msg, port = nativePort) {
   return false;
 }
 function isWsOpen() {
-  if (!wsReady || !wsChannel || wsChannel.readyState !== WebSocket.OPEN)
+  if (!wsReady || !wsChannel || wsChannel.readyState !== WebSocketImpl.OPEN)
     return false;
   return true;
 }
@@ -5195,7 +5342,7 @@ function markWsRegistered() {
 }
 function sendWs(msg) {
   const channel = wsChannel;
-  if (!wsReady || !channel || channel.readyState !== WebSocket.OPEN)
+  if (!wsReady || !channel || channel.readyState !== WebSocketImpl.OPEN)
     return false;
   try {
     channel.send(JSON.stringify(msg));
@@ -5277,7 +5424,7 @@ function sendToHost(msg, forceWs, allowQueue = false) {
 function scheduleWsReconnect() {
   if (wsReconnectTimer)
     return;
-  if (wsChannel && (wsChannel.readyState === WebSocket.OPEN || wsChannel.readyState === WebSocket.CONNECTING))
+  if (wsChannel && (wsChannel.readyState === WebSocketImpl.OPEN || wsChannel.readyState === WebSocketImpl.CONNECTING))
     return;
   const delay = delayWithJitter(wsReconnectDelay);
   wsReconnectTimer = setTimeout(() => {
@@ -5456,7 +5603,7 @@ function startWsKeepAlive() {
     clearInterval(wsKeepAliveTimer);
   wsKeepAliveTimer = setInterval(() => {
     const channel = wsChannel;
-    if (!channel || channel.readyState !== WebSocket.OPEN) {
+    if (!channel || channel.readyState !== WebSocketImpl.OPEN) {
       if (wsKeepAliveTimer)
         clearInterval(wsKeepAliveTimer);
       wsKeepAliveTimer = null;
@@ -5502,10 +5649,10 @@ function connectWsChannel() {
     connectSafariNativeRelayChannel();
     return;
   }
-  if (wsChannel && (wsChannel.readyState === WebSocket.OPEN || wsChannel.readyState === WebSocket.CONNECTING))
+  if (wsChannel && (wsChannel.readyState === WebSocketImpl.OPEN || wsChannel.readyState === WebSocketImpl.CONNECTING))
     return;
   try {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocketImpl(WS_URL);
     wsChannel = ws;
     ws.onopen = async () => {
       if (wsChannel !== ws) {
@@ -5528,7 +5675,7 @@ function connectWsChannel() {
         } catch {}
         return;
       }
-      if (ws.readyState !== WebSocket.OPEN)
+      if (ws.readyState !== WebSocketImpl.OPEN)
         return;
       if (!sendWsRegistration(ws, contextId)) {
         closeWsForReconnect(ws);
@@ -5602,7 +5749,7 @@ function registerStorageContextListener() {
     const newId = changes.contextId.newValue;
     if (typeof newId !== "string" || newId.length === 0)
       return;
-    if (!newId || !wsChannel || wsChannel.readyState !== WebSocket.OPEN)
+    if (!newId || !wsChannel || wsChannel.readyState !== WebSocketImpl.OPEN)
       return;
     const channel = wsChannel;
     if (!sendWsRegistration(channel, newId)) {

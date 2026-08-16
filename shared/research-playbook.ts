@@ -36,13 +36,13 @@ Most agents quit after 2-3 sources because nothing forces them deeper. Depth is
 a discipline with STOPPING RULES, not a longer prompt. Run this as a loop.
 
 TOOL     - interceptor CLI ONLY. Every fetch and every search in a research run goes
-           through interceptor (open / read / find / inspect / net / eval / tab). Do
+           through interceptor (websearch / open / read / find / inspect / net / eval / tab). Do
            NOT fall back to your host's built-in web tools (WebFetch / WebSearch and
            the like): they bypass the user's signed-in session, drop the zero-CDP
            fingerprint edge, can't walk the escalation chain or capture the network
            the page calls, and never reach the ledger -> the depth discipline below
            silently breaks. Catch yourself reaching for a built-in web tool -> stop,
-           use interceptor open / read instead.
+           use interceptor websearch / open / read instead.
 
 PLAN     - Decompose the question into 5-10 sub-questions. Each one earns >=1 source.
          - Pre-commit the source TYPE per question (primary doc / paper / repo /
@@ -57,9 +57,10 @@ COLLECT  - Collect to disk FIRST, synthesize LAST. Stand up a ledger:
            Resume from the ledger if the session dies. NO report writing yet.
 
 FILTER   - Query like a database, not a search box:
-             Google : site: intitle: inurl: filetype: intext: "exact" OR -term *
-                      date window -> &tbs=cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY&num=30
-                      (or relative &tbs=qdr:d|w|m|y)
+             Web    : interceptor websearch "<query>" uses the browser's configured
+                      default provider in a managed tab; never assume it is Google
+             Query  : site: intitle: inurl: filetype: intext: "exact" OR -term *
+                      (operator support varies by the configured provider)
              arXiv  : /search/advanced?...&date-filter_by=date_range&date-from_date=...
                       &order=-announced_date_first ; then chase the citation graph
              GitHub : stars:>250 pushed:>YYYY-MM-DD ; VERIFY counts via api.github.com/repos/O/N
@@ -68,7 +69,7 @@ FILTER   - Query like a database, not a search box:
 
 ESCALATE - Never silently skip a page. Walk the chain until one yields:
              open -> empty? wait-stable -> read --text-only --full -> read --markdown
-                  -> find "<text>" -> inspect --net-only / net log --filter
+                  -> find "<text>" --text-only -> inspect --net-only / net log --filter
                   -> eval --main -> screenshot --save (read with vision)
            A page is "read" only when this chain is exhausted. A skip you didn't
            log is a gap that never shows up in the report.
@@ -103,7 +104,7 @@ EXTRACT  - Get data OUT of stubborn pages (steal Codex's craft):
                              (Range headers); synthetic MouseEvent to surface tooltips
              tab new <url> (xN) then read --tab <id>  -> parallel fan-out
              --context <id> (list with: interceptor contexts)  -> isolate streams
-           Block? old.reddit.com -> duckduckgo.com/html/?q= -> Bing -> web.archive.org
+           Block? explicitly open an alternate provider -> old.reddit.com -> web.archive.org
                   -> HF /raw/... -> .json endpoints -> alternate URL forms.
 
 VERIFY   - Attribute, THEN attack:
@@ -150,10 +151,13 @@ INTERCEPTOR VERB COOKBOOK (research mode) — every verb exists today, zero CDP
 ================================================================================
 
   Load a source            interceptor open "<url>" --text-only --full
+  Search the web           interceptor websearch "<query>" --text-only
   Pull exact rows          interceptor read --text-only --full | awk '/Start/,/End/'
   Structure-preserving read interceptor read --markdown --text-only --full
   Precise extraction       interceptor read --markdown --text-only --full | rg -n -C 8 '<terms>'
-  Find one element         interceptor find "<text>" --role <role>
+  Find a page passage      interceptor find "<text>" --text-only
+  Find one element         interceptor find "<text>" --elements-only
+  Find by element role     interceptor find "<text>" --role <role>
   Scrape a JS app          interceptor eval --main "(async()=>{ ... })()"
   Grab the API payload     interceptor inspect --net-only   |   interceptor net log --filter <host>
   Capture XHR as JSON      interceptor net log --filter <host> --format json --out <path>
@@ -172,14 +176,14 @@ THE ESCALATION CHAIN (per page — wire it literally)
     -> empty/thin?   interceptor wait-stable        (let JS settle)
     -> still thin?   interceptor read --text-only --full
     -> structured?   interceptor read --markdown --text-only --full
-    -> need an elem? interceptor find "<text>"
+    -> know a phrase? interceptor find "<text>" --text-only
     -> data via XHR? interceptor inspect --net-only / interceptor net log --filter <p>
     -> JS-only state? interceptor eval --main "<expr>"
     -> visual only?  interceptor screenshot --save  (then read it with vision)
   Exhaust the chain before you move on. Log any skip explicitly.
 
 THE FALLBACK LADDER (a blocked page is not the end of the inquiry)
-  search engine blocked  -> duckduckgo.com/html/?q=  -> bing.com/search?q=
+  provider blocked       -> explicitly open an alternate provider URL (no silent fallback)
   www.reddit.com thin    -> old.reddit.com (+ /top/?t=year, restrict_sr=on)
   page dead/changed      -> web.archive.org (snapshot index, then a dated snapshot)
   long standards doc     -> alternate URL forms (e.g. ITU SUM-HTM / TOC-HTM)

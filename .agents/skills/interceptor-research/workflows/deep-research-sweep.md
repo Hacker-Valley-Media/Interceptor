@@ -31,7 +31,7 @@ Pick an effort and commit to its source floor. Do not stop short of it.
 3. **COLLECT — per sub-question, find then open the primary source.**
    - Query like a database, not a search box (`references/query-craft.md`): use
      `site:`, `filetype:pdf`, exact `"phrases"`, `OR`, date windows.
-   - Use search to *locate* the authoritative source, then `open` the primary
+   - Use `interceptor websearch "<query>"` to *locate* the authoritative source through the browser's configured default provider, then `open` the primary
      doc (registry / filing / standard / vendor doc / paper) and read *that*.
    - For each source: open → escalate if thin (`workflows/escalate-page.md`) →
      save to `sources/NN-<slug>.md` → `interceptor research add <url> --note "…"`

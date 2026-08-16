@@ -424,8 +424,11 @@ interceptor tree --depth 5                   # Limit tree depth
 interceptor text                             # All visible text
 interceptor text e5                          # Text from specific element
 interceptor html e5                          # HTML of specific element
-interceptor find "Submit"                    # Find elements by name
-interceptor find "Submit" --role button      # Filter by ARIA role
+interceptor websearch "browser automation"   # Default provider → managed background results tab + page read
+interceptor find "contract clause"           # Current-page rendered snippets + accessible elements
+interceptor find "contract clause" --text-only # Passage snippets only (scans beyond normal 8K read output)
+interceptor find "Submit" --elements-only    # Accessible controls + actionable refs only
+interceptor find "Submit" --role button      # Element-only, filtered by ARIA role
 interceptor diff                             # What changed since last tree read
 interceptor state                            # Full DOM tree + scroll + focused element
 ```

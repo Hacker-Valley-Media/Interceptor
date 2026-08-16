@@ -8,7 +8,7 @@ livelihood or loved ones depend on not stopping at page one.
 
 | Surface | Use it for | Depth move |
 |---|---|---|
-| **Google** (operators + date window) | Broad discovery, leaked docs, primary sources | Dork → open top 10–30 → pivot on names/files |
+| **Configured default provider** (`interceptor websearch`) | Broad discovery, leaked docs, primary sources | Query operators → open top 10–30 → pivot on names/files; do not assume Google |
 | **Reddit** (`old.reddit`, top/year) | Practitioner tactics, failure stories, tool chains | Read comments; follow linked repos |
 | **arXiv** (advanced + date_range) | Academic frontier, methods, benchmarks | Title-scope → abstract → citation-graph pivot |
 | **GitHub** (qualifier search) | Working tooling, reference implementations | `stars:>` + `pushed:>` → README → verify via API |
@@ -20,7 +20,7 @@ livelihood or loved ones depend on not stopping at page one.
 ## The fallback ladder (a blocked page is not the end)
 
 ```
-search blocked        -> duckduckgo.com/html/?q=  -> bing.com/search?q=
+provider blocked      -> open an alternate provider URL only when the research plan explicitly chooses it
 www.reddit.com thin   -> old.reddit.com (+ /top/?t=year, restrict_sr=on)
 page dead/changed     -> web.archive.org (snapshot index, then a dated snapshot)
 huggingface card      -> /raw/main/README.md

@@ -6,7 +6,7 @@ import { COMMAND_SPECS } from "../cli/manifest"
 // exist — every one must carry a non-empty returns: contract.
 const MUST_HAVE_RETURNS = [
   "open", "read", "act", "inspect",
-  "text", "html", "tree", "find", "search",
+  "text", "html", "tree", "find", "websearch",
   "table", "links", "forms", "query",
   "skills", "manifest",
 ]
@@ -34,6 +34,16 @@ describe("manifest command specs", () => {
   test("no duplicate command names", () => {
     const names = COMMAND_SPECS.map(s => s.name)
     expect(new Set(names).size).toBe(names.length)
+  })
+
+  test("browser search semantics cannot drift back to false in-page wording", () => {
+    const websearch = COMMAND_SPECS.find(s => s.name === "websearch")!
+    expect(websearch.summary).toContain("default provider")
+    expect(websearch.returns).toContain("Managed tab")
+    expect(COMMAND_SPECS.find(s => s.name === "search")).toBeUndefined()
+    const find = COMMAND_SPECS.find(s => s.name === "find")!
+    expect(find.returns).toContain("document.body.innerText")
+    expect(find.returns).toContain("actionable refs")
   })
 
   test("every spec has a valid surface", () => {

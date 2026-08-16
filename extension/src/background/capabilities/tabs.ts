@@ -117,10 +117,21 @@ export async function handleTabActions(
                 // the reused tab on demand without disturbing the user's
                 // focus on every routine reuse call.
                 const reuseActivate = (action.active as boolean | undefined) === true
-                const updateProps: chrome.tabs.UpdateProperties = { url: targetUrl }
-                if (reuseActivate) updateProps.active = true
-                const updated = await chrome.tabs.update(candidate.id, updateProps)
-                await waitForTabLoad(candidate.id)
+                // `websearch` needs a managed destination before the browser's
+                // provider API navigates it. In prepare-only mode, reuse the
+                // candidate in place rather than blanking it first; activation
+                // remains the same explicit opt-in as ordinary tab creation.
+                let updated: chrome.tabs.Tab | undefined = candidate
+                if (action.prepareOnly === true) {
+                  updated = reuseActivate
+                    ? await chrome.tabs.update(candidate.id, { active: true })
+                    : await chrome.tabs.get(candidate.id)
+                } else {
+                  const updateProps: chrome.tabs.UpdateProperties = { url: targetUrl }
+                  if (reuseActivate) updateProps.active = true
+                  updated = await chrome.tabs.update(candidate.id, updateProps)
+                  await waitForTabLoad(candidate.id)
+                }
                 // Pin the reused tab as the auto-target for subsequent commands.
                 // Mirrors the new-tab path below: every successful tab_create
                 // — whether new or reused — must update the (per-group)

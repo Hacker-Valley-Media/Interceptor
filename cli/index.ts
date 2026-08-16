@@ -4,7 +4,7 @@ import { detectSurfaces, SURFACE_UPGRADE_HINT } from "./lib/surfaces"
 import { runSkillsCommand, maybeEmitSkillsHint } from "./commands/skills"
 import { runManifestCommand } from "./manifest"
 import { parseTabFlag, parseContextFlag, parseGroupFlag, parseGroupColorFlag } from "./parse"
-import { formatState, formatTabs, formatCookies, formatResult } from "./format"
+import { formatState, formatTabs, formatCookies, formatFind, formatResult } from "./format"
 import { sendCommand, sendCommandWs, setGlobalGroup, type DaemonResult, type DaemonResponse, type Action } from "./transport"
 import { UPLOAD_CHUNK_B64_BYTES } from "../shared/platform"
 import { chunkBase64 } from "../shared/upload"
@@ -32,7 +32,7 @@ import { parseBatchCommand } from "./commands/batch"
 import { parseMonitorCommand } from "./commands/monitor"
 import { parseSceneCommand } from "./commands/scene"
 import { parseSseCommand } from "./commands/sse"
-import { runCompoundCommand } from "./commands/compound"
+import { runCompoundCommand, webSearchQuery, webSearchTimeout } from "./commands/compound"
 import { runOverride } from "./commands/override"
 import { runMacosCommand } from "./commands/macos"
 import { runIosCommand } from "./commands/ios"
@@ -65,7 +65,7 @@ const TAB_CMDS = new Set(["tabs", "tab", "window", "frames", "session"])
 const NET_CMDS = new Set(["network", "net", "headers"])
 const SS_CMDS = new Set(["screenshot", "canvas", "capture", "ocr"])
 const DATA_CMDS = new Set(["cookies", "storage", "history", "bookmarks", "downloads", "clear", "clipboard"])
-const META_CMDS = new Set(["status", "reload", "meta", "links", "images", "forms", "info", "page_info", "query", "exists", "count", "table", "attr", "style", "events", "search", "notify", "sessions", "capabilities", "modals", "panels"])
+const META_CMDS = new Set(["status", "reload", "meta", "links", "images", "forms", "info", "page_info", "query", "exists", "count", "table", "attr", "style", "events", "notify", "sessions", "capabilities", "modals", "panels"])
 const EVAL_CMDS = new Set(["eval"])
 const SAVE_CMDS = new Set(["save"])
 const BRAND_CMDS = new Set(["brand"])
@@ -76,7 +76,7 @@ const POWER_CMDS = new Set(["keepawake", "idle"])
 const DELEGATE_CMDS = new Set(["delegate"])
 const SCENE_CMDS = new Set(["scene"])
 const SSE_CMDS = new Set(["sse"])
-const COMPOUND_CMDS = new Set(["open", "read", "act", "inspect"])
+const COMPOUND_CMDS = new Set(["open", "read", "act", "inspect", "websearch", "search"])
 const OVERRIDE_CMDS = new Set(["override"])
 const MACOS_CMDS = new Set(["macos"])
 const IOS_CMDS = new Set(["ios"])
@@ -225,6 +225,18 @@ async function main() {
 
   if (!ALL_KNOWN_CMDS.has(cmd)) {
     console.error(`error: unknown command '${cmd}'. Run 'interceptor help' for usage.`)
+    process.exit(1)
+  }
+
+  // `websearch` validation happens before daemon auto-spawn so a malformed
+  // invocation has no browser or process side effects. The retained `search`
+  // alias uses the identical parser and lifecycle.
+  if ((cmd === "websearch" || cmd === "search") && !webSearchQuery(filtered)) {
+    console.error(`error: interceptor ${cmd} requires a non-empty query. Usage: interceptor ${cmd} "<query>"`)
+    process.exit(1)
+  }
+  if ((cmd === "websearch" || cmd === "search") && webSearchTimeout(filtered) === null) {
+    console.error("error: --timeout must be a non-negative integer")
     process.exit(1)
   }
 
@@ -593,6 +605,10 @@ async function main() {
       }
       if (action.type === "cookies_get") {
         console.log(formatCookies(result.data as Parameters<typeof formatCookies>[0]))
+        return
+      }
+      if (action.type === "find_element" || action.type === "frames_find") {
+        console.log(formatFind(result.data as Parameters<typeof formatFind>[0]))
         return
       }
     }

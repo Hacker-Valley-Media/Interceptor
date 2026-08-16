@@ -17,7 +17,7 @@ interceptor read --text-only --full
 interceptor read --markdown --text-only --full
 
 # 3. Know the target string? Jump to it instead of scanning.
-interceptor find "<text>"
+interceptor find "<text>" --text-only
 
 # 4. Data comes from an XHR, not the HTML? Read the API the page already calls.
 interceptor inspect --net-only
@@ -45,7 +45,7 @@ Use the fallback ladder (`references/source-playbooks.md`):
 
 ```
 www.reddit.com thin   -> old.reddit.com (+ /top/?t=year)
-search blocked        -> duckduckgo.com/html/?q=  -> bing.com/search?q=
+provider blocked      -> explicitly open an alternate provider URL; `websearch` itself never silently changes providers
 page dead/changed     -> web.archive.org (snapshot index, then a dated snapshot)
 HF model card         -> /raw/main/README.md
 rendered HTML noisy   -> the .json endpoint the page calls (net log)

@@ -367,8 +367,10 @@ export function runSkillsCommand(filtered: string[], jsonMode: boolean): null {
       console.log("  text e<ref>                 one element's textContent (includes display:none text)")
       console.log("  html e<ref>                 raw outerHTML markup")
       console.log("  read --tree-only / tree     a11y tree of interactive elements + refs for act")
-      console.log("  find \"<term>\"               locate elements by accessible name (returns refs, NOT text search)")
-      console.log("  search <query>              in-page text search")
+      console.log("  find \"<term>\"               current-page rendered text + accessible elements (snippets + refs)")
+      console.log("  find \"<term>\" --text-only   current-page rendered-text snippets only")
+      console.log("  find \"<term>\" --elements-only  accessible controls only")
+      console.log("  websearch \"<query>\"          configured default provider in a managed background tab")
       console.log("  table/links/forms/query     structured JSON extraction")
       console.log("\nFull machine-readable semantics: interceptor manifest")
     }

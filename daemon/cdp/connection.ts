@@ -13,6 +13,16 @@
 
 export type CdpEventHandler = (method: string, params: Record<string, unknown>, sessionId?: string) => void
 
+type WebSocketConstructor = {
+  new (url: string): WebSocket
+  readonly OPEN: number
+}
+
+// Capture the runtime constructor once. Browser-extension tests temporarily
+// replace globalThis.WebSocket; resolving it at connect-time made unrelated CDP
+// connections inherit that test double and emit an unhandled Node `error`.
+const RuntimeWebSocket = globalThis.WebSocket
+
 type Pending = {
   resolve: (result: Record<string, unknown>) => void
   reject: (err: Error) => void
@@ -29,14 +39,16 @@ export class CdpConnection {
   private opened = false
   private closed = false
   private readonly commandTimeoutMs: number
+  private readonly WebSocketImpl: WebSocketConstructor
 
-  constructor(wsUrl: string, opts: { commandTimeoutMs?: number } = {}) {
+  constructor(wsUrl: string, opts: { commandTimeoutMs?: number; webSocketImpl?: WebSocketConstructor } = {}) {
     this.wsUrl = wsUrl
     this.commandTimeoutMs = opts.commandTimeoutMs ?? 30_000
+    this.WebSocketImpl = opts.webSocketImpl ?? RuntimeWebSocket
   }
 
   get isOpen(): boolean {
-    return this.opened && !this.closed && this.ws?.readyState === WebSocket.OPEN
+    return this.opened && !this.closed && this.ws?.readyState === this.WebSocketImpl.OPEN
   }
 
   connect(timeoutMs = 5000): Promise<void> {
@@ -44,7 +56,7 @@ export class CdpConnection {
       let settled = false
       let ws: WebSocket
       try {
-        ws = new WebSocket(this.wsUrl)
+        ws = new this.WebSocketImpl(this.wsUrl)
       } catch (err) {
         reject(new Error(`failed to open CDP websocket: ${(err as Error).message}`))
         return
@@ -77,7 +89,7 @@ export class CdpConnection {
           reject(new Error(`CDP websocket closed before open (${this.wsUrl}) — target gone or origin rejected (--remote-allow-origins)`))
         }
       }
-      ws.onerror = () => {
+      const handleError = () => {
         if (!settled) {
           settled = true
           clearTimeout(timer)
@@ -85,6 +97,13 @@ export class CdpConnection {
           reject(new Error(`CDP websocket error connecting to ${this.wsUrl}`))
         }
       }
+      ws.onerror = handleError
+      // happy-dom/Node hosts expose the `ws` EventEmitter shape. Assigning the
+      // DOM `onerror` property alone does not consume its emitted `error`
+      // event, which otherwise terminates the process even though connect()
+      // already rejected correctly. Bun/browser WebSockets have no `.on`.
+      const emitter = ws as WebSocket & { on?: (event: string, listener: () => void) => void }
+      if (typeof emitter.on === "function") emitter.on("error", handleError)
     })
   }
 

@@ -40,7 +40,27 @@ describe("CdpConnection", () => {
   })
 
   test("connect rejects on a dead port", async () => {
-    const conn = new CdpConnection("ws://127.0.0.1:1/devtools/page/Z")
+    class FailingWebSocket {
+      static readonly OPEN = 1
+      readonly readyState = 0
+      onopen: ((event: Event) => void) | null = null
+      onmessage: ((event: MessageEvent) => void) | null = null
+      onclose: ((event: CloseEvent) => void) | null = null
+      onerror: ((event: Event) => void) | null = null
+
+      constructor(_url: string) {
+        queueMicrotask(() => this.onerror?.(new Event("error")))
+      }
+
+      close(): void {}
+      send(_data: string): void {}
+    }
+
+    // Use a deterministic failed-connection transport so this remains isolated
+    // from happy-dom's process-wide WebSocket replacement in the full suite.
+    const conn = new CdpConnection("ws://dead.invalid/devtools/page/Z", {
+      webSocketImpl: FailingWebSocket as unknown as typeof WebSocket,
+    })
     await expect(conn.connect(1000)).rejects.toThrow()
   })
 })

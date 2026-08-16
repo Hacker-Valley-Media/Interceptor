@@ -13,7 +13,7 @@ export type Action =
   | { type: "extract_html"; index?: number; ref?: string; frameId?: number }
   | { type: "evaluate"; code: string; world?: "MAIN" | "ISOLATED" }
   | { type: "screenshot"; format?: "png" | "jpeg" | "webp"; quality?: number; save?: boolean; clip?: { x: number; y: number; width: number; height: number }; element?: number; full?: boolean; target_max_long_edge?: number }
-  | { type: "tab_create"; url?: string; reuse?: boolean; active?: boolean }
+  | { type: "tab_create"; url?: string; reuse?: boolean; reusePolicy?: boolean; active?: boolean; prepareOnly?: boolean }
   | { type: "tab_close"; tabId?: number }
   | { type: "tab_switch"; tabId: number }
   | { type: "tab_list" }
@@ -36,7 +36,7 @@ export type Action =
   | { type: "get_state"; full?: boolean; tabId?: number }
   | { type: "get_a11y_tree"; depth?: number; filter?: "interactive" | "all"; maxChars?: number; includeStyle?: boolean; index?: number; ref?: string; frameId?: number }
   | { type: "diff" }
-  | { type: "find_element"; query: string; role?: string; limit?: number }
+  | { type: "find_element"; query: string; role?: string; limit?: number; mode?: "hybrid" | "text" | "elements" }
   | { type: "dblclick"; index?: number; ref?: string; x?: number; y?: number }
   | { type: "rightclick"; index?: number; ref?: string; x?: number; y?: number }
   | { type: "check"; index?: number; ref?: string; checked?: boolean }

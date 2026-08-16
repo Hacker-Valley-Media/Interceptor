@@ -31,6 +31,7 @@ let lastNativeActivityAt = 0
 const WS_URL = "ws://localhost:19222"
 let configuredContextId: string | null = null
 let forceWebSocketTransport = false
+let WebSocketImpl = globalThis.WebSocket
 let safariNativeRelayEnabled = false
 let safariNativeRelayClient: SafariNativeRelayClient | null = null
 export const NATIVE_KEEPALIVE_PONG_TIMEOUT_MS = 15_000
@@ -45,6 +46,8 @@ export type ExtensionTransportConfig = {
   contextId?: string
   forceWebSocket?: boolean
   safariNativeRelay?: boolean
+  /** Test/host injection; production entrypoints use the runtime WebSocket. */
+  webSocketImpl?: typeof WebSocket
 }
 
 /** Configure an entrypoint before it registers listeners or opens a channel. */
@@ -54,6 +57,34 @@ export function configureTransport(config: ExtensionTransportConfig): void {
   }
   forceWebSocketTransport = config.forceWebSocket === true
   safariNativeRelayEnabled = config.safariNativeRelay === true
+  if (config.webSocketImpl) WebSocketImpl = config.webSocketImpl
+}
+
+/** Restore injected entrypoint configuration between tests. */
+export function resetTransportForTesting(): void {
+  const channel = wsChannel
+  wsChannel = null
+  if (channel) {
+    channel.onopen = null
+    channel.onmessage = null
+    channel.onclose = null
+    channel.onerror = null
+    try { channel.close() } catch {}
+  }
+  stopWsKeepAlive()
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer)
+  wsReconnectTimer = null
+  wsReady = false
+  wsKeepalive = wsStateOnOpen()
+  wsReconnectDelay = INITIAL_RECONNECT_DELAY_MS
+  isConnecting = false
+  safariNativeRelayClient?.stop()
+  safariNativeRelayClient = null
+  if (activeTransport === "websocket" || activeTransport === "safari-native") activeTransport = "none"
+  configuredContextId = null
+  forceWebSocketTransport = false
+  safariNativeRelayEnabled = false
+  WebSocketImpl = globalThis.WebSocket
 }
 
 function describeOutboundMessage(msg: unknown): string {
@@ -106,7 +137,7 @@ function postNative(msg: unknown, port = nativePort): boolean {
 }
 
 function isWsOpen(): boolean {
-  if (!wsReady || !wsChannel || wsChannel.readyState !== WebSocket.OPEN) return false
+  if (!wsReady || !wsChannel || wsChannel.readyState !== WebSocketImpl.OPEN) return false
   return true
 }
 
@@ -130,7 +161,7 @@ function markWsRegistered(): void {
 
 function sendWs(msg: unknown): boolean {
   const channel = wsChannel
-  if (!wsReady || !channel || channel.readyState !== WebSocket.OPEN) return false
+  if (!wsReady || !channel || channel.readyState !== WebSocketImpl.OPEN) return false
   try {
     channel.send(JSON.stringify(msg))
     return true
@@ -209,7 +240,7 @@ export function sendToHost(msg: unknown, forceWs?: boolean, allowQueue = false):
 
 function scheduleWsReconnect(): void {
   if (wsReconnectTimer) return
-  if (wsChannel && (wsChannel.readyState === WebSocket.OPEN || wsChannel.readyState === WebSocket.CONNECTING)) return
+  if (wsChannel && (wsChannel.readyState === WebSocketImpl.OPEN || wsChannel.readyState === WebSocketImpl.CONNECTING)) return
   const delay = delayWithJitter(wsReconnectDelay)
   wsReconnectTimer = setTimeout(() => {
     wsReconnectTimer = null
@@ -437,7 +468,7 @@ function startWsKeepAlive(): void {
   if (wsKeepAliveTimer) clearInterval(wsKeepAliveTimer)
   wsKeepAliveTimer = setInterval(() => {
     const channel = wsChannel
-    if (!channel || channel.readyState !== WebSocket.OPEN) {
+    if (!channel || channel.readyState !== WebSocketImpl.OPEN) {
       if (wsKeepAliveTimer) clearInterval(wsKeepAliveTimer)
       wsKeepAliveTimer = null
       return
@@ -487,9 +518,9 @@ export function connectWsChannel(): void {
     connectSafariNativeRelayChannel()
     return
   }
-  if (wsChannel && (wsChannel.readyState === WebSocket.OPEN || wsChannel.readyState === WebSocket.CONNECTING)) return
+  if (wsChannel && (wsChannel.readyState === WebSocketImpl.OPEN || wsChannel.readyState === WebSocketImpl.CONNECTING)) return
   try {
-    const ws = new WebSocket(WS_URL)
+    const ws = new WebSocketImpl(WS_URL)
     wsChannel = ws
     ws.onopen = async () => {
       if (wsChannel !== ws) {
@@ -511,7 +542,7 @@ export function connectWsChannel(): void {
         try { ws.close() } catch {}
         return
       }
-      if (ws.readyState !== WebSocket.OPEN) return
+      if (ws.readyState !== WebSocketImpl.OPEN) return
       if (!sendWsRegistration(ws, contextId)) {
         closeWsForReconnect(ws)
         return
@@ -587,7 +618,7 @@ export function registerStorageContextListener(): void {
     if (area !== "local" || !changes.contextId) return
     const newId = changes.contextId.newValue
     if (typeof newId !== "string" || newId.length === 0) return
-    if (!newId || !wsChannel || wsChannel.readyState !== WebSocket.OPEN) return
+    if (!newId || !wsChannel || wsChannel.readyState !== WebSocketImpl.OPEN) return
     const channel = wsChannel
     if (!sendWsRegistration(channel, newId)) {
       closeWsForReconnect(channel)

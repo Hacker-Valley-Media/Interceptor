@@ -1,6 +1,6 @@
 ---
 name: interceptor-research
-description: "Deep web-research methodology for the interceptor browser surface — investigate a topic the way researchers, intelligence analysts, investigative journalists, private investigators, and OSINT operators do, not 'read 3 links and summarize.' Use when the task is research, deep research, investigate, go deeper, be thorough/exhaustive, OSINT, due diligence, competitive analysis, literature review, background check, dig in, or 'find everything about X.' Drives interceptor-browser verbs (open/read/inspect/net/eval/tab) with a planner loop, query-craft filters, a per-page escalation chain, pivot-chaining, an on-disk source ledger, and adversarial verification. Do every fetch and search through interceptor — never WebFetch/WebSearch. Pull the playbook any time with `interceptor research`."
+description: "Deep web-research methodology for the interceptor browser surface — investigate a topic the way researchers, intelligence analysts, investigative journalists, private investigators, and OSINT operators do, not 'read 3 links and summarize.' Use when the task is research, deep research, investigate, go deeper, be thorough/exhaustive, OSINT, due diligence, competitive analysis, literature review, background check, dig in, or 'find everything about X.' Drives interceptor-browser verbs (websearch/open/read/find/inspect/net/eval/tab) with a planner loop, query-craft filters, a per-page escalation chain, pivot-chaining, an on-disk source ledger, and adversarial verification. Do every fetch and search through interceptor — never WebFetch/WebSearch. Pull the playbook any time with `interceptor research`."
 metadata:
   short-description: Deep web-research methodology + source ledger for the interceptor browser surface
 ---
@@ -18,7 +18,7 @@ this one when the task is to research a topic deeply rather than read one page.
 > when the case is closed — Interceptor never crawls for you.
 
 > **Tool discipline — interceptor only.** While you are running this skill, do every
-> fetch and every search through the `interceptor` CLI (`open` / `read` / `find` /
+> fetch and every web search through the `interceptor` CLI (`websearch` / `open` / `read` / `find` /
 > `inspect` / `net` / `eval` / `tab`). **Do not fall back to your host's built-in web
 > tools** — `WebFetch`, `WebSearch`, or their equivalents in other agent hosts. They
 > bypass the user's signed-in browser session, carry a scraper fingerprint, can't walk
@@ -36,7 +36,7 @@ this one when the task is to research a topic deeply rather than read one page.
    keep a running insights file, and write the report only at the end. If the
    session dies, resume from the ledger.
 3. **Never silently skip a page.** Walk the escalation chain
-   (`open → wait-stable → read --text-only --full → read --markdown → find →
+   (`websearch → open → wait-stable → read --text-only --full → read --markdown → find →
    inspect --net-only / net log → eval --main → screenshot --save`). A skip you
    didn't log is a gap that never shows up in the report.
 4. **Pivot.** Every fact (name, file, date, handle, citation, domain) is the next
@@ -66,13 +66,13 @@ Most agents quit after 2-3 sources because nothing forces them deeper. Depth is
 a discipline with STOPPING RULES, not a longer prompt. Run this as a loop.
 
 TOOL     - interceptor CLI ONLY. Every fetch and every search in a research run goes
-           through interceptor (open / read / find / inspect / net / eval / tab). Do
+           through interceptor (websearch / open / read / find / inspect / net / eval / tab). Do
            NOT fall back to your host's built-in web tools (WebFetch / WebSearch and
            the like): they bypass the user's signed-in session, drop the zero-CDP
            fingerprint edge, can't walk the escalation chain or capture the network
            the page calls, and never reach the ledger -> the depth discipline below
            silently breaks. Catch yourself reaching for a built-in web tool -> stop,
-           use interceptor open / read instead.
+           use interceptor websearch / open / read instead.
 
 PLAN     - Decompose the question into 5-10 sub-questions. Each one earns >=1 source.
          - Pre-commit the source TYPE per question (primary doc / paper / repo /
@@ -87,9 +87,10 @@ COLLECT  - Collect to disk FIRST, synthesize LAST. Stand up a ledger:
            Resume from the ledger if the session dies. NO report writing yet.
 
 FILTER   - Query like a database, not a search box:
-             Google : site: intitle: inurl: filetype: intext: "exact" OR -term *
-                      date window -> &tbs=cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY&num=30
-                      (or relative &tbs=qdr:d|w|m|y)
+             Web    : interceptor websearch "<query>" uses the browser's configured
+                      default provider in a managed tab; never assume it is Google
+             Query  : site: intitle: inurl: filetype: intext: "exact" OR -term *
+                      (operator support varies by the configured provider)
              arXiv  : /search/advanced?...&date-filter_by=date_range&date-from_date=...
                       &order=-announced_date_first ; then chase the citation graph
              GitHub : stars:>250 pushed:>YYYY-MM-DD ; VERIFY counts via api.github.com/repos/O/N
@@ -98,7 +99,7 @@ FILTER   - Query like a database, not a search box:
 
 ESCALATE - Never silently skip a page. Walk the chain until one yields:
              open -> empty? wait-stable -> read --text-only --full -> read --markdown
-                  -> find "<text>" -> inspect --net-only / net log --filter
+                  -> find "<text>" --text-only -> inspect --net-only / net log --filter
                   -> eval --main -> screenshot --save (read with vision)
            A page is "read" only when this chain is exhausted. A skip you didn't
            log is a gap that never shows up in the report.
@@ -133,7 +134,7 @@ EXTRACT  - Get data OUT of stubborn pages (steal Codex's craft):
                              (Range headers); synthetic MouseEvent to surface tooltips
              tab new <url> (xN) then read --tab <id>  -> parallel fan-out
              --context <id> (list with: interceptor contexts)  -> isolate streams
-           Block? old.reddit.com -> duckduckgo.com/html/?q= -> Bing -> web.archive.org
+           Block? explicitly open an alternate provider -> old.reddit.com -> web.archive.org
                   -> HF /raw/... -> .json endpoints -> alternate URL forms.
 
 VERIFY   - Attribute, THEN attack:

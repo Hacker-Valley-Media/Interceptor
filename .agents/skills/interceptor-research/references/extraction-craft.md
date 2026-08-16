@@ -6,11 +6,13 @@ Chrome and captures request/response without a debugger banner.
 
 | Need | Verb / idiom | Notes |
 |---|---|---|
+| Search the web | `interceptor websearch "<query>" --text-only` | Browser's configured default provider; managed background tab, never assumed to be Google |
 | Load a source | `interceptor open "<url>" --text-only --full` | `--text-only` strips chrome; `--full` lifts the cap to 200K |
 | Pull exact rows | `interceptor read --text-only --full \| awk '/Start/,/End/'` | Pricing/financial tables, timelines |
 | Structure-preserving read | `interceptor read --markdown --text-only --full` | Headings/bold/lists/tables; tell answer from decoy |
 | Precise extraction | `interceptor read --markdown --text-only --full \| rg -n -C 8 '<terms>'` | Token-efficient; the default extraction idiom |
-| Find one element | `interceptor find "<text>" --role <role>` | Cheaper than re-reading the tree |
+| Find a page passage | `interceptor find "<text>" --text-only` | Scans complete rendered text; returns bounded snippets + truthful totals |
+| Find one element | `interceptor find "<text>" --elements-only` / `--role <role>` | Actionable refs; cheaper than re-reading the tree |
 | Grab the API payload | `interceptor inspect --net-only` / `interceptor net log --filter <host>` | Scrape the JSON the page already fetches |
 | Capture XHR to disk | `interceptor net log --filter <host> --format json --out <path>` | Save the raw API response as a source |
 | Infer infrastructure | `interceptor net headers --filter <host>` | Spot processors/CDNs from request hosts |
@@ -39,5 +41,5 @@ The preflight `open` already returns text + tree, so you often need zero extra r
 `read` appends an explicit `... (truncated: showed X of Y chars …)` marker when it
 caps. Look for it before assuming the data isn't there. Fix in one command:
 `read e<ref> --text-only` (scope), `read --text-only --full` (widen to 200K), or
-`find "<target>"` (jump). Do **not** fetch `?action=raw` / `view-source:` — raw
+`find "<target>" --text-only` (bounded passage). Do **not** fetch `?action=raw` / `view-source:` — raw
 markup is harder to parse than rendered text.
