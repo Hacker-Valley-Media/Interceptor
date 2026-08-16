@@ -30,6 +30,33 @@ afterEach(() => {
 })
 
 describe("find --include-frames", () => {
+  test("returns stable mode-selected sections when the frame list is empty", async () => {
+    globalThis.chrome = {
+      webNavigation: { getAllFrames: mock(async () => []) }
+    } as unknown as typeof chrome
+
+    const result = await handleFrameActions(
+      { type: "frames_find", query: "query", mode: "hybrid", limit: 10 },
+      99,
+      sendToContentScript as unknown as Parameters<typeof handleFrameActions>[2]
+    )
+
+    expect(result.data).toEqual({
+      query: "query",
+      mode: "hybrid",
+      frames: [],
+      text: {
+        total: 0,
+        returned: 0,
+        truncated: false,
+        scannedCharacters: 0,
+        scanTruncated: false,
+        matches: []
+      },
+      elements: { total: 0, returned: 0, truncated: false, matches: [] }
+    })
+  })
+
   test("aggregates totals, frame IDs, framed refs, and opaque-frame errors", async () => {
     globalThis.chrome = {
       webNavigation: {

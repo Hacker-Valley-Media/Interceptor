@@ -146,7 +146,21 @@ export async function handleFrameActions(
       return { success: false, error: `getAllFrames failed: ${(err as Error).message}` }
     }
     if (!frames?.length) {
-      return { success: true, data: { query, mode, frames: [] }, tabId }
+      const data: Record<string, unknown> = { query, mode, frames: [] }
+      if (mode !== "elements") {
+        data.text = {
+          total: 0,
+          returned: 0,
+          truncated: false,
+          scannedCharacters: 0,
+          scanTruncated: false,
+          matches: []
+        }
+      }
+      if (mode !== "text") {
+        data.elements = { total: 0, returned: 0, truncated: false, matches: [] }
+      }
+      return { success: true, data, tabId }
     }
 
     const perFrameResults = await Promise.all(frames.map(async (frame) => {

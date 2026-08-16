@@ -3361,7 +3361,21 @@ async function handleFrameActions(action, tabId, sendFrame = sendToContentScript
       return { success: false, error: `getAllFrames failed: ${err.message}` };
     }
     if (!frames?.length) {
-      return { success: true, data: { query, mode, frames: [] }, tabId };
+      const data2 = { query, mode, frames: [] };
+      if (mode !== "elements") {
+        data2.text = {
+          total: 0,
+          returned: 0,
+          truncated: false,
+          scannedCharacters: 0,
+          scanTruncated: false,
+          matches: []
+        };
+      }
+      if (mode !== "text") {
+        data2.elements = { total: 0, returned: 0, truncated: false, matches: [] };
+      }
+      return { success: true, data: data2, tabId };
     }
     const perFrameResults = await Promise.all(frames.map(async (frame) => {
       const frameMeta = {
