@@ -59,6 +59,7 @@ const DAEMON = ["--reason", "--timeout"]
 const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   // compound
   open: COMPOUND, read: COMPOUND, act: COMPOUND, inspect: COMPOUND,
+  websearch: COMPOUND, search: COMPOUND,
   // state
   state: STATE, tree: STATE, diff: STATE, find: STATE, text: STATE, html: STATE,
   // actions
@@ -78,7 +79,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   // meta
   status: META, reload: META, meta: META, links: META, images: META, forms: META,
   info: META, page_info: META, query: META, exists: META, count: META, table: META,
-  attr: META, style: META, events: META, search: META, notify: META, sessions: META,
+  attr: META, style: META, events: META, notify: META, sessions: META,
   capabilities: META, modals: META, panels: META,
   // singles
   eval: [], save: SAVE, brand: [], group: [], batch: BATCH, raw: BATCH,

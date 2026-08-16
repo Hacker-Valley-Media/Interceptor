@@ -74,12 +74,13 @@ const DOWNLOAD_ACTIONS = new Set([
 ])
 const SESSION_ACTIONS = new Set(["session_list", "session_restore"])
 const NOTIFICATION_ACTIONS = new Set(["notification_create", "notification_clear"])
+const SEARCH_ACTIONS = new Set(["search_capability", "search_query"])
 const BROWSING_DATA_ACTIONS = new Set(["browsing_data_remove"])
 const HEADER_ACTIONS = new Set(["headers_modify"])
 const EVALUATE_ACTIONS = new Set(["evaluate"])
 const BINARY_SINK_ACTIONS = new Set(["binary_sink_save"])
 const STYLE_ACTIONS = new Set(["style_inject", "style_remove"])
-const FRAME_ACTIONS = new Set(["frames_list", "frames_read_tree"])
+const FRAME_ACTIONS = new Set(["frames_list", "frames_read_tree", "frames_find"])
 const META_ACTIONS = new Set(["status", "reload_extension", "capabilities", "cdp_tree", "brand_set_tab_group"])
 const PASSIVE_NET_ACTIONS = new Set([
   "net_log", "net_clear", "net_headers", "sse_log", "sse_streams", "sse_chunk",
@@ -113,7 +114,7 @@ export async function routeAction(
   if (DOWNLOAD_ACTIONS.has(action.type)) return handleDownloadActions(action, tabId)
   if (SESSION_ACTIONS.has(action.type)) return handleSessionActions(action, tabId)
   if (NOTIFICATION_ACTIONS.has(action.type)) return handleNotificationActions(action, tabId)
-  if (action.type === "search_query") return handleSearchActions(action, tabId)
+  if (SEARCH_ACTIONS.has(action.type)) return handleSearchActions(action, tabId)
   if (BROWSING_DATA_ACTIONS.has(action.type)) return handleBrowsingDataActions(action, tabId)
   if (HEADER_ACTIONS.has(action.type)) return handleHeaderActions(action, tabId)
   if (EVALUATE_ACTIONS.has(action.type)) return handleEvaluateActions(action, tabId)

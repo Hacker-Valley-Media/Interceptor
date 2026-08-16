@@ -129,6 +129,7 @@ export type TabCreateAction = {
   reuse?: boolean
   reusePolicy?: boolean
   active?: boolean
+  prepareOnly?: boolean
 }
 
 export function buildTabCreateAction(
@@ -269,6 +270,199 @@ export async function runOpen(
   // Layer C: one rate-limited, opt-out hint to stderr when an agent opens a
   // search engine and no research ledger is active. Information, not coercion —
   // it changes nothing about the command's behavior or output.
+  maybeEmitResearchHint(url, filtered)
+}
+
+// ── interceptor websearch <query> ───────────────────────────────────────────
+
+const WEBSEARCH_BOOLEAN_FLAGS = new Set([
+  "--tree-only", "--text-only", "--markdown", "--full", "--reuse",
+  "--no-reuse", "--activate", "--no-wait"
+])
+
+export const SEARCH_DEPRECATION_WARNING =
+  "warning: 'interceptor search' is deprecated; use 'interceptor websearch' for the web or 'interceptor find' for the current page."
+
+export function webSearchQuery(filtered: string[]): string {
+  const parts: string[] = []
+  for (let i = 1; i < filtered.length; i++) {
+    const token = filtered[i]
+    if (WEBSEARCH_BOOLEAN_FLAGS.has(token)) continue
+    if (token === "--timeout") { i++; continue }
+    if (token.startsWith("--")) continue
+    parts.push(token)
+  }
+  const query = parts.join(" ")
+  return query.trim() ? query : ""
+}
+
+function resultObject(result: Result): Record<string, unknown> {
+  return typeof result.data === "object" && result.data
+    ? result.data as Record<string, unknown>
+    : {}
+}
+
+async function closeNewBlankSearchTab(
+  tabId: number,
+  useWs: boolean,
+  contextId?: string
+): Promise<void> {
+  const tabsResult = await send({ type: "tab_list" }, undefined, useWs, contextId)
+  const tabs = Array.isArray(tabsResult.data) ? tabsResult.data as Array<Record<string, unknown>> : []
+  const target = tabs.find(tab => tab.id === tabId)
+  const url = typeof target?.url === "string" ? target.url : ""
+  if (shouldCloseFailedSearchTab(false, url)) {
+    await send({ type: "tab_close", tabId }, tabId, useWs, contextId)
+  }
+}
+
+export function shouldCloseFailedSearchTab(reused: boolean, url: string): boolean {
+  if (reused) return false
+  return url === "" || url === "about:blank" || url.startsWith("chrome://newtab")
+}
+
+export async function runWebsearch(
+  filtered: string[],
+  globalTabId?: number,
+  jsonMode = false,
+  useWs = false,
+  contextId?: string
+): Promise<void> {
+  const query = webSearchQuery(filtered)
+  if (!query) {
+    console.error('error: interceptor websearch requires a non-empty query. Usage: interceptor websearch "<query>"')
+    process.exit(1)
+  }
+  if (filtered[0] === "search") {
+    console.error(SEARCH_DEPRECATION_WARNING)
+  }
+
+  // Check the target browser context before allocating anything. Provider
+  // fallback would violate the configured-default-provider contract.
+  const capability = await send({ type: "search_capability" }, undefined, useWs, contextId)
+  const available = capability.success && resultObject(capability).available === true
+  if (!available) {
+    output(jsonMode, {
+      success: false,
+      error: capability.error || "websearch is unavailable in this browser context: chrome.search.query is not exposed; no fallback provider was used"
+    })
+    return
+  }
+
+  const createAction = buildTabCreateAction(filtered, "about:blank", { policyDefault: true })
+  createAction.prepareOnly = true
+  const createResult = await send(createAction, globalTabId, useWs, contextId)
+  if (!createResult.success) {
+    output(jsonMode, { success: false, error: createResult.error || "failed to allocate managed search tab" })
+    return
+  }
+  const createData = resultObject(createResult)
+  const tabId = (createData.tabId as number) || createResult.tabId || globalTabId
+  if (!tabId) {
+    output(jsonMode, { success: false, error: "managed search tab allocation returned no tab ID" })
+    return
+  }
+  const reused = createData.reused === true
+  const initialUrl = typeof createData.url === "string" ? createData.url : ""
+
+  const searchResult = await send({ type: "search_query", query }, tabId, useWs, contextId)
+  if (!searchResult.success) {
+    if (!reused) await closeNewBlankSearchTab(tabId, useWs, contextId)
+    output(jsonMode, { success: false, error: searchResult.error || "default-provider search failed" })
+    return
+  }
+
+  const common: Record<string, unknown> = {
+    tabId,
+    groupId: createData.groupId,
+    group: createData.group,
+    reused
+  }
+  if (createData.groupWarning) common.groupWarning = createData.groupWarning
+
+  if (filtered.includes("--no-wait")) {
+    output(jsonMode, {
+      success: true,
+      data: { ...common, query, message: reused ? "search dispatched in reused managed tab (no-wait)" : "search dispatched in managed tab (no-wait)" }
+    })
+    return
+  }
+
+  const treeOnly = filtered.includes("--tree-only")
+  const textOnly = filtered.includes("--text-only")
+  const markdown = filtered.includes("--markdown")
+  const full = filtered.includes("--full")
+  const timeoutIdx = filtered.indexOf("--timeout")
+  const timeout = timeoutIdx !== -1 ? parseInt(filtered[timeoutIdx + 1]) : 5000
+  const deadline = Date.now() + timeout
+
+  // Observe a navigation away from the allocator state when possible. This
+  // avoids reading the prior document from a reused tab before the provider
+  // navigation commits, while allowing an identical repeated query to proceed.
+  const navigationDeadline = Math.min(deadline, Date.now() + 1500)
+  while (Date.now() < navigationDeadline) {
+    const state = await send({ type: "get_state" }, tabId, useWs, contextId)
+    const url = typeof resultObject(state).url === "string" ? resultObject(state).url as string : ""
+    if (state.success && url && url !== "about:blank" && url !== initialUrl) break
+    await Bun.sleep(100)
+  }
+
+  while (Date.now() < deadline) {
+    const stable = await send({ type: "wait_stable", ms: 200, timeout: Math.max(1, Math.min(3000, deadline - Date.now())) }, tabId, useWs, contextId)
+    if (stable.success) break
+    await Bun.sleep(250)
+  }
+
+  let treeResult: Result | undefined
+  let textResult: Result | undefined
+  if (!textOnly) {
+    treeResult = await send({ type: "get_a11y_tree", depth: 15, filter: "interactive", maxChars: 50000 }, tabId, useWs, contextId)
+  }
+  if (!treeOnly) {
+    textResult = await send({ type: markdown ? "extract_markdown" : "extract_text" }, tabId, useWs, contextId)
+  }
+  const aggregate = aggregateReadResults({
+    treeRequested: !textOnly,
+    textRequested: !treeOnly,
+    treeResult,
+    textResult,
+    full
+  })
+  if (!aggregate.success) {
+    output(jsonMode, { success: false, error: aggregate.error || "search completed but the provider page could not be read" })
+    return
+  }
+
+  const stateResult = await send({ type: "get_state" }, tabId, useWs, contextId)
+  const state = resultObject(stateResult)
+  const url = typeof state.url === "string" ? state.url : initialUrl
+  const title = typeof state.title === "string" ? state.title : ""
+  const data = {
+    ...common,
+    query,
+    url,
+    title,
+    tree: aggregate.tree,
+    text: aggregate.text
+  }
+
+  if (jsonMode) {
+    const result: { success: boolean; data: unknown; warning?: string } = { success: true, data }
+    const warnings = [...(aggregate.warnings || [])]
+    if (typeof createData.groupWarning === "string") warnings.unshift(createData.groupWarning)
+    if (warnings.length) result.warning = warnings.join("; ")
+    console.log(JSON.stringify(result, null, 2))
+  } else {
+    const warnings = [...(aggregate.warnings || [])]
+    if (typeof createData.groupWarning === "string") warnings.unshift(createData.groupWarning)
+    if (warnings.length) console.error(`warning: ${warnings.join("; ")}`)
+    const parts = [`Tab: ${tabId} | ${title || url}${reused ? " (reused)" : ""}`, url]
+    if (aggregate.tree) parts.push("", aggregate.tree)
+    if (aggregate.tree && aggregate.text) parts.push("", "---")
+    if (aggregate.text) parts.push(aggregate.text)
+    console.log(parts.join("\n"))
+  }
+
   maybeEmitResearchHint(url, filtered)
 }
 
@@ -637,6 +831,8 @@ export async function runCompoundCommand(
 ): Promise<void> {
   switch (cmd) {
     case "open":    return runOpen(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
+    case "websearch":
+    case "search":  return runWebsearch(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
     case "read":    return runRead(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
     case "act":     return runAct(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
     case "inspect":  return runInspect(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)

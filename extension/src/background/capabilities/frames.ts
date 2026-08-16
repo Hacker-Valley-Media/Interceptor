@@ -12,9 +12,35 @@ type FrameTreeEntry = {
   text?: string
 }
 
+type FindTextMatch = {
+  start: number
+  end: number
+  matchedText: string
+  snippet: string
+  frameId?: number
+}
+
+type FindElementMatch = {
+  refId: string
+  role: string
+  name: string
+  score: number
+  frameId?: number
+}
+
+type FindSection<T> = {
+  total: number
+  returned: number
+  truncated: boolean
+  matches: T[]
+  scannedCharacters?: number
+  scanTruncated?: boolean
+}
+
 export async function handleFrameActions(
   action: { type: string; [key: string]: unknown },
-  tabId: number
+  tabId: number,
+  sendFrame: typeof sendToContentScript = sendToContentScript
 ): Promise<ActionResult> {
   if (action.type === "frames_list") {
     const frames = await chrome.webNavigation.getAllFrames({ tabId })
@@ -65,7 +91,7 @@ export async function handleFrameActions(
         }
         if (targetIndex !== undefined) treeAction.index = targetIndex
         if (targetRef) treeAction.ref = targetRef
-        const treeResp = await sendToContentScript(
+        const treeResp = await sendFrame(
           tabId,
           treeAction,
           f.frameId
@@ -83,7 +109,7 @@ export async function handleFrameActions(
           const textAction: { type: string; [key: string]: unknown } = { type: "extract_text", frameId: f.frameId }
           if (targetIndex !== undefined) textAction.index = targetIndex
           if (targetRef) textAction.ref = targetRef
-          const textResp = await sendToContentScript(
+          const textResp = await sendFrame(
             tabId,
             textAction,
             f.frameId
@@ -100,6 +126,103 @@ export async function handleFrameActions(
     }))
 
     return { success: true, data: { frames: results }, tabId }
+  }
+
+  if (action.type === "frames_find") {
+    const query = String(action.query || "").trim()
+    if (!query) return { success: false, error: "find requires a non-empty query" }
+    const limit = typeof action.limit === "number" ? Math.max(0, Math.floor(action.limit)) : 10
+    const role = typeof action.role === "string" ? action.role : ""
+    const mode = role
+      ? "elements"
+      : action.mode === "text" || action.mode === "elements"
+        ? action.mode
+        : "hybrid"
+
+    let frames: chrome.webNavigation.GetAllFrameResultDetails[] | undefined
+    try {
+      frames = await chrome.webNavigation.getAllFrames({ tabId }) || undefined
+    } catch (err) {
+      return { success: false, error: `getAllFrames failed: ${(err as Error).message}` }
+    }
+    if (!frames?.length) {
+      return { success: true, data: { query, mode, frames: [] }, tabId }
+    }
+
+    const textMatches: FindTextMatch[] = []
+    const elementMatches: FindElementMatch[] = []
+    let textTotal = 0
+    let elementTotal = 0
+    let scannedCharacters = 0
+    let scanTruncated = false
+
+    const frameResults = await Promise.all(frames.map(async (frame) => {
+      const frameMeta: { frameId: number; parentFrameId: number; url: string; opaque?: true; error?: string } = {
+        frameId: frame.frameId,
+        parentFrameId: frame.parentFrameId,
+        url: frame.url
+      }
+      try {
+        const response = await sendFrame(tabId, {
+          type: "find_element",
+          query,
+          role,
+          mode,
+          // Per-frame output is bounded. Every frame still reports its full
+          // totals, and the aggregate applies the global category limit below.
+          limit,
+          frameId: frame.frameId
+        }, frame.frameId) as { success: boolean; error?: string; data?: unknown }
+        if (!response.success || !response.data || typeof response.data !== "object") {
+          frameMeta.opaque = true
+          frameMeta.error = response.error || "unreachable frame"
+          return frameMeta
+        }
+        const data = response.data as { text?: FindSection<FindTextMatch>; elements?: FindSection<FindElementMatch> }
+        if (data.text) {
+          textTotal += data.text.total
+          scannedCharacters += data.text.scannedCharacters || 0
+          scanTruncated ||= data.text.scanTruncated === true
+          for (const match of data.text.matches) textMatches.push({ ...match, frameId: frame.frameId })
+        }
+        if (data.elements) {
+          elementTotal += data.elements.total
+          for (const match of data.elements.matches) {
+            const refId = frame.frameId === 0
+              ? match.refId
+              : match.refId.replace(/^e(\d+)$/, `e${frame.frameId}_$1`)
+            elementMatches.push({ ...match, refId, frameId: frame.frameId })
+          }
+        }
+      } catch (err) {
+        frameMeta.opaque = true
+        frameMeta.error = (err as Error).message || "injection failed"
+      }
+      return frameMeta
+    }))
+
+    const data: Record<string, unknown> = { query, mode, frames: frameResults }
+    if (mode !== "elements") {
+      const matches = textMatches.slice(0, limit)
+      data.text = {
+        total: textTotal,
+        returned: matches.length,
+        truncated: textTotal > matches.length,
+        scannedCharacters,
+        scanTruncated,
+        matches
+      }
+    }
+    if (mode !== "text") {
+      const matches = elementMatches.slice(0, limit)
+      data.elements = {
+        total: elementTotal,
+        returned: matches.length,
+        truncated: elementTotal > matches.length,
+        matches
+      }
+    }
+    return { success: true, data, tabId }
   }
 
   return { success: false, error: `unknown frame action: ${action.type}` }

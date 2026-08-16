@@ -26,7 +26,7 @@ type TierMap = Record<string, Tier>
 // ── READ (no state change) ────────────────────────────────────────────────────
 const READ_VERBS: Record<Surface, Set<string>> = {
   browser: new Set([
-    "state", "tree", "diff", "find", "text", "html", "search", "links", "images",
+    "state", "tree", "diff", "find", "text", "html", "links", "images",
     "forms", "query", "exists", "count", "table", "attr", "style", "screenshot",
     "net", "network", "headers", "inspect", "tabs", "read", "status", "meta",
     "info", "page_info", "events", "modals", "panels", "sessions", "capabilities",

@@ -16,7 +16,7 @@ If you're at command 4 and don't have the value, **commit with what's there** �
 ## Decision tree
 
 1. **Is the answer in plain page text?** → use `read --text-only` first, smallest surface.
-2. **Does it need a specific element?** → use `find "<text>"` or `read e<ref>` on a known ref.
+2. **Does it need a passage or specific element?** → use `find "<text>" --text-only` for a passage, `find "<text>" --elements-only`/`--role` for a control, or `read e<ref>` on a known ref.
 3. **Does it live in a sub-tree?** → use `read e<ref>` to scope.
 4. **Is it inside an iframe?** → use `read --include-frames`, refs like `e2_7`.
 5. **Is it client-side state hidden from DOM?** → use `inspect` (combined tree + network) or `state` for SPA state.
@@ -51,12 +51,13 @@ If you're at command 4 and don't have the value, **commit with what's there** �
    - The fact you need is a single value (date, name, number) that appears once on the page — flat text is faster and the markup adds noise.
    - You already ran `--text-only` (or the preflight ran `open --text-only`) and got the answer. Don't re-read the same content in a different mode.
 
-3. **For specific elements, prefer `find` over scanning a full tree.**
+3. **For a known passage or element, prefer `find` over returning the full page/tree.**
    ```bash
-   interceptor find "Submit"
+   interceptor find "termination for convenience" --text-only
+   interceptor find "Submit" --elements-only
    interceptor find "Email" --role textbox
    ```
-   `find` uses semantic + text matching. Faster than reading a 5,000-line tree.
+   Plain `find` returns both bounded rendered-text snippets and accessible element refs. It scans beyond `read`'s normal 8K emitted-text cap without returning the entire page, and it never navigates or mutates.
 
 ## When `read` returns less than you expected
 
@@ -66,7 +67,7 @@ Fix in one command:
 
 - **`read e<ref> --text-only`** to scope to a known section (cheapest)
 - **`read --text-only --full`** to widen to 200,000 chars (mid-cost)
-- **`find "<target>"`** to jump straight to the element (cheapest if you know the text)
+- **`find "<target>" --text-only`** for a bounded passage, or **`--elements-only`** for a control ref
 
 **Do NOT fetch `?action=raw`, `view-source:`, or any markup-level URL.** Raw wikitext / HTML source is harder to parse than rendered text. The agent's job is to read the page, not its source.
 
@@ -86,6 +87,7 @@ Fix in one command:
 6. **Pages with iframes** (auth widgets, embedded docs, payment frames):
    ```bash
    interceptor read --include-frames
+   interceptor find "target" --include-frames
    interceptor act e2_7                         # Framed ref directly
    ```
 

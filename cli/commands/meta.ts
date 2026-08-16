@@ -1,6 +1,6 @@
 /**
  * cli/commands/meta.ts — status, reload, meta, links, images, forms, info, query, exists, count,
- *                        table, attr, style, events, search, notify, sessions, capabilities,
+ *                        table, attr, style, events, notify, sessions, capabilities,
  *                        modals, panels
  *
  * Returns null for "status" and "events" (handled locally, no daemon connection needed).
@@ -205,9 +205,6 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false, con
       }
       return { type: "style_get", ...parseElementTarget(filtered[1]), property: filtered[2] }
     }
-
-    case "search":
-      return { type: "search_query", query: filtered.slice(1).join(" ") }
 
     case "notify":
       return { type: "notification_create", title: filtered[1], message: filtered.slice(2).join(" ") }

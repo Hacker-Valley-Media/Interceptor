@@ -52,18 +52,34 @@ export function parseStateCommand(filtered: string[]): Action {
     case "find": {
       const roleIdx = filtered.indexOf("--role")
       const limitIdx = filtered.indexOf("--limit")
-      const queryParts = filtered.slice(1).filter(
-        a =>
-          a !== "--role" &&
-          a !== "--limit" &&
-          (roleIdx === -1 || a !== filtered[roleIdx + 1]) &&
-          (limitIdx === -1 || a !== filtered[limitIdx + 1])
-      )
+      const firstFlag = filtered.findIndex((arg, index) => index > 0 && arg.startsWith("--"))
+      const queryParts = filtered.slice(1, firstFlag === -1 ? filtered.length : firstFlag)
+      const query = queryParts.join(" ").trim()
+      if (!query) {
+        console.error('error: interceptor find requires a non-empty query. Usage: interceptor find "<query>"')
+        process.exit(1)
+      }
+      const textOnly = filtered.includes("--text-only")
+      const elementsOnly = filtered.includes("--elements-only")
+      if (textOnly && elementsOnly) {
+        console.error("error: --text-only and --elements-only are mutually exclusive")
+        process.exit(1)
+      }
+      if (textOnly && roleIdx !== -1) {
+        console.error("error: --role selects element mode and cannot be combined with --text-only")
+        process.exit(1)
+      }
+      const limit = limitIdx !== -1 ? parseInt(filtered[limitIdx + 1]) : 10
+      if (!Number.isFinite(limit) || limit < 0) {
+        console.error("error: --limit must be a non-negative integer")
+        process.exit(1)
+      }
       return {
-        type: "find_element",
-        query: queryParts.join(" "),
+        type: filtered.includes("--include-frames") ? "frames_find" : "find_element",
+        query,
         role: roleIdx !== -1 ? filtered[roleIdx + 1] : undefined,
-        limit: limitIdx !== -1 ? parseInt(filtered[limitIdx + 1]) : 10
+        mode: textOnly ? "text" : (elementsOnly || roleIdx !== -1) ? "elements" : "hybrid",
+        limit
       }
     }
 

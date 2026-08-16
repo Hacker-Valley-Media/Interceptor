@@ -13,7 +13,8 @@ This installed skill is self-contained. Source checkouts also have `AGENTS.md`, 
 
 ## Core Rules
 
-- Use compound commands (`open`, `read`, `act`, `inspect`) before low-level verbs.
+- Use compound commands (`open`, `websearch`, `read`, `act`, `inspect`) before low-level verbs.
+- `websearch "<query>"` searches through the browser's configured default provider in an Interceptor-managed background tab and returns the provider page. It is not Google-specific. `find "<query>"` never navigates: it searches the current page's complete rendered-text snapshot plus accessible elements. Use `find --text-only` for passages and `find --elements-only`/`--role` for controls.
 - Browser commands operate inside managed Interceptor tab groups. Do not use `--any-tab` unless the user explicitly authorizes acting outside those groups.
 - Pick a stable `--group <label>` (your agent name or session id) at the start of browser work, or set `INTERCEPTOR_GROUP` once. A named label buys three things at once: your tabs live in their own colored group and resolution never leaves it (isolation from sibling agents), `open` reuses your group's most-recent tab instead of piling up new ones, and the idle sweeper has a clean unit to reap if you crash. `interceptor group list` shows what's running.
 - Close your group with `interceptor group close <label>` the moment the job is done — tabs you leave open are tabs the user has to close by hand. The extension auto-closes idle groups (default: after 10 minutes without a command; configurable in the extension popup), but that is the crash-safety floor, not a substitute for cleaning up.
@@ -31,7 +32,8 @@ This installed skill is self-contained. Source checkouts also have `AGENTS.md`, 
 
 ```bash
 interceptor status                        # 1. Confirm daemon + extension are alive
-interceptor open "https://example.com"    # 2. Background tab + wait + tree + text
+interceptor websearch "example docs"      # 2a. Default provider → managed background results tab
+interceptor open "https://example.com"    # 2b. Or open a known URL → wait + tree + text
 interceptor read                          # 3. Current state (re-read after any mutation)
 interceptor act e5                        # 4. Click ref e5 (refs come from `read`)
 interceptor act e7 "example user"         # 5. Type into ref e7

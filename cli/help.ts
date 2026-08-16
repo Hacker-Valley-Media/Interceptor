@@ -113,7 +113,8 @@ needed. Go deeper on any verb:
 const MAP_BROWSER = `BROWSER — a signed-in Chrome/Brave profile, background tabs by default:
   Compound   open <url> · read [ref] · act <ref> ["text"] · inspect     one-call open / read / act / debug
   Read text  text (visible innerText) · text --markdown (keeps headings/tables) · html <ref> (raw markup)
-  Structure  tree (a11y refs to act on) · find "<name>" (elements by name) · search "<q>" (full-text) · state · diff
+  Structure  tree (a11y refs) · find "<q>" (current-page text + elements) · state · diff
+  Web        websearch "<q>" (configured default provider → managed background tab + page read)
   Extract    table · links · images · forms · query <css> · exists · count · attr · style      structured JSON
   Act        act <ref> · click · type · select · focus · hover · drag · dblclick · rightclick · check · keys · scroll
   Navigate   navigate <url> · back · forward · scroll · wait <ms> · wait-stable
@@ -232,8 +233,13 @@ State:
   interceptor tree --filter all              Include landmarks + headings
   interceptor tree --depth N --max-chars N   Limit depth and output size
   interceptor diff                           Changes since last state/tree read
-  interceptor find "query"                   Find elements by name
-  interceptor find "query" --role button     Filter by role
+  interceptor find "query"                   Find current-page text + accessible elements
+  interceptor find "query" --text-only       Return bounded rendered-text snippets only
+  interceptor find "query" --elements-only   Return actionable element refs only
+  interceptor find "query" --role button     Element-only, filtered by role
+  interceptor find "query" --include-frames  Aggregate reachable frames
+  interceptor websearch "query"              Search default provider in a managed background tab
+  interceptor search "query"                 Deprecated alias for websearch (one release)
   interceptor text                           All visible text
   interceptor text <index|ref>               Text from specific element
   interceptor text --markdown                All visible text rendered as markdown

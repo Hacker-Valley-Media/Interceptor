@@ -19,6 +19,10 @@ interceptor read --include-frames                  # Descend into iframes
 interceptor read e2_7 --include-frames --tree-only # Framed ref
 interceptor text --markdown                        # Standalone markdown dump
 interceptor text e12 --markdown                    # Element rendered as markdown
+
+interceptor websearch "<query>"                    # Configured default provider → managed background tab + tree/text
+interceptor websearch "<query>" --text-only --full
+interceptor websearch "<query>" --reuse | --no-reuse | --activate | --no-wait
 ```
 
 In a **named group** (`--group <label>`), `open` reuses that group's most-recent tab **by default** (address-bar semantics; policy set in the extension popup) — pass `--no-reuse` to keep the current page and open another. Ungrouped `open` and `tab new` always create; `--reuse` opts in per call. Reading strategy: start with `read`/`open`, not a screenshot. Re-read after every mutating action.
@@ -30,6 +34,9 @@ In a **named group** (`--group <label>`), `open` reuses that group's most-recent
 ```bash
 interceptor find "Submit"
 interceptor find "Email" --role textbox
+interceptor find "contract clause" --text-only     # Complete rendered-text snapshot; bounded snippets
+interceptor find "Submit" --elements-only          # Accessible controls + actionable refs only
+interceptor find "privacy" --include-frames        # Frame IDs + framed refs such as e2_7
 
 interceptor act e7                                 # Click + read after
 interceptor act e9 "example user"                  # Type into field
@@ -40,7 +47,7 @@ interceptor act e20 --no-read
 
 **After `act --trusted` reports success, read the page once and commit.** Do not re-execute the same click via a different surface (`interceptor macos click ...`, manual coordinates, etc.) to "verify" — the page's own state is the verification, and the trusted event is the same trusted event regardless of which surface posted it. Escalating to a different surface to redo a successful browser action is the most common way to blow the command budget. `interceptor macos` remains the right surface for native-app tasks; this rule only constrains within-task redo behavior on the browser.
 
-`find` uses semantic + text matching — faster than scanning a big tree. Low-level actions when `act` is not enough:
+Unqualified `find` returns two typed current-page sections: literal case-insensitive matches from the complete `document.body.innerText` snapshot, and semantic accessible-element matches. It does not navigate, scroll, focus, or highlight. `--limit` caps returned matches per category while preserving total counts. Low-level actions when `act` is not enough:
 
 ```bash
 interceptor click e7

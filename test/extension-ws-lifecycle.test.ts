@@ -29,7 +29,6 @@ class FakeWebSocket {
   }
 }
 
-const originalWebSocket = globalThis.WebSocket
 const hadOriginalChrome = Object.prototype.hasOwnProperty.call(globalThis, "chrome")
 const originalChrome = (globalThis as { chrome?: unknown }).chrome
 
@@ -67,7 +66,6 @@ function installFakeChrome(): void {
 }
 
 afterEach(() => {
-  ;(globalThis as { WebSocket: typeof WebSocket }).WebSocket = originalWebSocket
   if (hadOriginalChrome) {
     ;(globalThis as { chrome?: unknown }).chrome = originalChrome
   } else {
@@ -78,14 +76,17 @@ afterEach(() => {
 
 describe("extension websocket lifecycle", () => {
   test("Safari-shaped startup registers the explicit context once without storage", async () => {
-    ;(globalThis as { WebSocket: typeof WebSocket }).WebSocket = FakeWebSocket as unknown as typeof WebSocket
     installFakeChrome()
 
     const { configureTransport, connectWsChannel } = await import("../extension/src/background/transport")
     const { initializeActionRouter } = await import("../extension/src/background/router")
 
     expect(() => initializeActionRouter()).not.toThrow()
-    configureTransport({ contextId: "safari", forceWebSocket: true })
+    configureTransport({
+      contextId: "safari",
+      forceWebSocket: true,
+      webSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
 
     connectWsChannel()
     connectWsChannel()

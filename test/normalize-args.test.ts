@@ -90,6 +90,11 @@ describe("normalizeArgs", () => {
       .toEqual(["find", "submit", "order", "--role", "button"])
   })
 
+  test("websearch keeps multi-word queries and open-style flags paired", () => {
+    expect(normalizeArgs(["websearch", "--timeout", "9000", "default", "provider", "query", "--activate"]))
+      .toEqual(["websearch", "default", "provider", "query", "--timeout", "9000", "--activate"])
+  })
+
   test("click --selector keeps a quoted multi-token selector attached", () => {
     expect(normalizeArgs(["click", "--selector", "button span", "--nth", "4"]))
       .toEqual(["click", "--selector", "button span", "--nth", "4"])

@@ -24,7 +24,8 @@ autopilot. For deep research that is a downgrade, and this skill assumes you do
 - **No ledger.** Built-in fetches don't land in `sources/`, so the collect-first
   discipline, the source count, and the saturation rubric all silently break.
 
-So: every fetch and every search in this skill goes through the `interceptor`
+So: every fetch and every search in this skill goes through `interceptor websearch`
+for provider discovery, then the `interceptor`
 CLI. If a built-in web tool feels easier mid-run, that's the autopilot — stop and
 use `interceptor open` / `read`. (This composes with, and does not replace, any
 higher-level research orchestrator your host provides — but the *fetching* is

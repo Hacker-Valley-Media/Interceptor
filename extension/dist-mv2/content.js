@@ -2999,17 +2999,58 @@ init_ref_registry();
 init_element_discovery();
 init_a11y_tree();
 init_input_simulation();
-async function handleFindElement(action) {
-  const query = (action.query || "").toLowerCase();
-  const targetRole = (action.role || "").toLowerCase();
-  const limit = action.limit || 10;
+function findRenderedText(renderedText, rawQuery, limit = 10, contextChars = 80) {
+  const query = rawQuery.trim();
+  const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 10;
+  const matches = [];
+  let total = 0;
+  if (query.length > 0) {
+    const haystack = renderedText.toLowerCase();
+    const needle = query.toLowerCase();
+    let from = 0;
+    while (from <= haystack.length - needle.length) {
+      const start = haystack.indexOf(needle, from);
+      if (start === -1)
+        break;
+      const end = start + query.length;
+      total++;
+      if (matches.length < boundedLimit) {
+        const snippetStart = Math.max(0, start - contextChars);
+        const snippetEnd = Math.min(renderedText.length, end + contextChars);
+        const prefix = snippetStart > 0 ? "…" : "";
+        const suffix = snippetEnd < renderedText.length ? "…" : "";
+        matches.push({
+          start,
+          end,
+          matchedText: renderedText.slice(start, end),
+          snippet: `${prefix}${renderedText.slice(snippetStart, snippetEnd).replace(/\s+/g, " ").trim()}${suffix}`
+        });
+      }
+      from = end;
+    }
+  }
+  return {
+    total,
+    returned: matches.length,
+    truncated: total > matches.length,
+    scannedCharacters: renderedText.length,
+    scanTruncated: false,
+    matches
+  };
+}
+function findAccessibleElements(rawQuery, rawRole, limit = 10) {
+  const query = rawQuery.trim().toLowerCase();
+  const targetRole = rawRole.trim().toLowerCase();
+  const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 10;
   const results = [];
   for (const [refId, weakRef] of refRegistry) {
     const el = weakRef.deref();
     if (!el || !el.isConnected || !isVisible(el))
       continue;
-    const role = getEffectiveRole(el).toLowerCase();
-    const name = getAccessibleName(el).toLowerCase();
+    const effectiveRole = getEffectiveRole(el);
+    const accessibleName = getAccessibleName(el);
+    const role = effectiveRole.toLowerCase();
+    const name = accessibleName.toLowerCase();
     let score = 0;
     if (targetRole && role !== targetRole)
       continue;
@@ -3031,10 +3072,28 @@ async function handleFindElement(action) {
         score += 30;
     }
     if (score > 0)
-      results.push({ refId, role: getEffectiveRole(el), name: getAccessibleName(el), score });
+      results.push({ refId, role: effectiveRole, name: accessibleName, score });
   }
   results.sort((a, b) => b.score - a.score);
-  return { success: true, data: results.slice(0, limit) };
+  const matches = results.slice(0, boundedLimit);
+  return { total: results.length, returned: matches.length, truncated: results.length > matches.length, matches };
+}
+async function handleFindElement(action) {
+  const query = String(action.query || "").trim();
+  if (!query)
+    return { success: false, error: "find requires a non-empty query" };
+  const role = String(action.role || "");
+  const limit = typeof action.limit === "number" ? action.limit : 10;
+  const requestedMode = action.mode === "text" || action.mode === "elements" ? action.mode : "hybrid";
+  const mode = role ? "elements" : requestedMode;
+  const data = { query, mode };
+  if (mode !== "elements") {
+    data.text = findRenderedText(document.body?.innerText || "", query, limit);
+  }
+  if (mode !== "text") {
+    data.elements = findAccessibleElements(query, role, limit);
+  }
+  return { success: true, data };
 }
 async function handleSemanticResolve(action) {
   const match = findBestMatch(action.name, action.role);
