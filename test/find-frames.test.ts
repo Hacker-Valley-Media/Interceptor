@@ -4,6 +4,7 @@ import { handleFrameActions } from "../extension/src/background/capabilities/fra
 const sendToContentScript = mock(async (_tabId: number, _action: Record<string, unknown>, frameId?: number) => {
   if (frameId === 3) throw new Error("opaque frame")
   if (frameId === 0) {
+    await Bun.sleep(10)
     return {
       success: true,
       data: {

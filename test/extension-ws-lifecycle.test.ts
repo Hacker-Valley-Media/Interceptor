@@ -65,7 +65,9 @@ function installFakeChrome(): void {
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
+  const { resetTransportForTesting } = await import("../extension/src/background/transport")
+  resetTransportForTesting()
   if (hadOriginalChrome) {
     ;(globalThis as { chrome?: unknown }).chrome = originalChrome
   } else {

@@ -60,6 +60,33 @@ export function configureTransport(config: ExtensionTransportConfig): void {
   if (config.webSocketImpl) WebSocketImpl = config.webSocketImpl
 }
 
+/** Restore injected entrypoint configuration between tests. */
+export function resetTransportForTesting(): void {
+  const channel = wsChannel
+  wsChannel = null
+  if (channel) {
+    channel.onopen = null
+    channel.onmessage = null
+    channel.onclose = null
+    channel.onerror = null
+    try { channel.close() } catch {}
+  }
+  stopWsKeepAlive()
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer)
+  wsReconnectTimer = null
+  wsReady = false
+  wsKeepalive = wsStateOnOpen()
+  wsReconnectDelay = INITIAL_RECONNECT_DELAY_MS
+  isConnecting = false
+  safariNativeRelayClient?.stop()
+  safariNativeRelayClient = null
+  if (activeTransport === "websocket" || activeTransport === "safari-native") activeTransport = "none"
+  configuredContextId = null
+  forceWebSocketTransport = false
+  safariNativeRelayEnabled = false
+  WebSocketImpl = globalThis.WebSocket
+}
+
 function describeOutboundMessage(msg: unknown): string {
   const candidate = msg as { id?: unknown; result?: { error?: unknown } } | null
   if (candidate && typeof candidate.id === "string") {

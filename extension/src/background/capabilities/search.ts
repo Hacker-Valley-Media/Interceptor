@@ -4,9 +4,7 @@ export async function handleSearchActions(
   action: { type: string; [key: string]: unknown },
   tabId: number
 ): Promise<ActionResult> {
-  const searchApi = (chrome as typeof chrome & {
-    search?: { query?: (info: { text: string; tabId: number }) => Promise<void> }
-  }).search
+  const searchApi = chrome.search
 
   if (action.type === "search_capability") {
     return {

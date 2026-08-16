@@ -156,7 +156,8 @@ INTERCEPTOR VERB COOKBOOK (research mode) — every verb exists today, zero CDP
   Structure-preserving read interceptor read --markdown --text-only --full
   Precise extraction       interceptor read --markdown --text-only --full | rg -n -C 8 '<terms>'
   Find a page passage      interceptor find "<text>" --text-only
-  Find one element         interceptor find "<text>" --elements-only | --role <role>
+  Find one element         interceptor find "<text>" --elements-only
+  Find by element role     interceptor find "<text>" --role <role>
   Scrape a JS app          interceptor eval --main "(async()=>{ ... })()"
   Grab the API payload     interceptor inspect --net-only   |   interceptor net log --filter <host>
   Capture XHR as JSON      interceptor net log --filter <host> --format json --out <path>

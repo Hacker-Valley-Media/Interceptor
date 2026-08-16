@@ -149,18 +149,20 @@ export async function handleFrameActions(
       return { success: true, data: { query, mode, frames: [] }, tabId }
     }
 
-    const textMatches: FindTextMatch[] = []
-    const elementMatches: FindElementMatch[] = []
-    let textTotal = 0
-    let elementTotal = 0
-    let scannedCharacters = 0
-    let scanTruncated = false
-
-    const frameResults = await Promise.all(frames.map(async (frame) => {
+    const perFrameResults = await Promise.all(frames.map(async (frame) => {
       const frameMeta: { frameId: number; parentFrameId: number; url: string; opaque?: true; error?: string } = {
         frameId: frame.frameId,
         parentFrameId: frame.parentFrameId,
         url: frame.url
+      }
+      const result = {
+        frameMeta,
+        textMatches: [] as FindTextMatch[],
+        elementMatches: [] as FindElementMatch[],
+        textTotal: 0,
+        elementTotal: 0,
+        scannedCharacters: 0,
+        scanTruncated: false
       }
       try {
         const response = await sendFrame(tabId, {
@@ -176,30 +178,46 @@ export async function handleFrameActions(
         if (!response.success || !response.data || typeof response.data !== "object") {
           frameMeta.opaque = true
           frameMeta.error = response.error || "unreachable frame"
-          return frameMeta
+          return result
         }
         const data = response.data as { text?: FindSection<FindTextMatch>; elements?: FindSection<FindElementMatch> }
         if (data.text) {
-          textTotal += data.text.total
-          scannedCharacters += data.text.scannedCharacters || 0
-          scanTruncated ||= data.text.scanTruncated === true
-          for (const match of data.text.matches) textMatches.push({ ...match, frameId: frame.frameId })
+          result.textTotal = data.text.total
+          result.scannedCharacters = data.text.scannedCharacters || 0
+          result.scanTruncated = data.text.scanTruncated === true
+          result.textMatches = data.text.matches.map(match => ({ ...match, frameId: frame.frameId }))
         }
         if (data.elements) {
-          elementTotal += data.elements.total
+          result.elementTotal = data.elements.total
           for (const match of data.elements.matches) {
             const refId = frame.frameId === 0
               ? match.refId
               : match.refId.replace(/^e(\d+)$/, `e${frame.frameId}_$1`)
-            elementMatches.push({ ...match, refId, frameId: frame.frameId })
+            result.elementMatches.push({ ...match, refId, frameId: frame.frameId })
           }
         }
       } catch (err) {
         frameMeta.opaque = true
         frameMeta.error = (err as Error).message || "injection failed"
       }
-      return frameMeta
+      return result
     }))
+
+    const frameResults = perFrameResults.map(result => result.frameMeta)
+    const textMatches: FindTextMatch[] = []
+    const elementMatches: FindElementMatch[] = []
+    let textTotal = 0
+    let elementTotal = 0
+    let scannedCharacters = 0
+    let scanTruncated = false
+    for (const result of perFrameResults) {
+      textTotal += result.textTotal
+      elementTotal += result.elementTotal
+      scannedCharacters += result.scannedCharacters
+      scanTruncated ||= result.scanTruncated
+      textMatches.push(...result.textMatches)
+      elementMatches.push(...result.elementMatches)
+    }
 
     const data: Record<string, unknown> = { query, mode, frames: frameResults }
     if (mode !== "elements") {

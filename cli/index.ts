@@ -32,7 +32,7 @@ import { parseBatchCommand } from "./commands/batch"
 import { parseMonitorCommand } from "./commands/monitor"
 import { parseSceneCommand } from "./commands/scene"
 import { parseSseCommand } from "./commands/sse"
-import { runCompoundCommand, webSearchQuery } from "./commands/compound"
+import { runCompoundCommand, webSearchQuery, webSearchTimeout } from "./commands/compound"
 import { runOverride } from "./commands/override"
 import { runMacosCommand } from "./commands/macos"
 import { runIosCommand } from "./commands/ios"
@@ -233,6 +233,10 @@ async function main() {
   // alias uses the identical parser and lifecycle.
   if ((cmd === "websearch" || cmd === "search") && !webSearchQuery(filtered)) {
     console.error(`error: interceptor ${cmd} requires a non-empty query. Usage: interceptor ${cmd} "<query>"`)
+    process.exit(1)
+  }
+  if ((cmd === "websearch" || cmd === "search") && webSearchTimeout(filtered) === null) {
+    console.error("error: --timeout must be a non-negative integer")
     process.exit(1)
   }
 

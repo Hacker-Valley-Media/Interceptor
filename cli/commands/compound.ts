@@ -321,6 +321,15 @@ export function shouldCloseFailedSearchTab(reused: boolean, url: string): boolea
   return url === "" || url === "about:blank" || url.startsWith("chrome://newtab")
 }
 
+export function webSearchTimeout(filtered: string[]): number | null {
+  const timeoutIdx = filtered.indexOf("--timeout")
+  if (timeoutIdx === -1) return 5000
+  const raw = filtered[timeoutIdx + 1]
+  if (!raw || !/^\d+$/.test(raw)) return null
+  const timeout = Number(raw)
+  return Number.isSafeInteger(timeout) ? timeout : null
+}
+
 export async function runWebsearch(
   filtered: string[],
   globalTabId?: number,
@@ -392,8 +401,11 @@ export async function runWebsearch(
   const textOnly = filtered.includes("--text-only")
   const markdown = filtered.includes("--markdown")
   const full = filtered.includes("--full")
-  const timeoutIdx = filtered.indexOf("--timeout")
-  const timeout = timeoutIdx !== -1 ? parseInt(filtered[timeoutIdx + 1]) : 5000
+  const timeout = webSearchTimeout(filtered)
+  if (timeout === null) {
+    console.error("error: --timeout must be a non-negative integer")
+    process.exit(1)
+  }
   const deadline = Date.now() + timeout
 
   // Observe a navigation away from the allocator state when possible. This

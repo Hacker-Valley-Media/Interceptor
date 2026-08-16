@@ -22,7 +22,10 @@ interceptor text e12 --markdown                    # Element rendered as markdow
 
 interceptor websearch "<query>"                    # Configured default provider → managed background tab + tree/text
 interceptor websearch "<query>" --text-only --full
-interceptor websearch "<query>" --reuse | --no-reuse | --activate | --no-wait
+interceptor websearch "<query>" --reuse             # Reuse the latest managed tab
+interceptor websearch "<query>" --no-reuse          # Force a new managed tab
+interceptor websearch "<query>" --activate          # Explicitly foreground the destination
+interceptor websearch "<query>" --no-wait           # Return after provider dispatch
 ```
 
 In a **named group** (`--group <label>`), `open` reuses that group's most-recent tab **by default** (address-bar semantics; policy set in the extension popup) — pass `--no-reuse` to keep the current page and open another. Ungrouped `open` and `tab new` always create; `--reuse` opts in per call. Reading strategy: start with `read`/`open`, not a screenshot. Re-read after every mutating action.
@@ -36,6 +39,7 @@ interceptor find "Submit"
 interceptor find "Email" --role textbox
 interceptor find "contract clause" --text-only     # Complete rendered-text snapshot; bounded snippets
 interceptor find "Submit" --elements-only          # Accessible controls + actionable refs only
+interceptor read --include-frames                   # Populate child-frame element refs
 interceptor find "privacy" --include-frames        # Frame IDs + framed refs such as e2_7
 
 interceptor act e7                                 # Click + read after

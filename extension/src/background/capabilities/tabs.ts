@@ -123,7 +123,9 @@ export async function handleTabActions(
                 // remains the same explicit opt-in as ordinary tab creation.
                 let updated: chrome.tabs.Tab | undefined = candidate
                 if (action.prepareOnly === true) {
-                  if (reuseActivate) updated = await chrome.tabs.update(candidate.id, { active: true })
+                  updated = reuseActivate
+                    ? await chrome.tabs.update(candidate.id, { active: true })
+                    : await chrome.tabs.get(candidate.id)
                 } else {
                   const updateProps: chrome.tabs.UpdateProperties = { url: targetUrl }
                   if (reuseActivate) updateProps.active = true

@@ -2032,8 +2032,7 @@ async function handleTabActions(action, tabId) {
                 const reuseActivate = action.active === true;
                 let updated = candidate;
                 if (action.prepareOnly === true) {
-                  if (reuseActivate)
-                    updated = await chrome.tabs.update(candidate.id, { active: true });
+                  updated = reuseActivate ? await chrome.tabs.update(candidate.id, { active: true }) : await chrome.tabs.get(candidate.id);
                 } else {
                   const updateProps = { url: targetUrl };
                   if (reuseActivate)
@@ -3364,17 +3363,20 @@ async function handleFrameActions(action, tabId, sendFrame = sendToContentScript
     if (!frames?.length) {
       return { success: true, data: { query, mode, frames: [] }, tabId };
     }
-    const textMatches = [];
-    const elementMatches = [];
-    let textTotal = 0;
-    let elementTotal = 0;
-    let scannedCharacters = 0;
-    let scanTruncated = false;
-    const frameResults = await Promise.all(frames.map(async (frame) => {
+    const perFrameResults = await Promise.all(frames.map(async (frame) => {
       const frameMeta = {
         frameId: frame.frameId,
         parentFrameId: frame.parentFrameId,
         url: frame.url
+      };
+      const result = {
+        frameMeta,
+        textMatches: [],
+        elementMatches: [],
+        textTotal: 0,
+        elementTotal: 0,
+        scannedCharacters: 0,
+        scanTruncated: false
       };
       try {
         const response = await sendFrame(tabId, {
@@ -3388,29 +3390,43 @@ async function handleFrameActions(action, tabId, sendFrame = sendToContentScript
         if (!response.success || !response.data || typeof response.data !== "object") {
           frameMeta.opaque = true;
           frameMeta.error = response.error || "unreachable frame";
-          return frameMeta;
+          return result;
         }
         const data2 = response.data;
         if (data2.text) {
-          textTotal += data2.text.total;
-          scannedCharacters += data2.text.scannedCharacters || 0;
-          scanTruncated ||= data2.text.scanTruncated === true;
-          for (const match of data2.text.matches)
-            textMatches.push({ ...match, frameId: frame.frameId });
+          result.textTotal = data2.text.total;
+          result.scannedCharacters = data2.text.scannedCharacters || 0;
+          result.scanTruncated = data2.text.scanTruncated === true;
+          result.textMatches = data2.text.matches.map((match) => ({ ...match, frameId: frame.frameId }));
         }
         if (data2.elements) {
-          elementTotal += data2.elements.total;
+          result.elementTotal = data2.elements.total;
           for (const match of data2.elements.matches) {
             const refId = frame.frameId === 0 ? match.refId : match.refId.replace(/^e(\d+)$/, `e${frame.frameId}_$1`);
-            elementMatches.push({ ...match, refId, frameId: frame.frameId });
+            result.elementMatches.push({ ...match, refId, frameId: frame.frameId });
           }
         }
       } catch (err) {
         frameMeta.opaque = true;
         frameMeta.error = err.message || "injection failed";
       }
-      return frameMeta;
+      return result;
     }));
+    const frameResults = perFrameResults.map((result) => result.frameMeta);
+    const textMatches = [];
+    const elementMatches = [];
+    let textTotal = 0;
+    let elementTotal = 0;
+    let scannedCharacters = 0;
+    let scanTruncated = false;
+    for (const result of perFrameResults) {
+      textTotal += result.textTotal;
+      elementTotal += result.elementTotal;
+      scannedCharacters += result.scannedCharacters;
+      scanTruncated ||= result.scanTruncated;
+      textMatches.push(...result.textMatches);
+      elementMatches.push(...result.elementMatches);
+    }
     const data = { query, mode, frames: frameResults };
     if (mode !== "elements") {
       const matches = textMatches.slice(0, limit);

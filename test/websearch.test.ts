@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 
-import { webSearchQuery, buildTabCreateAction, shouldCloseFailedSearchTab, SEARCH_DEPRECATION_WARNING } from "../cli/commands/compound"
+import { webSearchQuery, webSearchTimeout, buildTabCreateAction, shouldCloseFailedSearchTab, SEARCH_DEPRECATION_WARNING } from "../cli/commands/compound"
 import { normalizeArgs } from "../cli/normalize"
 import { handleSearchActions } from "../extension/src/background/capabilities/search"
+import { handleTabActions } from "../extension/src/background/capabilities/tabs"
+import { namedGroups } from "../extension/src/background/tab-group"
 import { needsTab } from "../extension/src/background/no-tab-actions"
 import { classify } from "../cli/mcp/tiers"
 
@@ -10,6 +12,7 @@ const originalChrome = globalThis.chrome
 
 afterEach(() => {
   globalThis.chrome = originalChrome
+  namedGroups.clear()
 })
 
 describe("websearch CLI contract", () => {
@@ -21,6 +24,15 @@ describe("websearch CLI contract", () => {
 
   test("flags-only input produces an empty query", () => {
     expect(webSearchQuery(normalizeArgs(["websearch", "--text-only", "--no-wait"]))).toBe("")
+  })
+
+  test("accepts only non-negative integer timeouts", () => {
+    expect(webSearchTimeout(["websearch", "query"])).toBe(5000)
+    expect(webSearchTimeout(["websearch", "query", "--timeout", "0"])).toBe(0)
+    expect(webSearchTimeout(["websearch", "query", "--timeout", "9000"])).toBe(9000)
+    expect(webSearchTimeout(["websearch", "query", "--timeout"])).toBeNull()
+    expect(webSearchTimeout(["websearch", "query", "--timeout", "-1"])).toBeNull()
+    expect(webSearchTimeout(["websearch", "query", "--timeout", "later"])).toBeNull()
   })
 
   test("uses the open allocator policy and background-first defaults", () => {
@@ -42,6 +54,44 @@ describe("websearch CLI contract", () => {
     expect(shouldCloseFailedSearchTab(false, "chrome://newtab/")).toBe(true)
     expect(shouldCloseFailedSearchTab(false, "https://provider.example/results")).toBe(false)
     expect(shouldCloseFailedSearchTab(true, "about:blank")).toBe(false)
+  })
+
+  test("revalidates a prepare-only reuse candidate before returning it", async () => {
+    namedGroups.set("search", 44)
+    const get = mock(async (tabId: number) => {
+      if (tabId === 7) throw new Error("tab vanished")
+      return { id: tabId, url: "about:blank" } as chrome.tabs.Tab
+    })
+    const create = mock(async () => ({ id: 8, url: "about:blank" }) as chrome.tabs.Tab)
+    globalThis.chrome = {
+      storage: {
+        session: { get: async () => ({}), set: async () => {}, remove: async () => {} },
+        local: { get: async () => ({}), set: async () => {}, remove: async () => {} }
+      },
+      tabs: {
+        query: async () => [{ id: 7, url: "https://old.example" }],
+        get,
+        create,
+        group: async () => 44
+      },
+      tabGroups: {
+        get: async () => ({ id: 44, title: "interceptor-search" }),
+        query: async () => [],
+        update: async () => ({ id: 44 })
+      }
+    } as unknown as typeof chrome
+
+    const result = await handleTabActions({
+      type: "tab_create",
+      url: "about:blank",
+      group: "search",
+      reuse: true,
+      prepareOnly: true
+    }, 0)
+
+    expect(get).toHaveBeenCalledWith(7)
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(result.data).toMatchObject({ tabId: 8, reused: false })
   })
 
   test("deprecated alias warning is the exact migration guidance", () => {
