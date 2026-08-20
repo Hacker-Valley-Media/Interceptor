@@ -609,8 +609,16 @@ export function activeMonitorTasks(): MonitorTaskMeta[] {
 
 export function resolveMonitorTaskId(taskId?: string): string {
   if (taskId) {
-    if (!readMonitorTaskMeta(taskId)) throw new Error(`task not found: ${taskId}`)
-    return taskId
+    if (readMonitorTaskMeta(taskId)) return taskId
+    // `--task "<name>"` creates a task keyed task-<id> with the given name
+    // stored as `instruction` — resolve that name back to the id so quality/
+    // snapshot/export can be addressed the way the task was created (#218).
+    const byName = listMonitorTasks().filter((task) => task.instruction === taskId)
+    if (byName.length === 1) return byName[0].taskId
+    if (byName.length > 1) {
+      throw new Error(`multiple tasks named '${taskId}': ${byName.map((task) => task.taskId).join(", ")} — pass the taskId`)
+    }
+    throw new Error(`task not found: ${taskId}`)
   }
   const active = activeMonitorTasks()
   if (active.length === 0) throw new Error("no active task; pass --task <taskId>")

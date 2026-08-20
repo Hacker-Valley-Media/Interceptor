@@ -181,12 +181,15 @@ See `permissions.md` for response shape and worked examples.
 ```bash
 interceptor macos monitor start --instruction "..."
 interceptor macos monitor status | list | tail <sid> | tail <sid> --raw
-interceptor macos monitor pause | resume | stop <sid>
+interceptor macos monitor pause | resume | stop [--sid <sid>]
+interceptor macos monitor stop --task <taskId|name>          # epilogue: snapshot + transcript + quality grade
 interceptor macos monitor export <sid>                       # text default
 interceptor macos monitor export <sid> --plan | --with-bodies | --json
 ```
 
 Scope: `--app`, `--apps a,b`, `--all-apps`. Optional sources: `--include clipboard|files|network|log|notifications|speech`, `--frames N`, `--vision-text`, `--watch-path <p>`, `--log-predicate "<NSPredicate>"`.
+
+`--include speech` emits throttled partials plus utterance-final `speech_segment` events (`isFinal: true`, with text) at utterance boundaries. Task verbs (`interceptor monitor task snapshot|quality|diagnose`) accept the task name or id; `quality` synthesizes a missing transcript before grading. Prefer `stop --task` over `stop --sid` — only the task stop runs the epilogue.
 
 ## Overlays + Container + AppIntent
 

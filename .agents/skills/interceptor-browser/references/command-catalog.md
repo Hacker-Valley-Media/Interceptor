@@ -76,7 +76,7 @@ Passive network (preferred over CDP):
 
 ```bash
 interceptor net log [--filter <p>] [--since 30s] [--limit 100]
-interceptor net log --format json|har|pcapng [--out <path>]
+interceptor net log --format json|har|pcapng [--out <path>] [--redact-auth]   # file is 0600; headers kept unless --redact-auth
 interceptor net headers [--filter <p>]
 interceptor net clear
 ```

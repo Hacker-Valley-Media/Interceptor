@@ -10,6 +10,7 @@
  * I/O lives here.
  */
 
+import { writeFileSync, chmodSync } from "node:fs"
 import type { ExportFormat, ExportMetadata, UnifiedCapture } from "./types"
 import { buildHar } from "./har"
 import { buildPcapng } from "./pcapng"
@@ -28,6 +29,39 @@ export type WriteExportOptions = {
   meta: ExportMetadata
   /** Output path. When omitted, writes to stdout (only safe for text formats). */
   out?: string
+  /**
+   * Replace credential-bearing header values with "[redacted]" before
+   * encoding. OFF by default — captured headers are part of the export's
+   * value; pass `net log --redact-auth` when the capture should not carry
+   * live credentials (issue #160).
+   */
+  redactAuth?: boolean
+}
+
+// Header names that carry credentials or session state. Exact set from issue
+// #160 plus a loose name match for the token/secret/session family.
+const REDACT_EXACT = /^(authorization|proxy-authorization|cookie|set-cookie|x-csrf-token|x-api-key)$/i
+const REDACT_LOOSE = /token|secret|session/i
+
+export function redactHeaderRecord(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    out[name] = REDACT_EXACT.test(name) || REDACT_LOOSE.test(name) ? "[redacted]" : value
+  }
+  return out
+}
+
+/**
+ * Shallow-copy captures with credential headers redacted on both sides
+ * (set-cookie lives on the response). The HAR encoder derives its cookies
+ * arrays from these header records, so redacting here empties those too.
+ */
+export function redactCaptures(captures: UnifiedCapture[]): UnifiedCapture[] {
+  return captures.map((c) => ({
+    ...c,
+    requestHeaders: redactHeaderRecord(c.requestHeaders),
+    responseHeaders: redactHeaderRecord(c.responseHeaders),
+  }))
 }
 
 /**
@@ -62,7 +96,8 @@ function stdoutIsTty(): boolean {
  * to fall back to its existing pretty-print pipeline for `format === "text"`.
  */
 export async function writeExport(opts: WriteExportOptions): Promise<number> {
-  const { format, captures, meta, out } = opts
+  const { format, meta, out } = opts
+  const captures = opts.redactAuth ? redactCaptures(opts.captures) : opts.captures
   if (format === "text" || format === "plan") {
     throw new Error(`writeExport does not handle '${format}'; the CLI should branch before reaching here`)
   }
@@ -82,15 +117,23 @@ export async function writeExport(opts: WriteExportOptions): Promise<number> {
     throw new Error(`unknown export format: ${format}`)
   }
 
+  if (out) {
+    // Exports carry captured headers (credentials by default) — keep the file
+    // owner-only. Bun.write has no mode parameter
+    // (docs/bun/docs/runtime/file-io.md), so write through node:fs; the
+    // explicit chmod covers pre-existing files, where writeFileSync's mode
+    // only applies at creation.
+    writeFileSync(out, payload, { mode: 0o600 })
+    chmodSync(out, 0o600)
+    return typeof payload === "string" ? Buffer.byteLength(payload, "utf-8") : payload.byteLength
+  }
+
   // Bun.write signatures (docs/bun/docs/runtime/file-io.md):
   //   Bun.write(path | BunFile | Bun.stdout, string | Uint8Array | ...): Promise<number>
   // `Bun` is available globally in Bun runtime.
   const BunRef = (globalThis as unknown as { Bun?: { write: (dest: unknown, data: unknown) => Promise<number>; stdout: unknown } }).Bun
   if (!BunRef) {
     throw new Error("Bun runtime is required for writeExport")
-  }
-  if (out) {
-    return BunRef.write(out, payload)
   }
   return BunRef.write(BunRef.stdout, payload)
 }

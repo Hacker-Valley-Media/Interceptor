@@ -19,7 +19,7 @@ function parseAt(filtered: string[]): { x?: number; y?: number } {
   return {}
 }
 
-export function parseActionsCommand(filtered: string[]): Action {
+export function parseActionsCommand(filtered: string[], positionalCount?: number): Action {
   const cmd = filtered[0]
 
   switch (cmd) {
@@ -73,7 +73,14 @@ export function parseActionsCommand(filtered: string[]): Action {
       const append = filtered.includes("--append")
       const useOs = hasTrustedFlag(filtered)
       const target = parseElementTarget(filtered[1])
-      const textArgs = filtered.slice(2).filter(a => a !== "--append" && !TRUSTED_FLAG_VALUES.includes(a))
+      // Normalized argv is [cmd, ...positionals, ...flags]; the typed text is
+      // the positional span after the target. Sweeping everything after index 2
+      // used to ingest flags AND their values (`type e1 999 --frame 4897` typed
+      // "999 --frame 4897" — issue #217). The filter fallback keeps direct
+      // callers (tests) that don't pass the boundary working.
+      const textArgs = positionalCount !== undefined
+        ? filtered.slice(2, positionalCount + 1)
+        : filtered.slice(2).filter(a => a !== "--append" && !TRUSTED_FLAG_VALUES.includes(a))
       if (useOs) {
         return { type: "os_type", ...target, text: textArgs.join(" ") }
       } else if (target.semantic) {

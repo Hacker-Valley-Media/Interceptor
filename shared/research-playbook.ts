@@ -161,6 +161,7 @@ INTERCEPTOR VERB COOKBOOK (research mode) — every verb exists today, zero CDP
   Scrape a JS app          interceptor eval --main "(async()=>{ ... })()"
   Grab the API payload     interceptor inspect --net-only   |   interceptor net log --filter <host>
   Capture XHR as JSON      interceptor net log --filter <host> --format json --out <path>
+                           (request auth headers are captured; add --redact-auth to strip credentials)
   Map before crawling      interceptor eval --main "JSON.stringify([...document.querySelectorAll('a[href]')].map(a=>a.href))"
   Pull a binary (PDF)      interceptor eval --main "fetch(url,{headers:{Range:'bytes=0-32767'}})...btoa...chunk"
   Probe before fetching    interceptor eval --main "fetch(url,{headers:{Range:'bytes=0-0'}})  -> content-length/type"

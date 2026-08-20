@@ -1036,6 +1036,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
             r.speechTask = recognizer.recognitionTask(with: req, resultHandler: makeSpeechResultHandler(runtime: r))
             r.speechRingFrameBudget = AVAudioFrameCount(format.sampleRate * 2) // ~2s replay
             scheduleSpeechRestart(runtime: r)
+            scheduleSpeechSilenceFlush(runtime: r)
         }
 
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak r] buffer, _ in
@@ -1066,20 +1067,121 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         return req
     }
 
+    // Buffer-based recognition NEVER finalizes per utterance — Apple:
+    // "for audio buffer–based recognition, recognition does not finish until
+    // [finish()] is called" — so isFinal only fires at our own 55s restarts,
+    // and on-device those finals carry EMPTY text (issue #218: 232 partials,
+    // 2 empty finals at the restart boundaries). Utterance-final events are
+    // therefore synthesized from the latest partial: partials update pending
+    // state (emitted at most 1/s for live tailing), and boundary signals —
+    // recognition metadata (arrives on utterance-complete results), a 3s
+    // silence, a task restart, or stop — flush the pending text as a
+    // speech_segment with isFinal: true.
     private func makeSpeechResultHandler(runtime r: MonitorRuntime) -> (SFSpeechRecognitionResult?, Error?) -> Void {
         return { [weak self, weak r] result, error in
             guard let self = self, let r = r else { return }
             if let res = result {
-                self.recordEvent(runtime: r, event: "speech_segment", data: [
-                    "text": res.bestTranscription.formattedString,
-                    "isFinal": res.isFinal,
-                    "source": "live",
-                ])
+                let text = res.bestTranscription.formattedString
+                if !text.isEmpty {
+                    // Inside the post-metadata grace window the recognizer has
+                    // declared the pending utterance complete; the only
+                    // legitimate change is a tail revision. Anything that does
+                    // not carry the pending stem forward is the next utterance
+                    // beginning (on-device recognition restarts its
+                    // transcription per utterance) — flush the old one first
+                    // so it is never overwritten.
+                    r.speechLock.lock()
+                    let boundary = r.speechBoundaryPending
+                    let pending = r.pendingSpeechText
+                    r.speechLock.unlock()
+                    if boundary, !SpeechUtteranceSegmenter.isRevision(of: pending, incoming: text) {
+                        self.flushPendingUtterance(runtime: r)
+                    }
+                    r.speechLock.lock()
+                    r.pendingSpeechText = text
+                    r.pendingSpeechAt = Date()
+                    let emitPartial = !res.isFinal && Date().timeIntervalSince(r.lastPartialEmitAt) >= 1.0
+                    if emitPartial { r.lastPartialEmitAt = Date() }
+                    r.speechLock.unlock()
+                    if emitPartial {
+                        self.recordEvent(runtime: r, event: "speech_segment", data: [
+                            "text": text,
+                            "isFinal": false,
+                            "source": "live",
+                        ])
+                    }
+                }
+                if res.isFinal {
+                    // finish()/endAudio() final (restart/stop teardown): no
+                    // more results are coming — flush immediately.
+                    self.flushPendingUtterance(runtime: r)
+                } else if res.speechRecognitionMetadata != nil {
+                    // utterance boundary: defer the flush one grace window so
+                    // a revision arriving right behind the metadata result
+                    // still lands in the final (observed: trailing words can
+                    // finalize 0.5-1s after the boundary signal).
+                    self.scheduleUtteranceGraceFlush(runtime: r)
+                }
             }
             if let e = error {
                 self.recordEvent(runtime: r, event: "speech_unavailable", data: ["reason": "\(e.localizedDescription)"])
             }
         }
+    }
+
+    // Emit the pending partial as an utterance-final speech_segment. Clearing
+    // the pending text under the lock is what prevents a double flush (grace
+    // timer vs. restart/stop racing on the same utterance); identical text in
+    // a LATER utterance is a real repeat and is kept.
+    private func flushPendingUtterance(runtime r: MonitorRuntime) {
+        r.speechLock.lock()
+        r.speechBoundaryPending = false
+        r.speechGraceWorkItem?.cancel()
+        r.speechGraceWorkItem = nil
+        let text = r.pendingSpeechText.trimmingCharacters(in: .whitespacesAndNewlines)
+        r.pendingSpeechText = ""
+        r.speechLock.unlock()
+        guard !text.isEmpty else { return }
+        recordEvent(runtime: r, event: "speech_segment", data: [
+            "text": text,
+            "isFinal": true,
+            "source": "live",
+        ])
+    }
+
+    // Defer the boundary flush by one grace window. The work item reads the
+    // CURRENT pending text when it fires, so any revision that arrives during
+    // the window is what gets flushed; a newer boundary or an explicit flush
+    // (restart/stop/reset) cancels it.
+    private func scheduleUtteranceGraceFlush(runtime r: MonitorRuntime) {
+        let work = DispatchWorkItem { [weak self, weak r] in
+            guard let self = self, let r = r else { return }
+            self.flushPendingUtterance(runtime: r)
+        }
+        r.speechLock.lock()
+        r.speechBoundaryPending = true
+        r.speechGraceWorkItem?.cancel()
+        r.speechGraceWorkItem = work
+        r.speechLock.unlock()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    // ~3s of silence ends an utterance: on-device recognition keeps growing
+    // one transcription across pauses, so without this a monologue collapses
+    // into a single giant pending string that only flushes at the restart.
+    private func scheduleSpeechSilenceFlush(runtime r: MonitorRuntime) {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + .seconds(2), repeating: .seconds(2))
+        timer.setEventHandler { [weak self, weak r] in
+            guard let self = self, let r = r else { return }
+            guard r.session.endTime == nil, !r.session.paused else { return }
+            r.speechLock.lock()
+            let stale = !r.pendingSpeechText.isEmpty && Date().timeIntervalSince(r.pendingSpeechAt) >= 3.0
+            r.speechLock.unlock()
+            if stale { self.flushPendingUtterance(runtime: r) }
+        }
+        timer.resume()
+        r.speechSilenceTimer = timer
     }
 
     // restart the recognition task before Apple's ~60s hard limit
@@ -1100,6 +1202,9 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
 
     private func restartSpeechTask(runtime r: MonitorRuntime) {
         guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else { return }
+        // flush BEFORE finish(): the final result finish() produces is empty
+        // on-device, so the pending partial is the utterance's only copy.
+        flushPendingUtterance(runtime: r)
         r.speechTask?.finish()
         r.speechRequest?.endAudio()
         let req = makeSpeechRequest(recognizer: recognizer)
@@ -1128,6 +1233,15 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     private func stopSpeechRecognition(runtime r: MonitorRuntime) {
         r.speechRestartTimer?.cancel()
         r.speechRestartTimer = nil
+        r.speechSilenceTimer?.cancel()
+        r.speechSilenceTimer = nil
+        r.speechLock.lock()
+        r.speechGraceWorkItem?.cancel()
+        r.speechGraceWorkItem = nil
+        r.speechLock.unlock()
+        // the tail of the narration lives only in the pending partial —
+        // flush it before tearing the task down (finish()'s final is empty).
+        flushPendingUtterance(runtime: r)
         r.speechTask?.finish()
         r.speechRequest?.endAudio()
         r.speechEngine?.stop()
