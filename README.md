@@ -340,6 +340,7 @@ bash scripts/uninstall.sh --bridge-only     # Remove only the macOS bridge (down
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `interceptor open <url>` returns `error: timeout: no response for 'tab_create' after 15s` | Browser extension is not loaded — most often because **Developer mode is off** in the target profile. Chromium silently drops `--load-extension` when Dev mode is off. | Open `brave://extensions/` or `chrome://extensions/`, toggle Developer mode ON. Quit the browser fully. Re-run `bash scripts/install.sh` (it will preflight Dev mode and re-launch). |
+| A timeout whose message says `A browser context is connected, so the extension is reachable` | The daemon still holds a live extension connection, so the request itself timed out — usually an oversized or slow response (for `net log`, too many full bodies in one reply). | Narrow the request: `net log --limit 20`, `--since <ts>` to page incrementally, or `--filter <host>`. The extension also budgets `net log` replies to 8 MiB of bodies; entries past the budget come back with `truncated: true` and an empty body. |
 | `interceptor status --verbose` says `extension: not reachable` | Same as above, or extension is registered but the Interceptor extension was disabled in the browser. | Open the extensions page, confirm Interceptor (ID `hkjbaciefhhgekldhncknbjkofbpenng`) is present and enabled. If missing, click **Load unpacked** and select `extension/dist/`. |
 | Chrome's extension error page shows `A preload for ... is found, but is not used because the request credentials mode does not match` attributed to `inject-net.js` | A page-level Chromium preload warning was attributed to Interceptor because the passive network shim calls through to the page's original `fetch()` there. The warning is not the same as an Interceptor connection failure. | Treat it as a site warning unless commands fail. If Interceptor commands fail, check the `extension: not reachable` row above. |
 | `chrome://extensions/` reports the extension as version `0.10.0` while `interceptor --version` reports a higher version | Extension manifest drift fixed in this release — rebuild from current source: `bash scripts/build.sh` then re-run `scripts/install.sh`. | Restart the browser after re-loading the extension so Chromium picks up the bumped manifest. |
@@ -496,7 +497,10 @@ interceptor net log --limit 50              # Max entries (default 100)
 interceptor net clear                        # Flush buffer
 interceptor net headers                      # Captured request headers (CSRF, auth tokens)
 interceptor net headers --filter api         # Filter by URL
+interceptor net log --format json --out api.json          # Export json | har | pcapng (file is created mode 600)
+interceptor net log --format har --out api.har --redact-auth   # Same, credential headers replaced with [redacted]
 ```
+Exports keep the captured request and response headers by default — the auth token is usually the point of the capture — and are written owner-only (`0600`). Pass `--redact-auth` when the file will be shared: `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-CSRF-Token`, `X-API-Key`, and any `token` / `secret` / `session` header become `[redacted]`.
 
 ### Network — Request Overrides (rewrite before send)
 Modify outgoing requests at the JavaScript level. No CDP, no debugger.
@@ -666,6 +670,9 @@ interceptor capabilities                     # Check available input layers
 | `--os` | FALLBACK: use OS-level CGEvent (macOS) when synthetic input is observed to fail. Default to synthetic — the pre-load `userActivation` override + `__interceptor_trust` event marker satisfy most `isTrusted` checks. |
 | `--frame <id>` | Target specific iframe |
 | `--changes` | Include DOM diff in response |
+| `--flag=value`, `--` | `--flag=value` is accepted everywhere; `--` ends flag parsing so a positional may begin with `--` |
+
+Flags are order-independent on browser commands, and **unknown flags are rejected** (exit 1, naming the flag and the command) instead of being ignored — a typo such as `screenshot --out shot.png` no longer looks like a success (`screenshot` writes to disk with `--save`). `INTERCEPTOR_LAX_FLAGS=1` downgrades the rejection to a one-line warning for legacy scripts. `interceptor macos *` and `interceptor ios *` keep their verb-first parsing and are not strict.
 
 ## Browser Recipes
 
@@ -1020,6 +1027,8 @@ interceptor macos monitor export <sid> --json                    # raw NDJSON
 ```
 
 Sessions live at `${INTERCEPTOR_MONITOR_SESSIONS_DIR:-/tmp/interceptor-monitor-sessions}/<sid>/` with `events.jsonl`, `session.json`, optionally `frames/`. Records auto-stop after 24h and rotate `events.jsonl` at 100 MiB.
+
+**Task envelopes and speech.** `--task "<name>"` wraps the session in a task that every `interceptor monitor task *` verb (`snapshot`, `quality`, `diagnose`) accepts by that name or by its generated `task-<id>`. End it with `interceptor macos monitor stop --task <taskId|name>`: that epilogue snapshots the sources, synthesizes the transcript, and grades blueprint readiness. `stop --sid <sid>` ends only the session and prints the owning task plus the two commands that finish it, and `monitor task quality` synthesizes a missing transcript itself before grading. With `--include speech`, live recognition emits throttled partials (`isFinal: false`, at most one per second) and an utterance-final `speech_segment` (`isFinal: true`, with text) at each boundary — recognition metadata, ~3 s of silence, the periodic task restart, or stop — because buffer-based `SFSpeechRecognizer` never finalizes on its own.
 
 Permissions:
 

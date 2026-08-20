@@ -30,6 +30,17 @@ interceptor macos monitor tail --raw            # Raw JSONL
 - A session captures clicks, keystrokes, scrolls, and app switches. App switches generate `app_change` events so the replay plan knows which app each subsequent event belongs to.
 - Input Monitoring permission is required for global key/click capture. Run `interceptor macos trust` before recording.
 
+## Task envelopes and speech
+
+```bash
+interceptor macos monitor start --task "Teach Slack triage" --mode human-teach --app Slack --include speech
+interceptor macos monitor stop --task "Teach Slack triage"   # snapshot + transcript synthesis + quality grade
+interceptor monitor task quality "Teach Slack triage"        # name or task-<id>; synthesizes a missing transcript first
+```
+
+- Stop a task with `--task`, not `--sid`. A sid stop ends the session only; it prints the owning task and the `task snapshot` / `task quality` commands that finish the job.
+- Speech finals are real: `speech_segment` events arrive as throttled partials (`isFinal: false`) and one utterance-final (`isFinal: true`, with text) per utterance — at recognition metadata, ~3 s of silence, the periodic restart, or stop. Grade on the finals.
+
 ## Use replay plans correctly
 
 - Prefer the exported semantic replay commands over raw event streams.

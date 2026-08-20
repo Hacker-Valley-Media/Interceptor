@@ -9,6 +9,7 @@ import { existsSync } from "node:fs"
 import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
 import {
   attachMonitorTaskSource,
+  listMonitorTasks,
   markMonitorTaskSourceAttachFailed,
   resolveOrCreateMonitorTask,
   validateMonitorTaskMode,
@@ -199,6 +200,29 @@ export async function runMacosCommand(
     } catch (err) {
       console.error(`error: ${(err as Error).message}`)
       process.exit(1)
+    }
+  }
+
+  // A sid-addressed stop bypasses the task epilogue above (snapshot +
+  // synthesis + grading), which is why a later `task quality` used to grade an
+  // empty transcript with no pointer to the missing step (#218). Name the
+  // owning task and the path forward.
+  if (action.type === "macos_monitor" && action.sub === "stop" && typeof action.taskRef !== "string") {
+    const sid = typeof action.sid === "string" ? action.sid
+      : typeof (result.data as Record<string, unknown> | undefined)?.sid === "string"
+        ? (result.data as Record<string, unknown>).sid as string
+        : undefined
+    if (sid) {
+      try {
+        const owner = listMonitorTasks().find((task) => task.sourceSessions?.some((s) => s.sid === sid))
+        if (owner) {
+          console.error(
+            `note: session ${sid} belongs to task ${owner.taskId} — ` +
+            `'interceptor macos monitor stop --task ${owner.taskId}' auto-snapshots and grades; ` +
+            `to finish now run 'interceptor monitor task snapshot ${owner.taskId}' then 'interceptor monitor task quality ${owner.taskId}'.`,
+          )
+        }
+      } catch {}
     }
   }
 

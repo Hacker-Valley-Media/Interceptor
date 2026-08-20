@@ -95,6 +95,21 @@ final class MonitorRuntime: @unchecked Sendable {
     // transcript exists even when live Speech-Recognition TCC is denied.
     var speechAudioFile: AVAudioFile?
     var speechCafPath: String?
+    // utterance segmentation state (guarded by speechLock): buffer-based
+    // recognition only delivers isFinal at finish()/endAudio() — and empty
+    // on-device — so utterance-final speech_segment events are synthesized
+    // from the latest partial at boundary signals (recognition metadata,
+    // silence, restart, stop). See MonitorDomain.flushPendingUtterance.
+    var pendingSpeechText: String = ""
+    var pendingSpeechAt: Date = .distantPast
+    var lastPartialEmitAt: Date = .distantPast
+    var lastFlushedSpeechText: String = ""
+    var speechSilenceTimer: DispatchSourceTimer?
+    // metadata marks the utterance boundary, but late revisions can still
+    // arrive right behind it — the flush is deferred by a short grace window
+    // (speechGraceWorkItem) so those revisions make it into the final.
+    var speechBoundaryPending = false
+    var speechGraceWorkItem: DispatchWorkItem?
     #endif
 
     // per-session capture configuration (parsed from monitor start).

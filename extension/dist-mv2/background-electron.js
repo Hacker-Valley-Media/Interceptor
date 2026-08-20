@@ -3601,6 +3601,31 @@ async function injectPageCommNow(tabId) {
 function restorePageCommCaptureConfig() {
   readPageCommConfig().then((config) => config.enabled ? registerPageCommScript(config) : undefined).catch((err) => console.warn("failed to restore page communication capture config:", err.message));
 }
+var NET_LOG_BODY_BUDGET_BYTES = 8 * 1024 * 1024;
+function budgetNetLogEntries(entries, budgetBytes = NET_LOG_BODY_BUDGET_BYTES) {
+  const out = new Array(entries.length);
+  let used = 0;
+  let over = false;
+  for (let i = entries.length - 1;i >= 0; i--) {
+    const entry = entries[i];
+    if (!over) {
+      let size = 0;
+      try {
+        size = JSON.stringify(entry).length;
+      } catch {
+        size = 0;
+      }
+      used += size;
+      if (used <= budgetBytes) {
+        out[i] = entry;
+        continue;
+      }
+      over = true;
+    }
+    out[i] = typeof entry.body === "string" && entry.body.length > 0 ? { ...entry, body: "", truncated: true } : entry;
+  }
+  return out;
+}
 async function handlePassiveNetActions(action, tabId) {
   switch (action.type) {
     case "net_log": {
@@ -3613,7 +3638,7 @@ async function handlePassiveNetActions(action, tabId) {
         return { success: false, error: result.error || "failed to get passive net log" };
       let entries = result.data || [];
       const limit = action.limit || 100;
-      entries = entries.slice(-limit);
+      entries = budgetNetLogEntries(entries.slice(-limit));
       return { success: true, data: entries };
     }
     case "page_comm_log": {

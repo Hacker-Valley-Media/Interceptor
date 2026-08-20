@@ -61,6 +61,35 @@ export function restorePageCommCaptureConfig(): void {
     .catch((err) => console.warn("failed to restore page communication capture config:", (err as Error).message))
 }
 
+// A net_log reply travels extension→daemon→CLI; every hop caps its frame at
+// 64 MiB (native messaging, daemon WS maxPayloadLength, CLI frame guard) and
+// an over-cap reply dies SILENTLY as a generic transport timeout (issue #161).
+// Budget the serialized body content well under those caps: newest entries
+// keep their bodies, older ones past the budget are blanked with an honest
+// per-entry `truncated` marker (url/status/headers/meta stay intact, so counts
+// and shapes are stable). `--since` remains the way to page full bodies.
+export const NET_LOG_BODY_BUDGET_BYTES = 8 * 1024 * 1024
+
+export function budgetNetLogEntries(entries: unknown[], budgetBytes = NET_LOG_BODY_BUDGET_BYTES): unknown[] {
+  const out = new Array<unknown>(entries.length)
+  let used = 0
+  let over = false
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i] as Record<string, unknown>
+    if (!over) {
+      let size = 0
+      try { size = JSON.stringify(entry).length } catch { size = 0 }
+      used += size
+      if (used <= budgetBytes) { out[i] = entry; continue }
+      over = true
+    }
+    out[i] = typeof entry.body === "string" && entry.body.length > 0
+      ? { ...entry, body: "", truncated: true }
+      : entry
+  }
+  return out
+}
+
 export async function handlePassiveNetActions(
   action: { type: string; [key: string]: unknown },
   tabId: number
@@ -75,7 +104,7 @@ export async function handlePassiveNetActions(
       if (!result.success) return { success: false, error: result.error || "failed to get passive net log" }
       let entries = result.data || []
       const limit = (action.limit as number) || 100
-      entries = entries.slice(-limit)
+      entries = budgetNetLogEntries(entries.slice(-limit))
       return { success: true, data: entries }
     }
 

@@ -103,7 +103,10 @@ export function parseNetworkCommand(filtered: string[]): Action {
             since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : undefined,
             limit: filtered.includes("--limit") ? parseInt(filtered[filtered.indexOf("--limit") + 1]) : undefined,
             format: formatRaw,
-            out: filtered.includes("--out") ? filtered[filtered.indexOf("--out") + 1] : undefined
+            out: filtered.includes("--out") ? filtered[filtered.indexOf("--out") + 1] : undefined,
+            // exports keep captured auth headers by default; this opt-in
+            // strips credentials from the encoded output (issue #160).
+            redactAuth: filtered.includes("--redact-auth") || undefined
           }
         }
         case "clear":

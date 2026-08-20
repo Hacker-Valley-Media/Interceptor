@@ -44,7 +44,7 @@ import { runExtensionsCommand } from "./commands/extensions"
 import { runDaemonCommand } from "./commands/daemon"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs } from "./global-flags"
-import { normalizeArgs } from "./normalize"
+import { normalizeArgsSplit } from "./normalize"
 
 // console.log must not be used for CLI output: Bun's console.log writer
 // silently drops everything past 64 KiB at exit when stderr and stdout share
@@ -190,8 +190,10 @@ async function main() {
   // rewrite argv to [cmd, ...positionals, ...flags] so flag
   // position never changes meaning (e.g. `open --text-only <url>` used to
   // create a tab whose URL was literally "--text-only"). macos/ios pass
-  // through untouched — see cli/normalize.ts.
-  filtered = normalizeArgs(filtered)
+  // through untouched — see cli/normalize.ts. positionalCount marks where the
+  // positional span ends so text-sweeping parsers (type) never ingest flags.
+  const normalized = normalizeArgsSplit(filtered)
+  filtered = normalized.argv
 
   // Per-command --help / -h short-circuit. `interceptor open --help` prints
   // the open-specific help block; `interceptor --help` (no command) falls
@@ -398,7 +400,7 @@ async function main() {
   }
 
   if (STATE_CMDS.has(cmd))       action = parseStateCommand(filtered)
-  else if (ACTION_CMDS.has(cmd)) action = parseActionsCommand(filtered)
+  else if (ACTION_CMDS.has(cmd)) action = parseActionsCommand(filtered, normalized.positionalCount)
   else if (NAV_CMDS.has(cmd))    action = parseNavigationCommand(filtered)
   else if (TAB_CMDS.has(cmd))    action = await parseTabsCommand(filtered)
   else if (NET_CMDS.has(cmd))    action = parseNetworkCommand(filtered)
@@ -583,6 +585,7 @@ async function main() {
             comment: `net log buffer dump (${captures.length} entries)`,
           },
           out: action.out as string | undefined,
+          redactAuth: action.redactAuth === true,
         })
         // pcapng with --out: also report saved path. har/json with --out: same. Both go to stderr so stdout stays clean.
         if (action.out) process.stderr.write(`saved: ${action.out}\n`)
@@ -613,6 +616,16 @@ async function main() {
       }
     }
 
+    // A background router older than this CLI forwards unrecognized action
+    // types to the content script, which answers "unknown action type: <t>" —
+    // the stale-extension-snapshot symptom after a pkg install (the running
+    // browser keeps the old service worker until reloaded). Label it.
+    if (!result.success && typeof result.error === "string" && result.error.startsWith("unknown action type:")) {
+      process.stderr.write(
+        `hint: the browser may be running an older Interceptor extension snapshot than this CLI (${VERSION}). ` +
+        `Run 'interceptor reload' (or reload the extension in the browser) and retry.\n`,
+      )
+    }
     console.log(formatResult(result, jsonMode))
   } catch (err) {
     console.error(`error: ${(err as Error).message}`)

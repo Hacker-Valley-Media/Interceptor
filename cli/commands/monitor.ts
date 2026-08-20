@@ -808,12 +808,15 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
         }
       }
       if (op === "snapshot") {
-        const taskId = filtered[3]
-        if (!taskId) {
+        const taskRef = filtered[3]
+        if (!taskRef) {
           console.error("error: interceptor monitor task snapshot requires <taskId>")
           process.exit(1)
         }
         try {
+          // accept the task's name (instruction) as well as its id — the id is
+          // generated, the name is what the user typed at start (#218).
+          const taskId = resolveMonitorTaskId(taskRef)
           const manifest = snapshotMonitorTaskSources(taskId)
           if (jsonMode) console.log(JSON.stringify(manifest, null, 2))
           else console.log(`snapshotted ${manifest.filter((entry) => entry.status === "present").length} source artifacts for task ${taskId}`)
@@ -824,12 +827,29 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
         }
       }
       if (op === "quality" || op === "diagnose") {
-        const taskId = filtered[3]
-        if (!taskId) {
+        const taskRef = filtered[3]
+        if (!taskRef) {
           console.error(`error: interceptor monitor task ${op} requires <taskId>`)
           process.exit(1)
         }
         try {
+          const taskId = resolveMonitorTaskId(taskRef)
+          // quality only READS the transcript/segments files; without this,
+          // grading a task whose synthesis never ran (e.g. stopped via
+          // `stop --sid`, which skips the task epilogue) reported
+          // "transcript segments: 0" no matter what the sources hold (#218).
+          if (readMonitorTaskTranscriptSegments(taskId).length === 0) {
+            const meta = readMonitorTaskMeta(taskId)
+            if (meta && meta.sourceSessions.length > 0) {
+              try {
+                synthesizeMonitorTaskTranscript(taskId)
+                const segmentCount = readMonitorTaskTranscriptSegments(taskId).length
+                console.error(`synthesized transcript (${segmentCount} segments) — quality reflects current sources`)
+              } catch {
+                // fall through to plain grading; the report's findings explain what's missing
+              }
+            }
+          }
           const report = generateMonitorTaskCaptureQuality(taskId)
           if (jsonMode) console.log(JSON.stringify(report, null, 2))
           else console.log(renderMonitorTaskQualitySummary(taskId))

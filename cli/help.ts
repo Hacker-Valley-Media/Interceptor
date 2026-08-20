@@ -159,6 +159,7 @@ const MAP_FOOTER = `LOCAL (no browser needed):
 GLOBAL FLAGS (any command, any position — flag order never changes meaning):
   --json  --context <id>  --tab <id>  --group <label>  --frame <id>  --all-surfaces
   e.g. 'open --text-only <url>' ≡ 'open <url> --text-only'
+  unknown flags are rejected (exit 1) on browser commands; INTERCEPTOR_LAX_FLAGS=1 downgrades to a warning
 
 Docs & issues: https://github.com/Hacker-Valley-Media/Interceptor`
 
@@ -330,6 +331,8 @@ Passive Network (always-on, no CDP):
   interceptor net log --filter <pattern>     Filter by URL substring
   interceptor net log --since <timestamp>    Entries after timestamp
   interceptor net log --limit <n>            Max entries (default 100)
+  interceptor net log --format json|har|pcapng --out <path>   Export the buffer (file is created mode 600)
+  interceptor net log --format har --out <path> --redact-auth Same, credential headers replaced with [redacted]
   interceptor net clear                      Flush passive capture buffer
   interceptor net monitor on [--reload]      Arm WebSocket/Beacon/BroadcastChannel capture
   interceptor net monitor off                Disable dynamic page-communication capture
@@ -415,8 +418,8 @@ Recording (Session Monitor):
   interceptor monitor status [--all]            Show status of current/all monitor sessions
   interceptor monitor status --task <taskId>    Show task envelope status
   interceptor monitor task attach <taskId> <sid> Attach an existing source session
-  interceptor monitor task snapshot <taskId>    Snapshot source artifacts under the task root
-  interceptor monitor task quality <taskId>     Show task capture readiness gates
+  interceptor monitor task snapshot <taskId|name>  Snapshot source artifacts under the task root
+  interceptor monitor task quality <taskId|name>   Show task capture readiness gates (synthesizes a missing transcript first)
   interceptor monitor task compile-blueprint <taskId>  Enforce blueprint-readiness gate
   interceptor monitor list                      List all sessions in the event log
   interceptor monitor tail [--raw] [--current]  Live tail current session (pretty by default)
@@ -585,6 +588,7 @@ macOS Bridge (full install only):
                                   [--watch-path <path>] [--watch-paths p1,p2,...]
                                   [--log-predicate "<NSPredicate format>"]
   interceptor macos monitor stop | pause | resume | status [--sid <sid>]
+  interceptor macos monitor stop --task <taskId|name>       Stop the task envelope: snapshot + transcript + quality grade
   interceptor macos monitor tail [--sid <sid>] [--limit N] [--raw]
   interceptor macos monitor list
   interceptor macos monitor export <sid> [--plan|--json] [--limit N]
