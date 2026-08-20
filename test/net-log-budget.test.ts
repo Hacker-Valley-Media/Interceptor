@@ -53,6 +53,17 @@ describe("budgetNetLogEntries (#161)", () => {
     expect(out[0].requestHeaders).toEqual({})
   })
 
+  test("budget is measured in UTF-8 bytes, not UTF-16 code units", () => {
+    // 600 CJK code units = 1,800 UTF-8 bytes; a code-unit measure would
+    // wave this through a 1,000-byte budget.
+    const cjk = { ...entry("cjk", 0), body: "漢".repeat(600) }
+    const out = budgetNetLogEntries([cjk], 1_000) as Array<Record<string, unknown>>
+    expect(out[0].body).toBe("")
+    expect(out[0].truncated).toBe(true)
+    const ascii = entry("ascii", 600)
+    expect((budgetNetLogEntries([ascii], 1_000) as Array<Record<string, unknown>>)[0].body).toHaveLength(600)
+  })
+
   test("bodyless entries never gain a truncated marker", () => {
     const bare = { url: "b", method: "GET", status: 204, body: "", type: "fetch", timestamp: 1 }
     const out = budgetNetLogEntries([entry("big", 5_000), bare], 1_000) as Array<Record<string, unknown>>

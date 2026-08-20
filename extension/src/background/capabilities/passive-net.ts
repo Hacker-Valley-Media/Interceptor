@@ -64,11 +64,14 @@ export function restorePageCommCaptureConfig(): void {
 // A net_log reply travels extension→daemon→CLI; every hop caps its frame at
 // 64 MiB (native messaging, daemon WS maxPayloadLength, CLI frame guard) and
 // an over-cap reply dies SILENTLY as a generic transport timeout (issue #161).
-// Budget the serialized body content well under those caps: newest entries
+// Budget the serialized UTF-8 bytes well under those caps: newest entries
 // keep their bodies, older ones past the budget are blanked with an honest
 // per-entry `truncated` marker (url/status/headers/meta stay intact, so counts
 // and shapes are stable). `--since` remains the way to page full bodies.
 export const NET_LOG_BODY_BUDGET_BYTES = 8 * 1024 * 1024
+// The caps are byte caps; String.length counts UTF-16 code units, which
+// undercounts multibyte bodies by up to 3x.
+const utf8 = new TextEncoder()
 
 export function budgetNetLogEntries(entries: unknown[], budgetBytes = NET_LOG_BODY_BUDGET_BYTES): unknown[] {
   const out = new Array<unknown>(entries.length)
@@ -78,7 +81,7 @@ export function budgetNetLogEntries(entries: unknown[], budgetBytes = NET_LOG_BO
     const entry = entries[i] as Record<string, unknown>
     if (!over) {
       let size = 0
-      try { size = JSON.stringify(entry).length } catch { size = 0 }
+      try { size = utf8.encode(JSON.stringify(entry)).byteLength } catch { size = 0 }
       used += size
       if (used <= budgetBytes) { out[i] = entry; continue }
       over = true

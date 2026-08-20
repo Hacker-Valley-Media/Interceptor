@@ -229,6 +229,13 @@ export function normalizeArgsSplit(filtered: string[]): NormalizedArgs {
       }
       if (eq > 2) {
         if (vf.has(name)) { flags.push(name, tok.slice(eq + 1)); continue }
+        if (bf.has(name) || GLOBAL_BOOLEAN_FLAGS.has(name)) {
+          // A boolean flag with a value would travel as one raw token no
+          // parser recognizes — `net log --redact-auth=true` would export
+          // credentials unredacted and exit 0. Never legal, so no lax mode.
+          console.error(`error: flag '${name}' for '${cmd}' does not take a value (use '${name}').`)
+          process.exit(1)
+        }
         flags.push(tok)
         continue
       }

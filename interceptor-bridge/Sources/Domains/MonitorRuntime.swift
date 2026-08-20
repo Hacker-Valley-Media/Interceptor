@@ -103,7 +103,6 @@ final class MonitorRuntime: @unchecked Sendable {
     var pendingSpeechText: String = ""
     var pendingSpeechAt: Date = .distantPast
     var lastPartialEmitAt: Date = .distantPast
-    var lastFlushedSpeechText: String = ""
     var speechSilenceTimer: DispatchSourceTimer?
     // metadata marks the utterance boundary, but late revisions can still
     // arrive right behind it — the flush is deferred by a short grace window

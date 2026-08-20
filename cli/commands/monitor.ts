@@ -810,7 +810,7 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
       if (op === "snapshot") {
         const taskRef = filtered[3]
         if (!taskRef) {
-          console.error("error: interceptor monitor task snapshot requires <taskId>")
+          console.error("error: interceptor monitor task snapshot requires <taskId|name>")
           process.exit(1)
         }
         try {
@@ -829,7 +829,7 @@ export async function parseMonitorCommand(filtered: string[], jsonMode = false):
       if (op === "quality" || op === "diagnose") {
         const taskRef = filtered[3]
         if (!taskRef) {
-          console.error(`error: interceptor monitor task ${op} requires <taskId>`)
+          console.error(`error: interceptor monitor task ${op} requires <taskId|name>`)
           process.exit(1)
         }
         try {

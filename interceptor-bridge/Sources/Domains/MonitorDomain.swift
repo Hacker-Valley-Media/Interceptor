@@ -1083,20 +1083,18 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
             if let res = result {
                 let text = res.bestTranscription.formattedString
                 if !text.isEmpty {
-                    // Inside the post-metadata grace window, a partial whose
-                    // FIRST WORD differs from the pending utterance is the next
-                    // utterance beginning (on-device recognition resets its
-                    // transcription per utterance) — flush the old one now so
-                    // it is not overwritten. First-word compare, not prefix:
-                    // the recognizer revises tail words mid-utterance, and a
-                    // strict prefix test would over-split on those revisions.
+                    // Inside the post-metadata grace window the recognizer has
+                    // declared the pending utterance complete; the only
+                    // legitimate change is a tail revision. Anything that does
+                    // not carry the pending stem forward is the next utterance
+                    // beginning (on-device recognition restarts its
+                    // transcription per utterance) — flush the old one first
+                    // so it is never overwritten.
                     r.speechLock.lock()
                     let boundary = r.speechBoundaryPending
-                    let pendingFirst = r.pendingSpeechText.split(separator: " ").first
+                    let pending = r.pendingSpeechText
                     r.speechLock.unlock()
-                    if boundary, let pendingFirst,
-                       let incomingFirst = text.split(separator: " ").first,
-                       incomingFirst != pendingFirst {
+                    if boundary, !SpeechUtteranceSegmenter.isRevision(of: pending, incoming: text) {
                         self.flushPendingUtterance(runtime: r)
                     }
                     r.speechLock.lock()
@@ -1131,9 +1129,10 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
-    // Emit the pending partial as an utterance-final speech_segment. Empty or
-    // consecutive-duplicate text is dropped (a metadata flush followed by the
-    // restart's isFinal would otherwise double-record the same utterance).
+    // Emit the pending partial as an utterance-final speech_segment. Clearing
+    // the pending text under the lock is what prevents a double flush (grace
+    // timer vs. restart/stop racing on the same utterance); identical text in
+    // a LATER utterance is a real repeat and is kept.
     private func flushPendingUtterance(runtime r: MonitorRuntime) {
         r.speechLock.lock()
         r.speechBoundaryPending = false
@@ -1141,10 +1140,8 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         r.speechGraceWorkItem = nil
         let text = r.pendingSpeechText.trimmingCharacters(in: .whitespacesAndNewlines)
         r.pendingSpeechText = ""
-        let duplicate = text == r.lastFlushedSpeechText
-        if !text.isEmpty && !duplicate { r.lastFlushedSpeechText = text }
         r.speechLock.unlock()
-        guard !text.isEmpty, !duplicate else { return }
+        guard !text.isEmpty else { return }
         recordEvent(runtime: r, event: "speech_segment", data: [
             "text": text,
             "isFinal": true,

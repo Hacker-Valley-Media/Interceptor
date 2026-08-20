@@ -3602,6 +3602,7 @@ function restorePageCommCaptureConfig() {
   readPageCommConfig().then((config) => config.enabled ? registerPageCommScript(config) : undefined).catch((err) => console.warn("failed to restore page communication capture config:", err.message));
 }
 var NET_LOG_BODY_BUDGET_BYTES = 8 * 1024 * 1024;
+var utf8 = new TextEncoder;
 function budgetNetLogEntries(entries, budgetBytes = NET_LOG_BODY_BUDGET_BYTES) {
   const out = new Array(entries.length);
   let used = 0;
@@ -3611,7 +3612,7 @@ function budgetNetLogEntries(entries, budgetBytes = NET_LOG_BODY_BUDGET_BYTES) {
     if (!over) {
       let size = 0;
       try {
-        size = JSON.stringify(entry).length;
+        size = utf8.encode(JSON.stringify(entry)).byteLength;
       } catch {
         size = 0;
       }

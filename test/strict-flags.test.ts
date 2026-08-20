@@ -50,6 +50,17 @@ describe("strict unknown-flag rejection (#212)", () => {
     expect(errors.join("\n")).toContain("unknown flag '--bogus=1' for 'open'")
   })
 
+  test("a boolean flag given a value is rejected — net log --redact-auth=true must not export unredacted", () => {
+    expect(() => normalizeArgs(["net", "log", "--redact-auth=true"])).toThrow("__exit_1")
+    expect(errors.join("\n")).toContain("flag '--redact-auth' for 'net' does not take a value")
+  })
+
+  test("global booleans reject values too, and lax mode does not soften it", () => {
+    process.env.INTERCEPTOR_LAX_FLAGS = "1"
+    expect(() => normalizeArgs(["open", "--json=1", "https://example.com"])).toThrow("__exit_1")
+    expect(errors.join("\n")).toContain("does not take a value")
+  })
+
   test("INTERCEPTOR_LAX_FLAGS=1 downgrades to a warning and keeps going", () => {
     process.env.INTERCEPTOR_LAX_FLAGS = "1"
     const argv = normalizeArgs(["screenshot", "--zzz-lax-flag"])
