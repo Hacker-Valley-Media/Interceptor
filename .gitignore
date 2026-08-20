@@ -8,6 +8,9 @@ extension/dist/
 extension/dist-safari/
 daemon/interceptor-daemon
 daemon/*.exe
+# Live images moved aside by build.sh's prepare_windows_outputs (Windows locks a
+# running .exe against write/delete but allows rename). Reaped on a later build.
+daemon/*.exe.old-*
 daemon/.generated/
 *.log
 /tmp/

@@ -9,7 +9,10 @@
  * in the wild: a ~/.codex/skills/interceptor copy six weeks behind the pkg).
  *
  * Per-skill selection, whole-folder links: one symlink per skill directory.
- * A real directory at the destination is NEVER replaced without --force.
+ * A real directory at the destination is NEVER replaced without --force, and a
+ * directory whose name differs from the skill's only by case is never replaced
+ * at all — on a case-insensitive filesystem that destination belongs to someone
+ * else (see classifyLink / "name-collision").
  */
 
 import {
@@ -25,7 +28,7 @@ const SKILLS_REFRESH_MARKER_DARWIN = "/Library/Application Support/Interceptor/.
 const HINT_FLAG_FILE = join(tmpdir(), "interceptor-skills-hint.flag")
 const HINT_WINDOW_MS = 24 * 60 * 60 * 1000
 
-export type LinkState = "linked" | "stale-copy" | "foreign" | "missing"
+export type LinkState = "linked" | "stale-copy" | "foreign" | "name-collision" | "missing"
 
 export type SkillTarget = {
   id: string
@@ -110,10 +113,33 @@ export function detectedTargets(home = homedir(), env: Record<string, string | u
 
 // ── classification ────────────────────────────────────────────────────────────
 
+/**
+ * The name the destination directory actually holds on disk, or null when
+ * nothing there matches. Windows and default-configured APFS are
+ * case-INSENSITIVE, so `lstat(".../skills/interceptor")` happily resolves an
+ * on-disk `Interceptor/` belonging to someone else. `readdir` reports the true
+ * casing, which is the only way to tell the two apart.
+ */
+function onDiskEntryName(targetDir: string, skillName: string): string | null {
+  try {
+    const entries = readdirSync(targetDir)
+    if (entries.includes(skillName)) return skillName
+    const lower = skillName.toLowerCase()
+    return entries.find(e => e.toLowerCase() === lower) ?? null
+  } catch {
+    return null
+  }
+}
+
 export function classifyLink(targetDir: string, skillName: string, srcDir: string): LinkState {
   const dst = join(targetDir, skillName)
   let st
   try { st = lstatSync(dst) } catch { return "missing" }
+  // A hit whose real casing differs is a DIFFERENT skill that the filesystem
+  // merely folded onto our name. We never created it (link names always come
+  // from the pack's own readdir), so we must not unlink or delete it.
+  const actual = onDiskEntryName(targetDir, skillName)
+  if (actual && actual !== skillName) return "name-collision"
   if (st.isSymbolicLink()) {
     try {
       if (realpathSync(dst) === realpathSync(srcDir)) return "linked"
@@ -130,6 +156,8 @@ export type AdoptResult = {
   target: string
   skill: string
   action: "linked" | "already-linked" | "skipped" | "replaced-copy" | "error"
+  /** Pre-adopt classification. Two skips are not the same: only "stale-copy" is --force-able. */
+  state?: LinkState
   detail?: string
 }
 
@@ -192,6 +220,16 @@ export function adoptSkill(target: SkillTarget, skill: SkillInfo, force: boolean
   try {
     mkdirSync(target.dir, { recursive: true })
     if (state === "linked") return { target: target.id, skill: skill.name, action: "already-linked" }
+    if (state === "name-collision") {
+      // Not force-overridable by design: on a case-insensitive filesystem the
+      // colliding directory is another author's skill, and --force would rmSync
+      // hand-edited work with no recovery path.
+      const actual = onDiskEntryName(target.dir, skill.name)
+      return {
+        target: target.id, skill: skill.name, action: "skipped", state,
+        detail: `${join(target.dir, actual ?? skill.name)} already exists with different casing — a separate skill, not a stale copy of '${skill.name}'. Not replaced (not even with --force). Rename or remove it yourself if you want this one linked.`,
+      }
+    }
     if (state === "foreign") {
       // ln -sfn semantics: replacing a symlink (even one pointing elsewhere)
       // destroys no data — the target directory is untouched.
@@ -199,7 +237,7 @@ export function adoptSkill(target: SkillTarget, skill: SkillInfo, force: boolean
     } else if (state === "stale-copy") {
       if (!force) {
         return {
-          target: target.id, skill: skill.name, action: "skipped",
+          target: target.id, skill: skill.name, action: "skipped", state,
           detail: `${dst} is a real directory (stale copy?) — re-run with --force to replace it with a link`,
         }
       }
@@ -260,7 +298,9 @@ export function maybeEmitSkillsHint(argv: string[], env: Record<string, string |
     if (!summary.packDir || summary.targets.length === 0) return
     const gaps: string[] = []
     for (const t of summary.targets) {
-      const unlinked = Object.entries(t.states).filter(([, st]) => st !== "linked")
+      // name-collision is excluded: `adopt` will never link it, so counting it
+      // here would nag every 24h about something the suggested command can't fix.
+      const unlinked = Object.entries(t.states).filter(([, st]) => st !== "linked" && st !== "name-collision")
       if (unlinked.length > 0) {
         gaps.push(`${t.id}: ${unlinked.length} of ${t.total} not linked`)
       }
@@ -337,6 +377,10 @@ export function runSkillsCommand(filtered: string[], jsonMode: boolean): null {
       console.log(`${t.id} (${t.dir}): ${t.linked}/${t.total} linked`)
       for (const [name, st] of Object.entries(t.states)) {
         console.log(`  ${st === "linked" ? "✓" : st === "missing" ? "·" : "!"} ${name}: ${st}`)
+        if (st === "name-collision") {
+          const actual = onDiskEntryName(t.dir, name)
+          console.log(`      '${actual}' already occupies this name (case-only difference) — adopt leaves it alone, --force included`)
+        }
       }
     }
     return null
@@ -426,8 +470,11 @@ export function runSkillsCommand(filtered: string[], jsonMode: boolean): null {
         const mark = r.action === "error" ? "✗" : r.action === "skipped" ? "!" : "✓"
         console.log(`${mark} ${r.target}/${r.skill}: ${r.action}${r.detail ? ` — ${r.detail}` : ""}`)
       }
-      const skipped = results.filter(r => r.action === "skipped").length
-      if (skipped) console.log(`\n${skipped} destination(s) were real directories — re-run with --force to replace them with links.`)
+      const staleCopies = results.filter(r => r.action === "skipped" && r.state === "stale-copy").length
+      const collisions = results.filter(r => r.action === "skipped" && r.state === "name-collision").length
+      if (staleCopies) console.log(`\n${staleCopies} destination(s) were real directories — re-run with --force to replace them with links.`)
+      // Deliberately not offered as a --force candidate: --force refuses these.
+      if (collisions) console.log(`\n${collisions} destination(s) collide with an existing skill by case only. --force will not touch them — rename or remove the existing directory first.`)
     }
     if (results.some(r => r.action === "error")) process.exit(1)
     return null
