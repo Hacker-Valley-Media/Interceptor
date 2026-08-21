@@ -67,10 +67,39 @@ enum Platform {
     // the path, so the pid file always names the current owner. An older
     // instance that exits later (an orphan from a pre-0.23.24 install being
     // killed) must not take the live bridge's files with it.
-    static func cleanup(socketPath: String = bridgeSocketPath, pidPath: String = bridgePidPath) {
+    static func cleanup(socketPath: String = bridgeSocketPath, pidPath: String = bridgePidPath, lockPath: String = bridgeLockPath) {
+        // The ownership read and the unlinks are serialized with a starting
+        // instance's pid publication + socket bind by the lifecycle lock, so an
+        // exiting instance cannot slip between a newcomer's pid write and its
+        // bind. Non-blocking with a short retry: cleanup also runs from signal
+        // handlers, and leaving the files behind is the benign failure mode.
+        guard let fd = acquireLifecycleLock(path: lockPath, timeout: 2.0) else { return }
+        defer { releaseLifecycleLock(fd) }
         guard ownsBridgeFiles(pidPath: pidPath) else { return }
         unlink(socketPath)
         unlink(pidPath)
+    }
+
+    static let bridgeLockPath = "/tmp/interceptor-bridge.lock"
+
+    /// Advisory `flock` guarding the pid-file + socket-path lifecycle. Returns
+    /// the held descriptor, or nil if the lock could not be taken in time.
+    static func acquireLifecycleLock(path: String = bridgeLockPath, timeout: TimeInterval) -> Int32? {
+        let fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { return nil }
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return fd }
+            if errno != EWOULDBLOCK { break }
+            usleep(20_000)
+        } while Date() < deadline
+        Darwin.close(fd)
+        return nil
+    }
+
+    static func releaseLifecycleLock(_ fd: Int32) {
+        flock(fd, LOCK_UN)
+        Darwin.close(fd)
     }
 
     static func ownsBridgeFiles(pidPath: String = bridgePidPath, selfPid: pid_t = ProcessInfo.processInfo.processIdentifier) -> Bool {

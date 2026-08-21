@@ -200,7 +200,7 @@ export function formatBridgeUnavailableError(
 export function formatBridgeDisconnectedError(actionType: string): string {
   return `bridge disconnected while handling '${actionType}': the interceptor-bridge process exited or crashed mid-request. ` +
     `Check 'interceptor status'; if it crashed, the report is in ~/Library/Logs/DiagnosticReports/interceptor-bridge-*.ips. ` +
-    `The LaunchAgent restarts it automatically; retry in a few seconds.`
+    `The daemon reconnects as soon as the bridge is back (the LaunchAgent restarts it on full installs); retry in a few seconds.`
 }
 
 export type PendingBridgeRequest = {
