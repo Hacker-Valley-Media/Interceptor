@@ -13,7 +13,7 @@ interceptor macos act <ref> "hello"            # AX value-set (no focus change)
 interceptor macos inspect                      # Tree + apps + frontmost info
 ```
 
-Updating Interceptor itself from an agent: `interceptor update`, then `interceptor macos read --app interceptor-bridge`, then `interceptor macos act <ref>` on the "Install Update" button and, once Sparkle has downloaded, on the "Install and Relaunch" button. The last step raises a macOS administrator prompt that a person must answer (package installs always do); do not try to drive that dialog.
+Updating Interceptor itself from an agent: `interceptor update`, then `interceptor macos read --app interceptor-bridge`, then `interceptor macos act <ref>` on the "Install Update" button. Once Sparkle has downloaded, run `interceptor macos read --app interceptor-bridge` again (the alert changed, so the earlier ref is stale) and `act` the "Install and Relaunch" button. The last step raises a macOS administrator prompt that a person must answer (package installs always do); do not try to drive that dialog.
 
 ## Apps + Windows
 
