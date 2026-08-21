@@ -5,6 +5,16 @@ import Sparkle
 
 Platform.log("interceptor-bridge starting")
 Platform.cleanupSocket()
+// Lifecycle lock: held from pid publication through the socket bind (released
+// after `transport.start()` below) so an exiting older instance's cleanup can
+// never interleave with this instance taking ownership of the files.
+guard let lifecycleLockFD = Platform.acquireLifecycleLock(timeout: 5.0) else {
+    // Another instance is mid-start or mid-cleanup for longer than either
+    // ever takes. Starting unguarded would reopen the ownership race; exit
+    // non-zero instead so launchd's KeepAlive retries in a few seconds.
+    Platform.log("could not acquire the bridge lifecycle lock within 5 s; exiting so launchd retries")
+    exit(1)
+}
 Platform.writePID()
 
 let router = Router()
@@ -147,6 +157,7 @@ router.register("share", handler: shareDomain)
 do {
     let transport = try Transport(router: router)
     transport.start()
+    Platform.releaseLifecycleLock(lifecycleLockFD)
 } catch {
     Platform.log("failed to start transport: \(error)")
     exit(1)
