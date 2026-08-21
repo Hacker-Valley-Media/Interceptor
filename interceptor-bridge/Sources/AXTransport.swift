@@ -58,6 +58,10 @@ protocol AXTransport: Sendable {
 // method is a faithful, thin wrapper over the AX C function — no policy, no
 // budget, no decoding lives here. Budgets/deadlines/codec are layered above it
 // (a later layer) precisely because this seam exists.
+//
+// One deliberate exception (issue #222): the two mutating calls marshal to the
+// main thread when the element belongs to THIS process. That is a correctness
+// requirement of the call itself, not verb policy; see `onMainIfSelfTargeted`.
 struct LiveAXTransport: AXTransport {
     func createApplication(pid: pid_t) -> AXUIElement {
         AXUIElementCreateApplication(pid)
@@ -105,7 +109,7 @@ struct LiveAXTransport: AXTransport {
     }
 
     func setAttributeValue(_ element: AXUIElement, _ attribute: String, _ value: CFTypeRef) -> AXError {
-        AXUIElementSetAttributeValue(element, attribute as CFString, value)
+        onMainIfSelfTargeted(element) { AXUIElementSetAttributeValue(element, attribute as CFString, value) }
     }
 
     func copyParameterizedAttributeNames(_ element: AXUIElement) -> (AXError, [String]?) {
@@ -133,7 +137,7 @@ struct LiveAXTransport: AXTransport {
     }
 
     func performAction(_ element: AXUIElement, _ action: String) -> AXError {
-        AXUIElementPerformAction(element, action as CFString)
+        onMainIfSelfTargeted(element) { AXUIElementPerformAction(element, action as CFString) }
     }
 
     func copyElementAtPosition(_ application: AXUIElement, x: Float, y: Float) -> (AXError, AXUIElement?) {
@@ -176,5 +180,40 @@ struct LiveAXTransport: AXTransport {
 
     func isProcessTrustedWithOptions(_ options: CFDictionary) -> Bool {
         AXIsProcessTrustedWithOptions(options)
+    }
+
+    // Issue #222. An AX mutation whose target is *this* process is executed
+    // synchronously on the calling thread by HIServices (there is no IPC hop
+    // for our own pid), so it runs our own AppKit code (Sparkle's update
+    // alert, overlay panels) on a Transport worker queue. AppKit requires the
+    // main thread for that and traps otherwise (EXC_BREAKPOINT, "Must only be
+    // used from the main thread"). Marshal only when the element is ours;
+    // foreign pids keep the plain cross-process call. `sync` keeps the
+    // synchronous AXError return every caller relies on; the main queue is
+    // thread-bound so the body really runs on the main thread.
+    // ponytail: unbounded main.sync; add a semaphore + timeout if a wedged
+    // main thread ever shows up in the field (the CLI's 15 s timeout surfaces
+    // it today, same as any other hung bridge request).
+    private func onMainIfSelfTargeted(_ element: AXUIElement, _ body: () -> AXError) -> AXError {
+        guard AXSelfTargetPolicy.needsMainThreadMarshal(
+            elementPid: AXSelfTargetPolicy.pid(of: element),
+            selfPid: getpid(),
+            isMainThread: Thread.isMainThread
+        ) else { return body() }
+        return DispatchQueue.main.sync(execute: body)
+    }
+}
+
+// Pure decision behind `LiveAXTransport.onMainIfSelfTargeted`, split out so the
+// rule is unit-testable without a live window: marshal iff the element's owning
+// pid is this process and we are not already on the main thread.
+enum AXSelfTargetPolicy {
+    static func pid(of element: AXUIElement) -> pid_t? {
+        var p: pid_t = 0
+        return AXUIElementGetPid(element, &p) == .success ? p : nil
+    }
+
+    static func needsMainThreadMarshal(elementPid: pid_t?, selfPid: pid_t, isMainThread: Bool) -> Bool {
+        elementPid == selfPid && !isMainThread
     }
 }

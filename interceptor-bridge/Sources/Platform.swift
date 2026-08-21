@@ -62,9 +62,21 @@ enum Platform {
         unlink(bridgeSocketPath)
     }
 
-    static func cleanup() {
-        unlink(bridgeSocketPath)
-        unlink(bridgePidPath)
+    // Only the latest-started instance owns the socket path and pid file: every
+    // instance writes its pid (main.swift) before Transport unlinks + rebinds
+    // the path, so the pid file always names the current owner. An older
+    // instance that exits later (an orphan from a pre-0.23.24 install being
+    // killed) must not take the live bridge's files with it.
+    static func cleanup(socketPath: String = bridgeSocketPath, pidPath: String = bridgePidPath) {
+        guard ownsBridgeFiles(pidPath: pidPath) else { return }
+        unlink(socketPath)
+        unlink(pidPath)
+    }
+
+    static func ownsBridgeFiles(pidPath: String = bridgePidPath, selfPid: pid_t = ProcessInfo.processInfo.processIdentifier) -> Bool {
+        guard let raw = try? String(contentsOfFile: pidPath, encoding: .utf8) else { return true }
+        let owner = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return owner.isEmpty || owner == "\(selfPid)"
     }
 
     static func emitEvent(_ event: String, data: [String: Any] = [:]) {

@@ -19,7 +19,7 @@ import {
 } from "../shared/monitor-artifacts"
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
 import { claimContextId, type ContextSocket } from "./context-registration"
-import { formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
+import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 import { clearDaemonRuntimeFiles, clearLockFile, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
 import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 import { VERSION } from "../cli/version"
@@ -117,7 +117,7 @@ async function spawnBridge(): Promise<boolean> {
   bridgeSpawnAttempted = true
   try {
     const layout = readBridgeRecoveryLayout()
-    const actions = getBridgeRecoveryActions(layout, existsSync)
+    const actions = getBridgeRecoveryActions(layout, existsSync, { launchAgentLoaded: isLaunchAgentBootstrapped() })
     if (actions.length === 0) {
       log("bridge binary not found — cannot auto-spawn")
       return false
@@ -168,7 +168,9 @@ async function connectBridge(): Promise<boolean> {
           processBridgeBuffer()
         },
         close() {
-          log("bridge disconnected")
+          // Issue #222: fail in-flight requests now, not at the CLI's timeout.
+          const failed = failPendingBridgeRequests(bridgePending)
+          log(`bridge disconnected${failed ? ` (failed ${failed} in-flight request(s))` : ""}`)
           bridgeSocket = null as any
           bridgeConnecting = false
           // Schedule reconnect

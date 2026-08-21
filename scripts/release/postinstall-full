@@ -86,6 +86,21 @@ refresh_interceptor_bridge() {
     fi
   fi
 
+  # Installs before 0.23.24 could leave a second, unsupervised bridge running
+  # (the daemon's old recovery ladder `open`ed the bundle while launchd was
+  # throttled). It never appears in the pid file, so stop every remaining
+  # interceptor-bridge for this user before the supervised one is bootstrapped.
+  local leftover=""
+  for leftover in $(pgrep -u "$TARGET_UID" -x interceptor-bridge 2>/dev/null || true); do
+    log_install "stopping leftover interceptor-bridge pid=$leftover before LaunchAgent bootstrap"
+    kill "$leftover" 2>/dev/null || true
+  done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -u "$TARGET_UID" -x interceptor-bridge >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+  pkill -KILL -u "$TARGET_UID" -x interceptor-bridge 2>/dev/null || true
+
   rm -f "$BRIDGE_PID_PATH" "$BRIDGE_SOCKET_PATH" 2>/dev/null || true
 }
 

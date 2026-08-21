@@ -93,4 +93,15 @@ final class SparkleUpdaterDelegate: NSObject, SPUUpdaterDelegate {
     func allowedChannels(for updater: SPUUpdater) -> Set<String> {
         return ["full"]
     }
+
+    // The pkg postinstall bootstraps + kickstarts the LaunchAgent, which is the
+    // only supervised owner of the bridge process. Sparkle's own stage-3
+    // relaunch (Autoupdate `relaunchApplication`) would start a second,
+    // unsupervised instance that survives the next install and leaves the Mac
+    // with two bridges (observed after a Sparkle update). Sparkle still quits
+    // the bridge for the bundle swap (stage 2, `BridgeAppDelegate`); only the
+    // relaunch is declined.
+    func updaterShouldRelaunchApplication(_ updater: SPUUpdater) -> Bool {
+        return false
+    }
 }

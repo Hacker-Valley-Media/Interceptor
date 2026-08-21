@@ -83,9 +83,9 @@ Two core installers ship per release, plus an optional Safari add-on. Pick the c
 
 Both download from the same [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases) page. Start with **Browser** unless you know you need native macOS commands — you can always upgrade to Full later via `interceptor upgrade --full`.
 
-**Updating:** run `interceptor update` — it fires a user-initiated update check and immediately shows the update prompt when a new version exists (`interceptor update status` shows the feed and schedule). Full installs also auto-check in the background via Sparkle.
+**Updating:** run `interceptor update` — it fires a user-initiated update check and immediately shows the update prompt when a new version exists (`interceptor update status` shows the feed and schedule). Full installs also auto-check in the background via Sparkle. An agent can drive the prompt like any other window (`interceptor macos tree --app interceptor-bridge`, then `macos act <ref>` on **Install Update**); the final install step always asks for an administrator password, which a person must enter.
 
-**Windows (browser-only):** a signed per-user installer (`Interceptor-Browser-<version>-windows-{x64,arm64}.exe`, Windows 11 24H2+) is in preparation — see [docs/windows-install.md](docs/windows-install.md) for the install, silent-install, upgrade, and uninstall contract. Windows extension acquisition is store-based (Chrome Web Store for Chrome/Brave, Edge Add-ons for Edge); the installer never edits browser profiles or force-loads an unpacked extension. Until the signed installer ships, Windows developers can build from source with `scripts/install.ps1` (PowerShell 7, source checkout).
+**Windows (browser-only):** a signed per-user installer (`Interceptor-Browser-<version>-windows-{x64,arm64}.exe`, Windows 11 24H2+) is attached to each [release](https://github.com/Hacker-Valley-Media/Interceptor/releases) — see [docs/windows-install.md](docs/windows-install.md) for the install, silent-install, upgrade, and uninstall contract. Windows extension acquisition is store-based (Chrome Web Store for Chrome/Brave, Edge Add-ons for Edge); the installer never edits browser profiles or force-loads an unpacked extension. Windows developers can also build from source with `scripts/install.ps1` (PowerShell 7, source checkout).
 
 ### Install steps
 
