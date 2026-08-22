@@ -120,6 +120,22 @@ help: tasks create --title "..." [--body "..."]
 
 Every operation must be completable with flags alone. If a required value is missing, fail immediately with a clear error — don't prompt for it. Suppress prompts from wrapped tools.
 
+### Fail loud on unrecognized input
+
+Reject unknown flags and arguments — never silently ignore them. A dropped flag is worse than an error: the agent gets plausible-looking output it believes is scoped or filtered, then proceeds confidently on wrong data. This is the same guarantee a CLI already owes for an unknown _command_; extend it to flags.
+
+```
+$ tasks list --stat closed
+error: unknown flag --stat for `list`
+help: valid flags for `list`: --state, --assignee, --limit (--help always allowed)
+```
+
+- **Validate before any dependency call**, with exit code 2 — the same as a missing required flag. Each command declares its own known flags; an unrecognized one is rejected by name and the command's valid flags are listed.
+- **`--help` always passes** — it's the one universal flag. Beyond it, a CLI may standardize its own always-allowed globals (e.g. an `--account` selector); whatever the set, those flags pass on every command and are never reported as unknown.
+- **Renamed or removed flags get a targeted hint**, not the generic list — point at what replaced them (`--status was renamed; use --state instead`) so the agent self-corrects in one step.
+- **Per-subcommand flag sets.** For grouped nouns where one command dispatches to subcommands (a `list` vs a `create` under the same noun), validate against the _subcommand's_ flags — they differ, and only the subcommand layer knows which is in play.
+- **Make the error self-correcting in one turn.** The agent's deterministic next move after an unknown-flag error is to run `<command> --help` (e.g. `tasks list --help`) — so fold that lookup into the error: list the valid flags inline, or print the command's concise `--help` block directly beneath it. Per §4 the expensive cost is the follow-up call, and per §10 per-command help is already concise, so inlining it collapses the two-turn correction into one.
+
 ### Output channels
 
 - **stdout**: all structured output the agent consumes — data, errors, suggestions
@@ -128,14 +144,14 @@ Every operation must be completable with flags alone. If a required value is mis
 
 Never mix progress messages into stdout. An agent that reads "Fetching data..." will try to interpret it as data.
 
-## 7. Ambient context via session hooks
+## 7. Ambient context via session integrations
 
 Register your tool into the agent's session lifecycle so every conversation starts with relevant state already visible — before the agent takes any action.
 
 **Pattern:**
 
-1. On first invocation, self-install hooks into the agent's configuration (idempotently)
-2. At session start, a hook runs your tool and outputs a compact dashboard to stdout
+1. Provide an explicit setup command that installs or repairs a session hook or plugin after user intent is clear
+2. At session start, the integration runs your tool and provides a compact dashboard as context
 3. The agent receives this as initial context and can act immediately
 
 ```
@@ -151,10 +167,10 @@ help[2]:
 
 **Rules:**
 
-- **Default app targets**: by default, support Claude Code and Codex. Do not hard-code a single agent integration when the tool can reasonably support both
-- **Self-installing**: register hooks at global/user level on first run — no manual setup required
+- **Default app targets**: by default, support Claude Code, Codex, and OpenCode. Do not hard-code a single agent integration when the tool can reasonably support multiple agents
+- **Explicit opt-in**: register hooks or plugins only from a user-invoked setup command, not from ordinary CLI commands
 - **Portable commands**: hook commands should use a PATH-verified binary name when it resolves to the current executable, and fall back to the full absolute path otherwise. This keeps global installs portable while ensuring hooks do not accidentally run a different binary
-- **Path repair**: on every invocation, check existing hooks and update the executable path if it has changed (e.g., after reinstall or relocation). This turns self-install into self-heal
+- **Path repair**: setup commands should check existing hooks and update the executable path if it has changed (e.g., after reinstall or relocation)
 - **Idempotent**: repeated installs with the same path are silent no-ops
 - **Directory-scoped**: show only state relevant to the current working directory
 - **Token-budget-aware**: this context loads on _every_ session — ruthlessly minimize it. Include just enough for the agent to orient and act; deep data belongs in explicit invocations
@@ -163,7 +179,25 @@ help[2]:
 **How to integrate with each app:**
 
 - **Claude Code**: use native hooks in `~/.claude/settings.json` or project `.claude/settings.json`. Prefer `SessionStart` to inject compact context via stdout
-- **Codex**: use native hooks in `~/.codex/hooks.json` or `<repo>/.codex/hooks.json`, and ensure `[features].codex_hooks = true` in `config.toml`. Prefer `SessionStart` for ambient context via stdout
+- **Codex**: use native hooks in `~/.codex/hooks.json` or `<repo>/.codex/hooks.json`, and ensure `[features].hooks = true` in `config.toml`. Prefer `SessionStart` for ambient context via stdout
+- **OpenCode**: use a managed plugin in `~/.config/opencode/plugins/` or `<repo>/.opencode/plugins/`. Prefer ambient system-context injection for the home view rather than adding a custom tool
+
+**Also ship an installable skill (secondary recommendation):**
+
+The session hook is the primary integration, but it only helps agents whose harness supports hooks, and it loads on _every_ session.
+Offer an installable [Agent Skill](https://agentskills.io) as a secondary discovery path.
+It loads on demand when the agent recognizes a matching task, carries no per-session token cost, and works in any agent that supports the skill format.
+Recommend the hook first (ambient context plus live state) and the skill second (lower overhead, broader agent support) - they are complementary, and a user installs whichever fits, or both.
+
+```sh
+npx skills add <owner>/<repo> --skill <name>
+```
+
+- **Single source of truth**: generate `SKILL.md` from the same content your no-args home view prints, so the skill never drifts from the CLI's own guidance. Add a `--check` build step to CI that fails if the committed skill is stale
+- **Strip live state**: a skill is static, so omit dynamic data (open sessions, current items) that only the hook can show
+- **Non-interactive commands**: rewrite command examples to a form the agent can run without a global install (e.g. `npx -y mytool ...`), since a skill may be installed without the binary on PATH
+- **Trigger-shaped frontmatter**: include `name` and a `description` written as a trigger — terse and outcome-focused so the agent loads it on the right intent
+- **Document both paths**: in your README, present the hook and the skill as two ways to achieve the same thing, and make clear the user only needs one
 
 ## 8. Content first
 
@@ -211,3 +245,29 @@ description: Manage project tasks in the current workspace
 ```
 
 Every subcommand should support `--help` with a concise, complete reference: available flags with defaults, required arguments, and 2-3 usage examples. Keep it focused on the requested subcommand — don't dump the entire CLI's manual.
+
+### Identify yourself instantly: the `--version` fast path
+
+`-v`, `-V`, and `--version` must all print the bare version and exit 0. Agents and their harnesses probe `--version` constantly - to confirm a tool is installed, to check whether a fix has shipped, to decide whether to suggest `update`. That makes latency an ergonomics property, not just a perf tweak: a probe that takes 80 ms is 80 ms of every session start, paid before any useful work happens.
+
+The trap is ESM static imports. If `bin/<tool>.js` statically imports the module that builds the command graph, every dependency in that graph is fully evaluated _before_ the version check runs. One heavy import anywhere in the tree - an SDK, a server framework - is then paid on every `--version`.
+
+Answer the version before the graph loads: keep the version in a leaf module that imports only node builtins, and defer the real CLI to a dynamic `import()`.
+
+```js
+#!/usr/bin/env node
+import { tryFastPath } from "axi-sdk-js/fast-path";
+import { VERSION } from "../src/version.js"; // leaf module - node builtins only
+
+if (!tryFastPath(process.argv.slice(2), { version: VERSION })) {
+  const { main } = await import("../src/cli.js"); // heavy graph loads only here
+  await main();
+}
+```
+
+`axi-sdk-js/fast-path` is a dedicated subpath export that imports nothing at all, so pulling it in never drags in `runAxiCli` or its dependencies. `tryFastPath` handles only a bare, single-argument version flag and returns `false` for everything else, so all other argv - including version flags in trailing positions - falls through to `runAxiCli`, which stays the single owner of the general case. Its accepted flags and output are identical to the SDK's own version handling, so adopting it changes nothing an agent can observe except the latency.
+
+Two things keep this honest:
+
+- The version must come from a **leaf** module. If `VERSION` is defined inside `cli.ts`, importing it re-pulls the whole graph and the fast path buys nothing.
+- Guard it with a test that measures the version path against the `node -e "console.log(1)"` floor measured in the same process, rather than an absolute millisecond budget that goes flaky across machines.

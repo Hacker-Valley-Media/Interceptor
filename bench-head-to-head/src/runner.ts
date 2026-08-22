@@ -14,7 +14,7 @@ import type { AgentFinalMessage, BenchConfig, ConditionDef, RunEnvironment, RunR
 function environment(config: BenchConfig): RunEnvironment {
   const interceptorStatus = shellResult("interceptor status")
   const axiHelp = shellResult("chrome-devtools-axi --version")
-  const browser = shellResult("interceptor tabs --json")
+  const browser = shellResult(`interceptor${config.conditions.interceptor.context ? ` --context ${config.conditions.interceptor.context}` : ""} tabs --json`)
   const axiCommit = process.env.AXI_REPO_PATH
     ? shellResult("git rev-parse HEAD", { cwd: process.env.AXI_REPO_PATH }).stdout.trim() || undefined
     : undefined
@@ -57,6 +57,7 @@ function codexCommand(config: BenchConfig, condition: ConditionDef, task: TaskDe
     `--sandbox ${config.models.agent.sandbox}`,
     `-c 'approval_policy=\"${config.models.agent.approvalPolicy}\"'`,
     `-c 'model=\"${config.models.agent.model}\"'`,
+    `-c 'model_reasoning_effort=\"${config.models.agent.reasoningEffort}\"'`,
     `--output-schema ${schemaPath(config.models.agent.outputSchema)}`,
     `-o ${outputPath}`,
     JSON.stringify(prompt),
@@ -110,7 +111,7 @@ export function runOne(spec: RunSpec, config = loadConfig()): RunResult {
   try {
     startCondition(condition)
     runPreflight(condition)
-    if (config.runPolicy.freshStatePerRun && condition.id === "interceptor") resetInterceptorManagedTabs()
+    if (config.runPolicy.freshStatePerRun && condition.id === "interceptor") resetInterceptorManagedTabs(condition.context)
   } catch (error) {
     setupError = error instanceof Error ? error.message : String(error)
   }

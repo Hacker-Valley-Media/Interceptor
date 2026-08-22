@@ -28,6 +28,7 @@ export function runJudge(task: TaskDef, final: AgentFinalMessage, models: Models
     `--sandbox ${models.judge.sandbox}`,
     `-c 'approval_policy=\"${models.judge.approvalPolicy}\"'`,
     `-c 'model=\"${models.judge.model}\"'`,
+    `-c 'model_reasoning_effort=\"${models.judge.reasoningEffort}\"'`,
     `--output-schema ${schemaPath(models.judge.outputSchema)}`,
     `-o ${outputPath}`,
     JSON.stringify(prompt),

@@ -1,7 +1,7 @@
 {
   "agent": {
     "provider": "codex",
-    "model": "gpt-5.4",
+    "model": "gpt-5.6-terra",
     "reasoningEffort": "high",
     "sandbox": "danger-full-access",
     "approvalPolicy": "never",
@@ -10,7 +10,7 @@
   },
   "judge": {
     "provider": "codex",
-    "model": "gpt-5.4",
+    "model": "gpt-5.6-terra",
     "reasoningEffort": "high",
     "sandbox": "read-only",
     "approvalPolicy": "never",
@@ -19,6 +19,6 @@
   },
   "costModel": {
     "enabled": false,
-    "reason": "No verified local pricing source for gpt-5.4 was available during implementation; benchmark reports token usage and leaves total_cost_usd null unless configured later."
+    "reason": "No verified local pricing source for gpt-5.6-terra was available during implementation; benchmark reports token usage and leaves total_cost_usd null unless configured later."
   }
 }
