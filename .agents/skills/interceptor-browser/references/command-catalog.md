@@ -169,7 +169,8 @@ For Canva, Google Docs/Slides/Sheets. Run `scene profile` first.
 interceptor scene profile [--verbose]
 interceptor scene list [--type text]
 interceptor scene hit 400 300
-interceptor scene click | dblclick | select | cursor-to <scene-ref>
+interceptor scene click <scene-ref> [--trusted]   # --trusted posts OS-level input for isTrusted-gated canvases
+interceptor scene dblclick | select | cursor-to <scene-ref>
 interceptor scene selected
 interceptor scene text <scene-ref> [--with-html]
 interceptor scene insert "New text"

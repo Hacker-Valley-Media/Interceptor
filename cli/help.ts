@@ -389,7 +389,7 @@ Scene Graph (Rich Editors):
   interceptor scene profile --verbose          Include active capabilities and strategy details
   interceptor scene list                       List scene objects on the current editor surface
   interceptor scene list --type shape          Filter by type (image|shape|text|page|embed|slide)
-  interceptor scene click <id>                 Click a scene object by its scene id
+  interceptor scene click <id> [--trusted]     Click a scene object by its scene id (--trusted posts OS-level input)
   interceptor scene dblclick <id>              Double-click a scene object
   interceptor scene select <id>                Click + verify selection change
   interceptor scene hit <x> <y>                Identify the scene object at viewport coordinates
