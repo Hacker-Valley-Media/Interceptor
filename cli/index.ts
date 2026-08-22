@@ -385,7 +385,7 @@ async function main() {
   }
 
   if (COMPOUND_CMDS.has(cmd)) {
-    await runCompoundCommand(cmd, filtered, { jsonMode, useWs, globalTabId, anyTab, contextId: globalContextId })
+    await runCompoundCommand(cmd, filtered, { jsonMode, useWs, globalTabId, anyTab, contextId: globalContextId, positionalCount: normalized.positionalCount })
     return
   }
 

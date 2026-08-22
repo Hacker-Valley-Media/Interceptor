@@ -586,12 +586,46 @@ export async function runRead(
 
 // ── interceptor act <ref> [value] ───────────────────────────────────────────────────
 
+/**
+ * The text `act <ref> [value]` should type, or undefined when the command is a
+ * click. Normalized argv is [cmd, ...positionals, ...flags], so positionalCount
+ * marks where the positional span ends and the value is everything in it after
+ * the ref.
+ *
+ * This used to reject a hardcoded six-flag list instead, which meant every
+ * OTHER global boolean fell through and became the text to type: `act e1
+ * --json` sent input_text carrying the literal "--json" rather than clicking,
+ * and so did --no-skills-hint / --no-research-hint. Same bug class as issue
+ * #217, which fixed the low-level `type` verb this way.
+ *
+ * The filter fallback keeps direct callers that don't pass the boundary
+ * working; it cannot see global booleans, so prefer passing positionalCount.
+ */
+export function actValue(filtered: string[], positionalCount?: number): string | undefined {
+  let valueArgs: string[]
+  if (positionalCount !== undefined) {
+    valueArgs = filtered.slice(2, positionalCount + 1)
+  } else {
+    const flagSet = new Set(["--trusted", "--os", "--append", "--no-read", "--keys", "--timeout"])
+    valueArgs = []
+    let skip = false
+    for (let i = 2; i < filtered.length; i++) {
+      if (skip) { skip = false; continue }
+      if (filtered[i] === "--timeout" || filtered[i] === "--keys") { skip = true; continue }
+      if (flagSet.has(filtered[i])) continue
+      valueArgs.push(filtered[i])
+    }
+  }
+  return valueArgs.length > 0 ? valueArgs.join(" ") : undefined
+}
+
 export async function runAct(
   filtered: string[],
   globalTabId?: number,
   jsonMode = false,
   useWs = false,
-  contextId?: string
+  contextId?: string,
+  positionalCount?: number
 ): Promise<void> {
   const ref = filtered[1]
   if (!ref) {
@@ -606,17 +640,7 @@ export async function runAct(
   const timeoutIdx = filtered.indexOf("--timeout")
   const timeout = timeoutIdx !== -1 ? parseInt(filtered[timeoutIdx + 1]) : 2000
 
-  // Find value: everything after ref that isn't a flag
-  const flagSet = new Set(["--trusted", "--os", "--append", "--no-read", "--keys", "--timeout"])
-  const valueArgs: string[] = []
-  let skip = false
-  for (let i = 2; i < filtered.length; i++) {
-    if (skip) { skip = false; continue }
-    if (filtered[i] === "--timeout" || filtered[i] === "--keys") { skip = true; continue }
-    if (flagSet.has(filtered[i])) continue
-    valueArgs.push(filtered[i])
-  }
-  const value = valueArgs.length > 0 ? valueArgs.join(" ") : undefined
+  const value = actValue(filtered, positionalCount)
 
   const target = parseElementTarget(ref)
 
@@ -839,14 +863,14 @@ function output(jsonMode: boolean, result: { success: boolean; error?: string; d
 export async function runCompoundCommand(
   cmd: string,
   filtered: string[],
-  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; anyTab?: boolean; contextId?: string }
+  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; anyTab?: boolean; contextId?: string; positionalCount?: number }
 ): Promise<void> {
   switch (cmd) {
     case "open":    return runOpen(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
     case "websearch":
     case "search":  return runWebsearch(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
     case "read":    return runRead(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
-    case "act":     return runAct(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
+    case "act":     return runAct(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId, opts.positionalCount)
     case "inspect":  return runInspect(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
     default:
       console.error(`error: unknown compound command '${cmd}'`)
