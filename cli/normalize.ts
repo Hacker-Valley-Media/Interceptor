@@ -122,9 +122,14 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
 }
 
 // Boolean (valueless) flags per family — the other half of the contract,
-// consulted only by the strict unknown-flag check. Harvested 2026-08-20 from
-// every includes("--x") site in cli/commands/*.ts.
-const COMPOUND_BOOL = ["--activate", "--append", "--full", "--include-frames", "--include-style", "--markdown", "--net-only", "--no-read", "--no-reuse", "--no-wait", "--reuse", "--text-only", "--tree-only"]
+// consulted only by the strict unknown-flag check. Originally harvested
+// 2026-08-20 from every includes("--x") site in cli/commands/*.ts — which
+// missed helper-mediated flags (hasTrustedFlag consumed --trusted/--os in
+// compound's runAct and scene without a literal includes, so 0.23.23 rejected
+// `act --trusted` while help advertised it). The reverse-direction block in
+// test/strict-flags.test.ts now re-harvests module sources over every
+// consumption pattern, so keep it in sync when adding a family here.
+const COMPOUND_BOOL = ["--activate", "--append", "--full", "--include-frames", "--include-style", "--markdown", "--net-only", "--no-read", "--no-reuse", "--no-wait", "--os", "--reuse", "--text-only", "--tree-only", "--trusted"]
 const STATE_BOOL = ["--elements-only", "--full", "--include-frames", "--markdown", "--native", "--text-only"]
 const ACTIONS_BOOL = ["--append", "--dropzone", "--picker", "--trusted", "--os"]
 const TABS_BOOL = ["--incognito"]
@@ -136,7 +141,7 @@ const EVAL_BOOL = ["--main"]
 const SAVE_BOOL = ["--isolated", "--main"]
 const BATCH_BOOL = ["--stop-on-error"]
 const MONITOR_BOOL = ["--force-diagnostic", "--from-start", "--include-synthetic", "--no-regenerate", "--plan", "--raw", "--reload", "--snapshot-sources", "--stop-sources", "--with-bodies"]
-const SCENE_BOOL = ["--save", "--verbose", "--with-html"]
+const SCENE_BOOL = ["--os", "--save", "--trusted", "--verbose", "--with-html"]
 const POWER_BOOL = ["--display", "--follow"]
 const RESEARCH_BOOL = ["--capture", "--full", "--stdin", "--no-research-hint"]
 const SKILLS_BOOL = ["--all", "--force", "--no-skills-hint"]

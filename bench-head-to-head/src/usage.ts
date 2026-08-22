@@ -16,15 +16,72 @@ function emptyTelemetry(): InterceptorTelemetry {
   }
 }
 
+// Codex discloses skills progressively: the agent reads SKILL.md (and sibling
+// reference docs) with cat/sed/head. Those are tool-manual lookups, not browser
+// commands, so they are logged separately and exempt from the command cap and
+// prefix policy. Their tokens still land in input_tokens.
+const VIEWERS = /^(?:cat|sed|head|tail|less|more|grep|rg|wc|ls|find)\b/
+
+// Split a shell string on command separators (newline, ;, &&, ||, |) while
+// respecting single/double quotes — a pipe inside `rg "a|b"` is part of the
+// pattern, not a pipeline stage. Quote-blind splitting shattered such
+// commands and mis-invalidated legitimate skill reads (P3/P7, 2026-08-21).
+function splitShellSegments(inner: string): string[] {
+  const segments: string[] = []
+  let current = ""
+  let quote: string | null = null
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]
+    if (quote) {
+      current += ch
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === "'" || ch === '"') { quote = ch; current += ch; continue }
+    if (ch === "\n" || ch === ";" || ch === "|") {
+      if (ch === "|" && inner[i + 1] === "|") i++
+      segments.push(current)
+      current = ""
+      continue
+    }
+    if (ch === "&" && inner[i + 1] === "&") { i++; segments.push(current); current = ""; continue }
+    current += ch
+  }
+  segments.push(current)
+  return segments.map((part) => part.trim()).filter(Boolean)
+}
+
+export function isSkillRead(command: string): boolean {
+  const inner = command
+    .replace(/^(?:\/bin\/)?(?:zsh|bash|sh) -lc\s+/, "")
+    .replace(/^(["'])([\s\S]*)\1$/, "$2")
+  const segments = splitShellSegments(inner)
+  const isNoise = (part: string) => /^(?:pwd|cd\b|echo\b|true$)/.test(part)
+  // Codex logs re-rendered zsh quoting ('("'^|/)SKILL'"...) that no flat
+  // tokenizer can track; fragments it sheds start with punctuation, while any
+  // real piped/chained command starts with a word or an executable path — so
+  // only fragments that cannot begin a shell word (and path-lookalikes whose
+  // second char is not a path char, e.g. "/)SKILL...") count as continuations
+  // of the previous view. /bin/x, ./x, and ~/x stay commands, so an embedded
+  // interceptor/curl/rm segment still breaks the exemption. The skill marker
+  // is checked on the whole command (SKILL\\?\.md also matches the
+  // regex-escaped form agents pass to rg).
+  const isShrapnel = (part: string) => /^[^a-zA-Z/.~]/.test(part) || /^\/[^a-zA-Z0-9_./]/.test(part)
+  return /\/skills\/|SKILL\\?\.md/.test(inner) &&
+    segments.every((part) => VIEWERS.test(part) || isNoise(part) || isShrapnel(part))
+}
+
 export function parseCodexJsonl(raw: string, wallClockSeconds: number, totalCostUsd: number | null = null): UsageMetrics {
   const telemetry = emptyTelemetry()
   let inputTokens = 0
   let cachedInput = 0
   let outputTokens = 0
+  let reasoningTokens = 0
   let turns = 0
   let commands = 0
   let errors = 0
   const commandLog: string[] = []
+  const skillReadLog: string[] = []
   const toolLog: string[] = []
 
   for (const line of raw.split("\n")) {
@@ -37,15 +94,20 @@ export function parseCodexJsonl(raw: string, wallClockSeconds: number, totalCost
         inputTokens = Number(usage.input_tokens ?? inputTokens)
         cachedInput = Number(usage.cached_input_tokens ?? cachedInput)
         outputTokens = Number(usage.output_tokens ?? outputTokens)
+        reasoningTokens = Number(usage.reasoning_output_tokens ?? reasoningTokens)
       }
       if (entry.type === "turn.failed" || entry.type === "error") errors += 1
       if (entry.type === "item.completed") {
         const item = (entry.item ?? {}) as Record<string, unknown>
         if (item.type === "command_execution" && typeof item.command === "string") {
-          commands += 1
           const command = item.command as string
-          commandLog.push(command)
-          classifyInterceptor(command, telemetry)
+          if (isSkillRead(command)) {
+            skillReadLog.push(command)
+          } else {
+            commands += 1
+            commandLog.push(command)
+            classifyInterceptor(command, telemetry)
+          }
         } else if (typeof item.type === "string" && !["agent_message", "todo_list"].includes(item.type)) {
           toolLog.push(item.type)
         }
@@ -60,19 +122,22 @@ export function parseCodexJsonl(raw: string, wallClockSeconds: number, totalCost
     input_tokens_cached: cachedInput,
     input_tokens_uncached: Math.max(0, inputTokens - cachedInput),
     output_tokens: outputTokens,
-    reasoning_tokens: 0,
+    reasoning_tokens: reasoningTokens,
     total_cost_usd: totalCostUsd,
     wall_clock_seconds: wallClockSeconds,
     turn_count: turns,
     command_count: commands,
     error_count: errors,
     command_log: commandLog,
+    skill_read_log: skillReadLog,
     tool_log: toolLog,
     interceptor_telemetry: telemetry,
   }
 }
 
-function classifyInterceptor(command: string, telemetry: InterceptorTelemetry): void {
+function classifyInterceptor(rawCommand: string, telemetry: InterceptorTelemetry): void {
+  // global value flags (--context chrome, --group x, …) may sit between `interceptor` and the verb
+  const command = rawCommand.replace(/ --(?:context|group|tab|frame) \S+/g, "")
   if (!command.includes("interceptor")) return
   if (/\binterceptor tree\b/.test(command)) telemetry.tree_count += 1
   if (/\binterceptor text\b/.test(command)) telemetry.text_count += 1

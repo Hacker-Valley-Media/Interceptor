@@ -41,7 +41,7 @@ export function startCondition(condition: ConditionDef): void {
 
 export function stopCondition(condition: ConditionDef): void {
   if (condition.id === "interceptor") {
-    resetInterceptorManagedTabs()
+    resetInterceptorManagedTabs(condition.context)
   }
   if (condition.daemon === "explicit" && condition.daemonStop) {
     shellResult(condition.daemonStop)
@@ -103,15 +103,16 @@ function stopProcessOnFixturePort(): void {
   }
 }
 
-export function resetInterceptorManagedTabs(): void {
-  const tabs = shellResult("interceptor tabs --json")
+export function resetInterceptorManagedTabs(context?: string): void {
+  const cli = context ? `interceptor --context ${context}` : "interceptor"
+  const tabs = shellResult(`${cli} tabs --json`)
   if (!tabs.ok) return
   try {
     const parsed = JSON.parse(tabs.stdout) as { data?: Array<{ id: number; managed?: boolean }> }
     for (const tab of parsed.data ?? []) {
-      if (tab.managed) shellResult(`interceptor tab close ${tab.id}`)
+      if (tab.managed) shellResult(`${cli} tab close ${tab.id}`)
     }
   } catch {
   }
-  shellResult("interceptor net clear")
+  shellResult(`${cli} net clear`)
 }

@@ -156,7 +156,7 @@ const CANVAS_HELP = `interceptor scene — adaptive scene access for rich editor
 Usage:
   interceptor scene profile [--verbose]        Show the detected strategy/profile and capabilities
   interceptor scene list [--type <t>]          Enumerate scene objects on the current editor surface
-  interceptor scene click <id>                 Click a scene object by scene id
+  interceptor scene click <id> [--trusted]     Click a scene object by scene id (--trusted posts OS-level input)
   interceptor scene dblclick <id>              Double-click a scene object (enters text edit on Canva/Slides)
   interceptor scene select <id>                Click + verify selection changed
   interceptor scene selected                   Read the current selection label

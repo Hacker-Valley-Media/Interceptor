@@ -21,6 +21,8 @@ export interface ConditionDef {
   name: string
   tool: string
   toolCommand?: string
+  /** browser context id passed as --context on every interceptor command */
+  context?: string
   agentsMd: string
   daemon: "auto" | "explicit"
   daemonStart?: string
@@ -127,6 +129,8 @@ export interface UsageMetrics {
   command_count: number
   error_count: number
   command_log: string[]
+  /** read-only views of skill docs (cat/sed/head … SKILL.md); exempt from the command cap and prefix policy */
+  skill_read_log: string[]
   tool_log: string[]
   interceptor_telemetry?: InterceptorTelemetry
 }

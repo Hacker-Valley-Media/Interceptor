@@ -1,7 +1,7 @@
 source: https://github.com/kunchenguid/axi
 subpath: .agents/skills/axi/SKILL.md
-commit: a7193a0d4143696a969e999bbc1e9463f848005d
-fetched-at: 2026-04-29T07:47:17Z
+commit: 6df2cdcdf7e2823949a37d67377a4c4208e920a9
+fetched-at: 2026-08-21T12:18:48Z
 
 To refresh:
   git clone --depth 1 https://github.com/kunchenguid/axi.git /tmp/axi-skill-tmp

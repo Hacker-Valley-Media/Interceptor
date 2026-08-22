@@ -31,6 +31,7 @@ function usage(commands: string[], toolLog: string[] = []): UsageMetrics {
     command_count: commands.length,
     error_count: 0,
     command_log: commands,
+    skill_read_log: [],
     tool_log: toolLog,
   }
 }

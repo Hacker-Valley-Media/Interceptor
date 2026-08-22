@@ -4,8 +4,9 @@
       "id": "interceptor",
       "name": "interceptor-browser",
       "tool": "interceptor",
-      "toolCommand": "interceptor",
-      "agentsMd": "# interceptor (browser tool for this bench)\n\nYou have a real browser session driven by the `interceptor` CLI. Your operator skill (`interceptor-browser`) is loaded as ambient context — it covers commands, compound flows, screenshot policy, scene-graph workflows, and monitor/replay. Use it.\n\n## Bench constraints\n- Use only `interceptor ...` commands. No curl, wget, python, web search, or other browser tools.\n- Do not read local repo files (fixtures, source, configs, README) — answer from page content only.\n- Cap: 8 commands per task. If you don't have the answer by command 8, return your best answer with what you have.\n- Tab targeting is automatic. Do not call `interceptor status`, `interceptor tabs`, or `interceptor tab switch`.\n- Screenshots only when the task explicitly requires them.\n\n## Final-answer phrasing\n- Use neutral, factual language in your final answer. Phrases like 'failed to', 'unable to', 'cannot', 'couldn't', 'could not', or 'did not' will cause the validator to reject your answer EVEN IF you correctly identified the data. Describe what happened factually instead — e.g., 'the request returned HTTP 404' rather than 'I failed to read the page'; 'the header value is X' rather than 'I could not find the header'.\n",
+      "toolCommand": "interceptor --context chrome",
+      "context": "chrome",
+      "agentsMd": "# interceptor (browser tool for this bench)\n\nYou have a real browser session driven by the `interceptor` CLI. Your operator skill (`interceptor-browser`) is loaded as ambient context — it covers commands, compound flows, screenshot policy, scene-graph workflows, and monitor/replay. Use it.\n\n## Bench constraints\n- Multiple browser profiles are connected. Pass `--context chrome` on EVERY `interceptor` command (never another context id), e.g. `interceptor --context chrome open <url>`.\n- Use only `interceptor ...` commands. No curl, wget, python, web search, or other browser tools.\n- Do not read local repo files (fixtures, source, configs, README) — answer from page content only.\n- Cap: 8 commands per task. If you don't have the answer by command 8, return your best answer with what you have.\n- Reading your skill docs (SKILL.md and its reference files) with cat/sed/head does not count toward the cap.\n- Tab targeting is automatic. Do not call `interceptor status`, `interceptor tabs`, or `interceptor tab switch`.\n- Screenshots only when the task explicitly requires them.\n\n## Final-answer phrasing\n- Use neutral, factual language in your final answer. Phrases like 'failed to', 'unable to', 'cannot', 'couldn't', 'could not', or 'did not' will cause the validator to reject your answer EVEN IF you correctly identified the data. Describe what happened factually instead — e.g., 'the request returned HTTP 404' rather than 'I failed to read the page'; 'the header value is X' rather than 'I could not find the header'.\n",
       "daemon": "auto",
       "healthCommand": "interceptor status",
       "commandPolicy": {
@@ -19,7 +20,7 @@
       "preflight": {
         "commands": [
           "interceptor status",
-          "interceptor open http://127.0.0.1:3241/spa-lab/ --text-only"
+          "interceptor --context chrome open http://127.0.0.1:3241/spa-lab/ --text-only"
         ]
       }
     },
@@ -28,7 +29,7 @@
       "name": "chrome-devtools-axi",
       "tool": "chrome-devtools-axi",
       "toolCommand": "chrome-devtools-axi",
-      "agentsMd": "# chrome-devtools-axi (browser tool for this bench)\n\nYou have a real browser session driven by `chrome-devtools-axi`. The `axi` skill is loaded as ambient context — use what it provides.\n\n## Bench constraints\n- Use only `chrome-devtools-axi ...` commands. No curl, wget, python, web search, or other browser tools.\n- Do not read local repo files (fixtures, source, configs, README) — answer from page content only.\n- Cap: 8 commands per task. If you don't have the answer by command 8, return your best answer with what you have.\n\n## Final-answer phrasing\n- Use neutral, factual language in your final answer. Phrases like 'failed to', 'unable to', 'cannot', 'couldn't', 'could not', or 'did not' will cause the validator to reject your answer EVEN IF you correctly identified the data. Describe what happened factually instead — e.g., 'the request returned HTTP 404' rather than 'I failed to read the page'.\n",
+      "agentsMd": "# chrome-devtools-axi (browser tool for this bench)\n\nYou have a real browser session driven by `chrome-devtools-axi`. The `axi` skill is loaded as ambient context — use what it provides.\n\n## Bench constraints\n- Use only `chrome-devtools-axi ...` commands. No curl, wget, python, web search, or other browser tools.\n- Do not read local repo files (fixtures, source, configs, README) — answer from page content only.\n- Cap: 8 commands per task. If you don't have the answer by command 8, return your best answer with what you have.\n- Reading your skill docs (SKILL.md and its reference files) with cat/sed/head does not count toward the cap.\n\n## Final-answer phrasing\n- Use neutral, factual language in your final answer. Phrases like 'failed to', 'unable to', 'cannot', 'couldn't', 'could not', or 'did not' will cause the validator to reject your answer EVEN IF you correctly identified the data. Describe what happened factually instead — e.g., 'the request returned HTTP 404' rather than 'I failed to read the page'.\n",
       "daemon": "explicit",
       "daemonStart": "chrome-devtools-axi start",
       "daemonStop": "chrome-devtools-axi stop",
