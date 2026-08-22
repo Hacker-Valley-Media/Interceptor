@@ -59,13 +59,14 @@ export function isSkillRead(command: string): boolean {
   const isNoise = (part: string) => /^(?:pwd|cd\b|echo\b|true$)/.test(part)
   // Codex logs re-rendered zsh quoting ('("'^|/)SKILL'"...) that no flat
   // tokenizer can track; fragments it sheds start with punctuation, while any
-  // real piped/chained command starts with a word — so punctuation-leading
-  // fragments are continuations of the previous view, not commands. The skill
-  // marker is checked on the whole command (SKILL\\?\.md also matches the
-  // regex-escaped form agents pass to rg); each segment only has to be a
-  // viewer, noise, or shrapnel — an embedded interceptor/curl/rm segment
-  // still breaks the exemption.
-  const isShrapnel = (part: string) => /^[^a-zA-Z]/.test(part)
+  // real piped/chained command starts with a word or an executable path — so
+  // only fragments that cannot begin a shell word (and path-lookalikes whose
+  // second char is not a path char, e.g. "/)SKILL...") count as continuations
+  // of the previous view. /bin/x, ./x, and ~/x stay commands, so an embedded
+  // interceptor/curl/rm segment still breaks the exemption. The skill marker
+  // is checked on the whole command (SKILL\\?\.md also matches the
+  // regex-escaped form agents pass to rg).
+  const isShrapnel = (part: string) => /^[^a-zA-Z/.~]/.test(part) || /^\/[^a-zA-Z0-9_./]/.test(part)
   return /\/skills\/|SKILL\\?\.md/.test(inner) &&
     segments.every((part) => VIEWERS.test(part) || isNoise(part) || isShrapnel(part))
 }

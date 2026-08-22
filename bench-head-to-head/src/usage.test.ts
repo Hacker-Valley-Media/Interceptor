@@ -18,6 +18,10 @@ const BROWSER = [
   `/bin/zsh -lc 'chrome-devtools-axi open https://example.com && chrome-devtools-axi snapshot'`,
   `/bin/zsh -lc "sed -n '1,40p' /x/skills/axi/SKILL.md && chrome-devtools-axi pages"`,
   `/bin/zsh -lc 'cat /x/bench-head-to-head/fixtures/spa-lab/index.html'`,
+  // path-executed commands chained after a skill read must stay commands, not shrapnel
+  `/bin/zsh -lc 'cat /Users/me/.agents/skills/interceptor-browser/SKILL.md && /bin/interceptor open https://example.com'`,
+  `/bin/zsh -lc 'cat /Users/me/.agents/skills/interceptor-browser/SKILL.md && ./interceptor open https://example.com'`,
+  `/bin/zsh -lc 'cat /Users/me/.agents/skills/interceptor-browser/SKILL.md && ~/bin/interceptor open https://example.com'`,
 ]
 
 describe("isSkillRead", () => {

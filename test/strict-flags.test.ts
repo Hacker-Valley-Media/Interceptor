@@ -124,10 +124,10 @@ const MODULE_COMMANDS: Record<string, string[]> = {
 const UNMAPPED_OK = new Set(["manifest"])
 
 const CONSUMPTION_PATTERNS = [
-  /\.includes\(\s*"(--[a-z][a-z-]*)"\s*\)/g,
-  /\.indexOf\(\s*"(--[a-z][a-z-]*)"\s*\)/g,
-  /flagPresent\([^,]+,\s*"(--[a-z][a-z-]*)"\s*\)/g,
-  /flagValue\([^,]+,\s*"(--[a-z][a-z-]*)"\s*\)/g,
+  /\.includes\(\s*["'](--[a-z][a-z-]*)["']\s*\)/g,
+  /\.indexOf\(\s*["'](--[a-z][a-z-]*)["']\s*\)/g,
+  /flagPresent\([^,]+,\s*["'](--[a-z][a-z-]*)["']\s*\)/g,
+  /flagValue\([^,]+,\s*["'](--[a-z][a-z-]*)["']\s*\)/g,
 ]
 
 describe("every module-consumed flag is declared (reverse direction)", () => {
@@ -153,7 +153,7 @@ describe("every module-consumed flag is declared (reverse direction)", () => {
 
   test("the module map covers every normalized command in the inventory", () => {
     const mapped = new Set(Object.values(MODULE_COMMANDS).flat())
-    const uncovered = Object.keys(FLAG_INVENTORY.boolean)
+    const uncovered = [...new Set([...Object.keys(FLAG_INVENTORY.boolean), ...Object.keys(FLAG_INVENTORY.value)])]
       .filter(c => !mapped.has(c) && !UNMAPPED_OK.has(c))
       .sort()
     expect(uncovered).toEqual([])
