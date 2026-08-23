@@ -1618,13 +1618,14 @@ function healRuntimeFiles(reason: string): string[] {
   try { pidOnDisk = parseDaemonPidFile(readFileSync(PID_PATH, "utf-8")) } catch {}
   if (pidOnDisk !== process.pid) attempt("pid", writePidFile)
   if (!IS_WIN && !existsSync(SOCKET_PATH)) {
-    // Listen anew first, then stop the orphaned listener without closing its
-    // in-flight connections. Bun's stop() never unlinks a unix socket path, so
-    // the new file survives the old listener's shutdown.
+    // Stop the orphaned listener first (without closing its in-flight
+    // connections), then listen anew. Newer Bun releases unlink the listener's
+    // socket path on stop(), which would delete a freshly created file if the
+    // new listener came first; the path is already gone here, so stopping
+    // first is safe on every Bun.
     attempt("socket", () => {
-      const orphaned = socketServer!
+      try { socketServer!.stop() } catch {}
       socketServer = listenCliSocket()
-      try { orphaned.stop() } catch {}
     })
   }
   if (healed.length) log(`restored runtime files (${reason}): ${healed.join(", ")}`)
