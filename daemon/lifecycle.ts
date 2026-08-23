@@ -171,6 +171,22 @@ export function clearDaemonRuntimeFiles(deps: Pick<LifecycleDeps, "unlinkSync" |
   try { deps.unlinkSync(deps.lockPath) } catch {}
 }
 
+// Exit-path cleanup. Only the process that won the singleton gate (the WS
+// port) may remove the runtime files: they were created by, and describe,
+// that winner. A losing duplicate or a native-messaging relay shares this
+// module's exit path — if it unlinks the winner's socket/pid/lock on the way
+// out, the CLI loses track of a live daemon ("daemon not running") while the
+// WS port stays held, and every respawn attempt fails on the port: the
+// unrecoverable "daemon failed to start" deadlock.
+export function cleanupOwnedRuntimeFiles(deps: Pick<LifecycleDeps, "unlinkSync" | "pidPath" | "lockPath" | "socketPath" | "isWin">, ownsRuntimeFiles: boolean): void {
+  if (!ownsRuntimeFiles) return
+  if (!deps.isWin) {
+    try { deps.unlinkSync(deps.socketPath) } catch {}
+  }
+  try { deps.unlinkSync(deps.pidPath) } catch {}
+  try { deps.unlinkSync(deps.lockPath) } catch {}
+}
+
 export function decideDaemonStartupRole(standalone: boolean, state: PidState): StartupDecision {
   if (state.status === "alive") {
     return standalone ? { action: "exit", pid: state.pid } : { action: "relay", pid: state.pid }

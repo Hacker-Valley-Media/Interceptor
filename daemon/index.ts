@@ -20,7 +20,7 @@ import {
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
 import { claimContextId, type ContextSocket } from "./context-registration"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
-import { clearDaemonRuntimeFiles, clearLockFile, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
+import { cleanupOwnedRuntimeFiles, clearDaemonRuntimeFiles, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
 import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 import { VERSION } from "../cli/version"
 import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
@@ -578,6 +578,11 @@ await bootstrapDaemonRole()
 // Losing this race is fatal: exit instead of becoming a second, extension-less singleton.
 let wsServer: ReturnType<typeof Bun.serve> | null = null
 let wsBindError: Error | null = null
+// Flipped to true only after this process wins the singleton gate below. The
+// runtime files (socket, pid, lock) describe the gate winner, so only a
+// process holding this flag may remove them on the way out — see
+// cleanupOwnedRuntimeFiles in ./lifecycle.
+let ownsRuntimeFiles = false
 try {
   assertNoInstallMaintenance()
 } catch (error) {
@@ -595,6 +600,7 @@ if (singletonGate.action === "exit") {
   process.exit(singletonGate.exitCode)
 }
 log(`ws server listening on port ${WS_PORT}`)
+ownsRuntimeFiles = true
 
 // Write lock file — metadata record of this instance, read by `interceptor
 // diagnose` for binary-mismatch detection. Written only after winning the
@@ -1851,18 +1857,14 @@ function gracefulShutdown(signal: string) {
     socketServer = null
   }
   if (wsServer) wsServer.stop(true)
-  try { unlinkSync(SOCKET_PATH) } catch {}
-  try { unlinkSync(PID_PATH) } catch {}
-  try { clearLockFile(LOCK_PATH) } catch {}
+  cleanupOwnedRuntimeFiles(lifecycleDeps(), ownsRuntimeFiles)
   log("shutdown complete")
   process.exit(0)
 }
 
 process.on("exit", (code) => {
   log(`exiting with code ${code}`)
-  try { unlinkSync(SOCKET_PATH) } catch {}
-  try { unlinkSync(PID_PATH) } catch {}
-  try { clearLockFile(LOCK_PATH) } catch {}
+  cleanupOwnedRuntimeFiles(lifecycleDeps(), ownsRuntimeFiles)
 })
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
 process.on("SIGINT", () => gracefulShutdown("SIGINT"))
