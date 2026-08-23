@@ -11,8 +11,8 @@ export type PidState =
 
 export type StartupDecision =
   | { action: "continue" }
-  | { action: "exit"; pid: number }
-  | { action: "relay"; pid: number }
+  | { action: "exit"; pid: number | null }
+  | { action: "relay"; pid: number | null }
   | { action: "spawn" }
   | { action: "clear-and-continue"; reason: string }
   | { action: "clear-and-spawn"; reason: string }
@@ -171,25 +171,38 @@ export function clearDaemonRuntimeFiles(deps: Pick<LifecycleDeps, "unlinkSync" |
   try { deps.unlinkSync(deps.lockPath) } catch {}
 }
 
-// Exit-path cleanup. Only the process that won the singleton gate (the WS
-// port) may remove the runtime files: they were created by, and describe,
-// that winner. A losing duplicate or a native-messaging relay shares this
-// module's exit path — if it unlinks the winner's socket/pid/lock on the way
-// out, the CLI loses track of a live daemon ("daemon not running") while the
-// WS port stays held, and every respawn attempt fails on the port: the
-// unrecoverable "daemon failed to start" deadlock.
-export function cleanupOwnedRuntimeFiles(deps: Pick<LifecycleDeps, "unlinkSync" | "pidPath" | "lockPath" | "socketPath" | "isWin">, ownsRuntimeFiles: boolean): void {
+// Exit-path cleanup, gated on singleton ownership (PR #227). Today every
+// process that reaches the daemon's exit hook has already won the WS-port
+// gate: pid-election losers, gate losers, and native relays all exit before
+// the hook is registered, so `ownsRuntimeFiles` is true whenever this runs.
+// The guard is defensive against a future reordering; the runtime-file wipes
+// that actually strand a live daemon are the pid-file-driven clears in
+// bootstrap and the CLI's ensureDaemon, both of which now consult the port
+// first, and the pkg postinstall, which now removes files only for a dead pid.
+export function cleanupOwnedRuntimeFiles(
+  deps: Pick<LifecycleDeps, "unlinkSync" | "pidPath" | "lockPath" | "socketPath" | "isWin"> & { log?: (msg: string) => void },
+  ownsRuntimeFiles: boolean,
+): void {
   if (!ownsRuntimeFiles) return
-  if (!deps.isWin) {
-    try { deps.unlinkSync(deps.socketPath) } catch {}
-  }
-  try { deps.unlinkSync(deps.pidPath) } catch {}
-  try { deps.unlinkSync(deps.lockPath) } catch {}
+  clearDaemonRuntimeFiles({ ...deps, log: deps.log ?? (() => {}) }, "exit")
 }
 
-export function decideDaemonStartupRole(standalone: boolean, state: PidState): StartupDecision {
+// The pid file is advisory; the WS port is the singleton token (see
+// decideSingletonGate). `portHeld` is the answer from probing that port. While
+// it is held, a live singleton is serving whatever the pid file says, so this
+// process must never clear its runtime files or spawn a rival: relay to it
+// (native) or get out of its way (standalone). A pid that is alive while the
+// port is free is not a daemon (a daemon writes its pid only after binding
+// the port), so it is treated as stale.
+export function decideDaemonStartupRole(standalone: boolean, state: PidState, portHeld = false): StartupDecision {
+  if (portHeld) {
+    const pid = state.status === "alive" || state.status === "stale" ? state.pid : null
+    return standalone ? { action: "exit", pid } : { action: "relay", pid }
+  }
+
   if (state.status === "alive") {
-    return standalone ? { action: "exit", pid: state.pid } : { action: "relay", pid: state.pid }
+    const reason = `pid ${state.pid} alive but the singleton port is free`
+    return standalone ? { action: "clear-and-continue", reason } : { action: "clear-and-spawn", reason }
   }
 
   if (state.status === "stale") {
