@@ -1611,9 +1611,19 @@ function healRuntimeFiles(reason: string): string[] {
       log(`could not restore ${name} (${reason}): ${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  let lockPid: number | undefined
-  try { lockPid = readLockFile(LOCK_PATH)?.pid } catch {}
-  if (lockPid !== process.pid) attempt("lock", () => writeLockFile(LOCK_PATH, daemonIdentity))
+  // The lock is derived from daemonIdentity; any drifted field (pid, port,
+  // shutdown protocol, or token) makes the CLI's authenticated readiness and
+  // `daemon stop` fail, so compare the whole identity, not only the pid.
+  let lockMatches = false
+  try {
+    const lock = readLockFile(LOCK_PATH)
+    lockMatches = !!lock
+      && lock.pid === daemonIdentity.pid
+      && lock.wsPort === daemonIdentity.wsPort
+      && lock.shutdownProtocolVersion === daemonIdentity.shutdownProtocolVersion
+      && lock.shutdownToken === daemonIdentity.shutdownToken
+  } catch {}
+  if (!lockMatches) attempt("lock", () => writeLockFile(LOCK_PATH, daemonIdentity))
   let pidOnDisk: number | null = null
   try { pidOnDisk = parseDaemonPidFile(readFileSync(PID_PATH, "utf-8")) } catch {}
   if (pidOnDisk !== process.pid) attempt("pid", writePidFile)

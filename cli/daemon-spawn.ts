@@ -85,9 +85,8 @@ export function formatMissingDaemonBinaryError(
 // the transport is the socket file; on Windows it is the authenticated lock
 // record (pid, port, shutdown protocol). Never throws; ensureDaemon decides
 // what an unready state means once the port has been asked.
-function readRuntimeReadiness(): { ready: boolean; observedLivePid: number | null } {
+function readRuntimeReadiness(): { ready: boolean } {
   let ready = false
-  let observedLivePid: number | null = null
   if (existsSync(PID_PATH)) {
     try {
       const pidContent = readFileSync(PID_PATH, "utf-8").trim()
@@ -95,7 +94,6 @@ function readRuntimeReadiness(): { ready: boolean; observedLivePid: number | nul
       if (!isNaN(pid)) {
         try {
           process.kill(pid, 0)
-          observedLivePid = pid
           if (IS_WIN) {
             const lock = readLockFile(LOCK_PATH)
             ready = !!lock && lock.pid === pid && lock.wsPort === WS_PORT && lock.shutdownProtocolVersion === 1
@@ -106,7 +104,7 @@ function readRuntimeReadiness(): { ready: boolean; observedLivePid: number | nul
       }
     } catch {}
   }
-  return { ready, observedLivePid }
+  return { ready }
 }
 
 /**
@@ -123,16 +121,13 @@ export async function ensureDaemon(): Promise<void> {
   assertNoInstallMaintenance()
   if (readRuntimeReadiness().ready) return
 
-  // Ask the port first: a live owner rewrites a missing or foreign lock/pid
-  // while answering, so the Windows inconsistent-lock failure below is only
-  // raised after the owner had its chance to heal.
+  // Ask the port: a live owner rewrites a missing or drifted lock/pid while
+  // answering, and the probe alone decides what follows. A live pid in the
+  // pid file proves nothing (pids are reused), so it never blocks a spawn on
+  // a free port; an owner that answered but still left the files unready is
+  // reported by decideDaemonRecovery.
   const probe = await probeDaemonHealth(WS_PORT)
-  const healed = readRuntimeReadiness()
-  if (healed.ready) return
-  if (IS_WIN && healed.observedLivePid) {
-    throw new Error(`daemon pid ${healed.observedLivePid} is alive but its authenticated lock/readiness record is missing or inconsistent; run 'interceptor diagnose'`)
-  }
-  const recovery = decideDaemonRecovery(probe, false, WS_PORT, LOG_PATH)
+  const recovery = decideDaemonRecovery(probe, readRuntimeReadiness().ready, WS_PORT, LOG_PATH)
   if (recovery.action === "connect") return
   if (recovery.action === "fail") {
     console.error(`error: ${recovery.message}`)
