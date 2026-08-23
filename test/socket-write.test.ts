@@ -69,15 +69,34 @@ describe("socketWriteAll / drainSocketQueue (unit)", () => {
   })
 
   test("a throwing socket does not lose the queue until released", () => {
-    const sock = fakeSocket([1])
+    // Queue a tail, then make the SAME socket throw: drain must swallow the
+    // throw (close releases the queue) and the queue must survive until then.
+    let throwing = false
+    const sock = {
+      write() {
+        if (throwing) throw new Error("closed")
+        return 1
+      },
+    }
     socketWriteAll(sock, Buffer.from("abc"))
-    const broken = { write() { throw new Error("closed") } }
-    // drain on a throwing socket returns without crashing
     socketWriteAll(sock, Buffer.from("d"))
     expect(queuedByteLength(sock)).toBe(3)
-    expect(() => drainSocketQueue(broken as any)).not.toThrow()
+    throwing = true
+    expect(() => drainSocketQueue(sock)).not.toThrow()
+    expect(queuedByteLength(sock)).toBe(3)
     releaseSocketQueue(sock)
     expect(queuedByteLength(sock)).toBe(0)
+  })
+
+  test("a negative write return fails the write and drops the queue on drain", () => {
+    const dead = { write: () => -1 }
+    expect(() => socketWriteAll(dead, Buffer.from("abc"))).toThrow()
+    const dying = fakeSocket([1])
+    socketWriteAll(dying, Buffer.from("abc"))
+    expect(queuedByteLength(dying)).toBe(2)
+    dying.write = () => -1
+    drainSocketQueue(dying)
+    expect(queuedByteLength(dying)).toBe(0)
   })
 })
 
@@ -176,9 +195,15 @@ describe("bridge-path integration over a real unix socket", () => {
       })
       const big = frame(Buffer.alloc(100 * 1024, 107))
       const wrote = client.write(big) // bare write, return value ignored — the old sendToBridge
-      expect(wrote).toBeLessThan(big.byteLength)
-      await Bun.sleep(300)
-      expect(received).toBe(wrote) // tail never arrives
+      if (wrote === big.byteLength) {
+        // A future Bun that buffers internally makes the queue layer dead
+        // weight — surface that instead of failing an unrelated CI run.
+        console.warn("socket.write accepted the full frame: Bun now buffers internally; revisit daemon/socket-write.ts")
+      } else {
+        expect(wrote).toBeLessThan(big.byteLength)
+        await Bun.sleep(300)
+        expect(received).toBe(wrote) // tail never arrives
+      }
       client.end()
     } finally {
       server.stop(true)

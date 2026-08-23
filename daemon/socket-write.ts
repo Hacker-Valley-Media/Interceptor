@@ -29,6 +29,9 @@ export function socketWriteAll(socket: WritableSocket, data: Buffer): void {
     return
   }
   const wrote = socket.write(data)
+  // A negative return means the socket is dead (not a partial write) — fail
+  // the request rather than queue garbage from subarray(-n).
+  if (wrote < 0) throw new Error(`socket write failed (${wrote})`)
   if (wrote < data.byteLength) {
     queues.set(socket, [Buffer.from(data.subarray(wrote))])
   }
@@ -45,6 +48,11 @@ export function drainSocketQueue(socket: WritableSocket): void {
       wrote = socket.write(chunk)
     } catch {
       // Socket is closing; its close handler releases the queue.
+      return
+    }
+    if (wrote < 0) {
+      // Dead socket: drop the queue now — close may never fire for it.
+      queues.delete(socket)
       return
     }
     if (wrote < chunk.byteLength) {
