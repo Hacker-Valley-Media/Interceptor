@@ -1600,24 +1600,32 @@ log(`pid file written: ${process.pid}`)
 function healRuntimeFiles(reason: string): string[] {
   if (!ownsRuntimeFiles || shuttingDown || !socketServer) return []
   const healed: string[] = []
-  if (readLockFile(LOCK_PATH)?.pid !== process.pid) {
-    writeLockFile(LOCK_PATH, daemonIdentity)
-    healed.push("lock")
+  // Each step is contained: a transient write/rename/listen failure must not
+  // turn /health into a 500 (the probe would then classify the live owner as
+  // foreign and the CLI would fail closed) or reject the keepalive loop.
+  const attempt = (name: string, fn: () => void) => {
+    try {
+      fn()
+      healed.push(name)
+    } catch (err) {
+      log(`could not restore ${name} (${reason}): ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
+  let lockPid: number | undefined
+  try { lockPid = readLockFile(LOCK_PATH)?.pid } catch {}
+  if (lockPid !== process.pid) attempt("lock", () => writeLockFile(LOCK_PATH, daemonIdentity))
   let pidOnDisk: number | null = null
   try { pidOnDisk = parseDaemonPidFile(readFileSync(PID_PATH, "utf-8")) } catch {}
-  if (pidOnDisk !== process.pid) {
-    writePidFile()
-    healed.push("pid")
-  }
+  if (pidOnDisk !== process.pid) attempt("pid", writePidFile)
   if (!IS_WIN && !existsSync(SOCKET_PATH)) {
     // Listen anew first, then stop the orphaned listener without closing its
     // in-flight connections. Bun's stop() never unlinks a unix socket path, so
     // the new file survives the old listener's shutdown.
-    const orphaned = socketServer
-    socketServer = listenCliSocket()
-    try { orphaned.stop() } catch {}
-    healed.push("socket")
+    attempt("socket", () => {
+      const orphaned = socketServer!
+      socketServer = listenCliSocket()
+      try { orphaned.stop() } catch {}
+    })
   }
   if (healed.length) log(`restored runtime files (${reason}): ${healed.join(", ")}`)
   return healed
@@ -1929,7 +1937,7 @@ process.on("unhandledRejection", (reason) => {
 async function keepAliveForever() {
   while (true) {
     await Bun.sleep(10_000)
-    healRuntimeFiles("keepalive tick")
+    try { healRuntimeFiles("keepalive tick") } catch (err) { log(`keepalive heal failed: ${err instanceof Error ? err.message : String(err)}`) }
   }
 }
 keepAliveForever()

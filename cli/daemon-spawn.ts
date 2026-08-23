@@ -83,8 +83,8 @@ export function formatMissingDaemonBinaryError(
 
 // Runtime-file readiness: a live pid that names a reachable transport. On unix
 // the transport is the socket file; on Windows it is the authenticated lock
-// record (pid, port, shutdown protocol). Throws only for the Windows
-// inconsistent-lock case, which is not recoverable here.
+// record (pid, port, shutdown protocol). Never throws; ensureDaemon decides
+// what an unready state means once the port has been asked.
 function readRuntimeReadiness(): { ready: boolean; observedLivePid: number | null } {
   let ready = false
   let observedLivePid: number | null = null
@@ -121,18 +121,18 @@ function readRuntimeReadiness(): { ready: boolean; observedLivePid: number | nul
  */
 export async function ensureDaemon(): Promise<void> {
   assertNoInstallMaintenance()
-  const readiness = readRuntimeReadiness()
-  const observedLivePid = readiness.observedLivePid
-  let daemonAlive = readiness.ready
+  if (readRuntimeReadiness().ready) return
 
-  if (IS_WIN && observedLivePid && !daemonAlive) {
-    throw new Error(`daemon pid ${observedLivePid} is alive but its authenticated lock/readiness record is missing or inconsistent; run 'interceptor diagnose'`)
-  }
-
-  if (daemonAlive) return
-
+  // Ask the port first: a live owner rewrites a missing or foreign lock/pid
+  // while answering, so the Windows inconsistent-lock failure below is only
+  // raised after the owner had its chance to heal.
   const probe = await probeDaemonHealth(WS_PORT)
-  const recovery = decideDaemonRecovery(probe, readRuntimeReadiness().ready, WS_PORT, LOG_PATH)
+  const healed = readRuntimeReadiness()
+  if (healed.ready) return
+  if (IS_WIN && healed.observedLivePid) {
+    throw new Error(`daemon pid ${healed.observedLivePid} is alive but its authenticated lock/readiness record is missing or inconsistent; run 'interceptor diagnose'`)
+  }
+  const recovery = decideDaemonRecovery(probe, false, WS_PORT, LOG_PATH)
   if (recovery.action === "connect") return
   if (recovery.action === "fail") {
     console.error(`error: ${recovery.message}`)
@@ -156,6 +156,7 @@ export async function ensureDaemon(): Promise<void> {
       })
       child.unref()
 
+      let daemonAlive = false
       for (let i = 0; i < 20; i++) {
         await Bun.sleep(250)
         if (IS_WIN) {
