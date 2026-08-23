@@ -39,6 +39,15 @@ refresh_interceptor_daemon() {
     fi
   fi
 
+  # The pid file and socket describe a live process. Removing them while that
+  # process is still running (a daemon this script chose not to stop, or one
+  # the kill did not reach) strands every CLI command on "daemon failed to
+  # start": the next spawn loses the port to the survivor. Only a dead pid
+  # leaves files that are safe to remove.
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "interceptor: daemon pid $pid is still running; leaving its runtime files in place" >&2
+    return
+  fi
   rm -f "$DAEMON_PID_PATH" "$DAEMON_SOCKET_PATH" 2>/dev/null || true
 }
 

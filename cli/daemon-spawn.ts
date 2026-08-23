@@ -5,6 +5,7 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { IS_WIN, SOCKET_PATH, PID_PATH, LOCK_PATH, LOG_PATH, WS_PORT } from "../shared/platform"
+import { decideDaemonRecovery, probeDaemonHealth } from "../shared/daemon-health"
 import { readLockFile } from "../daemon/lifecycle"
 import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 export const MACOS_PKG_DAEMON_PATH = "/Library/Application Support/Interceptor/interceptor-daemon"
@@ -80,15 +81,13 @@ export function formatMissingDaemonBinaryError(
   return lines.join("\n")
 }
 
-/**
- * Ensure the daemon is running, spawning it if needed.
- * Call only when a daemon connection is required (i.e. not for "status", "help", "events", "session").
- */
-export async function ensureDaemon(): Promise<void> {
-  assertNoInstallMaintenance()
-  let daemonAlive = false
+// Runtime-file readiness: a live pid that names a reachable transport. On unix
+// the transport is the socket file; on Windows it is the authenticated lock
+// record (pid, port, shutdown protocol). Throws only for the Windows
+// inconsistent-lock case, which is not recoverable here.
+function readRuntimeReadiness(): { ready: boolean; observedLivePid: number | null } {
+  let ready = false
   let observedLivePid: number | null = null
-
   if (existsSync(PID_PATH)) {
     try {
       const pidContent = readFileSync(PID_PATH, "utf-8").trim()
@@ -99,20 +98,49 @@ export async function ensureDaemon(): Promise<void> {
           observedLivePid = pid
           if (IS_WIN) {
             const lock = readLockFile(LOCK_PATH)
-            daemonAlive = !!lock && lock.pid === pid && lock.wsPort === WS_PORT && lock.shutdownProtocolVersion === 1
+            ready = !!lock && lock.pid === pid && lock.wsPort === WS_PORT && lock.shutdownProtocolVersion === 1
           } else {
-            daemonAlive = true
+            ready = existsSync(SOCKET_PATH)
           }
-        } catch { daemonAlive = false }
+        } catch { ready = false }
       }
     } catch {}
   }
+  return { ready, observedLivePid }
+}
+
+/**
+ * Ensure the daemon is running, spawning it if needed.
+ * Call only when a daemon connection is required (i.e. not for "status", "help", "events", "session").
+ *
+ * The pid/socket/lock files are derived state; the WS port is the singleton
+ * token. When the files do not describe a reachable daemon, ask the port: a
+ * live owner restores its files in the course of answering the probe, and the
+ * CLI connects without ever unlinking or spawning against a held port (that
+ * was the "daemon failed to start" deadlock). Only a free port leads to spawn.
+ */
+export async function ensureDaemon(): Promise<void> {
+  assertNoInstallMaintenance()
+  const readiness = readRuntimeReadiness()
+  const observedLivePid = readiness.observedLivePid
+  let daemonAlive = readiness.ready
 
   if (IS_WIN && observedLivePid && !daemonAlive) {
     throw new Error(`daemon pid ${observedLivePid} is alive but its authenticated lock/readiness record is missing or inconsistent; run 'interceptor diagnose'`)
   }
 
-  if (!daemonAlive) {
+  if (daemonAlive) return
+
+  const probe = await probeDaemonHealth(WS_PORT)
+  const recovery = decideDaemonRecovery(probe, readRuntimeReadiness().ready, WS_PORT, LOG_PATH)
+  if (recovery.action === "connect") return
+  if (recovery.action === "fail") {
+    console.error(`error: ${recovery.message}`)
+    process.exit(1)
+  }
+
+  // recovery.action === "spawn": the port is free, so stale files are ours to clear.
+  {
     if (!IS_WIN) { try { unlinkSync(SOCKET_PATH) } catch {} }
     try { unlinkSync(PID_PATH) } catch {}
 
