@@ -25,6 +25,8 @@
  * PortNumber in network byte order (htons). Success = response `Number == 0`.
  */
 
+import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "../socket-write"
+
 const USBMUXD_SOCKET = "/var/run/usbmuxd"
 
 const USBMUX_HEADER_LEN = 16
@@ -102,6 +104,8 @@ type MuxDevice = { deviceId: number; udid: string; connectionType: string }
  * One-shot usbmux request → first response payload, over a fresh usbmuxd socket.
  * Resolves with the response payload bytes (XML plist).
  */
+// One-shot control writes (ListDevices/Connect plists, ~300 bytes on fresh
+// sockets) stay bare: they cannot exceed an empty 8 KiB send buffer.
 function usbmuxRequest(dict: Record<string, string | number>, timeoutMs = 5_000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     let acc = Buffer.alloc(0)
@@ -203,7 +207,9 @@ export async function usbmuxForward(udid: string, devicePort: number, hostPort: 
       open(client) {
         const state: BridgeState = { device: null, pending: [] }
         client.data = state
-        openDeviceChannel(deviceId, devicePort, (chunk) => { try { client.write(chunk) } catch {} }, () => { try { client.end() } catch {} })
+        // Issue #229: pump writes must queue past the kernel send buffer or
+        // the dropped tail corrupts the proxied stream.
+        openDeviceChannel(deviceId, devicePort, (chunk) => { try { socketWriteAll(client, chunk) } catch {} }, () => { try { client.end() } catch {} })
           .then((deviceSock) => {
             state.device = deviceSock
             for (const c of state.pending) { try { deviceSock.write(c) } catch {} }
@@ -216,8 +222,9 @@ export async function usbmuxForward(udid: string, devicePort: number, hostPort: 
         if (s?.device) { try { s.device.write(chunk) } catch {} }
         else s?.pending.push(chunk)
       },
-      close(client) { closeDevice(client.data) },
-      error(client) { closeDevice(client.data) },
+      drain(client) { drainSocketQueue(client) },
+      close(client) { releaseSocketQueue(client); closeDevice(client.data) },
+      error(client) { releaseSocketQueue(client); closeDevice(client.data) },
     },
   })
 
@@ -267,10 +274,13 @@ function openDeviceChannel(
           settled = true
           // Any bytes already past the result header belong to the bridged stream.
           if (msg.rest.length) onData(msg.rest)
-          resolve(sock as { write: (b: Buffer) => void; end: () => void })
+          // Issue #229: the usbmuxd socket has an 8 KiB send buffer; route
+          // writes through the backpressure queue so large chunks survive.
+          resolve({ write: (b: Buffer) => socketWriteAll(sock, b), end: () => { try { sock.end() } catch {} } })
         },
-        error(_sock, err) { if (bridged) onClose(); else fail(err instanceof Error ? err : new Error(String(err))) },
-        close() { if (bridged) onClose(); else fail(new Error("usbmuxd closed during Connect")) },
+        drain(sock) { drainSocketQueue(sock) },
+        error(sock, err) { releaseSocketQueue(sock); if (bridged) onClose(); else fail(err instanceof Error ? err : new Error(String(err))) },
+        close(sock) { releaseSocketQueue(sock); if (bridged) onClose(); else fail(new Error("usbmuxd closed during Connect")) },
       },
     }).catch((err) => fail(err instanceof Error ? err : new Error(String(err))))
   })
