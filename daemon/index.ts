@@ -20,6 +20,7 @@ import {
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
 import { claimContextId, type ContextSocket } from "./context-registration"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
+import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
 import { cleanupOwnedRuntimeFiles, clearDaemonRuntimeFiles, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, parseDaemonPidFile, readLockFile, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
 import { DAEMON_HEALTH_SERVICE, LEGACY_HEALTH_BODY, probeDaemonHealth } from "../shared/daemon-health"
 import { assertNoInstallMaintenance } from "../shared/install-maintenance"
@@ -168,10 +169,15 @@ async function connectBridge(): Promise<boolean> {
           bridgeBuffer = Buffer.concat([bridgeBuffer, Buffer.from(raw)])
           processBridgeBuffer()
         },
-        close() {
+        drain(socket) {
+          // Issue #229: flush frame tails the 8 KiB unix send buffer rejected.
+          drainSocketQueue(socket as any)
+        },
+        close(socket) {
           // Issue #222: fail in-flight requests now, not at the CLI's timeout.
           const failed = failPendingBridgeRequests(bridgePending)
           log(`bridge disconnected${failed ? ` (failed ${failed} in-flight request(s))` : ""}`)
+          releaseSocketQueue(socket as any)
           bridgeSocket = null as any
           bridgeConnecting = false
           // Schedule reconnect
@@ -234,7 +240,9 @@ function sendToBridge(id: string, action: Record<string, unknown>, cliSocket: { 
   header.writeUInt32LE(encoded.byteLength, 0)
   const frame = Buffer.concat([header, encoded])
   try {
-    ;(bridgeSocket as any).write(frame)
+    // Issue #229: a bare write() truncated any frame > 8 KiB and desynced the
+    // bridge's framing; queue the tail and let the drain handler finish it.
+    socketWriteAll(bridgeSocket as any, frame)
   } catch (err) {
     log(`bridge write error: ${(err as Error).message}`)
     socketWriteFramed(cliSocket, JSON.stringify({ id, result: { success: false, error: "bridge connection lost" } }))
@@ -279,7 +287,7 @@ function forwardDelegateToBridge(
     const header = Buffer.alloc(4)
     header.writeUInt32LE(encoded.byteLength, 0)
     try {
-      ;(bridgeSocket as any).write(Buffer.concat([header, encoded]))
+      socketWriteAll(bridgeSocket as any, Buffer.concat([header, encoded]))
     } catch {
       fail("bridge connection lost")
       return
@@ -491,12 +499,17 @@ async function startNativeRelay(existingPid: number | null): Promise<never> {
         const encoded = Buffer.from(reg, "utf-8")
         const header = Buffer.alloc(4)
         header.writeUInt32LE(encoded.byteLength, 0)
-        socket.write(Buffer.concat([header, encoded]))
+        socketWriteAll(socket, Buffer.concat([header, encoded]))
         log("relay: registered with singleton")
       },
       data(_socket: Bun.Socket<undefined>, raw: Buffer<ArrayBufferLike>) {
         // Singleton → stdout (Chrome)
         process.stdout.write(Buffer.from(raw))
+      },
+      drain(socket: Bun.Socket<undefined>) {
+        // Issue #229: Chrome→singleton chunks can exceed the 8 KiB unix send
+        // buffer; flush the queued tail or the singleton's framing desyncs.
+        drainSocketQueue(socket)
       },
       close() {
         log("relay: singleton disconnected — exiting")
@@ -525,7 +538,7 @@ async function startNativeRelay(existingPid: number | null): Promise<never> {
 
   // Chrome stdin → singleton IPC socket
   process.stdin.on("data", (chunk: Buffer) => {
-    if (singletonSocket) singletonSocket.write(chunk)
+    if (singletonSocket) socketWriteAll(singletonSocket, chunk)
   })
   process.stdin.on("end", () => {
     log("relay: stdin ended (Chrome disconnected) — exiting")
@@ -641,7 +654,6 @@ const pendingRequests = new Map<string, {
 }>()
 
 const socketBuffers = new Map<object, Buffer>()
-const socketWriteQueues = new Map<object, Buffer[]>()
 
 const LARGE_PAYLOAD_THRESHOLD = 16 * 1024
 const MAX_RESPONSE_CHARS = 50000
@@ -678,49 +690,16 @@ function socketWriteFramed(socket: { write: (data: Buffer | string) => number },
       sink.write(header)
       sink.write(encoded)
       const frame = sink.end() as Uint8Array
-      const wrote = socket.write(Buffer.from(frame))
-      if (wrote < frame.byteLength) {
-        const remainder = Buffer.from(frame.subarray(wrote))
-        const queue = socketWriteQueues.get(socket) || []
-        queue.push(remainder)
-        socketWriteQueues.set(socket, queue)
-      }
+      socketWriteAll(socket, Buffer.from(frame))
     } else {
       const header = Buffer.alloc(4)
       header.writeUInt32LE(encoded.byteLength, 0)
-      const frame = Buffer.concat([header, encoded])
-      const wrote = socket.write(frame)
-      if (wrote < frame.byteLength) {
-        const remainder = frame.subarray(wrote)
-        const queue = socketWriteQueues.get(socket) || []
-        queue.push(Buffer.from(remainder))
-        socketWriteQueues.set(socket, queue)
-      }
+      socketWriteAll(socket, Buffer.concat([header, encoded]))
     }
     return true
   } catch (err) {
     log(`socket write error: ${(err as Error).message}`)
     return false
-  }
-}
-
-function drainSocketQueue(socket: { write: (data: Buffer | string) => number }) {
-  const queue = socketWriteQueues.get(socket)
-  if (!queue || queue.length === 0) return
-  while (queue.length > 0) {
-    const chunk = queue[0]
-    let wrote = 0
-    try {
-      wrote = socket.write(chunk)
-    } catch (err) {
-      log(`socket drain error: ${(err as Error).message}`)
-      return
-    }
-    if (wrote < chunk.byteLength) {
-      queue[0] = chunk.subarray(wrote)
-      return
-    }
-    queue.shift()
   }
 }
 
@@ -1559,7 +1538,7 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           }
         }
         socketBuffers.delete(socket)
-        socketWriteQueues.delete(socket)
+        releaseSocketQueue(socket)
         log("cli disconnected")
       },
       error(_socket: Bun.Socket<undefined>, err: Error) {
