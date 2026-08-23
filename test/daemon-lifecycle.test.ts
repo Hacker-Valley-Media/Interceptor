@@ -76,11 +76,32 @@ describe("daemon lifecycle helpers", () => {
   })
 
   test("native mode relays to an existing live singleton", () => {
-    expect(decideDaemonStartupRole(false, { status: "alive", pid: 222 })).toEqual({ action: "relay", pid: 222 })
+    expect(decideDaemonStartupRole(false, { status: "alive", pid: 222 }, true)).toEqual({ action: "relay", pid: 222 })
   })
 
   test("standalone duplicate exits when a live singleton exists", () => {
-    expect(decideDaemonStartupRole(true, { status: "alive", pid: 222 })).toEqual({ action: "exit", pid: 222 })
+    expect(decideDaemonStartupRole(true, { status: "alive", pid: 222 }, true)).toEqual({ action: "exit", pid: 222 })
+  })
+
+  // The WS port is the singleton token. While it is held, the pid file cannot
+  // justify clearing the owner's runtime files or spawning a rival (the
+  // "daemon failed to start" deadlock: a stale pid guess wiped a live daemon).
+  test("a held singleton port forbids clearing or spawning whatever the pid file says", () => {
+    for (const state of [
+      { status: "stale", pid: 222 },
+      { status: "invalid", pid: null },
+      { status: "missing", pid: null },
+    ] as const) {
+      expect(decideDaemonStartupRole(false, state, true)).toEqual({ action: "relay", pid: state.pid })
+      expect(decideDaemonStartupRole(true, state, true)).toEqual({ action: "exit", pid: state.pid })
+    }
+  })
+
+  test("a live pid with a free singleton port is not a daemon and is cleared", () => {
+    expect(decideDaemonStartupRole(true, { status: "alive", pid: 222 }))
+      .toEqual({ action: "clear-and-continue", reason: "pid 222 alive but the singleton port is free" })
+    expect(decideDaemonStartupRole(false, { status: "alive", pid: 222 }))
+      .toEqual({ action: "clear-and-spawn", reason: "pid 222 alive but the singleton port is free" })
   })
 
   test("native mode spawns a detached singleton when no live singleton exists", () => {
