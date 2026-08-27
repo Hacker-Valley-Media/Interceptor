@@ -39,17 +39,19 @@ final class UpdateDomain: DomainHandler, @unchecked Sendable {
     private func handleCheck(completion: @escaping @Sendable ([String: Any]) -> Void) {
         DispatchQueue.main.async { [updaterController, updateState] in
             let updater = updaterController.updater
-            guard updater.canCheckForUpdates else {
-                completion(WireFormat.error("Sparkle is not ready to check for updates"))
-                return
-            }
-
             if updater.sessionInProgress {
                 var payload = Self.statusPayload(updater: updater, snapshot: updateState.snapshot())
                 payload["started"] = false
                 payload["message"] = "an update session is already in progress"
-                updaterController.checkForUpdates(nil)
+                if updater.canCheckForUpdates {
+                    updaterController.checkForUpdates(nil)
+                }
                 completion(WireFormat.success(payload))
+                return
+            }
+
+            guard updater.canCheckForUpdates else {
+                completion(WireFormat.error("Sparkle is not ready to check for updates"))
                 return
             }
 

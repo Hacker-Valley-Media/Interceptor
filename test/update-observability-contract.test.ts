@@ -19,9 +19,13 @@ describe("Sparkle update observability contract", () => {
     expect(domain).toContain("updateState.beginCheck(timeout: 10)")
     expect(domain).toContain("if updater.sessionInProgress")
     expect(domain).toContain('payload["started"] = false')
+    expect(domain).toContain("if updater.canCheckForUpdates")
     expect(domain).toContain("selectedDisplayVersion")
     expect(domain).toContain("use `interceptor update status` for the result")
     expect(domain).not.toContain("Sparkle will now show the alert")
+    expect(domain.indexOf("if updater.sessionInProgress")).toBeLessThan(
+      domain.indexOf("guard updater.canCheckForUpdates"),
+    )
   })
 
   test("observes Sparkle results without changing channel or relaunch policy", () => {

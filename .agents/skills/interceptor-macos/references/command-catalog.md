@@ -13,7 +13,7 @@ interceptor macos act <ref> "hello"            # AX value-set (no focus change)
 interceptor macos inspect                      # Tree + apps + frontmost info
 ```
 
-Updating Interceptor itself from an agent: run `interceptor update` and inspect `outcome`, `selectedVersion`, and `phase` (`interceptor update status` reads the latest callback-observed state). For `update_available`, run `interceptor macos read --app interceptor-bridge`, then `interceptor macos act <ref>` on the "Install Update" button. Once Sparkle has downloaded, read the alert again (the earlier ref is stale) and `act` the "Install and Relaunch" button. The last step raises a macOS administrator prompt that a person must answer (package installs always do); do not try to drive that dialog.
+Run `interceptor update`, then inspect `outcome`, `selectedVersion`, and `phase`; use `interceptor update status` for later state. For `update_available`, read `interceptor-bridge` and act on **Install Update**. After download, read the changed alert for a fresh ref and act on **Install and Relaunch**. Stop when macOS requests administrator authentication; a person must complete that protected prompt.
 
 ## Apps + Windows
 
