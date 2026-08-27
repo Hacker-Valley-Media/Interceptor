@@ -639,7 +639,12 @@ const daemonIdentity = {
   shutdownProtocolVersion: 1 as const,
   shutdownToken: generateShutdownToken(),
 }
-writeLockFile(LOCK_PATH, daemonIdentity)
+try {
+  writeLockFile(LOCK_PATH, daemonIdentity)
+} catch (error) {
+  log(`daemon lock-file setup failed: ${error instanceof Error ? error.message : String(error)}`)
+  throw error
+}
 // Lock cleanup rides the existing shutdown paths (gracefulShutdown + the
 // process "exit" listener below) — a separate signal handler here would
 // register first and its process.exit(0) would stop gracefulShutdown from
