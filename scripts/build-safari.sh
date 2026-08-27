@@ -90,10 +90,13 @@ fi
 ditto extension/dist-safari "$APPEX_RES"
 
 # 2. Build the containing app + appex (Developer ID, hardened runtime, sandbox).
+PUBLIC_SOURCE_ROOT="/src/interceptor"
 xcodebuild -project "$PROJ" -scheme InterceptorSafari -configuration Release \
   -derivedDataPath "$DERIVED" \
   CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=TPWBZD35WW \
   "CODE_SIGN_IDENTITY=$SIGN_APP" "CODE_SIGN_ENTITLEMENTS=$ENT" \
+  "OTHER_CFLAGS=-ffile-prefix-map=$REPO_ROOT=$PUBLIC_SOURCE_ROOT -fdebug-prefix-map=$REPO_ROOT=$PUBLIC_SOURCE_ROOT -ffile-compilation-dir=$PUBLIC_SOURCE_ROOT/safari/InterceptorSafari" \
+  "OTHER_SWIFT_FLAGS=-file-prefix-map $REPO_ROOT=$PUBLIC_SOURCE_ROOT -debug-prefix-map $REPO_ROOT=$PUBLIC_SOURCE_ROOT -file-compilation-dir $PUBLIC_SOURCE_ROOT/safari/InterceptorSafari" \
   "MARKETING_VERSION=$VER" \
   MACOSX_DEPLOYMENT_TARGET=14.0 "OTHER_CODE_SIGN_FLAGS=--timestamp" \
   PROVISIONING_PROFILE_SPECIFIER="" -allowProvisioningUpdates \
