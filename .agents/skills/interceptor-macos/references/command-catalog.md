@@ -13,7 +13,13 @@ interceptor macos act <ref> "hello"            # AX value-set (no focus change)
 interceptor macos inspect                      # Tree + apps + frontmost info
 ```
 
-Run `interceptor update`, then inspect `outcome`, `selectedVersion`, and `phase`; use `interceptor update status` for later state. For `update_available`, read `interceptor-bridge` and act on **Install Update**. After download, read the changed alert for a fresh ref and act on **Install and Relaunch**. Stop when macOS requests administrator authentication; a person must complete that protected prompt.
+### Self-update rules
+
+- Run `interceptor update`. Inspect `outcome`, `selectedVersion`, and `phase`.
+- If `outcome` is `checking`, run `interceptor update status`.
+- If `outcome` is `update_available`, run `interceptor macos read --app interceptor-bridge`, then act on **Install Update**.
+- After download, read the changed alert for a fresh ref, then act on **Install and Relaunch**.
+- Stop when macOS requests administrator authentication. A person must complete that protected prompt.
 
 ## Apps + Windows
 
