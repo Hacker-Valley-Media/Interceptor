@@ -102,6 +102,11 @@ xcodebuild -project "$PROJ" -scheme InterceptorSafari -configuration Release \
   PROVISIONING_PROFILE_SPECIFIER="" -allowProvisioningUpdates \
   clean build
 
+# Xcode leaves object-file paths in each Mach-O local symbol table. Strip those
+# records before the explicit inside-out signing pass below.
+/usr/bin/strip -x "$APP/Contents/PlugIns/InterceptorSafari Extension.appex/Contents/MacOS/InterceptorSafari Extension"
+/usr/bin/strip -x "$APP/Contents/MacOS/InterceptorSafari"
+
 # 3. Re-sign inside-out with explicit entitlements. A plain `build` injects the
 #    debug com.apple.security.get-task-allow entitlement, which notarization
 #    rejects; re-signing from our entitlements file (sandbox + network.client)

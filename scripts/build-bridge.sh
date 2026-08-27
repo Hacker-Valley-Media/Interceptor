@@ -55,6 +55,12 @@ if [ ! -f "$BINARY" ]; then
   exit 1
 fi
 
+# SwiftPM's final Mach-O symbol table records dependency and object-file paths
+# that compiler prefix maps do not cover. Remove local symbols before signing;
+# exported/runtime symbols remain intact.
+echo "==> Stripping local symbols from interceptor-bridge..."
+/usr/bin/strip -x "$BINARY"
+
 mkdir -p "$DIST_DIR"
 
 # Keep the legacy bare-binary path for back-compat — tests, the daemon's
