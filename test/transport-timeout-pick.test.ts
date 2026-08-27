@@ -31,6 +31,10 @@ describe("pickTimeoutForAction", () => {
     expect(pickTimeoutForAction({ type: "macos_vad" })).toBe(60_000)
   })
 
+  test("Sparkle checks outwait their bounded 10s conclusion window", () => {
+    expect(pickTimeoutForAction({ type: "macos_update" })).toBe(20_000)
+  })
+
   test("unlisted actions fall back to the default timeout", () => {
     expect(pickTimeoutForAction({ type: "tab_list" })).toBe(INTERCEPTOR_TIMEOUT_MS)
   })

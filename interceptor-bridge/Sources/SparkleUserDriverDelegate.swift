@@ -90,8 +90,73 @@ final class SparkleUserDriverDelegate: NSObject, SPUStandardUserDriverDelegate {
 //
 // Source: research/Sparkle/Sparkle/SPUUpdaterDelegate.h:90-111.
 final class SparkleUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    private let updateState: SparkleUpdateState
+
+    init(updateState: SparkleUpdateState) {
+        self.updateState = updateState
+        super.init()
+    }
+
     func allowedChannels(for updater: SPUUpdater) -> Set<String> {
         return ["full"]
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        updateState.recordUpdateFound(version: item.versionString, displayVersion: item.displayVersionString)
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        let nsError = error as NSError
+        let latestItem = nsError.userInfo[SPULatestAppcastItemFoundKey] as? SUAppcastItem
+        let reasonValue = (nsError.userInfo[SPUNoUpdateFoundReasonKey] as? NSNumber)?.intValue
+        let reason = Self.noUpdateReason(reasonValue)
+        updateState.recordNoUpdate(
+            latestVersion: latestItem?.versionString,
+            reason: reason,
+            currentIsLatest: reasonValue == 1 || reasonValue == 2
+        )
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        userDidMake choice: SPUUserUpdateChoice,
+        forUpdate updateItem: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        updateState.recordUserChoice(Self.choiceName(choice), stage: Self.stageName(state.stage))
+    }
+
+    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+        updateState.recordDownloading(version: item.versionString, displayVersion: item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        updateState.recordDownloaded(version: item.versionString, displayVersion: item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, willExtractUpdate item: SUAppcastItem) {
+        updateState.recordExtracting(version: item.versionString, displayVersion: item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, didExtractUpdate item: SUAppcastItem) {
+        updateState.recordReadyToInstall(version: item.versionString, displayVersion: item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        updateState.recordInstalling(version: item.versionString, displayVersion: item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        let nsError = error as NSError
+        // Sparkle reports its normal no-update conclusion through this abort
+        // callback after updaterDidNotFindUpdate. Preserve the richer result.
+        guard nsError.code != 1001 else { return }
+        updateState.recordError(nsError.localizedDescription)
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        let nsError = error as NSError?
+        updateState.recordCycleFinished(error: nsError?.code == 1001 ? nil : nsError?.localizedDescription)
     }
 
     // The pkg postinstall bootstraps + kickstarts the LaunchAgent, which is the
@@ -103,5 +168,34 @@ final class SparkleUpdaterDelegate: NSObject, SPUUpdaterDelegate {
     // relaunch is declined.
     func updaterShouldRelaunchApplication(_ updater: SPUUpdater) -> Bool {
         return false
+    }
+
+    nonisolated static func noUpdateReason(_ rawValue: Int?) -> String {
+        switch rawValue {
+        case 1: return "on_latest_version"
+        case 2: return "on_newer_than_latest_version"
+        case 3: return "system_too_old"
+        case 4: return "system_too_new"
+        case 5: return "hardware_does_not_support_arm64"
+        default: return "unknown"
+        }
+    }
+
+    nonisolated static func choiceName(_ choice: SPUUserUpdateChoice) -> String {
+        switch choice {
+        case .install: return "install"
+        case .dismiss: return "dismiss"
+        case .skip: return "skip"
+        @unknown default: return "unknown"
+        }
+    }
+
+    nonisolated static func stageName(_ stage: SPUUserUpdateStage) -> String {
+        switch stage {
+        case .notDownloaded: return "not_downloaded"
+        case .downloaded: return "downloaded"
+        case .installing: return "installing"
+        @unknown default: return "unknown"
+        }
     }
 }

@@ -285,8 +285,8 @@ async function main() {
     // `interceptor update` is the front door for updating Interceptor itself
     // sugar for the retained-but-hidden
     // `interceptor macos update check` — a user-initiated Sparkle check via the
-    // bridge that always surfaces the update alert. `interceptor update status`
-    // passes through to the status verb.
+    // bridge that reports Sparkle's selected version, no-update result, or
+    // error. `interceptor update status` passes through to the lifecycle state.
     //
     // Windows has no Sparkle: updates ship as a signed installer (see
     // docs/windows-install.md — run a newer architecture-matched Setup; the
