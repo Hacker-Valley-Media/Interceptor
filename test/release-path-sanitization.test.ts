@@ -15,6 +15,7 @@ describe("release source-path sanitization", () => {
       "-ffile-prefix-map=$BRIDGE_DIR/.build/checkouts=/src/interceptor-deps",
     )
     expect(source).toContain('swift build -c release "${SWIFT_FLAGS[@]}"')
+    expect(source).toContain('/usr/bin/strip -x "$BINARY"')
   })
 
   test("maps C and Swift source paths in the bundled iOS runner", () => {
@@ -74,6 +75,12 @@ describe("release source-path sanitization", () => {
     )
     expect(source).toContain(
       '-file-compilation-dir \\"$PUBLIC_SOURCE_ROOT/safari/InterceptorSafari\\"',
+    )
+    expect(source).toContain(
+      '/usr/bin/strip -x "$APP/Contents/PlugIns/InterceptorSafari Extension.appex/Contents/MacOS/InterceptorSafari Extension"',
+    )
+    expect(source).toContain(
+      '/usr/bin/strip -x "$APP/Contents/MacOS/InterceptorSafari"',
     )
   })
 })
