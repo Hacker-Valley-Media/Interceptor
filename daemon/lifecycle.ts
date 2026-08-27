@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { spawn, spawnSync } from "node:child_process"
 import { randomBytes, timingSafeEqual } from "node:crypto"
+import { win32 } from "node:path"
 
 export type PidState =
   | { status: "missing"; pid: null }
@@ -60,32 +61,72 @@ export function constantTimeTokenEquals(actual: unknown, expected: string): bool
   return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"))
 }
 
-function currentWindowsSid(): string {
-  const result = spawnSync("whoami.exe", ["/user", "/fo", "csv", "/nh"], { encoding: "utf-8", windowsHide: true })
-  if (result.status !== 0) throw new Error("cannot resolve the current Windows SID for lock-file ACL")
+type SyncCommandResult = {
+  status: number | null
+  stdout: string
+  stderr: string
+  error?: Error
+}
+
+export type WindowsAclDeps = {
+  platform: NodeJS.Platform
+  env: NodeJS.ProcessEnv
+  spawnSync: (
+    command: string,
+    args: string[],
+    options: { encoding: "utf-8"; windowsHide: true },
+  ) => SyncCommandResult
+}
+
+const DEFAULT_WINDOWS_ACL_DEPS: WindowsAclDeps = {
+  platform: process.platform,
+  env: process.env,
+  spawnSync: (command, args, options) => spawnSync(command, args, options),
+}
+
+export function windowsSystem32Executable(executable: string, env: NodeJS.ProcessEnv = process.env): string {
+  return win32.join(env.SystemRoot || env.windir || "C:\\Windows", "System32", executable)
+}
+
+function commandFailureDetail(result: SyncCommandResult): string {
+  return result.error?.message
+    || result.stderr.trim()
+    || result.stdout.trim()
+    || (result.status === null ? "process did not exit" : `exit ${result.status}`)
+}
+
+export function currentWindowsSid(deps: WindowsAclDeps = DEFAULT_WINDOWS_ACL_DEPS): string {
+  const command = windowsSystem32Executable("whoami.exe", deps.env)
+  const result = deps.spawnSync(command, ["/user", "/fo", "csv", "/nh"], { encoding: "utf-8", windowsHide: true })
+  if (result.error || result.status !== 0) {
+    throw new Error(`cannot resolve the current Windows SID for lock-file ACL: ${command}: ${commandFailureDetail(result)}`)
+  }
   const match = result.stdout.match(/S-1-(?:\d+-)+\d+/i)
-  if (!match) throw new Error("whoami did not return a Windows SID")
+  if (!match) throw new Error(`whoami did not return a Windows SID: ${result.stdout.trim() || "empty output"}`)
   return match[0]
 }
 
-function restrictFileToCurrentUser(path: string): void {
-  if (process.platform !== "win32") {
+export function restrictFileToCurrentUser(path: string, deps: WindowsAclDeps = DEFAULT_WINDOWS_ACL_DEPS): void {
+  if (deps.platform !== "win32") {
     chmodSync(path, 0o600)
     return
   }
-  const sid = currentWindowsSid()
-  const result = spawnSync("icacls.exe", [path, "/inheritance:r", "/grant:r", `*${sid}:(F)`], {
+  const sid = currentWindowsSid(deps)
+  const command = windowsSystem32Executable("icacls.exe", deps.env)
+  const result = deps.spawnSync(command, [path, "/inheritance:r", "/grant:r", `*${sid}:(F)`], {
     encoding: "utf-8",
     windowsHide: true,
   })
-  if (result.status !== 0) throw new Error(`cannot restrict lock-file ACL: ${result.stderr.trim() || result.stdout.trim()}`)
+  if (result.error || result.status !== 0) {
+    throw new Error(`cannot restrict lock-file ACL: ${command}: ${commandFailureDetail(result)}`)
+  }
 }
 
-export function writeLockFile(lockPath: string, data: LockFileData): void {
+export function writeLockFile(lockPath: string, data: LockFileData, aclDeps: WindowsAclDeps = DEFAULT_WINDOWS_ACL_DEPS): void {
   const tempPath = `${lockPath}.${process.pid}.${crypto.randomUUID()}.tmp`
   try {
     writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf-8", mode: 0o600, flag: "wx" })
-    restrictFileToCurrentUser(tempPath)
+    restrictFileToCurrentUser(tempPath, aclDeps)
     renameSync(tempPath, lockPath)
   } catch (error) {
     try { unlinkSync(tempPath) } catch {}
