@@ -224,7 +224,8 @@ app.delegate = bridgeAppDelegate
 // SparkleUserDriverDelegate.swift for the full rationale and the gentle-
 // reminders contract. Held strongly here so it lives the lifetime of the
 // process — Sparkle weakly references its delegate.
-let sparkleUpdaterDelegate = SparkleUpdaterDelegate()
+let sparkleUpdateState = SparkleUpdateState()
+let sparkleUpdaterDelegate = SparkleUpdaterDelegate(updateState: sparkleUpdateState)
 let sparkleUserDriverDelegate = SparkleUserDriverDelegate()
 let updaterController = SPUStandardUpdaterController(
     startingUpdater: true,
@@ -236,7 +237,7 @@ let updaterController = SPUStandardUpdaterController(
 // can drive a user-initiated update check directly. Useful both for agents
 // and for verifying the activation-policy dialog path (since automatic
 // checks for LSUIElement apps may silently download rather than surface).
-let updateDomain = UpdateDomain(updaterController: updaterController)
+let updateDomain = UpdateDomain(updaterController: updaterController, updateState: sparkleUpdateState)
 router.register("update", handler: updateDomain)
 Platform.log("sparkle updater started; feed: \(updaterController.updater.feedURL?.absoluteString ?? "unset")")
 

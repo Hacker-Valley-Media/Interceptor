@@ -173,8 +173,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
   {
     name: "update", surface: "local",
     usage: "interceptor update [status]",
-    summary: "Update Interceptor itself — fires a user-initiated Sparkle update check (full install only)",
-    returns: "check: confirmation the update alert was fired + feed URL. status: feed, lastCheck, automaticChecks, checkInterval, canCheckForUpdates, sessionInProgress.",
+    summary: "Update Interceptor itself — checks with Sparkle and reports its selected version or no-update result (full install only)",
+    returns: "check: started, concluded, outcome, phase, selected/latest version or error, and feed. status: the same observed lifecycle plus lastCheck, automaticChecks, checkInterval, canCheckForUpdates, and sessionInProgress.",
     example: "interceptor update",
   },
   { name: "network", surface: "browser", usage: "interceptor net [--filter <pattern>] [--limit <n>] [--format har|json|pcapng --out <path>]", summary: "Passive network log", returns: "Recent requests (method, url, status, type); exportable to HAR/pcapng." },
