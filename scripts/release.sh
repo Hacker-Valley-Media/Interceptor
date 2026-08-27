@@ -400,22 +400,40 @@ run ditto "$REPO_ROOT/ios/InterceptorRunner/README.md" "$STAGING_DIR/daemon/$DES
 # the prebuilt via devicectl; the re-sign only kicks in on the self-service path.)
 if [[ "${INTERCEPTOR_SKIP_RUNNER:-0}" != "1" ]]; then
   RUNNER_PRODUCTS="${INTERCEPTOR_RUNNER_PREBUILT:-}"
+  if [[ -n "$RUNNER_PRODUCTS" && ! -d "$RUNNER_PRODUCTS" ]]; then
+    echo "ERROR: INTERCEPTOR_RUNNER_PREBUILT is not a directory: $RUNNER_PRODUCTS" >&2
+    exit 1
+  fi
   if [[ -z "$RUNNER_PRODUCTS" && "${INTERCEPTOR_DRY_RUN:-0}" != "1" ]]; then
     echo "==> Building the iOS agent UNSIGNED (InterceptorRunner; user re-signs at setup)..."
     ( cd "$REPO_ROOT/ios/InterceptorRunner" && xcodegen generate >/dev/null )
     RUNNER_DD="$(mktemp -d)/dd"
     # Unsigned build-for-testing: no team, no identity, no provisioning. The
     # re-sign at `ios setup` supplies get-task-allow + the user's cert/profile.
+    PUBLIC_SOURCE_ROOT="/src/interceptor"
     xcrun xcodebuild build-for-testing \
       -project "$REPO_ROOT/ios/InterceptorRunner/InterceptorRunner.xcodeproj" \
       -scheme InterceptorRunner -destination 'generic/platform=iOS' \
       CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" ENTITLEMENTS_REQUIRED=NO \
+      "OTHER_CFLAGS=\"-ffile-prefix-map=$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" \"-fdebug-prefix-map=$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" \"-ffile-compilation-dir=$PUBLIC_SOURCE_ROOT/ios/InterceptorRunner\"" \
+      "OTHER_SWIFT_FLAGS=-file-prefix-map \"$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" -debug-prefix-map \"$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" -file-compilation-dir \"$PUBLIC_SOURCE_ROOT/ios/InterceptorRunner\"" \
       -derivedDataPath "$RUNNER_DD" >/dev/null
     RUNNER_PRODUCTS="$RUNNER_DD/Build/Products"
   fi
   if [[ -n "$RUNNER_PRODUCTS" && -d "$RUNNER_PRODUCTS" ]]; then
-    # exclude dSYMs to keep the bundle lean
-    run tar --exclude='*.dSYM' -cf "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/ios-runner.tar" -C "$RUNNER_PRODUCTS" .
+    RUNNER_XCTESTRUN="$(find "$RUNNER_PRODUCTS" -maxdepth 1 -type f -name '*.xctestrun' -print -quit)"
+    RUNNER_APP="$(find "$RUNNER_PRODUCTS" -mindepth 2 -maxdepth 2 -type d -name 'InterceptorRunner-Runner.app' -print -quit)"
+    if [[ -z "$RUNNER_XCTESTRUN" || -z "$RUNNER_APP" ]]; then
+      echo "ERROR: iOS agent build is incomplete (missing runner app or .xctestrun)" >&2
+      exit 1
+    fi
+    RUNNER_XCTESTRUN_REL="${RUNNER_XCTESTRUN#"$RUNNER_PRODUCTS"/}"
+    RUNNER_APP_REL="${RUNNER_APP#"$RUNNER_PRODUCTS"/}"
+    # Ship only the runtime app and launch descriptor. Swift modules, dSYMs,
+    # index data, and other compiler products are not needed on user machines.
+    run tar --uid 0 --gid 0 --uname root --gname wheel --exclude='*.dSYM' \
+      -cf "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/ios-runner.tar" \
+      -C "$RUNNER_PRODUCTS" "$RUNNER_XCTESTRUN_REL" "$RUNNER_APP_REL"
     echo "==> iOS agent bundled UNSIGNED (ios-runner.tar)"
   else
     echo "==> NOTE: iOS agent not bundled (no Products dir) — 'interceptor ios install'/'setup' will report it missing"

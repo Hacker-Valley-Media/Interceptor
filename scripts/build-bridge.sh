@@ -34,15 +34,20 @@ APP_ICON_NAME="interceptor"
 
 echo "==> Building interceptor-bridge (release)..."
 cd "$BRIDGE_DIR"
-SWIFT_FLAGS=()
+# BoringSSL embeds __FILE__ strings in the release binary. Map only SwiftPM's
+# dependency checkout root so those strings never disclose the build machine's
+# filesystem while source and module-cache diagnostics keep their normal paths.
+SWIFT_FLAGS=(
+  "-Xcc"
+  "-ffile-prefix-map=$BRIDGE_DIR/.build/checkouts=/src/interceptor-deps"
+)
 if [[ "${INTERCEPTOR_ENABLE_PLATFORM_TARGETS:-0}" == "1" ]]; then
   echo "==> Native platform target support: ENABLED (research build)"
   SWIFT_FLAGS+=("-Xswiftc" "-DINTERCEPTOR_ENABLE_PLATFORM_TARGETS")
-  swift build -c release "${SWIFT_FLAGS[@]}" 2>&1
 else
   echo "==> Native platform target support: disabled (public build)"
-  swift build -c release 2>&1
 fi
+swift build -c release "${SWIFT_FLAGS[@]}" 2>&1
 
 BINARY="$BRIDGE_DIR/.build/release/interceptor-bridge"
 if [ ! -f "$BINARY" ]; then

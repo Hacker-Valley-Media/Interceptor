@@ -42,7 +42,11 @@ final class InterceptorRunnerUITests: XCTestCase {
     func testRunner() {
         let env = ProcessInfo.processInfo.environment
         guard let urlStr = env["INTERCEPTOR_WS_URL"], let url = URL(string: urlStr) else {
-            XCTFail("INTERCEPTOR_WS_URL is not set in the test environment")
+            XCTFail(
+                "INTERCEPTOR_WS_URL is not set in the test environment",
+                file: "InterceptorRunnerUITests.swift",
+                line: #line
+            )
             return
         }
         let agent = WSAgent(
