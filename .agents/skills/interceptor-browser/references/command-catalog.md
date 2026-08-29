@@ -199,7 +199,9 @@ interceptor tab switch <tab-id>
 interceptor tab close <tab-id>
 
 interceptor open <url> --group <label>   # Open into a named per-agent group "<brand>-<label>" (created on first use)
-interceptor read --group <label>         # Any command scopes to that group's tabs; env INTERCEPTOR_GROUP is the fallback
+interceptor read --group <label>         # Any command scopes to that group's tabs; env INTERCEPTOR_GROUP is the fallback.
+                                         # No flag + no env: Claude Code shells auto-derive a per-session group (s-<hash8>,
+                                         # soft scope — empty group falls back to the active tab); --no-group opts out.
 interceptor group list                   # All live tab groups: label, title, color, tab count
 interceptor group close <label>          # Atomically close every tab in a named group (other groups untouched)
 interceptor window list
@@ -212,7 +214,7 @@ interceptor window resize --state maximized               # Don't combine maximi
 
 Use `--tab <id>` for a specific tab; `--any-tab` only when explicitly authorized.
 
-Give each agent its own `--group <label>` (or set `INTERCEPTOR_GROUP` once per agent): every command then resolves and acts only within that agent's tab group, reuse applies only to that group's tabs, and cross-group targets are rejected. Labels match `[A-Za-z0-9_-]{1,32}`; pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done — `interceptor group close <label>`, then `group list` as proof. The extension auto-closes groups idle for 10+ minutes by default (popup-configurable, 0 disables); treat that as crash safety, not as your cleanup.
+Solo agent work needs no label: a Claude Code shell derives a per-session group (`s-<hash8>` from the session id) automatically, giving it tab reuse and idle-sweep cleanup with SOFT scoping (empty-group commands fall back to the active tab; explicit `--tab` is not membership-gated). Parallel sibling lanes share one session id, so concurrent Interceptor lanes must each pass their own `--group lane-<n>`. An explicit `--group <label>` (or `INTERCEPTOR_GROUP` once per agent) buys HARD isolation: every command then resolves and acts only within that agent's tab group, reuse applies only to that group's tabs, and cross-group targets are rejected. Labels match `[A-Za-z0-9_-]{1,32}`; pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done — `interceptor group close <label>`, then `group list` as proof. The extension auto-closes groups idle for 10+ minutes by default (popup-configurable, 0 disables); treat that as crash safety, not as your cleanup.
 
 ## Cookies / Storage / History / Bookmarks
 

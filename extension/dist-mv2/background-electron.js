@@ -4974,19 +4974,24 @@ async function handleDaemonMessage(msg) {
     fail(`invalid group label '${groupLabel}' — must match [A-Za-z0-9_-]{1,32}`);
     return;
   }
-  if (groupLabel)
-    recordGroupActivity(groupLabel);
-  else if (needsTab(action.type) || action.type === "tab_create")
-    recordGroupActivity("");
+  const groupDerived = groupLabel !== undefined && action.groupDerived === true;
+  if (needsTab(action.type) || action.type === "tab_create")
+    recordGroupActivity(groupLabel ?? "");
   if (!tabId && needsTab(action.type)) {
     tabId = await getActiveTabId(groupLabel);
-    if (tabId && groupLabel) {
+    if (tabId && groupLabel && !groupDerived) {
       let stillInGroup = false;
       try {
         stillInGroup = await isTabInNamedGroup(tabId, groupLabel);
       } catch {}
       if (!stillInGroup)
         tabId = undefined;
+    } else if (tabId && groupDerived) {
+      try {
+        await chrome.tabs.get(tabId);
+      } catch {
+        tabId = undefined;
+      }
     }
   }
   if (!tabId && needsTab(action.type) && groupLabel) {
@@ -4996,8 +5001,8 @@ async function handleDaemonMessage(msg) {
       const candidate = groupTabs.filter((t) => typeof t.id === "number").sort((a, b) => b.id - a.id)[0];
       tabId = candidate?.id;
     }
-    if (!tabId) {
-      fail(`group '${groupLabel}' has no tabs — open one with 'interceptor open <url> --group ${groupLabel}'`);
+    if (!tabId && !groupDerived && !action.anyTab) {
+      fail(`group '${groupLabel}' has no tabs — open one with 'interceptor open <url> --group ${groupLabel}', pass --any-tab to target the active tab, or set INTERCEPTOR_GROUP= (empty) to opt out of group scoping`);
       return;
     }
   }
@@ -5010,7 +5015,7 @@ async function handleDaemonMessage(msg) {
     return;
   }
   if (tabId && needsTab(action.type) && !action.anyTab) {
-    if (groupLabel) {
+    if (groupLabel && !groupDerived) {
       const inNamed = await isTabInNamedGroup(tabId, groupLabel);
       if (!inNamed) {
         fail(`tab ${tabId} is not in group '${groupLabel}' — pass the owning group, or --any-tab to bypass`);

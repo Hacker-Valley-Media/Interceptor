@@ -50,7 +50,7 @@ const GLOBAL_VALUE_FLAGS = ["--frame", "--tab", "--context", "--group", "--group
 // Global booleans legal on every normalized command (harness-level concerns
 // handled in cli/index.ts before or after dispatch).
 const GLOBAL_BOOLEAN_FLAGS = new Set([
-  "--json", "--ws", "--no-ws", "--any-tab", "--changes", "--all-surfaces",
+  "--json", "--ws", "--no-ws", "--any-tab", "--no-group", "--changes", "--all-surfaces",
   "--help", "-h",
   // stderr-hint suppressors read from raw argv on any command
   // (cli/commands/skills.ts maybeEmitSkillsHint) or from `open`'s filtered

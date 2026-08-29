@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { GROUP_LABEL_RE, groupTitleFor, colorForLabel, serializeGroupAdd } from "../extension/src/background/tab-group"
 import { VALID_COLORS } from "../extension/src/background/brand-tab-group"
-import { GROUP_LABEL_RE as CLI_GROUP_LABEL_RE, parseGroupFlag } from "../cli/parse"
+import { GROUP_LABEL_RE as CLI_GROUP_LABEL_RE, parseGroupFlag, resolveGroupScope, deriveSessionGroupLabel } from "../cli/parse"
+import { setGlobalGroup, withGroup } from "../cli/transport"
 import { buildFilteredArgs } from "../cli/global-flags"
 
 // tab-group.ts is module-load side-effect-free (no `chrome.*` at import time — the
@@ -94,6 +95,80 @@ describe("tab groups: CLI global flags", () => {
     expect(parseGroupFlag(["open", "--group", "flagged"], { INTERCEPTOR_GROUP: "fromenv" })).toBe("flagged")
     expect(parseGroupFlag(["open"], { INTERCEPTOR_GROUP: "fromenv" })).toBe("fromenv")
     expect(parseGroupFlag(["open"], {})).toBeUndefined()
+  })
+
+  test("derivation: agent sessions derive a per-session group from CLAUDE_CODE_SESSION_ID", () => {
+    // Bare `open` from an agent shell must land in a per-session named group so
+    // the extension's policy reuse engages (it is deliberately excluded from
+    // the shared default group) and the idle sweep bounds the session's tabs.
+    const scope = resolveGroupScope(["open"], { CLAUDE_CODE_SESSION_ID: "00000000-1111-4222-8333-444444444444" })
+    expect(scope.label).toMatch(/^s-[0-9a-f]{8}$/)
+    expect(scope.derived).toBe(true)
+    expect(CLI_GROUP_LABEL_RE.test(scope.label!)).toBe(true)
+    // Deterministic: the same session always maps to the same label.
+    expect(resolveGroupScope(["read"], { CLAUDE_CODE_SESSION_ID: "00000000-1111-4222-8333-444444444444" }).label)
+      .toBe(scope.label)
+  })
+
+  test("derivation hashes the WHOLE id — format-prefixed ids must stay distinct (entropy, not a prefix)", () => {
+    // A sanitized-prefix scheme collapses `local_<uuid>` ids to two
+    // discriminating characters; the hash must keep them distinct.
+    const a = deriveSessionGroupLabel("local_c1ec3b94-1843-4b5e-9c66-000000000001")
+    const b = deriveSessionGroupLabel("local_a9ff1122-0000-4b5e-9c66-000000000002")
+    expect(a).toMatch(/^s-[0-9a-f]{8}$/)
+    expect(b).toMatch(/^s-[0-9a-f]{8}$/)
+    expect(a).not.toBe(b)
+    // Hostile characters cannot reach the label (hash output is hex-only)…
+    expect(deriveSessionGroupLabel("a!b@c#d$e%f^g&h*")).toMatch(/^s-[0-9a-f]{8}$/)
+    // …and an empty id derives nothing.
+    expect(deriveSessionGroupLabel("")).toBeUndefined()
+    expect(parseGroupFlag(["open"], { CLAUDE_CODE_SESSION_ID: "" })).toBeUndefined()
+  })
+
+  test("derivation loses to the flag, INTERCEPTOR_GROUP, and --no-group; explicit scopes are never marked derived", () => {
+    const env = { CLAUDE_CODE_SESSION_ID: "00000000-1111-4222-8333-444444444444", INTERCEPTOR_GROUP: "fromenv" }
+    expect(resolveGroupScope(["open", "--group", "flagged"], env)).toEqual({ label: "flagged", derived: false })
+    expect(resolveGroupScope(["open"], env)).toEqual({ label: "fromenv", derived: false })
+    expect(resolveGroupScope(["open", "--no-group"], { CLAUDE_CODE_SESSION_ID: "00000000-1111-4222-8333-444444444444" }))
+      .toEqual({ label: undefined, derived: false })
+  })
+
+  test("INTERCEPTOR_GROUP set-but-empty opts out of derivation (default group)", () => {
+    expect(resolveGroupScope(["open"], { CLAUDE_CODE_SESSION_ID: "00000000-1111-4222-8333-444444444444", INTERCEPTOR_GROUP: "" }))
+      .toEqual({ label: undefined, derived: false })
+  })
+
+  test("wire shape: a derived label reaches the action as group + groupDerived; explicit labels carry no marker", () => {
+    setGlobalGroup("s-deadbeef", undefined, true)
+    expect(withGroup({ type: "tab_create" })).toEqual({ type: "tab_create", group: "s-deadbeef", groupDerived: true })
+    setGlobalGroup("explicit", undefined, false)
+    expect(withGroup({ type: "tab_create" })).toEqual({ type: "tab_create", group: "explicit" })
+    // An action that already carries a group is never overridden or marked.
+    setGlobalGroup("s-deadbeef", undefined, true)
+    expect(withGroup({ type: "tab_create", group: "mine" })).toEqual({ type: "tab_create", group: "mine" })
+    setGlobalGroup(undefined, undefined, false)
+  })
+
+  test("--no-group is stripped from filtered args; --group '' still errors (no silent empty label)", () => {
+    expect(buildFilteredArgs(["open", "https://x", "--no-group"])).toEqual(["open", "https://x"])
+    // `--group` with a missing/flag-shaped value exits 1 — pinned via the regex
+    // (an empty label must never pass the label gate).
+    expect(CLI_GROUP_LABEL_RE.test("")).toBe(false)
+  })
+})
+
+describe("tab groups: derived scope is soft in dispatch (source assertions)", () => {
+  test("derived flag exists and is consulted by the three gates", () => {
+    expect(dispatchSrc).toContain('action.groupDerived === true')
+    // empty-group hard fail bypassed for derived scope and --any-tab
+    expect(dispatchSrc).toContain("!groupDerived && !action.anyTab")
+    // membership gate: strict only for explicit groups
+    expect(dispatchSrc).toContain("groupLabel && !groupDerived")
+  })
+
+  test("liveness stamp uses the tab-activity predicate for BOTH named and default groups", () => {
+    // A session heartbeating `status` must not pin its group past the sweep.
+    expect(dispatchSrc).toContain('if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")')
   })
 })
 

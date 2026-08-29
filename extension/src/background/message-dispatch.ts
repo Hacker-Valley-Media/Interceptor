@@ -131,17 +131,23 @@ export async function handleDaemonMessage(msg: {
     fail(`invalid group label '${groupLabel}' — must match [A-Za-z0-9_-]{1,32}`)
     return
   }
+  // A DERIVED group was auto-minted by the CLI from the caller's session id —
+  // nobody asked for isolation. It homes tab creation, policy reuse and the
+  // idle sweep, but must never become a hard isolation gate: empty-group
+  // resolution falls back to the active tab (as ungrouped requests always
+  // have), and explicit --tab targets are gated like ungrouped requests.
+  const groupDerived = groupLabel !== undefined && action.groupDerived === true
 
-  // Liveness stamp for the idle sweeper: any grouped command marks its
-  // group alive; any ungrouped tab-touching command (plus tab_create, which is a
-  // NO_TAB action but births tabs) marks the default group alive. Meta polls like
-  // `status`/`group_list` deliberately do NOT count as tab activity.
-  if (groupLabel) recordGroupActivity(groupLabel)
-  else if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity("")
+  // Liveness stamp for the idle sweeper: a tab-touching command (plus
+  // tab_create, which is a NO_TAB action but births tabs) marks its group —
+  // named or default — alive. Meta polls like `status`/`group_list`
+  // deliberately do NOT count as tab activity in EITHER branch: a session
+  // heartbeating `status` must not pin its group past the idle sweep.
+  if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")
 
   if (!tabId && needsTab(action.type)) {
     tabId = await getActiveTabId(groupLabel)
-    if (tabId && groupLabel) {
+    if (tabId && groupLabel && !groupDerived) {
       // Stored per-group target may be dead (tab closed outside group_close) or
       // no longer a member of the group; validate MEMBERSHIP (not mere existence)
       // and fall through to the group's own tabs otherwise — this also self-heals
@@ -149,6 +155,11 @@ export async function handleDaemonMessage(msg: {
       let stillInGroup = false
       try { stillInGroup = await isTabInNamedGroup(tabId, groupLabel) } catch {}
       if (!stillInGroup) tabId = undefined
+    } else if (tabId && groupDerived) {
+      // Derived scope is not an isolation boundary: the session's targeting
+      // chain survives as long as the tab EXISTS, whichever group holds it
+      // (it may legitimately point at a fallback-resolved default-group tab).
+      try { await chrome.tabs.get(tabId) } catch { tabId = undefined }
     }
   }
 
@@ -164,8 +175,12 @@ export async function handleDaemonMessage(msg: {
         .sort((a, b) => (b.id as number) - (a.id as number))[0]
       tabId = candidate?.id
     }
-    if (!tabId) {
-      fail(`group '${groupLabel}' has no tabs — open one with 'interceptor open <url> --group ${groupLabel}'`)
+    if (!tabId && !groupDerived && !action.anyTab) {
+      // Explicitly-grouped requests resolve only within their group. Derived
+      // scope (or --any-tab) falls through to the active-tab path below
+      // instead — that IS the pre-derivation behavior for a bare call, and
+      // hard-failing here broke read-the-user's-tab workflows.
+      fail(`group '${groupLabel}' has no tabs — open one with 'interceptor open <url> --group ${groupLabel}', pass --any-tab to target the active tab, or set INTERCEPTOR_GROUP= (empty) to opt out of group scoping`)
       return
     }
   }
@@ -184,7 +199,7 @@ export async function handleDaemonMessage(msg: {
   }
 
   if (tabId && needsTab(action.type) && !action.anyTab) {
-    if (groupLabel) {
+    if (groupLabel && !groupDerived) {
       const inNamed = await isTabInNamedGroup(tabId, groupLabel)
       if (!inNamed) {
         fail(`tab ${tabId} is not in group '${groupLabel}' — pass the owning group, or --any-tab to bypass`)

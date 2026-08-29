@@ -3,7 +3,7 @@ import { HELP, shortHelp, fullHelp, helpForCommand } from "./help"
 import { detectSurfaces, SURFACE_UPGRADE_HINT } from "./lib/surfaces"
 import { runSkillsCommand, maybeEmitSkillsHint } from "./commands/skills"
 import { runManifestCommand } from "./manifest"
-import { parseTabFlag, parseContextFlag, parseGroupFlag, parseGroupColorFlag } from "./parse"
+import { parseTabFlag, parseContextFlag, resolveGroupScope, parseGroupColorFlag } from "./parse"
 import { formatState, formatTabs, formatCookies, formatFind, formatResult } from "./format"
 import { sendCommand, sendCommandWs, setGlobalGroup, type DaemonResult, type DaemonResponse, type Action } from "./transport"
 import { UPLOAD_CHUNK_B64_BYTES } from "../shared/platform"
@@ -136,10 +136,11 @@ async function main() {
   const anyTab = args.includes("--any-tab")
   const globalTabId = parseTabFlag(args)
   const globalContextId = parseContextFlag(args)
-  // --group / $INTERCEPTOR_GROUP scopes this invocation to a named tab
-  // group. Injected into every outgoing action at the transport choke point, so
-  // simple, compound, and looping command paths are all covered.
-  setGlobalGroup(parseGroupFlag(args), parseGroupColorFlag(args))
+  // --group / $INTERCEPTOR_GROUP / derived-from-session scopes this invocation
+  // to a named tab group. Injected into every outgoing action at the transport
+  // choke point, so simple, compound, and looping command paths are all covered.
+  const groupScope = resolveGroupScope(args)
+  setGlobalGroup(groupScope.label, parseGroupColorFlag(args), groupScope.derived)
 
   // Build filtered args (strip global flags). NB: --json is dual-purpose —
   // it can be a global "emit JSON output" boolean OR a domain-specific

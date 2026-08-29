@@ -6,7 +6,7 @@ export function buildFilteredArgs(args: string[]): string[] {
   const skipIndices = new Set<number>()
 
   args.forEach((arg, index) => {
-    if (arg === "--ws" || arg === "--any-tab") skipIndices.add(index)
+    if (arg === "--ws" || arg === "--any-tab" || arg === "--no-group") skipIndices.add(index)
   })
 
   const tabIdx = args.indexOf("--tab")
