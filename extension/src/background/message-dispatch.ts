@@ -172,13 +172,6 @@ export async function handleDaemonMessage(msg: {
   // idle sweep, but must never become a hard isolation gate: empty-group
   // resolution falls back to the active tab (as ungrouped requests always
   // have), and explicit --tab targets are gated like ungrouped requests.
-  // Liveness stamp for the idle sweeper: a tab-touching command (plus
-  // tab_create, which is a NO_TAB action but births tabs) marks its group —
-  // named or default — alive. Meta polls like `status`/`group_list`
-  // deliberately do NOT count as tab activity in EITHER branch: a session
-  // heartbeating `status` must not pin its group past the idle sweep.
-  if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")
-
   if (!tabId && needsTab(action.type)) {
     tabId = await getActiveTabId(groupLabel)
     if (tabId && groupHard) {
@@ -239,6 +232,11 @@ export async function handleDaemonMessage(msg: {
       return
     }
   }
+
+  // Only accepted tab activity refreshes the idle timer. Invalid labels,
+  // empty hard groups, stale ids, and rejected cross-group targets must not
+  // keep a group alive. Meta polls such as status/group_list never count.
+  if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")
 
   // Persist the auto-target only AFTER the group gate has passed — a rejected
   // cross-group request must never poison another group's (or the global)

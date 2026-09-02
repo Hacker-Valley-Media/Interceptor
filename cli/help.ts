@@ -280,7 +280,7 @@ Navigation:
 
 Tabs:
   interceptor tabs                           List all tabs
-  interceptor tab new [url]                  Open new tab in background (default; always creates — the ⌘T verb)
+  interceptor tab new [url]                  Open new tab in background (creates by default; --reuse opts in)
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
   interceptor tab new [url] --reuse          Navigate the group's most-recent tab instead of creating
   interceptor tab close [id]                 Close tab

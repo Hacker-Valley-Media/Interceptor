@@ -259,6 +259,14 @@ export function normalizeArgsSplit(filtered: string[]): NormalizedArgs {
     positionals.push(tok)
   }
 
+  if (cmd === "tab" && positionals[0] !== "new") {
+    const unsupported = TAB_BOOL.find((flag) => flags.includes(flag))
+    if (unsupported) {
+      console.error(`error: flag '${unsupported}' is only valid with 'tab new'.`)
+      process.exit(1)
+    }
+  }
+
   return { argv: [cmd, ...positionals, ...flags], positionalCount: positionals.length }
 }
 

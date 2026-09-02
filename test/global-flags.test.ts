@@ -23,4 +23,9 @@ describe("buildFilteredArgs", () => {
   test("preserves command-local --json outside leading global positions", () => {
     expect(buildFilteredArgs(["batch", "run", "--json", "payload"])).toEqual(["batch", "run", "--json", "payload"])
   })
+
+  test("preserves global-looking tokens after the option terminator", () => {
+    expect(buildFilteredArgs(["type", "e1", "--", "--shared-group", "--group", "literal"]))
+      .toEqual(["type", "e1", "--", "--shared-group", "--group", "literal"])
+  })
 })

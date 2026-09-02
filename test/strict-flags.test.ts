@@ -83,6 +83,18 @@ describe("strict unknown-flag rejection (#212)", () => {
     expect(exitCode).toBeUndefined()
   })
 
+  test("tab close and tab switch reject tab-creation flags", () => {
+    for (const args of [
+      ["tab", "close", "123", "--reuse"],
+      ["tab", "close", "123", "--no-reuse"],
+      ["tab", "switch", "123", "--activate"],
+    ]) {
+      errors = []
+      expect(() => normalizeArgs(args)).toThrow("__exit_1")
+      expect(errors.join("\n")).toContain("is only valid with 'tab new'")
+    }
+  })
+
   test("INTERCEPTOR_LAX_FLAGS=1 downgrades to a warning and keeps going", () => {
     process.env.INTERCEPTOR_LAX_FLAGS = "1"
     const argv = normalizeArgs(["screenshot", "--zzz-lax-flag"])
@@ -182,17 +194,18 @@ describe("every module-consumed flag is declared (reverse direction)", () => {
 describe("the whole inventory is accepted (table-driven)", () => {
   for (const [cmd, valueFlags] of Object.entries(FLAG_INVENTORY.value)) {
     test(`every declared flag parses for '${cmd}'`, () => {
+      const prefix = cmd === "tab" ? [cmd, "new"] : [cmd]
       for (const flag of valueFlags) {
-        normalizeArgsSplit([cmd, flag, "x"])
+        normalizeArgsSplit([...prefix, flag, "x"])
       }
       for (const flag of FLAG_INVENTORY.boolean[cmd] || []) {
-        normalizeArgsSplit([cmd, flag])
+        normalizeArgsSplit([...prefix, flag])
       }
       for (const flag of FLAG_INVENTORY.globalValue) {
-        normalizeArgsSplit([cmd, flag, "x"])
+        normalizeArgsSplit([...prefix, flag, "x"])
       }
       for (const flag of FLAG_INVENTORY.globalBoolean) {
-        if (flag.startsWith("--")) normalizeArgsSplit([cmd, flag])
+        if (flag.startsWith("--")) normalizeArgsSplit([...prefix, flag])
       }
       expect(exitCode).toBeUndefined()
     })

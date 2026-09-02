@@ -230,6 +230,20 @@ describe("reuse gating (T4)", () => {
     expect(action).toMatchObject({ type: "tab_create", url: "https://x.com", reuse: true })
   })
 
+  test("conflicting explicit reuse flags fail instead of silently winning", () => {
+    const realExit = process.exit
+    const realError = console.error
+    try {
+      process.exit = ((code?: number) => { throw new Error(`__exit_${code}`) }) as never
+      console.error = () => {}
+      expect(() => buildTabCreateAction(["open", "https://x.com", "--reuse", "--no-reuse"], "https://x.com"))
+        .toThrow("__exit_1")
+    } finally {
+      process.exit = realExit
+      console.error = realError
+    }
+  })
+
   test("policy may decide ONLY for grouped, reuse-undecided open calls", () => {
     const open = buildTabCreateAction(["open", "u"], "u", { policyDefault: true })
     // grouped → policy decides

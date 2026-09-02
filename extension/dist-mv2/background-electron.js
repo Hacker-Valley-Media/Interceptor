@@ -4994,8 +4994,6 @@ async function handleDaemonMessage(msg) {
     fail(`invalid group label '${groupLabel}' — must match [A-Za-z0-9_-]{1,32}`);
     return;
   }
-  if (needsTab(action.type) || action.type === "tab_create")
-    recordGroupActivity(groupLabel ?? "");
   if (!tabId && needsTab(action.type)) {
     tabId = await getActiveTabId(groupLabel);
     if (tabId && groupHard) {
@@ -5040,6 +5038,8 @@ async function handleDaemonMessage(msg) {
       return;
     }
   }
+  if (needsTab(action.type) || action.type === "tab_create")
+    recordGroupActivity(groupLabel ?? "");
   if (tabId)
     setActiveTabId(tabId, groupLabel);
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {

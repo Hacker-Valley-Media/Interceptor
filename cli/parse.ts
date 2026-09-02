@@ -113,8 +113,10 @@ export function resolveSessionId(env: Record<string, string | undefined>): strin
  * `INTERCEPTOR_SESSION_ID`.
  */
 export function resolveGroupScope(args: string[], env: Record<string, string | undefined> = process.env): GroupScope {
-  const idx = args.indexOf("--group")
-  if (args.includes("--shared-group")) {
+  const optionTerminator = args.indexOf("--")
+  const scopeArgs = optionTerminator === -1 ? args : args.slice(0, optionTerminator)
+  const idx = scopeArgs.indexOf("--group")
+  if (scopeArgs.includes("--shared-group")) {
     if (idx !== -1) {
       console.error("error: --shared-group conflicts with --group")
       process.exit(1)
@@ -124,11 +126,11 @@ export function resolveGroupScope(args: string[], env: Record<string, string | u
   let label: string | undefined
   let soft = false
   if (idx !== -1) {
-    if (!args[idx + 1] || args[idx + 1].startsWith("--")) {
+    if (!scopeArgs[idx + 1] || scopeArgs[idx + 1].startsWith("--")) {
       console.error("error: --group requires a label")
       process.exit(1)
     }
-    label = args[idx + 1]
+    label = scopeArgs[idx + 1]
   } else if (env.INTERCEPTOR_GROUP !== undefined) {
     // Set-but-empty is a deliberate opt-out: target the default group.
     label = env.INTERCEPTOR_GROUP === "" ? undefined : env.INTERCEPTOR_GROUP

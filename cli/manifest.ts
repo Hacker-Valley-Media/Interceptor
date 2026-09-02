@@ -171,7 +171,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "tabs", surface: "browser", usage: "interceptor tabs", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
   {
     name: "tab", surface: "browser",
-    usage: "interceptor tab new <url> [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id>",
+    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id>",
     summary: "Create, reuse, activate, or close managed tabs",
     returns: "Tab metadata for creation, or ok / error for exact-ID lifecycle actions.",
     flags: [

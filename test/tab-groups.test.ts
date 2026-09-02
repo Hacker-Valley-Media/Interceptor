@@ -181,6 +181,15 @@ describe("tab groups: CLI global flags", () => {
     }
   })
 
+  test("group-looking values after the option terminator remain literal", () => {
+    const env = { INTERCEPTOR_SESSION_ID: "session" }
+    const expected = deriveSessionGroupLabel("session")
+    expect(resolveGroupScope(["type", "e1", "--", "--shared-group"], env))
+      .toEqual({ label: expected, soft: true })
+    expect(resolveGroupScope(["type", "e1", "--", "--group", "literal"], env))
+      .toEqual({ label: expected, soft: true })
+  })
+
   test("wire shape: an automatic label carries groupSoft; explicit and MCP labels do not", () => {
     setGlobalGroup("s-ba7816bf8f01cfea", undefined, true)
     expect(withGroup({ type: "tab_create" })).toEqual({ type: "tab_create", group: "s-ba7816bf8f01cfea", groupSoft: true })
@@ -215,6 +224,10 @@ describe("tab groups: dispatch scope behavior", () => {
   test("liveness stamp uses the tab-activity predicate for BOTH named and default groups", () => {
     // A session heartbeating `status` must not pin its group past the sweep.
     expect(dispatchSrc).toContain('if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")')
+  })
+
+  test("rejected membership checks happen before the liveness stamp", () => {
+    expect(dispatchSrc.lastIndexOf("managedTabGateError(")).toBeLessThan(dispatchSrc.indexOf("recordGroupActivity(groupLabel"))
   })
 
   test("a stale explicit hard-group tab becomes a prompt actionable error", async () => {

@@ -138,6 +138,10 @@ export function buildTabCreateAction(
   opts?: { policyDefault?: boolean }
 ): TabCreateAction {
   const action: TabCreateAction = { type: "tab_create", url }
+  if (filtered.includes("--reuse") && filtered.includes("--no-reuse")) {
+    console.error("error: --reuse conflicts with --no-reuse")
+    process.exit(1)
+  }
   // --reuse / --no-reuse are the explicit per-call decisions. Without either,
   // `open` (policyDefault) marks the action reuse-undecided via `reusePolicy`
   // and the extension's resolved tabLifecycle policy decides — named groups
