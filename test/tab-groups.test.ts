@@ -230,6 +230,11 @@ describe("tab groups: dispatch scope behavior", () => {
     expect(dispatchSrc.lastIndexOf("managedTabGateError(")).toBeLessThan(dispatchSrc.indexOf("recordGroupActivity(groupLabel"))
   })
 
+  test("stale expected-URL checks happen before the liveness stamp", () => {
+    expect(dispatchSrc.indexOf("const urlErr = await verifyTabUrl"))
+      .toBeLessThan(dispatchSrc.indexOf("recordGroupActivity(groupLabel"))
+  })
+
   test("a stale explicit hard-group tab becomes a prompt actionable error", async () => {
     const savedChrome = globalThis.chrome
     namedGroups.set("stale", 71)

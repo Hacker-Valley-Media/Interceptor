@@ -38,6 +38,7 @@ export function buildFilteredArgs(args: string[]): string[] {
   }
 
   return args.filter((arg, index) => {
+    if (index >= optionEnd) return true
     if (skipIndices.has(index)) return false
     if (arg === "--json") return index > 1
     return true

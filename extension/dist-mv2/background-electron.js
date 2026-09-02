@@ -5038,8 +5038,6 @@ async function handleDaemonMessage(msg) {
       return;
     }
   }
-  if (needsTab(action.type) || action.type === "tab_create")
-    recordGroupActivity(groupLabel ?? "");
   if (tabId)
     setActiveTabId(tabId, groupLabel);
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
@@ -5051,6 +5049,8 @@ async function handleDaemonMessage(msg) {
       return;
     }
   }
+  if (needsTab(action.type) || action.type === "tab_create")
+    recordGroupActivity(groupLabel ?? "");
   try {
     const result = await routeAction(action, tabId);
     if (tabId)

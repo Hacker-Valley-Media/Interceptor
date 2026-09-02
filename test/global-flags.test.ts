@@ -27,5 +27,7 @@ describe("buildFilteredArgs", () => {
   test("preserves global-looking tokens after the option terminator", () => {
     expect(buildFilteredArgs(["type", "e1", "--", "--shared-group", "--group", "literal"]))
       .toEqual(["type", "e1", "--", "--shared-group", "--group", "literal"])
+    expect(buildFilteredArgs(["type", "e1", "--", "--json"]))
+      .toEqual(["type", "e1", "--", "--json"])
   })
 })

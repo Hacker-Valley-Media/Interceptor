@@ -233,11 +233,6 @@ export async function handleDaemonMessage(msg: {
     }
   }
 
-  // Only accepted tab activity refreshes the idle timer. Invalid labels,
-  // empty hard groups, stale ids, and rejected cross-group targets must not
-  // keep a group alive. Meta polls such as status/group_list never count.
-  if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")
-
   // Persist the auto-target only AFTER the group gate has passed — a rejected
   // cross-group request must never poison another group's (or the global)
   // auto-target key.
@@ -252,6 +247,12 @@ export async function handleDaemonMessage(msg: {
       return
     }
   }
+
+  // Only accepted tab activity refreshes the idle timer. Invalid labels,
+  // empty hard groups, stale ids, rejected cross-group targets, and stale
+  // expected-URL requests must not keep a group alive. Metadata polls such as
+  // status/group_list never count.
+  if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")
 
   try {
     const result = await routeAction(action, tabId!)
