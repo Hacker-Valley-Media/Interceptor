@@ -3,7 +3,7 @@ import { HELP, shortHelp, fullHelp, helpForCommand } from "./help"
 import { detectSurfaces, SURFACE_UPGRADE_HINT } from "./lib/surfaces"
 import { runSkillsCommand, maybeEmitSkillsHint } from "./commands/skills"
 import { runManifestCommand } from "./manifest"
-import { parseTabFlag, parseContextFlag, parseGroupFlag, parseGroupColorFlag } from "./parse"
+import { parseTabFlag, parseContextFlag, resolveGroupScope, parseGroupColorFlag } from "./parse"
 import { formatState, formatTabs, formatCookies, formatFind, formatResult } from "./format"
 import { sendCommand, sendCommandWs, setGlobalGroup, type DaemonResult, type DaemonResponse, type Action } from "./transport"
 import { UPLOAD_CHUNK_B64_BYTES } from "../shared/platform"
@@ -119,7 +119,9 @@ function unwrapResult(response: DaemonResponse): DaemonResult {
 
 async function main() {
   const args = process.argv.slice(2)
-  const jsonMode = args.includes("--json")
+  const optionTerminator = args.indexOf("--")
+  const globalArgs = optionTerminator === -1 ? args : args.slice(0, optionTerminator)
+  const jsonMode = globalArgs.includes("--json")
   // Screenshot responses can carry tens-to-hundreds of KB of base64
   // dataUrl payloads. Native-messaging port-based responses for that size
   // are unreliable on Brave/Chromium (messages are silently dropped despite
@@ -132,14 +134,14 @@ async function main() {
   // the action payload, e.g. "Unexpected token 'new'"). It therefore always
   // routes over WS — a stray --no-ws would otherwise produce a confusing parse
   // error. Screenshot still honors --no-ws as an escape hatch.
-  const useWs = args.includes("--ws") || isSaveCmd || (isScreenshotCmd && !args.includes("--no-ws"))
-  const anyTab = args.includes("--any-tab")
-  const globalTabId = parseTabFlag(args)
-  const globalContextId = parseContextFlag(args)
-  // --group / $INTERCEPTOR_GROUP scopes this invocation to a named tab
-  // group. Injected into every outgoing action at the transport choke point, so
-  // simple, compound, and looping command paths are all covered.
-  setGlobalGroup(parseGroupFlag(args), parseGroupColorFlag(args))
+  const useWs = globalArgs.includes("--ws") || isSaveCmd || (isScreenshotCmd && !globalArgs.includes("--no-ws"))
+  const anyTab = globalArgs.includes("--any-tab")
+  const globalTabId = parseTabFlag(globalArgs)
+  const globalContextId = parseContextFlag(globalArgs)
+  // Explicit or automatic session scope is injected into every outgoing
+  // action at the transport choke point, covering simple, compound, and loop paths.
+  const groupScope = resolveGroupScope(args)
+  setGlobalGroup(groupScope.label, parseGroupColorFlag(globalArgs), groupScope.soft)
 
   // Build filtered args (strip global flags). NB: --json is dual-purpose —
   // it can be a global "emit JSON output" boolean OR a domain-specific
@@ -514,9 +516,9 @@ async function main() {
   // Apply global modifiers
   if (anyTab) action.anyTab = true
   if (filtered.includes("--changes")) action.changes = true
-  const frameIdx = args.indexOf("--frame")
-  if (frameIdx !== -1 && args[frameIdx + 1]) {
-    action.frameId = parseInt(args[frameIdx + 1])
+  const frameIdx = globalArgs.indexOf("--frame")
+  if (frameIdx !== -1 && globalArgs[frameIdx + 1]) {
+    action.frameId = parseInt(globalArgs[frameIdx + 1])
   }
 
   try {

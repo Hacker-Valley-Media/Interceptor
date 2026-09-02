@@ -169,6 +169,11 @@ export async function handleTabActions(
         const groupId = group
           ? await addTabToNamedGroup(newTab.id, group, action.groupColor)
           : await addTabToInterceptorGroup(newTab.id)
+        // Chrome may deactivate a newly-created active tab while moving it
+        // into a tab group. Reassert the caller's explicit activation only
+        // after group placement completes. This changes the active tab inside
+        // the existing browser window but does not focus the browser window.
+        if (shouldActivate) await chrome.tabs.update(newTab.id, { active: true })
         // Pin the newly-created tab as the auto-target for subsequent commands
         // so a fresh CLI invocation (no --tab) routes to this tab instead of a
         // stale activeTabId or whatever Chrome reports as "active in currentWindow"

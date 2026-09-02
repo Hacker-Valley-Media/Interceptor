@@ -4,6 +4,7 @@ import {
   resolveTabLifecycle,
   policyMayDecideReuse,
   selectSweepCandidates,
+  boundedDirtyInspection,
   DEFAULT_TAB_LIFECYCLE,
   type SweepTab,
 } from "../extension/src/background/tab-lifecycle"
@@ -177,6 +178,24 @@ describe("selectSweepCandidates guards (T3)", () => {
   })
 })
 
+// ── T3b: a wedged page inspection cannot stall the whole sweep ──────────────
+
+describe("bounded dirty-page inspection (T3b)", () => {
+  test("preserves a tab whose inspection does not settle", async () => {
+    const never = new Promise<boolean>(() => {})
+    expect(await boundedDirtyInspection(never, 5)).toBe(true)
+  })
+
+  test("returns settled dirty and clean results without waiting for the timeout", async () => {
+    expect(await boundedDirtyInspection(Promise.resolve(true), 1_000)).toBe(true)
+    expect(await boundedDirtyInspection(Promise.resolve(false), 1_000)).toBe(false)
+  })
+
+  test("keeps the existing clean-on-inspection-failure behavior", async () => {
+    expect(await boundedDirtyInspection(Promise.reject(new Error("unreachable")), 1_000)).toBe(false)
+  })
+})
+
 // ── T4: reuse gating — parser + policy-gate composition ──────────────────────
 
 describe("reuse gating (T4)", () => {
@@ -209,6 +228,20 @@ describe("reuse gating (T4)", () => {
   test("tab new --reuse now works (was silently ignored — W3)", async () => {
     const action = await parseTabsCommand(["tab", "new", "https://x.com", "--reuse"])
     expect(action).toMatchObject({ type: "tab_create", url: "https://x.com", reuse: true })
+  })
+
+  test("conflicting explicit reuse flags fail instead of silently winning", () => {
+    const realExit = process.exit
+    const realError = console.error
+    try {
+      process.exit = ((code?: number) => { throw new Error(`__exit_${code}`) }) as never
+      console.error = () => {}
+      expect(() => buildTabCreateAction(["open", "https://x.com", "--reuse", "--no-reuse"], "https://x.com"))
+        .toThrow("__exit_1")
+    } finally {
+      process.exit = realExit
+      console.error = realError
+    }
   })
 
   test("policy may decide ONLY for grouped, reuse-undecided open calls", () => {

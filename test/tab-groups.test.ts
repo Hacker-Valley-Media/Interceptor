@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { GROUP_LABEL_RE, groupTitleFor, colorForLabel, serializeGroupAdd } from "../extension/src/background/tab-group"
+import { GROUP_LABEL_RE, groupTitleFor, colorForLabel, namedGroups, serializeGroupAdd } from "../extension/src/background/tab-group"
 import { VALID_COLORS } from "../extension/src/background/brand-tab-group"
-import { GROUP_LABEL_RE as CLI_GROUP_LABEL_RE, parseGroupFlag } from "../cli/parse"
+import {
+  GROUP_LABEL_RE as CLI_GROUP_LABEL_RE,
+  parseGroupFlag,
+  resolveGroupScope,
+  deriveSessionGroupLabel,
+  resolveSessionId,
+} from "../cli/parse"
+import { setGlobalGroup, withGroup } from "../cli/transport"
 import { buildFilteredArgs } from "../cli/global-flags"
+import { managedTabGateError, resolveGroupDispatchScope } from "../extension/src/background/message-dispatch"
 
 // tab-group.ts is module-load side-effect-free (no `chrome.*` at import time — the
 // MV2 transitive-bundle constraint), so its pure helpers are unit-testable here.
@@ -95,6 +103,158 @@ describe("tab groups: CLI global flags", () => {
     expect(parseGroupFlag(["open"], { INTERCEPTOR_GROUP: "fromenv" })).toBe("fromenv")
     expect(parseGroupFlag(["open"], {})).toBeUndefined()
   })
+
+  test("automatic scope: every verified harness gets an opaque per-session group", () => {
+    // Bare `open` from an agent shell must land in a per-session named group so
+    // the extension's policy reuse engages (it is deliberately excluded from
+    // the shared default group) and the idle sweep bounds the session's tabs.
+    for (const key of [
+      "INTERCEPTOR_SESSION_ID",
+      "MAESTRO_COWORKING_SESSION_ID",
+      "CLAUDE_CODE_SESSION_ID",
+      "CODEX_SESSION_ID",
+      "CODEX_THREAD_ID",
+    ]) {
+      const scope = resolveGroupScope(["open"], { [key]: "00000000-1111-4222-8333-444444444444" })
+      expect(scope.label).toMatch(/^s-[0-9a-f]{16}$/)
+      expect(scope.soft).toBe(true)
+      expect(CLI_GROUP_LABEL_RE.test(scope.label!)).toBe(true)
+      expect(resolveGroupScope(["read"], { [key]: "00000000-1111-4222-8333-444444444444" }).label)
+        .toBe(scope.label)
+    }
+  })
+
+  test("automatic labels use SHA-256 over the whole id and disclose none of it", () => {
+    // A sanitized-prefix scheme collapses `local_<uuid>` ids to two
+    // discriminating characters; the hash must keep them distinct.
+    const a = deriveSessionGroupLabel("local_c1ec3b94-1843-4b5e-9c66-000000000001")
+    const b = deriveSessionGroupLabel("local_a9ff1122-0000-4b5e-9c66-000000000002")
+    expect(deriveSessionGroupLabel("abc")).toBe("s-ba7816bf8f01cfea")
+    expect(a).toMatch(/^s-[0-9a-f]{16}$/)
+    expect(b).toMatch(/^s-[0-9a-f]{16}$/)
+    expect(a).not.toBe(b)
+    // Hostile characters cannot reach the label (hash output is hex-only)…
+    const hostile = "a!b@c#d$e%f^g&h*"
+    expect(deriveSessionGroupLabel(hostile)).toMatch(/^s-[0-9a-f]{16}$/)
+    expect(deriveSessionGroupLabel(hostile)).not.toContain(hostile)
+    // …and an empty id derives nothing.
+    expect(deriveSessionGroupLabel("")).toBeUndefined()
+    expect(parseGroupFlag(["open"], { INTERCEPTOR_SESSION_ID: "" })).toBeUndefined()
+  })
+
+  test("neutral and verified host session variables use documented precedence", () => {
+    const env = {
+      INTERCEPTOR_SESSION_ID: "neutral",
+      MAESTRO_COWORKING_SESSION_ID: "maestro",
+      CLAUDE_CODE_SESSION_ID: "claude",
+      CODEX_SESSION_ID: "codex",
+      CODEX_THREAD_ID: "thread",
+    }
+    expect(resolveSessionId(env)).toBe("neutral")
+    expect(resolveSessionId({ ...env, INTERCEPTOR_SESSION_ID: "" })).toBe("maestro")
+    expect(resolveSessionId({ CLAUDE_CODE_SESSION_ID: "claude", CODEX_SESSION_ID: "codex" })).toBe("claude")
+    expect(resolveSessionId({ CODEX_SESSION_ID: "", CODEX_THREAD_ID: "thread" })).toBe("thread")
+    expect(resolveSessionId({})).toBeUndefined()
+  })
+
+  test("explicit group inputs and shared opt-outs beat automatic session scope", () => {
+    const env = { INTERCEPTOR_SESSION_ID: "session", INTERCEPTOR_GROUP: "fromenv" }
+    expect(resolveGroupScope(["open", "--group", "flagged"], env)).toEqual({ label: "flagged", soft: false })
+    expect(resolveGroupScope(["open"], env)).toEqual({ label: "fromenv", soft: false })
+    expect(resolveGroupScope(["open", "--shared-group"], env)).toEqual({ label: undefined, soft: false })
+    expect(resolveGroupScope(["open"], { INTERCEPTOR_SESSION_ID: "session", INTERCEPTOR_GROUP: "" }))
+      .toEqual({ label: undefined, soft: false })
+    expect(resolveGroupScope(["open"], {})).toEqual({ label: undefined, soft: false })
+  })
+
+  test("--shared-group conflicts with an explicit --group", () => {
+    const realExit = process.exit
+    const realError = console.error
+    try {
+      process.exit = ((code?: number) => { throw new Error(`__exit_${code}`) }) as never
+      console.error = () => {}
+      expect(() => resolveGroupScope(["open", "--shared-group", "--group", "lane-1"], {}))
+        .toThrow("__exit_1")
+    } finally {
+      process.exit = realExit
+      console.error = realError
+    }
+  })
+
+  test("group-looking values after the option terminator remain literal", () => {
+    const env = { INTERCEPTOR_SESSION_ID: "session" }
+    const expected = deriveSessionGroupLabel("session")
+    expect(resolveGroupScope(["type", "e1", "--", "--shared-group"], env))
+      .toEqual({ label: expected, soft: true })
+    expect(resolveGroupScope(["type", "e1", "--", "--group", "literal"], env))
+      .toEqual({ label: expected, soft: true })
+  })
+
+  test("wire shape: an automatic label carries groupSoft; explicit and MCP labels do not", () => {
+    setGlobalGroup("s-ba7816bf8f01cfea", undefined, true)
+    expect(withGroup({ type: "tab_create" })).toEqual({ type: "tab_create", group: "s-ba7816bf8f01cfea", groupSoft: true })
+    setGlobalGroup("explicit", undefined, false)
+    expect(withGroup({ type: "tab_create" })).toEqual({ type: "tab_create", group: "explicit" })
+    // An action that already carries a group is never overridden or marked.
+    setGlobalGroup("s-ba7816bf8f01cfea", undefined, true)
+    expect(withGroup({ type: "tab_create", group: "mine" })).toEqual({ type: "tab_create", group: "mine" })
+    setGlobalGroup(undefined, undefined, false)
+  })
+
+  test("--shared-group is stripped from filtered args; --group '' still errors", () => {
+    expect(buildFilteredArgs(["open", "https://x", "--shared-group"])).toEqual(["open", "https://x"])
+    // `--group` with a missing/flag-shaped value exits 1 — pinned via the regex
+    // (an empty label must never pass the label gate).
+    expect(CLI_GROUP_LABEL_RE.test("")).toBe(false)
+  })
+})
+
+describe("tab groups: dispatch scope behavior", () => {
+  test("automatic groups are soft; explicit groups are hard by default", () => {
+    expect(resolveGroupDispatchScope({ group: "s-ba7816bf8f01cfea", groupSoft: true }))
+      .toEqual({ label: "s-ba7816bf8f01cfea", soft: true, hard: false })
+    expect(resolveGroupDispatchScope({ group: "lane-1" }))
+      .toEqual({ label: "lane-1", soft: false, hard: true })
+    expect(resolveGroupDispatchScope({ group: "lane-1", anyTab: true }))
+      .toEqual({ label: "lane-1", soft: false, hard: false })
+    expect(resolveGroupDispatchScope({ groupSoft: true }))
+      .toEqual({ label: undefined, soft: false, hard: false })
+  })
+
+  test("liveness stamp uses the tab-activity predicate for BOTH named and default groups", () => {
+    // A session heartbeating `status` must not pin its group past the sweep.
+    expect(dispatchSrc).toContain('if (needsTab(action.type) || action.type === "tab_create") recordGroupActivity(groupLabel ?? "")')
+  })
+
+  test("rejected membership checks happen before the liveness stamp", () => {
+    expect(dispatchSrc.lastIndexOf("managedTabGateError(")).toBeLessThan(dispatchSrc.indexOf("recordGroupActivity(groupLabel"))
+  })
+
+  test("stale expected-URL checks happen before the liveness stamp", () => {
+    expect(dispatchSrc.indexOf("const urlErr = await verifyTabUrl"))
+      .toBeLessThan(dispatchSrc.indexOf("recordGroupActivity(groupLabel"))
+  })
+
+  test("a stale explicit hard-group tab becomes a prompt actionable error", async () => {
+    const savedChrome = globalThis.chrome
+    namedGroups.set("stale", 71)
+    globalThis.chrome = {
+      tabs: { get: async () => { throw new Error("No tab with id: 999999999") } },
+      tabGroups: {
+        get: async () => ({ id: 71, title: "interceptor-stale" }),
+        query: async () => [],
+      },
+      storage: { session: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
+    } as unknown as typeof chrome
+    try {
+      const error = await managedTabGateError(999999999, "stale", true)
+      expect(error).toContain("tab 999999999 is unavailable")
+      expect(error).toContain("interceptor tabs --group stale")
+    } finally {
+      globalThis.chrome = savedChrome
+      namedGroups.delete("stale")
+    }
+  })
 })
 
 // Source assertions (the brand-tab-group.test.ts precedent): lock in the
@@ -122,7 +282,7 @@ describe("tab groups: dispatch never falls back to the browser-active tab for gr
   })
 
   test("gate scopes to the caller's group when a label is present", () => {
-    expect(dispatchSrc).toContain("isTabInNamedGroup(tabId, groupLabel)")
+    expect(dispatchSrc).toContain("isTabInNamedGroup(tabId, groupLabel!)")
     expect(dispatchSrc).toContain("isTabInAnyManagedGroup(tabId)")
   })
 
@@ -134,7 +294,7 @@ describe("tab groups: dispatch never falls back to the browser-active tab for gr
   })
 
   test("stored per-group target is validated for MEMBERSHIP, not mere existence", () => {
-    expect(dispatchSrc).toContain("stillInGroup = await isTabInNamedGroup(tabId, groupLabel)")
+    expect(dispatchSrc).toContain("stillInGroup = await isTabInNamedGroup(tabId, groupLabel!)")
   })
 })
 

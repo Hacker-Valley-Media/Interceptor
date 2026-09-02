@@ -169,7 +169,17 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "wait-stable", surface: "browser", usage: "interceptor wait-stable [--ms <n>] [--timeout <ms>]", summary: "Wait for DOM stability", returns: "ok when the DOM stops mutating." },
   // ── tabs / network / capture / data ─────────────────────────────────────────
   { name: "tabs", surface: "browser", usage: "interceptor tabs", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
-  { name: "tab", surface: "browser", usage: "interceptor tab new|close|activate|reload […]", summary: "Tab lifecycle", returns: "ok / tab info." },
+  {
+    name: "tab", surface: "browser",
+    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id>",
+    summary: "Create, reuse, activate, or close managed tabs",
+    returns: "Tab metadata for creation, or ok / error for exact-ID lifecycle actions.",
+    flags: [
+      { name: "--reuse", description: "reuse the most recent tab in the caller's managed group" },
+      { name: "--no-reuse", description: "force creation of a new managed tab" },
+      { name: "--activate", description: "activate the created or reused tab (default is background-first)" },
+    ],
+  },
   {
     name: "update", surface: "local",
     usage: "interceptor update [status]",

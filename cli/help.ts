@@ -182,7 +182,12 @@ Flags:
   -V, --version                       Print version, build SHA, and build date
   --json                              Output as JSON
   --context <id>                      Target a specific browser context (see: interceptor contexts)
-  --group <label>                     Scope this command to a named tab group (per-agent isolation; env: INTERCEPTOR_GROUP)
+  --group <label>                     Hard-scope this command to a named tab group (env: INTERCEPTOR_GROUP).
+                                      Agent shells default to a soft per-session group, labeled s-<hash16>,
+                                      using INTERCEPTOR_SESSION_ID or a verified Maestro, Claude Code, or Codex id.
+                                      Concurrent lanes need unique --group labels or INTERCEPTOR_SESSION_ID values.
+  --shared-group                      Suppress automatic session scope and use Interceptor's shared default group;
+                                      INTERCEPTOR_GROUP= (empty) is the per-environment equivalent.
   --group-color <color>               Color for the group when it is first created (default: auto from label)
 
 Compound (agent-optimized):
@@ -275,7 +280,7 @@ Navigation:
 
 Tabs:
   interceptor tabs                           List all tabs
-  interceptor tab new [url]                  Open new tab in background (default; always creates — the ⌘T verb)
+  interceptor tab new [url]                  Open new tab in background (creates by default; --reuse opts in)
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
   interceptor tab new [url] --reuse          Navigate the group's most-recent tab instead of creating
   interceptor tab close [id]                 Close tab
