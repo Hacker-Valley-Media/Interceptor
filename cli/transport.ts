@@ -209,22 +209,20 @@ export type DaemonResponse = {
 // `{id, action, tabId}` verbatim to the extension.
 let globalGroup: string | undefined
 let globalGroupColor: string | undefined
-let globalGroupDerived = false
+let globalGroupSoft = false
 
-export function setGlobalGroup(group?: string, groupColor?: string, derived = false): void {
+export function setGlobalGroup(group?: string, groupColor?: string, soft = false): void {
   globalGroup = group
   globalGroupColor = groupColor
-  globalGroupDerived = derived
+  globalGroupSoft = soft
 }
 
 /** Exported for tests (wire-shape assertion); production callers use sendCommand. */
 export function withGroup(action: Action): Action {
   if (!globalGroup || action.group !== undefined) return action
   const scoped: Action = { ...action, group: globalGroup }
-  // Derived scope (auto-minted from the session id, not chosen by the caller)
-  // is marked so the extension treats it as a soft preference, never a hard
-  // isolation gate. Only set alongside a group this function injected.
-  if (globalGroupDerived) scoped.groupDerived = true
+  // Automatic session scope is a preference, not an isolation boundary.
+  if (globalGroupSoft) scoped.groupSoft = true
   if (globalGroupColor && scoped.groupColor === undefined) scoped.groupColor = globalGroupColor
   return scoped
 }

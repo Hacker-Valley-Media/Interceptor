@@ -136,11 +136,10 @@ async function main() {
   const anyTab = args.includes("--any-tab")
   const globalTabId = parseTabFlag(args)
   const globalContextId = parseContextFlag(args)
-  // --group / $INTERCEPTOR_GROUP / derived-from-session scopes this invocation
-  // to a named tab group. Injected into every outgoing action at the transport
-  // choke point, so simple, compound, and looping command paths are all covered.
+  // Explicit or automatic session scope is injected into every outgoing
+  // action at the transport choke point, covering simple, compound, and loop paths.
   const groupScope = resolveGroupScope(args)
-  setGlobalGroup(groupScope.label, parseGroupColorFlag(args), groupScope.derived)
+  setGlobalGroup(groupScope.label, parseGroupColorFlag(args), groupScope.soft)
 
   // Build filtered args (strip global flags). NB: --json is dual-purpose —
   // it can be a global "emit JSON output" boolean OR a domain-specific

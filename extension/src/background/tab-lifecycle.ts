@@ -9,7 +9,7 @@
  *                    instead of creating one. Applies to NAMED groups only — in the
  *                    shared default group "most recent tab" can be a sibling agent's,
  *                    so the policy never engages there (explicit --reuse still works).
- *   idleCloseMinutes Close a managed group no command has touched for N minutes.
+ *   idleCloseMinutes Close a managed group with no tab activity for N minutes.
  *                    0 = off. Swept via a 1-minute chrome.alarms tick (30s-floor
  *                    alarms need Chrome 120; manifest floor is 116).
  *
@@ -30,6 +30,7 @@ const STORAGE_KEY = "tabLifecycle"
 const SWEEP_ALARM = "tabLifecycleSweep"
 const SWEEP_LOG_KEY = "tabLifecycleSweepLog"
 const SWEEP_LOG_CAP = 50
+const DIRTY_CHECK_TIMEOUT_MS = 2_000
 // Liveness stamps live in storage.session: same lifetime as tab/group ids (both die
 // with the browser), so a stamp can never describe ids that no longer exist.
 const GROUP_LAST_SEEN_PREFIX = "groupLastSeen:"
@@ -187,15 +188,38 @@ function pageHasDirtyState(): boolean {
   return false
 }
 
+/**
+ * Bound page inspection so one wedged renderer cannot block every group later
+ * in the sweep. A timeout is treated as dirty, preserving the uncertain tab;
+ * an explicit inspection failure keeps the existing "not dirty" behavior.
+ */
+export async function boundedDirtyInspection(
+  inspection: Promise<boolean>,
+  timeoutMs = DIRTY_CHECK_TIMEOUT_MS
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      inspection.catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), Math.max(0, timeoutMs))
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 async function isTabDirty(tabId: number): Promise<boolean> {
   try {
     const scripting = (chrome as unknown as { scripting?: typeof chrome.scripting }).scripting
     if (typeof scripting?.executeScript !== "function") return false
-    const results = await scripting.executeScript({
-      target: { tabId, allFrames: true },
-      func: pageHasDirtyState,
-    })
-    return results.some((r) => r?.result === true)
+    return await boundedDirtyInspection(
+      scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: pageHasDirtyState,
+      }).then((results) => results.some((r) => r?.result === true))
+    )
   } catch {
     return false
   }

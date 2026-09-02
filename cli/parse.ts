@@ -2,6 +2,8 @@
  * cli/parse.ts — argument parsing utilities shared across command modules
  */
 
+import { createHash } from "node:crypto"
+
 export function parseElementTarget(arg: string): { index?: number; ref?: string; frameId?: number; semantic?: { role: string; name: string } } {
   // Every caller that allows an absent target guards before calling (focus,
   // upload, text, html, read, act) — reaching here with no arg is always a
@@ -56,33 +58,39 @@ export function parseContextFlag(args: string[]): string | undefined {
 // per-agent named tab groups. Labels become part of a tab-strip title.
 export const GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/
 
-/**
- * Derive the per-session group label: `s-` + 8 hex chars of FNV-1a over the
- * WHOLE session id. A hash, deliberately not a sanitized prefix — prefix
- * truncation collapses entropy on format-prefixed ids (`local_c1ec3b94-…`
- * would leave two discriminating characters and collide across concurrent
- * sessions; the hash is format-independent). Returns undefined for an empty id.
- */
+/** Derive an opaque, valid tab-group label without exposing the session id. */
 export function deriveSessionGroupLabel(sessionId: string): string | undefined {
   if (sessionId.length === 0) return undefined
-  let h = 0x811c9dc5
-  for (let i = 0; i < sessionId.length; i++) {
-    h ^= sessionId.charCodeAt(i)
-    h = Math.imul(h, 0x01000193) >>> 0
-  }
-  return `s-${h.toString(16).padStart(8, "0")}`
+  return `s-${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}`
 }
 
-export type GroupScope = { label: string | undefined; derived: boolean }
+export type GroupScope = { label: string | undefined; soft: boolean }
+
+const SESSION_ID_ENV_KEYS = [
+  "INTERCEPTOR_SESSION_ID",
+  "MAESTRO_COWORKING_SESSION_ID",
+  "CLAUDE_CODE_SESSION_ID",
+  "CODEX_SESSION_ID",
+  "CODEX_THREAD_ID",
+] as const
+
+/** Neutral public contract first, then verified host adapters. */
+export function resolveSessionId(env: Record<string, string | undefined>): string | undefined {
+  for (const key of SESSION_ID_ENV_KEYS) {
+    const value = env[key]
+    if (value?.trim()) return value
+  }
+  return undefined
+}
 
 /**
  * Group scope resolution, highest precedence first:
- *   1. --no-group                 explicit per-call opt-out (default group)
+ *   1. --shared-group             explicit per-call opt-out (shared default group)
  *   2. --group <label>            explicit per-call choice
  *   3. $INTERCEPTOR_GROUP         explicit per-environment choice; SET-BUT-EMPTY
  *                                 means "the shared default group" (opts out of 4)
- *   4. derived from $CLAUDE_CODE_SESSION_ID — agent shells get a per-session
- *                                 group automatically (`derived: true`)
+ *   4. $INTERCEPTOR_SESSION_ID or a verified host session variable gives agent
+ *                                 shells a per-session group (`soft: true`)
  *
  * Rationale for 4: the extension's tab-lifecycle policy reuse applies to NAMED
  * groups only (in the shared default group "most recent tab" can be a sibling
@@ -94,28 +102,27 @@ export type GroupScope = { label: string | undefined; derived: boolean }
  * without weakening the sibling-isolation rule that keeps the default group
  * reuse-free. Interactive human shells (no session id) are unchanged.
  *
- * `derived` rides the wire as `groupDerived` so the extension can treat a
- * derived group as a soft preference (creation home, reuse, sweep unit) and
+ * `soft` rides the wire as `groupSoft` so the extension can treat an automatic
+ * group as a preference (creation home, reuse, sweep unit) and
  * NOT as the hard isolation boundary an explicit --group asks for — the
  * caller never chose isolation, so empty-group resolution falls back to the
  * active tab and explicit --tab targets are not membership-gated against it.
  *
- * NOTE: parallel subagents inherit the parent's CLAUDE_CODE_SESSION_ID (no
- * per-agent env discriminator exists), so sibling lanes SHARE the derived
- * group and policy reuse can navigate a tab another lane is using. Lanes that
- * run Interceptor concurrently must pass an explicit `--group lane-<n>` each.
+ * Parallel lanes commonly inherit the same host session id, so concurrent
+ * lanes must pass a unique explicit `--group <label>` or set their own neutral
+ * `INTERCEPTOR_SESSION_ID`.
  */
 export function resolveGroupScope(args: string[], env: Record<string, string | undefined> = process.env): GroupScope {
   const idx = args.indexOf("--group")
-  if (args.includes("--no-group")) {
+  if (args.includes("--shared-group")) {
     if (idx !== -1) {
-      console.error("error: --no-group conflicts with --group")
+      console.error("error: --shared-group conflicts with --group")
       process.exit(1)
     }
-    return { label: undefined, derived: false }
+    return { label: undefined, soft: false }
   }
   let label: string | undefined
-  let derived = false
+  let soft = false
   if (idx !== -1) {
     if (!args[idx + 1] || args[idx + 1].startsWith("--")) {
       console.error("error: --group requires a label")
@@ -125,15 +132,15 @@ export function resolveGroupScope(args: string[], env: Record<string, string | u
   } else if (env.INTERCEPTOR_GROUP !== undefined) {
     // Set-but-empty is a deliberate opt-out: target the default group.
     label = env.INTERCEPTOR_GROUP === "" ? undefined : env.INTERCEPTOR_GROUP
-  } else if (env.CLAUDE_CODE_SESSION_ID) {
-    label = deriveSessionGroupLabel(env.CLAUDE_CODE_SESSION_ID)
-    derived = label !== undefined
+  } else {
+    label = deriveSessionGroupLabel(resolveSessionId(env) ?? "")
+    soft = label !== undefined
   }
   if (label !== undefined && !GROUP_LABEL_RE.test(label)) {
     console.error(`error: invalid group label '${label}' — must match [A-Za-z0-9_-]{1,32}`)
     process.exit(1)
   }
-  return { label, derived }
+  return { label, soft }
 }
 
 /** Back-compat label-only view of resolveGroupScope. */

@@ -26,7 +26,7 @@ Use this as the routing skill before loading a surface-specific skill.
 ## Core Rules
 
 - Browser commands operate inside the cyan `interceptor` tab group. Do not use `--any-tab` unless the user explicitly authorizes acting outside that group.
-- For browser work, pick a stable `--group <label>` (agent name or session id) and close it with `interceptor group close <label>` when done — a named group isolates you from sibling agents, makes `open` reuse your most-recent tab instead of accumulating new ones, and is auto-closed by the extension if left idle (default 10 min).
+- Solo browser work in a supported agent shell gets a soft per-session group automatically. For concurrent lanes, set a unique `INTERCEPTOR_SESSION_ID` or pass a unique `--group <label>` to each lane. Explicit groups are hard-scoped by default unless `--any-tab` is authorized. Close named groups with `interceptor group close <label>` when done; the idle timer is based on tab activity, so metadata polls do not keep a group alive.
 - `interceptor open <url>` and `interceptor tab new <url>` create background tabs by default. Only `open --activate`, `tab new --activate`, `tab switch <id>`, and `window focus <id>` intentionally move browser focus.
 - The macOS surface is background-first by default. Only `interceptor macos app activate <app>` and `interceptor macos open <app> --activate` intentionally move focus.
 - If multiple browser profiles are connected, run `interceptor contexts` and pass `--context <id>`.

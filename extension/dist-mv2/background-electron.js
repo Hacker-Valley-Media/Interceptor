@@ -2059,6 +2059,8 @@ async function handleTabActions(action, tabId) {
       });
       if (newTab.id) {
         const groupId = group ? await addTabToNamedGroup(newTab.id, group, action.groupColor) : await addTabToInterceptorGroup(newTab.id);
+        if (shouldActivate)
+          await chrome.tabs.update(newTab.id, { active: true });
         await sessionArea4().set({ [activeTabKey(group)]: newTab.id });
         const data = { tabId: newTab.id, url: newTab.url, groupId, group, reused: false };
         const groupWarning = groupWarningFor(groupId, hasTabGroupApi());
@@ -4901,6 +4903,24 @@ var messageQueue = [];
 var EXT_REQUEST_TIMEOUT_MS = 180000;
 var EXT_LONG_REQUEST_TIMEOUT_MS = 600000;
 var pendingRequests = new Map;
+function resolveGroupDispatchScope(action) {
+  const label = typeof action.group === "string" && action.group.length > 0 ? action.group : undefined;
+  const soft = label !== undefined && action.groupSoft === true;
+  return { label, soft, hard: label !== undefined && !soft && action.anyTab !== true };
+}
+async function managedTabGateError(tabId, groupLabel, groupHard) {
+  try {
+    if (groupHard) {
+      const inNamed = await isTabInNamedGroup(tabId, groupLabel);
+      return inNamed ? null : `tab ${tabId} is not in group '${groupLabel}' — pass the owning group, or --any-tab to bypass`;
+    }
+    const inAny = await isTabInAnyManagedGroup(tabId);
+    return !inAny && anyManagedGroupKnown() ? `tab ${tabId} is not in the interceptor group — use 'interceptor tab new' to create managed tabs` : null;
+  } catch {
+    const groupArg = groupHard && groupLabel ? ` --group ${groupLabel}` : "";
+    return `tab ${tabId} is unavailable; run 'interceptor tabs${groupArg}' to refresh tab IDs and retry`;
+  }
+}
 function activeTabKey2(group) {
   return group ? `activeTabId:${group}` : "activeTabId";
 }
@@ -4969,24 +4989,23 @@ async function handleDaemonMessage(msg) {
     pendingRequests.delete(msg.id);
     sendToHost({ id: msg.id, result: { success: false, error } }, respondViaWs);
   };
-  const groupLabel = typeof action.group === "string" && action.group.length > 0 ? action.group : undefined;
+  const { label: groupLabel, soft: groupSoft, hard: groupHard } = resolveGroupDispatchScope(action);
   if (groupLabel && !GROUP_LABEL_RE.test(groupLabel)) {
     fail(`invalid group label '${groupLabel}' — must match [A-Za-z0-9_-]{1,32}`);
     return;
   }
-  const groupDerived = groupLabel !== undefined && action.groupDerived === true;
   if (needsTab(action.type) || action.type === "tab_create")
     recordGroupActivity(groupLabel ?? "");
   if (!tabId && needsTab(action.type)) {
     tabId = await getActiveTabId(groupLabel);
-    if (tabId && groupLabel && !groupDerived) {
+    if (tabId && groupHard) {
       let stillInGroup = false;
       try {
         stillInGroup = await isTabInNamedGroup(tabId, groupLabel);
       } catch {}
       if (!stillInGroup)
         tabId = undefined;
-    } else if (tabId && groupDerived) {
+    } else if (tabId && groupSoft) {
       try {
         await chrome.tabs.get(tabId);
       } catch {
@@ -5001,7 +5020,7 @@ async function handleDaemonMessage(msg) {
       const candidate = groupTabs.filter((t) => typeof t.id === "number").sort((a, b) => b.id - a.id)[0];
       tabId = candidate?.id;
     }
-    if (!tabId && !groupDerived && !action.anyTab) {
+    if (!tabId && groupHard) {
       fail(`group '${groupLabel}' has no tabs — open one with 'interceptor open <url> --group ${groupLabel}', pass --any-tab to target the active tab, or set INTERCEPTOR_GROUP= (empty) to opt out of group scoping`);
       return;
     }
@@ -5015,18 +5034,10 @@ async function handleDaemonMessage(msg) {
     return;
   }
   if (tabId && needsTab(action.type) && !action.anyTab) {
-    if (groupLabel && !groupDerived) {
-      const inNamed = await isTabInNamedGroup(tabId, groupLabel);
-      if (!inNamed) {
-        fail(`tab ${tabId} is not in group '${groupLabel}' — pass the owning group, or --any-tab to bypass`);
-        return;
-      }
-    } else {
-      const inAny = await isTabInAnyManagedGroup(tabId);
-      if (!inAny && anyManagedGroupKnown()) {
-        fail(`tab ${tabId} is not in the interceptor group — use 'interceptor tab new' to create managed tabs`);
-        return;
-      }
+    const membershipError = await managedTabGateError(tabId, groupLabel, groupHard);
+    if (membershipError) {
+      fail(membershipError);
+      return;
     }
   }
   if (tabId)

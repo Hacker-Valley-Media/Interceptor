@@ -50,7 +50,7 @@ const GLOBAL_VALUE_FLAGS = ["--frame", "--tab", "--context", "--group", "--group
 // Global booleans legal on every normalized command (harness-level concerns
 // handled in cli/index.ts before or after dispatch).
 const GLOBAL_BOOLEAN_FLAGS = new Set([
-  "--json", "--ws", "--no-ws", "--any-tab", "--no-group", "--changes", "--all-surfaces",
+  "--json", "--ws", "--no-ws", "--any-tab", "--shared-group", "--changes", "--all-surfaces",
   "--help", "-h",
   // stderr-hint suppressors read from raw argv on any command
   // (cli/commands/skills.ts maybeEmitSkillsHint) or from `open`'s filtered
@@ -133,6 +133,7 @@ const COMPOUND_BOOL = ["--activate", "--append", "--full", "--include-frames", "
 const STATE_BOOL = ["--elements-only", "--full", "--include-frames", "--markdown", "--native", "--text-only"]
 const ACTIONS_BOOL = ["--append", "--dropzone", "--picker", "--trusted", "--os"]
 const TABS_BOOL = ["--incognito"]
+const TAB_BOOL = ["--activate", "--no-reuse", "--reuse"]
 const NET_BOOL = ["--from-start", "--persist", "--reload", "--redact-auth"]
 const SCREENSHOT_BOOL = ["--background", "--full", "--image", "--no-fallback", "--pixel", "--save", "--webgl"]
 const DATA_BOOL = ["--session"]
@@ -154,7 +155,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   hover: ACTIONS_BOOL, drag: ACTIONS_BOOL, dblclick: ACTIONS_BOOL, rightclick: ACTIONS_BOOL,
   check: ACTIONS_BOOL, keys: ACTIONS_BOOL, "click-at": ACTIONS_BOOL, "what-at": ACTIONS_BOOL, regions: ACTIONS_BOOL,
   navigate: [], back: [], forward: [], scroll: [], wait: [], "wait-stable": [], wait_for: [],
-  tabs: TABS_BOOL, tab: TABS_BOOL, window: TABS_BOOL, frames: [], session: [],
+  tabs: TABS_BOOL, tab: TAB_BOOL, window: TABS_BOOL, frames: [], session: [],
   network: NET_BOOL, net: NET_BOOL, headers: NET_BOOL,
   screenshot: SCREENSHOT_BOOL, canvas: SCREENSHOT_BOOL, capture: SCREENSHOT_BOOL, ocr: SCREENSHOT_BOOL,
   cookies: DATA_BOOL, storage: DATA_BOOL, history: DATA_BOOL, bookmarks: DATA_BOOL, downloads: DATA_BOOL, clear: DATA_BOOL, clipboard: DATA_BOOL,

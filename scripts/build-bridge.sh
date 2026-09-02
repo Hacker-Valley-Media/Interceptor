@@ -7,7 +7,7 @@
 #
 # Env overrides:
 #   INTERCEPTOR_SIGNING_IDENTITY  codesign identity (default: HVM Developer ID)
-#   INTERCEPTOR_BRIDGE_VERSION    version string in Info.plist (default 1.0.0)
+#   INTERCEPTOR_BRIDGE_VERSION    version string in Info.plist (default: package.json)
 #   INTERCEPTOR_ENABLE_PLATFORM_TARGETS=1
 #                                  compile in research-only platform target support
 #   INTERCEPTOR_SKIP_SIGNING=1    skip codesign + lsregister (dev mode)
@@ -21,7 +21,7 @@ DIST_DIR="$PROJECT_DIR/dist"
 
 INTERCEPTOR_SIGNING_IDENTITY="${INTERCEPTOR_SIGNING_IDENTITY:-Developer ID Application: HACKER VALLEY MEDIA, LLC (TPWBZD35WW)}"
 INTERCEPTOR_BRIDGE_IDENTIFIER="com.interceptor.bridge"
-INTERCEPTOR_BRIDGE_VERSION="${INTERCEPTOR_BRIDGE_VERSION:-1.0.0}"
+INTERCEPTOR_BRIDGE_VERSION="${INTERCEPTOR_BRIDGE_VERSION:-$(grep '"version"' "$PROJECT_DIR/package.json" | head -1 | sed -E 's/.*"version": *"([^"]+)".*/\1/')}"
 INTERCEPTOR_SPARKLE_FEED_URL="${INTERCEPTOR_SPARKLE_FEED_URL:-https://updates.hackervalley.media/appcast.xml}"
 INTERCEPTOR_SPARKLE_PUBLIC_KEY="${INTERCEPTOR_SPARKLE_PUBLIC_KEY:-dnUnuHGCO4obHb44Khlf2TZQFUMmFGGpm2c6j+EqmdU=}"
 ## Bridge carries Virtualization framework capabilities (VM lifecycle)

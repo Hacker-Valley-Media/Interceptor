@@ -4,6 +4,7 @@ import {
   resolveTabLifecycle,
   policyMayDecideReuse,
   selectSweepCandidates,
+  boundedDirtyInspection,
   DEFAULT_TAB_LIFECYCLE,
   type SweepTab,
 } from "../extension/src/background/tab-lifecycle"
@@ -174,6 +175,24 @@ describe("selectSweepCandidates guards (T3)", () => {
   test("unknown window count never triggers G5 (treated as not-last)", () => {
     const tabs = [mkTab({ id: 1, windowId: 42 })]
     expect(selectSweepCandidates(tabs, ctx([]))).toEqual([1])
+  })
+})
+
+// ── T3b: a wedged page inspection cannot stall the whole sweep ──────────────
+
+describe("bounded dirty-page inspection (T3b)", () => {
+  test("preserves a tab whose inspection does not settle", async () => {
+    const never = new Promise<boolean>(() => {})
+    expect(await boundedDirtyInspection(never, 5)).toBe(true)
+  })
+
+  test("returns settled dirty and clean results without waiting for the timeout", async () => {
+    expect(await boundedDirtyInspection(Promise.resolve(true), 1_000)).toBe(true)
+    expect(await boundedDirtyInspection(Promise.resolve(false), 1_000)).toBe(false)
+  })
+
+  test("keeps the existing clean-on-inspection-failure behavior", async () => {
+    expect(await boundedDirtyInspection(Promise.reject(new Error("unreachable")), 1_000)).toBe(false)
   })
 })
 

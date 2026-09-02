@@ -64,6 +64,25 @@ describe("strict unknown-flag rejection (#212)", () => {
     expect(errors.join("\n")).toContain("does not take a value")
   })
 
+  test("the unreleased --no-group spelling is rejected in favor of --shared-group", () => {
+    expect(() => normalizeArgs(["open", "--no-group", "https://example.com"])).toThrow("__exit_1")
+    expect(errors.join("\n")).toContain("unknown flag '--no-group' for 'open'")
+  })
+
+  test("tab new accepts the reuse controls consumed by its shared create parser", () => {
+    expect(normalizeArgs(["tab", "new", "https://example.com", "--reuse"]))
+      .toEqual(["tab", "new", "https://example.com", "--reuse"])
+    expect(normalizeArgs(["tab", "new", "https://example.com", "--no-reuse"]))
+      .toEqual(["tab", "new", "https://example.com", "--no-reuse"])
+    expect(exitCode).toBeUndefined()
+  })
+
+  test("tab new accepts the explicit activation flag consumed by its shared create parser", () => {
+    expect(normalizeArgs(["tab", "new", "https://example.com", "--activate"]))
+      .toEqual(["tab", "new", "https://example.com", "--activate"])
+    expect(exitCode).toBeUndefined()
+  })
+
   test("INTERCEPTOR_LAX_FLAGS=1 downgrades to a warning and keeps going", () => {
     process.env.INTERCEPTOR_LAX_FLAGS = "1"
     const argv = normalizeArgs(["screenshot", "--zzz-lax-flag"])

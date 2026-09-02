@@ -182,12 +182,11 @@ Flags:
   -V, --version                       Print version, build SHA, and build date
   --json                              Output as JSON
   --context <id>                      Target a specific browser context (see: interceptor contexts)
-  --group <label>                     Scope this command to a named tab group (per-agent isolation; env: INTERCEPTOR_GROUP).
-                                      Agent shells default to a per-session group derived from $CLAUDE_CODE_SESSION_ID
-                                      (s-<hash8>) so open reuses one tab per session. Derived scope is soft: empty-group
-                                      reads fall back to the active tab and explicit --tab is not membership-gated.
-                                      Parallel agent lanes share one session id — pass --group lane-<n> per lane.
-  --no-group                          Opt this invocation out of group scoping (target the default group);
+  --group <label>                     Hard-scope this command to a named tab group (env: INTERCEPTOR_GROUP).
+                                      Agent shells default to a soft per-session group, labeled s-<hash16>,
+                                      using INTERCEPTOR_SESSION_ID or a verified Maestro, Claude Code, or Codex id.
+                                      Concurrent lanes need unique --group labels or INTERCEPTOR_SESSION_ID values.
+  --shared-group                      Suppress automatic session scope and use Interceptor's shared default group;
                                       INTERCEPTOR_GROUP= (empty) is the per-environment equivalent.
   --group-color <color>               Color for the group when it is first created (default: auto from label)
 
