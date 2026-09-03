@@ -1330,7 +1330,9 @@ function handleInput(e) {
       return;
     const info = describeTarget(target);
     let v = "";
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    if (isSensitive(target)) {
+      v = SECURE_MASK;
+    } else if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
       if (target instanceof HTMLInputElement && isPasswordLike(target)) {
         v = maskedValue(target);
       } else {
@@ -1357,7 +1359,9 @@ function handleChange(e) {
       return;
     const info = describeTarget(target);
     let v = "";
-    if (target instanceof HTMLInputElement) {
+    if (isSensitive(target)) {
+      v = SECURE_MASK;
+    } else if (target instanceof HTMLInputElement) {
       if (isPasswordLike(target)) {
         v = maskedValue(target);
       } else if (target.type === "checkbox" || target.type === "radio") {

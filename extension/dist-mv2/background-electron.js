@@ -2345,14 +2345,29 @@ async function historyGo(tabId, delta, deps = { waitForTabLoad }) {
   } catch (err) {
     apiError = err.message;
   }
+  let acked = false;
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, func: (d) => {
-      history.go(d);
-    }, args: [delta] });
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (d) => new Promise((resolve) => {
+        const done = () => resolve(true);
+        addEventListener("popstate", done, { once: true });
+        addEventListener("hashchange", done, { once: true });
+        addEventListener("pagehide", done, { once: true });
+        setTimeout(() => resolve(false), 800);
+        history.go(d);
+      }),
+      args: [delta]
+    });
+    acked = Array.isArray(injected) && injected.some((r) => r?.result === true);
   } catch (err) {
-    return { success: false, error: `${apiError} (page-side history.${label}() also failed: ${err.message})` };
+    if (!await waitForNavigationStart(tabId, before.url ?? "")) {
+      return { success: false, error: `${apiError} (page-side history.${label}() also failed: ${err.message})` };
+    }
+    await deps.waitForTabLoad(tabId);
+    return { success: true };
   }
-  if (!await waitForNavigationStart(tabId, before.url ?? "")) {
+  if (!acked && !await waitForNavigationStart(tabId, before.url ?? "")) {
     return { success: false, error: `no ${label} history for tab ${tabId} — nothing to go ${label} to` };
   }
   await deps.waitForTabLoad(tabId);

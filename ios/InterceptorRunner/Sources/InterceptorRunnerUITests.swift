@@ -348,7 +348,12 @@ enum Runner {
     private static func unlockDevice(passcode: String, probe: Bool) -> [String: Any] {
         let sb = XCUIApplication(bundleIdentifier: springboard)
         let lockedBefore = ICIsScreenLocked()
-        if !lockedBefore && !probe { return ok(["unlocked": true, "alreadyUnlocked": true]) }
+        if !lockedBefore {
+            // Already unlocked: report without touching the device (a probe must not
+            // press Home or swipe over whatever app is in front).
+            if probe { return ok(["probe": true, "lockedBefore": false, "lockedNow": false, "passcodeField": false]) }
+            return ok(["unlocked": true, "alreadyUnlocked": true])
+        }
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval: 0.6)
         // Face ID may have unlocked on wake when the owner is looking.

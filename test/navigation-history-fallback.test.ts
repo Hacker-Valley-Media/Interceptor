@@ -13,6 +13,7 @@ let fakeTab: { id: number; url: string; status: string }
 let goBackRejects: boolean
 let executed: Array<{ tabId: number; args: unknown[] }>
 let executeThrows: string | null
+let executeResult: unknown
 let originalChrome: unknown
 const noWait = { waitForTabLoad: async () => ({ ready: true, elapsed: 0 }) }
 
@@ -21,6 +22,7 @@ beforeEach(() => {
   goBackRejects = true
   executed = []
   executeThrows = null
+  executeResult = undefined
   originalChrome = (globalThis as { chrome?: unknown }).chrome
   ;(globalThis as { chrome: unknown }).chrome = {
     tabs: {
@@ -32,6 +34,7 @@ beforeEach(() => {
       executeScript: async (inj: { target: { tabId: number }; args: unknown[] }) => {
         if (executeThrows) throw new Error(executeThrows)
         executed.push({ tabId: inj.target.tabId, args: inj.args })
+        return executeResult
       },
     },
   }
@@ -59,6 +62,14 @@ describe("historyGo (issue #237)", () => {
     fakeTab.status = "loading"
     expect(await p).toEqual({ success: true })
     expect(executed).toEqual([{ tabId: 7, args: [1] }])
+  })
+
+  test("a same-document entry with the same URL counts as movement when the page acknowledges it", async () => {
+    executeResult = [{ result: true }]
+    const res = await historyGo(7, -1, noWait)
+    expect(res.success).toBe(true)
+    expect(executed).toHaveLength(1)
+    expect(fakeTab.url).toBe("https://b.example/")
   })
 
   test("reports an honest error when the page has nothing to go back to", async () => {

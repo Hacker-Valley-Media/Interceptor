@@ -185,7 +185,11 @@ function handleInput(e: Event) {
     if (!(target instanceof Element)) return
     const info = describeTarget(target)
     let v = ""
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    // A field that received a vault secret is masked whatever its kind
+    // (input, textarea, contenteditable) — before any value is read.
+    if (isSensitive(target)) {
+      v = SECURE_MASK
+    } else if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
       if (target instanceof HTMLInputElement && isPasswordLike(target)) {
         v = maskedValue(target)
       } else {
@@ -212,7 +216,9 @@ function handleChange(e: Event) {
     if (!(target instanceof Element)) return
     const info = describeTarget(target)
     let v = ""
-    if (target instanceof HTMLInputElement) {
+    if (isSensitive(target)) {
+      v = SECURE_MASK
+    } else if (target instanceof HTMLInputElement) {
       if (isPasswordLike(target)) {
         v = maskedValue(target)
       } else if (target.type === "checkbox" || target.type === "radio") {

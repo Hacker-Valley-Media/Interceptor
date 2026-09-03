@@ -42,14 +42,35 @@ export async function historyGo(tabId: number, delta: -1 | 1, deps: HistoryDeps 
   } catch (err) {
     apiError = (err as Error).message
   }
+  // The injected function resolves true when the page itself sees the
+  // traversal (popstate for a same-document entry, hashchange, or pagehide as a
+  // cross-document step begins), so a target entry with the SAME url is still
+  // recognized as movement; the tab-status poll below is the fallback.
+  let acked = false
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, func: (d: number) => { history.go(d) }, args: [delta] as [number] })
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (d: number) => new Promise<boolean>((resolve) => {
+        const done = () => resolve(true)
+        addEventListener("popstate", done, { once: true })
+        addEventListener("hashchange", done, { once: true })
+        addEventListener("pagehide", done, { once: true })
+        setTimeout(() => resolve(false), 800)
+        history.go(d)
+      }),
+      args: [delta] as [number],
+    })
+    acked = Array.isArray(injected) && injected.some((r) => (r as { result?: unknown } | undefined)?.result === true)
   } catch (err) {
-    return { success: false, error: `${apiError} (page-side history.${label}() also failed: ${(err as Error).message})` }
+    // A cross-document step can tear the injected context down before it
+    // answers; that is only a failure when the tab did not move.
+    if (!(await waitForNavigationStart(tabId, before.url ?? ""))) {
+      return { success: false, error: `${apiError} (page-side history.${label}() also failed: ${(err as Error).message})` }
+    }
+    await deps.waitForTabLoad(tabId)
+    return { success: true }
   }
-  // ponytail: a target entry with the SAME url that finishes loading inside
-  // 100 ms reads as "did not move"; switch to webNavigation.onCommitted if that bites.
-  if (!(await waitForNavigationStart(tabId, before.url ?? ""))) {
+  if (!acked && !(await waitForNavigationStart(tabId, before.url ?? ""))) {
     return { success: false, error: `no ${label} history for tab ${tabId} — nothing to go ${label} to` }
   }
   await deps.waitForTabLoad(tabId)

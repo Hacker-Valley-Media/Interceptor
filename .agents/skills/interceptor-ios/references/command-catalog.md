@@ -77,8 +77,12 @@ they work even when the runner is idle or asleep. Routed before the runner fallb
 - **Refs are coordinates, not handles.** They are re-minted on every `tree` read, so
   they never go stale the way server-side element ids do — but they only reflect the
   screen at read time. Re-read after any navigation.
-- **Unlocked + foreground.** A locked phone refuses app launches. The runner drops on
-  idle and re-dials per verb, so chain a `launch` and its follow-up verbs closely.
-- **UI only.** Cannot pass Face ID / passcode / Apple Pay or unlock the phone.
+- **Unlocked + foreground.** A locked phone refuses app launches. Keep Auto-Lock off so
+  the runner stays resident; while it is resident, `ios unlock --secret <name>` clears the
+  lock screen. After a reboot the runner cannot start on a locked phone, so unlock once by hand.
+- **Passcodes come from the vault.** Nothing can fake Face ID or Apple Pay. A passcode sheet
+  is typed with `ios type <ref> --secret <name>` / `ios keys --secret <name>`; never put a
+  passcode in a literal `type` call. Register it once with
+  `interceptor macos secret register <name> --target ios`.
 - **After a device reboot.** The phone drops off usbmux (its Wi‑Fi route is cleared even though `xcrun devicectl list devices` still lists it) → a brief USB cable touch reseeds it. The first runner launch also pops an on-device *"Enter iPhone Passcode for XCTest — Enable UI Automation"* dialog; approve it, then a daemon restart clears the stale testmanagerd session. Runner-free lanes (`proc`/`shot`) keep working through all of this.
 - Add `--json` to any command for machine-readable output.

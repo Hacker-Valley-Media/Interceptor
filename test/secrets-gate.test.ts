@@ -89,7 +89,7 @@ describe("release gate", () => {
     const vault = fakeVault()
     await storeSecret(vault, "rv", "v6", { targets: "sudo", metaPath })
     let prompts = 0
-    const res = await resolveSecret(vault, "rv", { kind: "reveal" }, { gate: async () => { prompts++; return { ok: true } }, alwaysGate: true, metaPath })
+    const res = await resolveSecret(vault, "rv", { kind: "reveal" }, { gate: async () => { prompts++; return { ok: true } }, metaPath })
     expect(res.value).toBe("v6")
     expect(prompts).toBe(1)
   })

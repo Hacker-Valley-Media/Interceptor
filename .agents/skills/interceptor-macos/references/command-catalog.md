@@ -82,7 +82,8 @@ Credentials live in the macOS keychain and are delivered by name. The daemon res
 interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <s>]
                                                     # native box: secure field + confirm; default gate none (unattended)
 interceptor macos secret set <name> --stdin         # headless: value from stdin (hidden TTY prompt without --stdin)
-interceptor macos secret list | status              # names, gates, targets, releases; backend + Touch ID availability
+interceptor macos secret list                       # names, gates, targets, release counts
+interceptor macos secret status                     # backend + Touch ID availability
 interceptor macos secret rm <name>
 interceptor macos secret unlock <name> --for 30m    # one OS prompt now; releases inside the window skip the prompt
 interceptor macos secret lock [<name>]

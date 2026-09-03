@@ -36,11 +36,19 @@ export function actionLogSummary(action: unknown): string {
   return JSON.stringify(redactAction(action)).slice(0, 100)
 }
 
-/** A request/response envelope (`{ id, action, … }`) with a secret-bearing action redacted. */
+/**
+ * A request/response envelope (`{ id, action, … }` or `{ id, result, … }`) with a
+ * secret-bearing action, or a vault read's `{ name, value }` result, redacted.
+ */
 export function redactMessage(msg: unknown): unknown {
   if (msg && typeof msg === "object" && !Array.isArray(msg)) {
     const m = msg as Record<string, unknown>
     if (isSecretBearing(m.action)) return { ...m, action: redactAction(m.action) }
+    const result = m.result as { data?: unknown } | undefined
+    const data = result?.data as Record<string, unknown> | undefined
+    if (data && typeof data === "object" && typeof data.name === "string" && typeof data.value === "string") {
+      return { ...m, result: { ...result, data: { ...data, value: "<redacted>" } } }
+    }
   }
   return msg
 }

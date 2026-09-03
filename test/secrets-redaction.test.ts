@@ -89,3 +89,20 @@ describe("outbound frames (daemon → extension) never carry the value", () => {
     expect(outboundLogSummary({ id: "x", action: { type: "click", ref: "e2" } })).toContain('"ref":"e2"')
   })
 })
+
+describe("content monitor masks secret-typed fields of every kind", () => {
+  test("handleInput and handleChange check isSensitive before reading any value", async () => {
+    const { readFileSync } = await import("node:fs")
+    const src = readFileSync(new URL("../extension/src/content/monitor.ts", import.meta.url), "utf-8")
+    for (const fn of ["function handleInput(", "function handleChange("]) {
+      const start = src.indexOf(fn)
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf("\n}\n", start))
+      const sensitiveAt = body.indexOf("isSensitive(target)")
+      const truncateAt = body.indexOf("truncate(")
+      expect(sensitiveAt).toBeGreaterThan(-1)
+      expect(truncateAt).toBeGreaterThan(sensitiveAt)
+      expect(body.slice(sensitiveAt, truncateAt)).toContain("SECURE_MASK")
+    }
+  })
+})

@@ -35,6 +35,17 @@ function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag)
 }
 
+/** Non-flag tokens from `start` on, skipping the operands of the listed value flags. */
+function positionalsExcept(args: string[], start: number, valueFlags: string[]): string[] {
+  const out: string[] = []
+  for (let i = start; i < args.length; i++) {
+    const a = args[i]
+    if (a.startsWith("--")) { if (valueFlags.includes(a)) i++; continue }
+    out.push(a)
+  }
+  return out
+}
+
 function numFlag(args: string[], flag: string): number | undefined {
   const v = flagValue(args, flag)
   if (v === undefined) return undefined
@@ -88,7 +99,7 @@ Get started (requires Xcode signed in with your Apple ID) —   setup [<device>]
   refresh [<device>]        force a re-sign now (also runs on a timer before expiry)
 
 Experimental no-Xcode Apple-services path:
-  login --apple-id <id> --password <pw> [--code <2fa>]   sign in (token → Keychain). One time.
+  login --apple-id <id> [--code <2fa>] [--stdin]   sign in; the password is read at a hidden prompt (or stdin). Token → Keychain. One time.
   logout                    drop the stored Apple-ID token
 
 Operator path (prebuilt, needs Xcode/devicectl):
@@ -103,7 +114,7 @@ const FULL_HELP = `interceptor ios — automate your iPhone
 Setup:
   setup [<device>] [--team <id>]             Xcode self-service build/sign + install + launch
   refresh [<device>] [--team <id>]           re-sign now (also automatic before expiry)
-  login --apple-id <id> --password <pw>      experimental no-Xcode Apple-services path
+  login --apple-id <id> [--stdin]            experimental no-Xcode Apple-services path (password at a hidden prompt)
   logout                                     drop the stored Apple-ID token
   install [<device>]                         push/refresh the prebuilt agent (operator path)
   devices                                    phones with the agent (+ names)
@@ -354,8 +365,9 @@ export async function runIosCommand(
       const secretName = flagValue(args, "--secret")
       if (hasFlag(args, "--secret")) {
         if (!secretName) { console.error("error: --secret requires a secret name"); process.exit(1) }
-        const literal = ref ? (args[3] && !args[3].startsWith("--") ? args[3] : undefined) : undefined
-        if (literal !== undefined) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
+        // Every positional after the verb other than the ref is literal text, wherever it sits.
+        const literals = positionalsExcept(args, 2, ["--secret", "--bundle", "--on", "--context"]).filter((p) => p !== ref)
+        if (literals.length) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
         emitExit(await send({ type: "ios_type", ref, secret: secretName, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
         return
       }
@@ -370,7 +382,7 @@ export async function runIosCommand(
       const secretName = flagValue(args, "--secret")
       if (hasFlag(args, "--secret")) {
         if (!secretName) { console.error("error: --secret requires a secret name"); process.exit(1) }
-        if (args[2] && !args[2].startsWith("--")) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
+        if (positionalsExcept(args, 2, ["--secret", "--bundle", "--on", "--context"]).length) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
         emitExit(await send({ type: "ios_keys", secret: secretName, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
         return
       }

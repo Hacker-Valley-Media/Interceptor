@@ -1825,7 +1825,9 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
             continue
           }
           if (action && (action.type === "macos_sudo" || typeof action.secret === "string")) {
-            deliverWithSecret(id, action, request, socket, actionType)
+            deliverWithSecret(id, action, request, socket, actionType).catch((err) => {
+              socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: `secret delivery failed: ${(err as Error).message}` } }))
+            })
             continue
           }
 

@@ -136,7 +136,7 @@ async function main() {
   // error. Screenshot still honors --no-ws as an escape hatch.
   // issue #244: a secret-bearing action resolves inside the daemon's IPC handler,
   // so it never takes the WebSocket lane.
-  const carriesSecret = args.includes("--secret")
+  const carriesSecret = args.includes("--secret") || (args[0] === "macos" && (args[1] === "secret" || args[1] === "sudo" || args[1] === "authdialog"))
   const useWs = !carriesSecret && (globalArgs.includes("--ws") || isSaveCmd || (isScreenshotCmd && !globalArgs.includes("--no-ws")))
   const anyTab = globalArgs.includes("--any-tab")
   const globalTabId = parseTabFlag(globalArgs)
