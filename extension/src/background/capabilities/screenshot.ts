@@ -179,9 +179,9 @@ async function handleDomRenderScreenshot(
   }
 
   // Preflight: a minimized window has no live compositor frame to render, so
-  // the DOM-render path would inject screenshot-runner.js and then hang until
-  // the CLI WebSocket client times out at 15s (cli/transport.ts). Match the
-  // --pixel path's fast, honest failure instead.
+  // the content-script render would hang until the CLI WebSocket client times
+  // out (cli/transport.ts). Match the --pixel path's fast, honest failure
+  // instead.
   const renderWindow = await chrome.windows.get(targetTab.windowId, { populate: false }).catch(() => null)
   if (renderWindow && renderWindow.state === "minimized") {
     return {

@@ -112,7 +112,11 @@ export async function ensureNamedGroup(label: string): Promise<number> {
     }
   }
   const title = groupTitleFor(label)
-  const groups = await chrome.tabGroups.query({})
+  // A profile with zero windows makes chrome.tabGroups.query reject with
+  // "No current window". No windows means no groups, so treat it as an empty
+  // result instead of letting it escape tab_create before the create-a-window
+  // branch runs (issue #162: `open` failed on a windowless profile).
+  const groups = await chrome.tabGroups.query({}).catch(() => [])
   const match = groups.find((g) => g.title === title)
   if (match) {
     namedGroups.set(label, match.id)
@@ -226,7 +230,7 @@ export async function ensureInterceptorGroup(): Promise<number> {
   // not a single hardcoded title, so a group created under the default or a prior brand is re-adopted
   // rather than orphaned after a retitle + SW restart.
   const candidates = await getCandidateTitles()
-  const groups = await chrome.tabGroups.query({})
+  const groups = await chrome.tabGroups.query({}).catch(() => [])
   const match = groups.find((g) => typeof g.title === "string" && candidates.includes(g.title))
   if (match) {
     interceptorGroupId = match.id

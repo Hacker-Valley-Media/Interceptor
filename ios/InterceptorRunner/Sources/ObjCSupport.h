@@ -23,4 +23,15 @@ NSString * _Nullable ICActiveApplicationBundleID(void);
 /// right bundle-id accessor can be confirmed on-device.
 NSString * _Nullable ICActiveApplicationDebug(void);
 
+/// issue #244: is the device locked? Reads the com.apple.springboard.lockstate
+/// Darwin notification state (non-zero while locked).
+BOOL ICIsScreenLocked(void);
+
+/// issue #244: press a hardware button through XCTest's private XCDeviceEvent
+/// (HID usage page + usage, hold duration in seconds). Used for the lock
+/// button on iOS 27, where -[XCUIDevice pressLockButton] no longer locks
+/// (WebDriverAgent takes the same path: page 0x0C, usage 0x30, 0.5 s).
+/// Returns nil on success or an NSError describing the failure.
+NSError * _Nullable ICPerformDeviceEvent(unsigned int page, unsigned int usage, double duration);
+
 NS_ASSUME_NONNULL_END

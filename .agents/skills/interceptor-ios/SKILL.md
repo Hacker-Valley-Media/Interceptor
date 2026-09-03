@@ -32,8 +32,8 @@ Treat `eN` refs as short-lived. The UI changes between calls; **re-read with `in
 ## The Model
 
 - **The device dials in.** A verb on a not-yet-connected phone auto-launches the runner; it connects back over WiFi and the verb runs. There is no manual "enable" step.
-- **Unlocked + foreground matters.** A locked phone refuses app launches. If launches stall, the phone is likely locked — unlock it. The runner drops on idle and re-dials per verb, so between calls the phone may return to the Home screen; chain a launch and its follow-up verbs closely.
-- **UI only.** Interceptor drives the touchscreen and buttons. It cannot pass Face ID / passcode / Apple Pay or unlock the phone.
+- **Unlocked + foreground matters.** A locked phone refuses app launches. If launches stall, the phone is likely locked. While the runner is still resident, `interceptor ios unlock --secret ios-passcode` wakes the phone, swipes up, and types the passcode from the vault (`ios unlock --probe` checks the lock screen without typing). After a reboot the runner cannot start on a locked phone, so one manual unlock is needed first. Keep Auto-Lock off so the runner stays resident.
+- **Passcodes come from the vault, never from chat.** Nothing can fake Face ID or Apple Pay. On a Face ID sheet tap "Enter Passcode", then `interceptor ios type <ref> --secret ios-passcode` (or `ios keys --secret ios-passcode`); the runner types into SpringBoard when the sheet owns the keyboard. Register the passcode once with `interceptor macos secret register ios-passcode --target ios`.
 - **Setup is one-time.** `interceptor ios setup` (Xcode signed in) or `interceptor ios login` (no-Xcode, the user's own Apple ID) installs + signs the runner. A background timer renews the runner signature before the free-tier certificate expires.
 
 ## Workflows

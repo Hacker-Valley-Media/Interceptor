@@ -109,6 +109,29 @@ browser_bin_for() {
   esac
 }
 
+# Is the target browser running? On Darwin BROWSER_BIN is the .app binary path,
+# which never appears in this script's own argv. On Linux it is a bare name
+# (brave, google-chrome) that DOES — `bash install.sh --brave` — so a plain
+# `pgrep -f` on that bare name matched the installer itself: every "is the browser
+# running" check answered yes, and the "force restart" pkill signalled the
+# script (issue #172). Anchor the Linux match to argv[0] so only a process
+# launched as the browser counts. Distro wrapper scripts `exec -a "$0"` the
+# real binary, so the wrapper name stays in argv[0]; the name is a prefix match
+# so google-chrome also covers google-chrome-stable.
+browser_pgrep_pattern() {
+  if [[ "$PLATFORM" == "Darwin" ]]; then
+    printf '%s' "$1"
+  else
+    printf '^([^ ]*/)?%s' "$1"
+  fi
+}
+browser_running() {
+  pgrep -f "$(browser_pgrep_pattern "$1")" >/dev/null 2>&1
+}
+kill_browser() {
+  pkill -TERM -f "$(browser_pgrep_pattern "$1")" 2>/dev/null || true
+}
+
 # ── Parse flags ────────────────────────────────────────────────────────────────
 SKIP_EXTENSION=0
 BROWSER=""
@@ -430,7 +453,7 @@ PY
 write_developer_mode_true() {
   local prefs="$1" browser_bin="$2"
   if [[ ! -f "$prefs" ]]; then return 1; fi
-  if pgrep -f "$browser_bin" >/dev/null 2>&1; then return 2; fi
+  if browser_running "$browser_bin"; then return 2; fi
   python3 - "$prefs" <<'PY' 2>/dev/null || return 3
 import json, sys, os, tempfile
 path = sys.argv[1]
@@ -563,7 +586,7 @@ load_extension() {
     # AND we have a Preferences file to write to. Editing while the browser
     # runs is unsafe — the browser overwrites on shutdown.
     local CAN_AUTO=0
-    if [[ -f "$PREFS_PATH" ]] && ! pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then
+    if [[ -f "$PREFS_PATH" ]] && ! browser_running "$BROWSER_BIN"; then
       CAN_AUTO=1
     fi
 
@@ -595,7 +618,7 @@ load_extension() {
 
   # Check if browser is already running
   local BROWSER_RUNNING=0
-  if pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then
+  if browser_running "$BROWSER_BIN"; then
     BROWSER_RUNNING=1
   fi
 
@@ -619,11 +642,11 @@ load_extension() {
         osascript -e "tell application \"$BROWSER_NAME Browser\" to quit" 2>/dev/null || \
         osascript -e "tell application \"$BROWSER_NAME\" to quit" 2>/dev/null || true
       else
-        pkill -TERM -f "$BROWSER_BIN" 2>/dev/null || true
+        kill_browser "$BROWSER_BIN"
       fi
       sleep 2
       for j in {1..10}; do
-        if ! pgrep -f "$BROWSER_BIN" >/dev/null 2>&1; then break; fi
+        if ! browser_running "$BROWSER_BIN"; then break; fi
         sleep 1
       done
     else

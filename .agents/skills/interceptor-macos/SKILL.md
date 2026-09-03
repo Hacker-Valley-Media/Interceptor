@@ -58,7 +58,7 @@ Each workflow is a complete self-contained "you are doing X" procedure. Open the
 | File | Topic |
 |---|---|
 | [`references/background-first.md`](references/background-first.md) | Full Background-First contract, verb inventory, reflexes-to-drop, pitfalls |
-| [`references/accessibility-and-input.md`](references/accessibility-and-input.md) | AX tree mechanics, input routing, window control, sensitive-app gate |
+| [`references/accessibility-and-input.md`](references/accessibility-and-input.md) | AX tree mechanics, input routing, window control, credential delivery by name (`--secret`) |
 | [`references/capture-and-vision.md`](references/capture-and-vision.md) | ScreenCaptureKit + CGS capture, Vision OCR, audio intelligence |
 | [`references/advanced-domains.md`](references/advanced-domains.md) | Apple Events, container runtime, OS log, fs, URL fetch, file watch |
 | [`references/jsc-host.md`](references/jsc-host.md) | Plain JavaScriptCore host capabilities, flags, scope rules, and pitfalls |

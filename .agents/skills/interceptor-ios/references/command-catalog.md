@@ -28,6 +28,8 @@ phone is set up. Phones auto-connect on the first drive verb.
 | `interceptor ios click <ref> \| --x N --y N` | Deterministic coordinate tap at the ref's frame center (or raw coordinates). |
 | `interceptor ios type <ref> "text"` | Focus the field at `<ref>`, then type. Most reliable text entry — focus is atomic. |
 | `interceptor ios keys "text"` | Type into whatever is already focused (append). |
+| `interceptor ios type <ref> --secret <name>` / `ios keys --secret <name>` | Type a vault secret (passcode) by name; the daemon resolves it and the runner falls back to SpringBoard when a system passcode sheet owns the keyboard. Register once: `interceptor macos secret register ios-passcode --target ios`. |
+| `interceptor ios unlock --secret <name>` / `ios unlock --probe` | Lock screen: wake, swipe up, type the passcode into SpringBoard's passcode field, wait for unlock. Needs the runner resident (it cannot start on a locked phone). `--probe` reports lock state + whether the passcode field appeared, without typing. |
 | `interceptor ios scroll [<ref>] --dir up\|down\|left\|right` | Scroll the view (or the element at `<ref>`). |
 | `interceptor ios drag <from> <to> [--duration s]` | Drag between two element refs (frame center to frame center). |
 | `interceptor ios press home\|lock\|volume-up\|volume-down` | Hardware button. `lock` locks the phone (avoid mid-flow — it blocks launches). |

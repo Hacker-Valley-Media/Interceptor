@@ -261,6 +261,7 @@ Actions:
   interceptor type <index|ref> <text>        Type into element (clears first)
   interceptor type <index|ref> <text> --append  Type without clearing
   interceptor type "role:name" <text>        Type using semantic selector (e.g. "button:Submit")
+  interceptor type <index|ref> --secret <name>   Type a vault secret by name (value resolved in the daemon, never shown)
   interceptor click "text:<query>"            Click first element whose textContent matches (e.g. "text:Save")
   interceptor select <index|ref> <value>     Select dropdown option
   interceptor focus <index|ref>              Focus element
@@ -519,6 +520,7 @@ macOS Bridge (full install only):
   interceptor macos click <ref> --double|--right
   interceptor macos type <ref> "<text>"      AX value-set on text-bearing role
   interceptor macos type "<text>" --app <name>   Type via postToPid keys
+  interceptor macos type [<ref>] --secret <name> Type a vault secret by name (allowlisted per app)
   interceptor macos keys "Meta+A" [--app <name>|--pid N]
   interceptor macos scroll up|down|left|right N [--app <name>] [--times N] [--interval-ms N]
   interceptor macos drag <fromRef> <toRef> [--app <name>]
@@ -644,6 +646,19 @@ macOS Bridge (full install only):
   Personal data (TCC-gated):
   interceptor macos auth status|confirm|invalidate|domain-state                   (LocalAuthentication)
   interceptor macos auth confirm "<reason>" [--policy biometry|any|biometry-or-watch] [--reuse <seconds>]
+
+  Secret vault (keychain-backed; values never on argv, in logs, or in results):
+  interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <s>]
+                                             Opens the native box (secure field + confirm). Default gate: none (unattended).
+  interceptor macos secret set <name> --stdin [same flags]   Headless: value from stdin (hidden TTY prompt without --stdin)
+  interceptor macos secret list | status     Names, gates, targets, release counts; backend + Touch ID availability
+  interceptor macos secret rm <name>
+  interceptor macos secret unlock <name> --for 30m          One OS prompt now, releases inside the window without prompts
+  interceptor macos secret lock [<name>]
+  interceptor macos secret reveal <name>     Human read-back: always OS-gated, TTY only, refused under --json / MCP
+  interceptor macos sudo --secret <name> [--keep] -- <command...>   Run as root; the password goes to sudo -S stdin
+  interceptor macos authdialog status|fill --secret <name> [--submit]   Fill the macOS administrator prompt (SecurityAgent),
+                                             pressing "Use Password" first on a Touch ID sheet
   interceptor macos calendar status|request|list|default|sources|create-calendar|delete-calendar|events|event|create|update|delete|move|refresh-sources|reset|tail   (EventKit events)
   interceptor macos calendar create --title "..." --start <ISO8601> --end <ISO8601> [--calendar <id>] [--all-day] [--alarm <offset|absolute>]
   interceptor macos reminders status|request|lists|default|all|incomplete|completed|create|update|complete|uncomplete|delete   (EventKit reminders)
@@ -681,6 +696,7 @@ const HELP_IOS = `  iOS — automate your iPhone (pre-built agent, no signing/en
   interceptor ios name <device> <alias>       Rename a phone (then use --on <alias>)
   interceptor ios tree|find|inspect [--on <name>]                   On-screen elements (auto-connects)
   interceptor ios click|type|keys|scroll|drag|press [--on <name>]   Trusted XCUITest input
+  interceptor ios type <ref> --secret <name> | keys --secret <name> | unlock --secret <name>   Vault-backed passcode entry
   interceptor ios screenshot | apps | app launch|activate|terminate <id> [--on <name>]
   Run 'interceptor ios help' for the full iOS surface.`
 

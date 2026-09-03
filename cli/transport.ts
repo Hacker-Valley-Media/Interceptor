@@ -29,6 +29,12 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   // RPC an elevated deadline as a safety margin so a momentarily busy main
   // run loop never trips the old 15s timeout that left a split-brain envelope.
   macos_monitor: 60_000,
+  // issue #244: the registration box and gated releases wait on a person; sudo
+  // may run an installer; the admin-prompt fill polls the dialog.
+  macos_secret: 620_000,
+  macos_sudo: 620_000,
+  macos_authdialog: 60_000,
+  ios_unlock: 60_000,
   // iOS XCUITest AX ops (element-tree snapshot, app activate/launch, typing) are
   // slow — the first snapshot initializes the on-device accessibility bridge and
   // waits for app quiescence. Give them an elevated deadline.

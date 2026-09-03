@@ -1,3 +1,4 @@
+import { isSensitive, SECURE_MASK } from "./sensitive"
 import { getOrAssignRef } from "./ref-registry"
 import { getEffectiveRole, getAccessibleName } from "./a11y-tree"
 
@@ -94,6 +95,8 @@ function describeTarget(target: EventTarget | null): Record<string, unknown> {
 }
 
 function isPasswordLike(el: Element): boolean {
+  // issue #244: a field that received a vault secret is masked regardless of type.
+  if (isSensitive(el)) return true
   if (!(el instanceof HTMLInputElement)) return false
   const type = (el.type || "").toLowerCase()
   if (type === "password") return true
@@ -105,6 +108,7 @@ function isPasswordLike(el: Element): boolean {
 }
 
 function maskedValue(el: HTMLInputElement): string {
+  if (isSensitive(el)) return SECURE_MASK
   const len = (el.value || "").length
   return `***${len}***`
 }

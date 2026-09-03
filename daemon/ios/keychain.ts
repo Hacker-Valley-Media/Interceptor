@@ -1,11 +1,14 @@
 /**
  * daemon/ios/keychain.ts — macOS Keychain store for the Apple-ID session token
- *.
  *
  * We NEVER persist the Apple-ID password and NEVER put the session/refresh token
  * in `state.json`. Interceptor authenticates directly to Apple (signer.ts) and
- * stashes only the resulting token here, in the login keychain, via the base-macOS
- * `/usr/bin/security` tool (ships with the OS, not Xcode).
+ * stashes only the resulting token here, in the login keychain.
+ *
+ * issue #244: the store moved from `/usr/bin/security add-generic-password -w`
+ * (the value rode argv, visible to `ps`) to `Bun.secrets`, which talks to
+ * Keychain Services in-process. Items written by the old path are read once
+ * through `security` and migrated on first load.
  *
  * A generic-password item keyed by (service, account). One active account, so the
  * default account label is fine; callers may pass a specific account (e.g. the
@@ -23,47 +26,48 @@ export type KeychainRef = { service?: string; account?: string }
 function svc(ref?: KeychainRef): string { return ref?.service ?? DEFAULT_SERVICE }
 function acct(ref?: KeychainRef): string { return ref?.account ?? DEFAULT_ACCOUNT }
 
-/**
- * Store (or replace) a secret. Uses `-U` so a second call updates in place rather
- * than erroring on a duplicate item.
- *
- * ponytail: the value is passed on argv (`-w`), briefly visible to `ps` on a
- * shared machine. Upgrade path if that matters: pipe via a `security`
- * interactive/`-X` flow. For a single-user dev Mac this is the lazy-correct floor.
- */
-export function storeToken(token: string, ref?: KeychainRef): { ok: boolean; error?: string } {
-  const r = spawnSync(SECURITY, [
-    "add-generic-password", "-U",
-    "-s", svc(ref), "-a", acct(ref),
-    "-D", "Interceptor Apple-ID session token",
-    "-w", token,
-  ], { encoding: "utf-8" })
-  if (r.status !== 0) return { ok: false, error: (r.stderr || r.stdout || "security add-generic-password failed").trim() }
-  return { ok: true }
+/** Store (or replace) a secret. Bun.secrets.set replaces an existing item in place. */
+export async function storeToken(token: string, ref?: KeychainRef): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await Bun.secrets.set({ service: svc(ref), name: acct(ref), value: token })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || "keychain write failed" }
+  }
 }
 
-/** Load the secret, or undefined if there is none. */
-export function loadToken(ref?: KeychainRef): string | undefined {
-  const r = spawnSync(SECURITY, [
-    "find-generic-password", "-s", svc(ref), "-a", acct(ref), "-w",
-  ], { encoding: "utf-8" })
+/** Legacy item written by `security add-generic-password` before issue #244. */
+function loadLegacyToken(ref?: KeychainRef): string | undefined {
+  const r = spawnSync(SECURITY, ["find-generic-password", "-s", svc(ref), "-a", acct(ref), "-w"], { encoding: "utf-8" })
   if (r.status !== 0) return undefined
   const out = (r.stdout ?? "").replace(/\n$/, "")
   return out.length ? out : undefined
 }
 
+function deleteLegacyToken(ref?: KeychainRef): void {
+  spawnSync(SECURITY, ["delete-generic-password", "-s", svc(ref), "-a", acct(ref)], { encoding: "utf-8" })
+}
+
+/** Load the secret, or undefined if there is none. Migrates a legacy item once. */
+export async function loadToken(ref?: KeychainRef): Promise<string | undefined> {
+  try {
+    const v = await Bun.secrets.get({ service: svc(ref), name: acct(ref) })
+    if (typeof v === "string" && v.length) return v
+  } catch {}
+  const legacy = loadLegacyToken(ref)
+  if (legacy === undefined) return undefined
+  const stored = await storeToken(legacy, ref)
+  if (stored.ok) deleteLegacyToken(ref)
+  return legacy
+}
+
 /** Remove the secret. Returns ok even if it was already absent. */
-export function deleteToken(ref?: KeychainRef): { ok: boolean; error?: string } {
-  const r = spawnSync(SECURITY, [
-    "delete-generic-password", "-s", svc(ref), "-a", acct(ref),
-  ], { encoding: "utf-8" })
-  // status 44 = item not found — treat as already-clear, not an error.
-  if (r.status !== 0 && r.status !== 44 && !/could not be found/i.test(r.stderr ?? "")) {
-    return { ok: false, error: (r.stderr || r.stdout || "security delete-generic-password failed").trim() }
-  }
+export async function deleteToken(ref?: KeychainRef): Promise<{ ok: boolean; error?: string }> {
+  try { await Bun.secrets.delete({ service: svc(ref), name: acct(ref) }) } catch {}
+  deleteLegacyToken(ref)
   return { ok: true }
 }
 
-export function hasToken(ref?: KeychainRef): boolean {
-  return loadToken(ref) !== undefined
+export async function hasToken(ref?: KeychainRef): Promise<boolean> {
+  return (await loadToken(ref)) !== undefined
 }

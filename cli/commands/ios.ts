@@ -13,6 +13,7 @@ import { sendCommand, type DaemonResponse, type DaemonResult } from "../transpor
 import { runIosWebCommand } from "./ios-web"
 import { runIosSvcCommand } from "./ios-svc"
 import { runIosDevCommand } from "./ios-dev"
+import { readSecretValue } from "../prompt"
 
 /** Device-service introspection subcommands, delegated to ios-svc.ts. */
 const IOS_SVC_SUBCOMMANDS = new Set(["diag", "logs", "fs", "crash", "profiles", "notify", "springboard"])
@@ -113,8 +114,9 @@ Drive a phone (add --on <name>, or it uses your only phone):
   find    --label "Send" [--role button]     find elements
   inspect <ref>                              element details
   click   <ref> | --x N --y N                tap
-  type    <ref> "text"                       focus + type
-  keys    "text"                             type into the focused field
+  type    <ref> "text" | --secret <name>     focus + type (a vault secret by name never shows the value)
+  keys    "text" | --secret <name>           type into the focused field
+  unlock  --secret <name> | --probe          lock screen: wake, swipe up, type the passcode (runner must be resident)
   scroll  [<ref>] --dir up|down|left|right   scroll
   drag    <from> <to>                        drag between elements
   press   home|lock|volume-up|volume-down    hardware button
@@ -132,6 +134,9 @@ Connection model (how the runner reaches the phone):
   • You do NOT need to connect manually. Just run a verb — e.g.
     'interceptor ios tree --on <name>' — and the daemon launches the runner and
     the phone dials in. 'connected' flips to true for the life of that session.
+  • 'ios unlock --secret ios-passcode' types the passcode into the lock screen while the
+    runner is still resident (Auto-Lock off keeps it that way). After a reboot the runner
+    cannot start on a locked phone: unlock once by hand, then drive as usual.
   • Keep the phone UNLOCKED and AWAKE while driving. Auto-lock / sleep tears the
     runner down (you'll see connected:false again and the next verb re-launches).
   • If a verb hangs or times out: confirm the phone is unlocked, on the same
@@ -168,7 +173,9 @@ Troubleshooting — when things aren't working, try these IN ORDER:
      check 'interceptor ios status' (tunnel/connection) + 'interceptor ios devices'.
 
 Phones connect automatically — no enable, no cable required once paired over WiFi.
-Drives UI only: can't pass Face ID/passcode/Apple Pay or unlock the phone.`
+Drives UI only: nothing can fake Face ID or Apple Pay. Passcode sheets are typed from the vault
+('ios type <ref> --secret ios-passcode' after tapping "Enter Passcode"), and 'ios unlock --secret'
+unlocks the lock screen while the runner is resident.`
 
 export async function runIosCommand(
   filtered: string[],
@@ -221,15 +228,19 @@ export async function runIosCommand(
 
     // ── self-service install (Apple-ID re-sign, no Xcode) ──────────────
     case "login": {
-      // ponytail: flags now; a hidden-input interactive prompt is a post-M6
-      // nicety (login is gated on the M6 Apple-auth spike anyway).
+      // issue #244: the Apple ID password comes from a hidden prompt or stdin,
+      // never argv (shell history, ps).
       const appleId = flagValue(args, "--apple-id") ?? flagValue(args, "--id")
-      const password = flagValue(args, "--password") ?? flagValue(args, "--pw")
-      const code = flagValue(args, "--code")
-      if (!appleId || !password) {
-        console.error("usage: interceptor ios login --apple-id <id> --password <pw> [--code <2fa>]")
+      if (hasFlag(args, "--password") || hasFlag(args, "--pw")) {
+        console.error("error: never pass the password on argv. Run 'interceptor ios login --apple-id <id>' and type it at the hidden prompt, or pipe it: printf '%s' \"$PW\" | interceptor ios login --apple-id <id> --stdin")
         process.exit(1)
       }
+      const code = flagValue(args, "--code")
+      if (!appleId) {
+        console.error("usage: interceptor ios login --apple-id <id> [--code <2fa>] [--stdin]")
+        process.exit(1)
+      }
+      const password = await readSecretValue(`Apple ID password for ${appleId}`, { stdin: hasFlag(args, "--stdin"), confirm: false })
       emitExit(await send({ type: "ios_login", appleId, password, code }), jsonMode)
       return
     }
@@ -339,17 +350,48 @@ export async function runIosCommand(
 
     case "type": {
       const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
+      // issue #244: `--secret <name>` types a vault value by name (daemon-resolved).
+      const secretName = flagValue(args, "--secret")
+      if (hasFlag(args, "--secret")) {
+        if (!secretName) { console.error("error: --secret requires a secret name"); process.exit(1) }
+        const literal = ref ? (args[3] && !args[3].startsWith("--") ? args[3] : undefined) : undefined
+        if (literal !== undefined) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
+        emitExit(await send({ type: "ios_type", ref, secret: secretName, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
+        return
+      }
       // text is the last non-flag arg (or the only one when no ref is given)
       const text = ref ? (args[3] && !args[3].startsWith("--") ? args[3] : undefined) : (args[2] && !args[2].startsWith("--") ? args[2] : undefined)
       if (text === undefined) { console.error('error: ios type requires text, e.g. ios type e5 "hello"'); process.exit(1) }
-      emitExit(await send({ type: "ios_type", ref: ref && args[3] !== undefined ? ref : undefined, text }, contextId), jsonMode)
+      emitExit(await send({ type: "ios_type", ref: ref && args[3] !== undefined ? ref : undefined, text, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
       return
     }
 
     case "keys": {
+      const secretName = flagValue(args, "--secret")
+      if (hasFlag(args, "--secret")) {
+        if (!secretName) { console.error("error: --secret requires a secret name"); process.exit(1) }
+        if (args[2] && !args[2].startsWith("--")) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
+        emitExit(await send({ type: "ios_keys", secret: secretName, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
+        return
+      }
       const text = args[2]
       if (!text || text.startsWith("--")) { console.error("error: ios keys requires text"); process.exit(1) }
-      emitExit(await send({ type: "ios_keys", text }, contextId), jsonMode)
+      emitExit(await send({ type: "ios_keys", text, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
+      return
+    }
+
+    // issue #244: unlock the lock screen with the passcode from the vault. The
+    // resident runner wakes the phone, swipes up, and types into SpringBoard's
+    // passcode field. `--probe` stops before typing and reports what it found.
+    case "unlock": {
+      const secretName = flagValue(args, "--secret")
+      const probe = hasFlag(args, "--probe")
+      if (!probe && (!secretName || hasFlag(args, "--secret") === false)) {
+        console.error("error: ios unlock requires --secret <name> (or --probe to check the lock screen without typing)"); process.exit(1)
+      }
+      const action: Action = { type: "ios_unlock", probe }
+      if (secretName) action.secret = secretName
+      emitExit(await send(action, contextId), jsonMode)
       return
     }
 

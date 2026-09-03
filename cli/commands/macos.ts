@@ -25,6 +25,7 @@ import {
 import { runCdpCommand } from "./cdp"
 import { runNativeCommand } from "./native"
 import { extensionMacosPrefixes, extensionActionType } from "../../shared/extensions"
+import { readSecretValue } from "../prompt"
 
 type Action = { type: string; [key: string]: unknown }
 type Result = { success: boolean; error?: string; data?: unknown }
@@ -130,6 +131,18 @@ export async function runMacosCommand(
     }
   }
 
+  // issue #244: the vault value comes from a hidden prompt or stdin, never argv;
+  // reveal prints to a human at a terminal only.
+  if (action.type === "macos_secret" && action.sub === "set") {
+    action.value = await readSecretValue(`Value for secret "${action.name}"`, { stdin: action.stdin === true })
+    delete action.stdin
+  }
+  if (action.type === "macos_secret" && action.sub === "reveal") {
+    if (opts.jsonMode) { console.error("error: secret reveal is refused under --json (it prints to a terminal only)"); process.exit(1) }
+    if (process.env.INTERCEPTOR_MCP === "1") { console.error("error: secret reveal is refused over MCP"); process.exit(1) }
+    if (!process.stdout.isTTY) { console.error("error: secret reveal prints to a terminal only (stdout is not a TTY)"); process.exit(1) }
+  }
+
   const result = await send(action, opts.globalTabId, opts.useWs)
 
   if (!result.success) {
@@ -224,6 +237,13 @@ export async function runMacosCommand(
         }
       } catch {}
     }
+  }
+
+  if (action.type === "macos_secret" && action.sub === "reveal") {
+    const value = (result.data as { value?: unknown } | undefined)?.value
+    if (typeof value !== "string") { console.error("error: no value returned"); process.exit(1) }
+    console.log(value)
+    return
   }
 
   if (opts.jsonMode) {
@@ -440,13 +460,28 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     }
 
     case "type": {
+      const typeApp = flagVal(filtered, "--app")
+      const typePid = flagInt(filtered, "--pid")
+      // issue #244: `--secret <name>` delivers a vault value by name. The daemon
+      // resolves it after logging; the CLI never sees the value.
+      if (filtered.includes("--secret")) {
+        const secretName = flagVal(filtered, "--secret")
+        if (!secretName || secretName.startsWith("--")) { console.error("error: --secret requires a secret name"); process.exit(1) }
+        const positionals = collectPositionals(filtered, 2, new Set(["--secret", "--app", "--pid"]))
+        const ref = positionals[0] && /^e\d+$/.test(positionals[0]) ? positionals[0] : undefined
+        const literal = ref ? positionals.slice(1) : positionals
+        if (literal.length) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
+        const action: Action = { type: "macos_type", secret: secretName }
+        if (ref) action.ref = ref
+        if (typeApp) action.app = typeApp
+        if (typePid !== undefined) action.pid = typePid
+        return action
+      }
       const refOrText = filtered[2]
       if (!refOrText) { console.error("error: interceptor macos type requires text or ref + text"); process.exit(1) }
       const action: Action = /^e\d+$/.test(refOrText) && filtered[3]
         ? { type: "macos_type", ref: refOrText, text: filtered[3] }
         : { type: "macos_type", text: refOrText }
-      const typeApp = flagVal(filtered, "--app")
-      const typePid = flagInt(filtered, "--pid")
       if (typeApp) action.app = typeApp
       if (typePid !== undefined) action.pid = typePid
       return action
@@ -1716,6 +1751,75 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       const format = flagVal(filtered, "--format"); if (format) action.format = format
       if (filtered.includes("--save")) action.save = true
       const out = flagVal(filtered, "--out"); if (out) action.out = out
+      return action
+    }
+
+    // issue #244: the secret vault. Values never appear on argv: `register`
+    // opens the bridge's native box, `set` reads stdin or a hidden prompt.
+    case "secret": {
+      const verb = filtered[2]
+      const verbs = ["register", "set", "list", "rm", "status", "unlock", "lock", "reveal"]
+      if (!verb || !verbs.includes(verb)) {
+        console.error(`error: secret requires a verb (${verbs.join("|")})`)
+        console.error("  interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <seconds>]")
+        console.error("  interceptor macos secret set <name> --stdin [same flags]      (value from stdin; TTY prompt without --stdin)")
+        console.error("  interceptor macos secret list | status | rm <name> | unlock <name> --for 30m | lock [<name>] | reveal <name>")
+        process.exit(1)
+      }
+      const action: Action = { type: "macos_secret", sub: verb }
+      const name = filtered[3] && !filtered[3].startsWith("--") ? filtered[3] : undefined
+      if (["register", "set", "rm", "unlock", "reveal"].includes(verb) && !name) {
+        console.error(`error: secret ${verb} requires a <name>`); process.exit(1)
+      }
+      if (name) action.name = name
+      if ((verb === "register" || verb === "set") && filtered[4] && !filtered[4].startsWith("--")) {
+        console.error("error: never pass the secret value on argv (it lands in shell history and ps). Use 'secret register <name>' for the box, or 'secret set <name> --stdin'.")
+        process.exit(1)
+      }
+      if (verb === "register" || verb === "set") {
+        const gate = flagVal(filtered, "--gate")
+        if (gate) action.gate = gate
+        const targets = collectMulti(filtered, "--target").flatMap((t) => t.split(",")).map((t) => t.trim()).filter(Boolean)
+        if (targets.length) action.targets = targets
+        const reuse = flagInt(filtered, "--reuse")
+        if (reuse !== undefined) action.reuseSeconds = reuse
+        if (verb === "set" && filtered.includes("--stdin")) action.stdin = true
+      }
+      if (verb === "unlock") {
+        const dur = flagVal(filtered, "--for")
+        if (!dur) { console.error("error: secret unlock requires --for <duration> (e.g. 30m, 2h)"); process.exit(1) }
+        action.for = dur
+      }
+      return action
+    }
+
+    // issue #244: `interceptor macos sudo --secret <name> [--keep] -- <command...>`
+    // The daemon pipes the vault value to `sudo -S` stdin.
+    case "sudo": {
+      const sep = filtered.indexOf("--")
+      const head = sep === -1 ? filtered : filtered.slice(0, sep)
+      const cmd = sep === -1 ? [] : filtered.slice(sep + 1)
+      const secretName = flagVal(head, "--secret")
+      if (!secretName || secretName.startsWith("--")) { console.error("error: interceptor macos sudo requires --secret <name> -- <command...>"); process.exit(1) }
+      if (cmd.length === 0) { console.error("error: interceptor macos sudo requires a command after --"); process.exit(1) }
+      const action: Action = { type: "macos_sudo", secret: secretName, cmd }
+      if (head.includes("--keep")) action.keep = true
+      return action
+    }
+
+    // issue #244: fill the macOS administrator prompt (SecurityAgent) from the vault.
+    case "authdialog": {
+      const verb = filtered[2]
+      if (!verb || !["fill", "status"].includes(verb)) {
+        console.error("error: authdialog requires a verb (fill --secret <name> [--submit] | status)"); process.exit(1)
+      }
+      const action: Action = { type: "macos_authdialog", sub: verb }
+      if (verb === "fill") {
+        const secretName = flagVal(filtered, "--secret")
+        if (!secretName || secretName.startsWith("--")) { console.error("error: authdialog fill requires --secret <name>"); process.exit(1) }
+        action.secret = secretName
+        if (filtered.includes("--submit")) action.submit = true
+      }
       return action
     }
 

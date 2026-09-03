@@ -82,3 +82,6 @@ use-cases/deep-research-demo/
 # Apple container runtime data dir (symlinked from ~/Library/Application Support/com.apple.container/)
 # Holds Linux container images + per-container VM disk state; never tracked.
 .container-data/
+
+# graphify knowledge-graph output (local analysis artifacts, never shipped)
+**/graphify-out/

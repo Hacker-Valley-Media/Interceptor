@@ -134,7 +134,10 @@ async function main() {
   // the action payload, e.g. "Unexpected token 'new'"). It therefore always
   // routes over WS — a stray --no-ws would otherwise produce a confusing parse
   // error. Screenshot still honors --no-ws as an escape hatch.
-  const useWs = globalArgs.includes("--ws") || isSaveCmd || (isScreenshotCmd && !globalArgs.includes("--no-ws"))
+  // issue #244: a secret-bearing action resolves inside the daemon's IPC handler,
+  // so it never takes the WebSocket lane.
+  const carriesSecret = args.includes("--secret")
+  const useWs = !carriesSecret && (globalArgs.includes("--ws") || isSaveCmd || (isScreenshotCmd && !globalArgs.includes("--no-ws")))
   const anyTab = globalArgs.includes("--any-tab")
   const globalTabId = parseTabFlag(globalArgs)
   const globalContextId = parseContextFlag(globalArgs)
@@ -629,6 +632,12 @@ async function main() {
       )
     }
     console.log(formatResult(result, jsonMode))
+    // Issue #237: a failed action (`back` with no history, a rejected
+    // `navigate`, …) printed `error:` but the process still exited 0, so a
+    // scripted check read the failure as success. Every generic action funnels
+    // through this print, so the exit code is mapped once here. exitCode (not
+    // exit()) lets stdout drain and the transport close normally.
+    if (!result.success) process.exitCode = 1
   } catch (err) {
     console.error(`error: ${(err as Error).message}`)
     process.exit(1)

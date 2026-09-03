@@ -169,7 +169,7 @@ export async function handleFindAndClick(action: Action): Promise<ActionResult> 
 export async function handleFindAndType(action: Action): Promise<ActionResult> {
   const match = findBestMatch(action.name as string | undefined, action.role as string | undefined, action.text as string | undefined)
   if (!match) return { success: false, error: "no matching element found (score < 30)" }
-  const typeResult = await handleInputText({ type: "input_text", ref: match.refId, text: action.inputText as string, clear: action.clear })
+  const typeResult = await handleInputText({ type: "input_text", ref: match.refId, text: action.inputText as string, clear: action.clear, sensitive: action.sensitive })
   return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: typeResult } }
 }
 

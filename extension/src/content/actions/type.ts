@@ -1,6 +1,7 @@
 import { resolveElement } from "../input-simulation"
 import { getShadowRoot } from "../element-discovery"
 import { getOrAssignRef } from "../ref-registry"
+import { markSensitive } from "../sensitive"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
@@ -8,6 +9,8 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 export async function handleInputText(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
   if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
+  // issue #244: a vault delivery marks the field so the monitor masks its value.
+  if (action.sensitive === true) markSensitive(el)
   el.focus()
   const text = action.text as string
   const tag = el.tagName
@@ -48,7 +51,7 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
   if (shadowRoot) {
     const innerInput = shadowRoot.querySelector("input, textarea, [contenteditable='true']") as HTMLElement | null
     if (innerInput) {
-      return handleInputText({ type: "input_text", ref: getOrAssignRef(innerInput), text, clear: action.clear })
+      return handleInputText({ type: "input_text", ref: getOrAssignRef(innerInput), text, clear: action.clear, sensitive: action.sensitive })
     }
   }
 

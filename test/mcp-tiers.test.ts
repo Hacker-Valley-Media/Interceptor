@@ -114,3 +114,35 @@ describe("gate — operator allowlist is the boundary; confirm is a speed-bump",
     expect(gate(eEval, parseAllow("all"), true).allowed).toBe(true)
   })
 })
+
+describe("issue #244 vault, sudo, admin prompt, auth", () => {
+  test("macos secret family: list/status read, register/set/unlock/lock mutate, rm destructive, reveal exec, unknown floors destructive", () => {
+    expect(classify("macos", "secret", ["list"]).tier).toBe("read")
+    expect(classify("macos", "secret", ["status"]).tier).toBe("read")
+    expect(classify("macos", "secret", ["register", "admin"]).tier).toBe("mutate")
+    expect(classify("macos", "secret", ["set", "admin", "--stdin"]).tier).toBe("mutate")
+    expect(classify("macos", "secret", ["unlock", "admin", "--for", "30m"]).tier).toBe("mutate")
+    expect(classify("macos", "secret", ["lock"]).tier).toBe("mutate")
+    expect(classify("macos", "secret", ["rm", "admin"]).tier).toBe("destructive")
+    expect(classify("macos", "secret", ["reveal", "admin"]).tier).toBe("exec")
+    expect(classify("macos", "secret", ["export"]).tier).toBe("destructive")
+  })
+
+  test("sudo is exec, authdialog fill destructive, authdialog status read", () => {
+    expect(classify("macos", "sudo", ["--secret", "admin", "--", "id"]).tier).toBe("exec")
+    expect(classify("macos", "authdialog", ["fill", "--secret", "admin"]).tier).toBe("destructive")
+    expect(classify("macos", "authdialog", ["status"]).tier).toBe("read")
+  })
+
+  test("auth is explicitly mutate; status reads", () => {
+    expect(classify("macos", "auth", ["confirm", "why"]).tier).toBe("mutate")
+    expect(classify("macos", "auth", ["status"]).tier).toBe("read")
+  })
+
+  test("the gate refuses sudo and reveal without operator opt-in", () => {
+    const allow = parseAllow(undefined)
+    expect(gate(classify("macos", "sudo", ["--secret", "a", "--", "id"]), allow, true).allowed).toBe(false)
+    expect(gate(classify("macos", "secret", ["reveal", "a"]), allow, true).allowed).toBe(false)
+    expect(gate(classify("macos", "secret", ["list"]), allow, false).allowed).toBe(true)
+  })
+})

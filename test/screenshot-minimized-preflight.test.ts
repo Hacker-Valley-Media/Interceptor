@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 // Minimized-window preflight for the DOM-render screenshot path (issue #94).
 //
 // A minimized window has no live compositor frame to render, so the default
-// DOM-render screenshot path used to inject screenshot-runner.js and then hang
-// until the CLI WebSocket client timed out at 15s (cli/transport.ts). The fix
+// DOM-render screenshot path (which, before 0.18.3, injected a
+// screenshot-runner.js bundle) hung until the CLI WebSocket client timed out
+// at 15s (cli/transport.ts). The fix
 // adds a `chrome.windows.get(...).state === "minimized"` preflight in
 // handleDomRenderScreenshot that returns the same fast, honest error shape the
 // legacy --pixel path already returns.

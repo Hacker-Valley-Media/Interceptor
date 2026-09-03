@@ -38,6 +38,8 @@ export const IOS_RUNNER_OPS = {
   press: "press",
   app: "app",
   eval: "eval",
+  // issue #244: lock-screen passcode entry (wake, swipe up, type into SpringBoard).
+  unlock: "unlock",
 } as const
 export type IosRunnerOp = (typeof IOS_RUNNER_OPS)[keyof typeof IOS_RUNNER_OPS]
 
@@ -73,7 +75,7 @@ export const IOS_ACTION_TYPES = new Set<string>([
 export const IOS_VERB_TYPES = new Set<string>([
   "ios_tree", "ios_find", "ios_inspect", "ios_click", "ios_type", "ios_keys",
   "ios_scroll", "ios_drag", "ios_press", "ios_screenshot", "ios_apps", "ios_app",
-  "ios_fgdebug", "ios_eval",
+  "ios_fgdebug", "ios_eval", "ios_unlock",
 ])
 
 /**

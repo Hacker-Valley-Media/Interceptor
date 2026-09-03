@@ -1153,6 +1153,16 @@ window.addEventListener("beforeunload", () => {
   domObserver.disconnect();
 });
 
+// extension/src/content/sensitive.ts
+var sensitiveElements = new WeakSet;
+function markSensitive(el) {
+  sensitiveElements.add(el);
+}
+function isSensitive(el) {
+  return sensitiveElements.has(el);
+}
+var SECURE_MASK = "***SECURE***";
+
 // extension/src/content/monitor.ts
 init_ref_registry();
 init_a11y_tree();
@@ -1230,6 +1240,8 @@ function describeTarget(target) {
   return out;
 }
 function isPasswordLike(el) {
+  if (isSensitive(el))
+    return true;
   if (!(el instanceof HTMLInputElement))
     return false;
   const type = (el.type || "").toLowerCase();
@@ -1244,6 +1256,8 @@ function isPasswordLike(el) {
   return false;
 }
 function maskedValue(el) {
+  if (isSensitive(el))
+    return SECURE_MASK;
   const len = (el.value || "").length;
   return `***${len}***`;
 }
@@ -1902,6 +1916,8 @@ async function handleInputText(action) {
   const el = resolveElement(action.index, action.ref);
   if (!el)
     return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` };
+  if (action.sensitive === true)
+    markSensitive(el);
   el.focus();
   const text = action.text;
   const tag = el.tagName;
@@ -1936,7 +1952,7 @@ async function handleInputText(action) {
   if (shadowRoot) {
     const innerInput = shadowRoot.querySelector("input, textarea, [contenteditable='true']");
     if (innerInput) {
-      return handleInputText({ type: "input_text", ref: getOrAssignRef(innerInput), text, clear: action.clear });
+      return handleInputText({ type: "input_text", ref: getOrAssignRef(innerInput), text, clear: action.clear, sensitive: action.sensitive });
     }
   }
   const role = el.getAttribute("role");
@@ -3113,7 +3129,7 @@ async function handleFindAndType(action) {
   const match = findBestMatch(action.name, action.role, action.text);
   if (!match)
     return { success: false, error: "no matching element found (score < 30)" };
-  const typeResult = await handleInputText({ type: "input_text", ref: match.refId, text: action.inputText, clear: action.clear });
+  const typeResult = await handleInputText({ type: "input_text", ref: match.refId, text: action.inputText, clear: action.clear, sensitive: action.sensitive });
   return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: typeResult } };
 }
 async function handleFindAndCheck(action) {

@@ -247,6 +247,37 @@ else
   if security find-identity -p codesigning -v 2>/dev/null | grep -q "$INTERCEPTOR_SIGNING_IDENTITY"; then
     echo "==> Codesigning bundle with: $INTERCEPTOR_SIGNING_IDENTITY"
 
+    # issue #244: the secret vault stores items in the data protection
+    # keychain, which needs an application-identifier + keychain-access-groups
+    # entitlement authorized by an embedded Developer ID provisioning profile
+    # (TN3137). Embed the profile and add the three restricted entitlements
+    # only when the profile matches this identity's team and bundle id;
+    # otherwise sign with the base entitlements and the bridge reports
+    # dataProtection:false (the daemon keeps items in the login keychain).
+    SIGN_ENTITLEMENTS="$ENTITLEMENTS"
+    BRIDGE_PROFILE="${INTERCEPTOR_BRIDGE_PROFILE:-$SCRIPT_DIR/Interceptor-Bridge-Developer-ID.provisionprofile}"
+    TEAM_ID="$(echo "$INTERCEPTOR_SIGNING_IDENTITY" | sed -nE 's/.*\(([A-Z0-9]{10})\).*/\1/p')"
+    if [ -f "$BRIDGE_PROFILE" ] && [ -n "$TEAM_ID" ]; then
+      PROFILE_PLIST="$(mktemp -t bridge-profile).plist"
+      security cms -D -i "$BRIDGE_PROFILE" > "$PROFILE_PLIST" 2>/dev/null || true
+      PROFILE_APP_ID="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$PROFILE_PLIST" 2>/dev/null || true)"
+      if [ "$PROFILE_APP_ID" = "$TEAM_ID.$INTERCEPTOR_BRIDGE_IDENTIFIER" ]; then
+        cp "$BRIDGE_PROFILE" "$APP_DIR/Contents/embedded.provisionprofile"
+        SIGN_ENTITLEMENTS="$(mktemp -t bridge-entitlements).plist"
+        cp "$ENTITLEMENTS" "$SIGN_ENTITLEMENTS"
+        /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $TEAM_ID.$INTERCEPTOR_BRIDGE_IDENTIFIER" "$SIGN_ENTITLEMENTS"
+        /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $TEAM_ID" "$SIGN_ENTITLEMENTS"
+        /usr/libexec/PlistBuddy -c "Add :keychain-access-groups array" "$SIGN_ENTITLEMENTS"
+        /usr/libexec/PlistBuddy -c "Add :keychain-access-groups:0 string $TEAM_ID.$INTERCEPTOR_BRIDGE_IDENTIFIER" "$SIGN_ENTITLEMENTS"
+        echo "==> Embedded provisioning profile ($PROFILE_APP_ID) + keychain-access-groups entitlement"
+      else
+        echo "==> Provisioning profile does not match $TEAM_ID.$INTERCEPTOR_BRIDGE_IDENTIFIER (got '${PROFILE_APP_ID:-none}'); signing without keychain-access-groups"
+      fi
+      rm -f "$PROFILE_PLIST"
+    else
+      echo "==> No bridge provisioning profile at $BRIDGE_PROFILE; signing without keychain-access-groups"
+    fi
+
     # Sign Sparkle.framework + nested helpers FIRST (inside-out is the rule).
     # Sparkle's helpers don't need our entitlements — they get hardened
     # runtime + timestamp only. The framework itself wraps everything.
@@ -276,13 +307,13 @@ else
     codesign --force --options runtime --timestamp \
       --sign "$INTERCEPTOR_SIGNING_IDENTITY" \
       --identifier "$INTERCEPTOR_BRIDGE_IDENTIFIER" \
-      --entitlements "$ENTITLEMENTS" \
+      --entitlements "$SIGN_ENTITLEMENTS" \
       "$APP_DIR/Contents/MacOS/interceptor-bridge"
 
     codesign --force --options runtime --timestamp \
       --sign "$INTERCEPTOR_SIGNING_IDENTITY" \
       --identifier "$INTERCEPTOR_BRIDGE_IDENTIFIER" \
-      --entitlements "$ENTITLEMENTS" \
+      --entitlements "$SIGN_ENTITLEMENTS" \
       "$APP_DIR"
 
     codesign --verify --strict --verbose=2 "$APP_DIR" || true

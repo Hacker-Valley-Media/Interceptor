@@ -34,7 +34,8 @@ export interface IosDeviceChannel {
   screenshot(): Promise<string>
   tap(x: number, y: number): Promise<void>
   drag(fromX: number, fromY: number, toX: number, toY: number, durationSec?: number): Promise<void>
-  sendKeys(text: string): Promise<void>
+  /** Type into the foreground app, or into `bundleId` (e.g. SpringBoard for a passcode sheet). */
+  sendKeys(text: string, bundleId?: string): Promise<void>
   pressButton(name: string): Promise<void>
   launchApp(bundleId: string): Promise<void>
   activateApp(bundleId: string): Promise<void>
@@ -127,7 +128,9 @@ export class RunnerChannel implements IosDeviceChannel {
     await this.send(IOS_RUNNER_OPS.drag, { fromX, fromY, toX, toY, duration: durationSec })
   }
 
-  async sendKeys(text: string): Promise<void> { await this.send(IOS_RUNNER_OPS.keys, { text }) }
+  async sendKeys(text: string, bundleId?: string): Promise<void> { await this.send(IOS_RUNNER_OPS.keys, bundleId ? { text, bundleId } : { text }) }
+  /** issue #244: lock-screen passcode entry (see the runner's `unlock` op). */
+  async unlock(passcode?: string, probe = false): Promise<unknown> { return this.send(IOS_RUNNER_OPS.unlock, { passcode: passcode ?? "", probe }) }
 
   async pressButton(name: string): Promise<void> { await this.send(IOS_RUNNER_OPS.press, { name }) }
 
