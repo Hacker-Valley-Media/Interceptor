@@ -311,9 +311,10 @@ export type SudoResult = { success: boolean; error?: string; data?: { exitCode: 
 const SUDO_OUTPUT_CAP = 50_000
 
 /**
- * Read a stream up to `cap` bytes, then stop consuming (the rest is dropped, the
- * reader is cancelled). `cancel()` from the outside unblocks a pending read so a
- * timeout can return even while a descendant of sudo keeps the pipe open.
+ * Read a stream, keeping the first `cap` bytes and discarding the rest while
+ * still draining it (closing the pipe early would SIGPIPE a chatty command).
+ * `cancel()` from the outside unblocks a pending read so a timeout can return
+ * even while a descendant of sudo keeps the pipe open.
  */
 function readCapped(stream: ReadableStream<Uint8Array> | null | undefined, cap: number): { text: Promise<string>; cancel: () => void } {
   if (!stream) return { text: Promise.resolve(""), cancel: () => {} }
@@ -327,12 +328,12 @@ function readCapped(stream: ReadableStream<Uint8Array> | null | undefined, cap: 
         const { value, done } = await reader.read()
         if (done) break
         if (!value) continue
+        if (size >= cap) { truncated = true; continue }
         if (size + value.byteLength > cap) {
-          chunks.push(value.subarray(0, Math.max(0, cap - size)))
+          chunks.push(value.subarray(0, cap - size))
           size = cap
           truncated = true
-          await reader.cancel().catch(() => {})
-          break
+          continue
         }
         chunks.push(value)
         size += value.byteLength

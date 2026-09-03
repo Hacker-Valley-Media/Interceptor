@@ -42,25 +42,24 @@ export async function historyGo(tabId: number, delta: -1 | 1, deps: HistoryDeps 
   } catch (err) {
     apiError = (err as Error).message
   }
-  // The injected function resolves true when the page itself sees the
-  // traversal (popstate for a same-document entry, hashchange, or pagehide as a
-  // cross-document step begins), so a target entry with the SAME url is still
-  // recognized as movement; the tab-status poll below is the fallback.
-  let acked = false
+  // The injected function resolves with the event the page itself saw:
+  // popstate/hashchange for a same-document entry (no document load follows,
+  // so the load wait is skipped) or pagehide as a cross-document step begins.
+  // A target entry with the SAME url is therefore still recognized as
+  // movement; the tab-status poll below is the fallback.
+  let ack: string | undefined
   try {
     const injected = await chrome.scripting.executeScript({
       target: { tabId },
-      func: (d: number) => new Promise<boolean>((resolve) => {
-        const done = () => resolve(true)
-        addEventListener("popstate", done, { once: true })
-        addEventListener("hashchange", done, { once: true })
-        addEventListener("pagehide", done, { once: true })
+      func: (d: number) => new Promise<string | false>((resolve) => {
+        for (const ev of ["popstate", "hashchange", "pagehide"]) addEventListener(ev, () => resolve(ev), { once: true })
         setTimeout(() => resolve(false), 800)
         history.go(d)
       }),
       args: [delta] as [number],
     })
-    acked = Array.isArray(injected) && injected.some((r) => (r as { result?: unknown } | undefined)?.result === true)
+    const results = Array.isArray(injected) ? injected.map((r) => (r as { result?: unknown } | undefined)?.result) : []
+    ack = results.find((r): r is string => typeof r === "string")
   } catch (err) {
     // A cross-document step can tear the injected context down before it
     // answers; that is only a failure when the tab did not move.
@@ -70,7 +69,8 @@ export async function historyGo(tabId: number, delta: -1 | 1, deps: HistoryDeps 
     await deps.waitForTabLoad(tabId)
     return { success: true }
   }
-  if (!acked && !(await waitForNavigationStart(tabId, before.url ?? ""))) {
+  if (ack === "popstate" || ack === "hashchange") return { success: true }
+  if (!ack && !(await waitForNavigationStart(tabId, before.url ?? ""))) {
     return { success: false, error: `no ${label} history for tab ${tabId} — nothing to go ${label} to` }
   }
   await deps.waitForTabLoad(tabId)

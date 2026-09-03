@@ -2345,21 +2345,20 @@ async function historyGo(tabId, delta, deps = { waitForTabLoad }) {
   } catch (err) {
     apiError = err.message;
   }
-  let acked = false;
+  let ack;
   try {
     const injected = await chrome.scripting.executeScript({
       target: { tabId },
       func: (d) => new Promise((resolve) => {
-        const done = () => resolve(true);
-        addEventListener("popstate", done, { once: true });
-        addEventListener("hashchange", done, { once: true });
-        addEventListener("pagehide", done, { once: true });
+        for (const ev of ["popstate", "hashchange", "pagehide"])
+          addEventListener(ev, () => resolve(ev), { once: true });
         setTimeout(() => resolve(false), 800);
         history.go(d);
       }),
       args: [delta]
     });
-    acked = Array.isArray(injected) && injected.some((r) => r?.result === true);
+    const results = Array.isArray(injected) ? injected.map((r) => r?.result) : [];
+    ack = results.find((r) => typeof r === "string");
   } catch (err) {
     if (!await waitForNavigationStart(tabId, before.url ?? "")) {
       return { success: false, error: `${apiError} (page-side history.${label}() also failed: ${err.message})` };
@@ -2367,7 +2366,9 @@ async function historyGo(tabId, delta, deps = { waitForTabLoad }) {
     await deps.waitForTabLoad(tabId);
     return { success: true };
   }
-  if (!acked && !await waitForNavigationStart(tabId, before.url ?? "")) {
+  if (ack === "popstate" || ack === "hashchange")
+    return { success: true };
+  if (!ack && !await waitForNavigationStart(tabId, before.url ?? "")) {
     return { success: false, error: `no ${label} history for tab ${tabId} — nothing to go ${label} to` };
   }
   await deps.waitForTabLoad(tabId);

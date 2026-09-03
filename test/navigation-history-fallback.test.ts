@@ -64,12 +64,22 @@ describe("historyGo (issue #237)", () => {
     expect(executed).toEqual([{ tabId: 7, args: [1] }])
   })
 
-  test("a same-document entry with the same URL counts as movement when the page acknowledges it", async () => {
-    executeResult = [{ result: true }]
-    const res = await historyGo(7, -1, noWait)
+  test("a same-document entry with the same URL counts as movement when the page acknowledges it, with no load wait", async () => {
+    executeResult = [{ result: "popstate" }]
+    let loadWaits = 0
+    const res = await historyGo(7, -1, { waitForTabLoad: async () => { loadWaits++; return { ready: true, elapsed: 0 } } })
     expect(res.success).toBe(true)
     expect(executed).toHaveLength(1)
     expect(fakeTab.url).toBe("https://b.example/")
+    expect(loadWaits).toBe(0)
+  })
+
+  test("a pagehide acknowledgement still waits for the new document to load", async () => {
+    executeResult = [{ result: "pagehide" }]
+    let loadWaits = 0
+    const res = await historyGo(7, -1, { waitForTabLoad: async () => { loadWaits++; return { ready: true, elapsed: 0 } } })
+    expect(res.success).toBe(true)
+    expect(loadWaits).toBe(1)
   })
 
   test("reports an honest error when the page has nothing to go back to", async () => {
