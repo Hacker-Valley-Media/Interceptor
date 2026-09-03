@@ -200,7 +200,8 @@ Interceptor ships one CLI binary with two product surfaces. Pick by what you're 
 | Real-time speech, sound classification, OCR, on-device NLP/LLM | macOS | `interceptor macos listen / sounds / vision / nlp / ai` |
 | Record & replay a human's native-app flow | macOS | `interceptor macos monitor *` |
 | Drive Apple Events to background apps without raising them | macOS | `interceptor macos intent dispatch` |
-| Drive any app on an owned, unlocked iPhone (tree/tap/type/screenshot/app lifecycle) | iOS | `interceptor ios tree / find / click / type / screenshot / app *` |
+| Deliver a stored password or passcode by name: admin prompts, `sudo`, native or web fields, the iPhone lock screen | macOS / Browser / iOS | `interceptor macos secret *`, `--secret <name>` on `type`, `macos sudo`, `macos authdialog`, `ios unlock` |
+| Drive any app on an owned, unlocked iPhone (tree/tap/type/screenshot/app lifecycle/unlock) | iOS | `interceptor ios tree / find / click / type / screenshot / app * / unlock` |
 | Runner-free iPhone process/telemetry, launch/kill, GPS simulation; on-device JS brain; WebKit inspection | iOS | `interceptor ios proc / top / spawn / kill / location / eval`, `ios web *` |
 
 If the task is content **inside** a browser tab, use Browser. If the task is the **shell** the browser runs inside (or any other macOS app), use macOS. If the task is an app on your **iPhone**, use iOS.
@@ -444,6 +445,7 @@ interceptor query "button span"              # Elements matching a CSS selector 
 interceptor type e3 "hello"                  # Type into element (synthetic; default)
 interceptor type e3 "more" --append          # Append without clearing
 interceptor type "textbox:Search" "query"    # Type using semantic selector (role:name)
+interceptor type e3 --secret <name>          # Type a stored credential by name (see "Secret vault"); the value never leaves the daemon
 interceptor select e7 "option-value"         # Select dropdown option
 interceptor hover e5                         # Hover over element
 interceptor keys "Control+A"                 # Keyboard shortcut (synthetic; default)
@@ -672,7 +674,7 @@ interceptor capabilities                     # Check available input layers
 | `--changes` | Include DOM diff in response |
 | `--flag=value`, `--` | `--flag=value` is accepted everywhere; `--` ends flag parsing so a positional may begin with `--` |
 
-Flags are order-independent on browser commands, and **unknown flags are rejected** (exit 1, naming the flag and the command) instead of being ignored — a typo such as `screenshot --out shot.png` no longer looks like a success (`screenshot` writes to disk with `--save`). `INTERCEPTOR_LAX_FLAGS=1` downgrades the rejection to a one-line warning for legacy scripts. `interceptor macos *` and `interceptor ios *` keep their verb-first parsing and are not strict.
+Flags are order-independent on browser commands, and **unknown flags are rejected** (exit 1, naming the flag and the command) instead of being ignored — a typo such as `screenshot --out shot.png` no longer looks like a success (`screenshot` writes to disk with `--save`). `INTERCEPTOR_LAX_FLAGS=1` downgrades the rejection to a one-line warning for legacy scripts. `interceptor macos *` and `interceptor ios *` keep their verb-first parsing and are not strict. A command whose result is a failure prints `error: …` (or the JSON envelope under `--json`) **and exits non-zero** — since 0.23.40 that covers every browser verb (`back`/`forward` with no history used to print the error and exit 0), so scripts can trust `$?`.
 
 ## Browser Recipes
 
@@ -1272,6 +1274,31 @@ interceptor macos thumbnail <path> [--size N|WxH] [--save] [--out <path>] [--for
 
 See [`docs/native/document.md`](docs/native/document.md) for PDFKit / DataDetection / Translation / QuickLookThumbnailing.
 
+#### Secret vault (keychain-backed credentials, delivered by name)
+
+Passwords and passcodes never travel as literal text. Store them once, then reference them by name on any surface; the daemon resolves the value after logging the action (name only), checks the secret's target allowlist against the real target, and hands it to exactly one delivery leg. The value never appears on argv, in the daemon log, the events file, monitor artifacts, MCP results, or `interceptor diagnose`.
+
+```bash
+interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <s>]
+                                                    # native box (secure field + confirm); default gate: none (unattended)
+interceptor macos secret set <name> --stdin         # headless: value from stdin (hidden TTY prompt without --stdin)
+interceptor macos secret list                       # names, gates, targets, release counts
+interceptor macos secret status                     # backend + Touch ID availability
+interceptor macos secret rm <name>
+interceptor macos secret unlock <name> --for 30m    # one OS prompt now; releases inside the window skip the prompt
+interceptor macos secret lock [<name>]
+interceptor macos secret reveal <name>              # human read-back: always OS-gated, TTY only, refused under --json / MCP
+
+interceptor macos sudo --secret <name> [--keep] -- installer -pkg X.pkg -target /   # root via sudo -S stdin
+interceptor macos authdialog status                 # is an administrator prompt up? shape: touchid | password
+interceptor macos authdialog fill --secret <name> [--submit]   # presses "Use Password" on a Touch ID sheet, types, submits
+interceptor macos type [<ref>] --secret <name> [--app X]       # native field (target: macos:<bundleId>)
+interceptor type <ref> --secret <name>              # browser field (target: browser:<host>); monitor records ***SECURE***
+interceptor ios type <ref> --secret <name> | ios keys --secret <name> | ios unlock --secret <name>   # passcode sheets + lock screen
+```
+
+Items live in the data-protection keychain owned by the signed bridge (login keychain on unsigned dev builds); `~/.interceptor/secrets.json` holds names, gates, targets, and release counts only. Releases are unattended by default; `--gate touchid` asks the OS prompt (Touch ID, Apple Watch, or the Mac password when no sensor is available). A target mismatch fails with `target_denied` and is never retargeted.
+
 #### Personal data (TCC-gated)
 
 ```bash
@@ -1343,7 +1370,7 @@ interceptor macos frontmost                                  # whatever was fron
 ## macOS Safety
 
 - **Panic hotkey** — `Ctrl+Opt+Cmd+Escape` closes every active overlay regardless of owning session. Bridge-side handler — no agent involvement required.
-- **Sensitive frontmost-app gate** — Before `mac_type` / `mac_keys` / `mac_click(coords)` / `mac_drag` hit the bridge, identity gating rejects the call if the bundle ID is on the denylist (Keychain, 1Password, Dashlane, LastPass, Bitwarden, System Settings, Chase, Bank of America, Wells Fargo).
+- **Credentials by name, never by value** — Passwords and passcodes come from the keychain-backed vault (`interceptor macos secret`) and are delivered by name; each secret carries a target allowlist (`sudo`, `macos:<bundleId>`, `browser:<host>`, `ios`) that the daemon checks against the real target before the keychain read. Values never reach argv, logs, events, monitor artifacts, or MCP results.
 - **Permission tiers** — Allow (observational) / Ask (interactive: click, type, keys, drag, app quit/hide, clipboard write) / Deny (none by default — tune per environment).
 - **TCC tracking** — Bridge ships as `.app` bundle so macOS TCC tracks grants correctly across reinstalls.
 

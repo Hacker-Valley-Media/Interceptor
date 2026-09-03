@@ -91,6 +91,13 @@ export function drainMessageQueue(): void {
   }
 }
 
+/** Issue #162: "no active tab" on a windowless profile should say so and name the fix. */
+export function noActiveTabError(windowCount: number | null): string {
+  return windowCount === 0
+    ? "no browser window is open in this profile — 'interceptor open <url>' creates one in the background"
+    : "no active tab"
+}
+
 export async function handleDaemonMessage(msg: {
   id?: string
   action?: { type: string; [key: string]: unknown }
@@ -216,12 +223,17 @@ export async function handleDaemonMessage(msg: {
     // No pre-gate persist here: the post-gate persist below is the only
     // auto-target write, so a request the group gate rejects (e.g. the
     // browser-active tab is unmanaged) can never poison the stored target.
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    // A profile with zero windows answers this with [] on current Chrome and
+    // rejects with "No current window" on older builds (issue #162); either
+    // way the useful error names the fix, so both paths go through
+    // noActiveTabError below.
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [] as chrome.tabs.Tab[])
     tabId = activeTab?.id
   }
 
   if (!tabId && needsTab(action.type)) {
-    fail("no active tab")
+    const windows = await chrome.windows.getAll().catch(() => null)
+    fail(noActiveTabError(windows ? windows.length : null))
     return
   }
 

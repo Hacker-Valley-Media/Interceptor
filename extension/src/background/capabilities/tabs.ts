@@ -234,7 +234,7 @@ export async function handleTabActions(
       }
       await ensureInterceptorGroup()
       await hydrateNamedGroups()
-      const live = await chrome.tabGroups.query({})
+      const live = await chrome.tabGroups.query({}).catch(() => []) // windowless profile → no groups (issue #162)
       // Re-adopt named groups the registry lost (e.g. browser restart restored
       // the window): exact match on the brand-composed `<brand>-<label>` title.
       // ponytail: current brand prefix only; a pre-rebrand title is re-adopted on the next brand change

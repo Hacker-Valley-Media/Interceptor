@@ -62,6 +62,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     // target. Centralizes the post-tap vs post-to-pid choice so every
     // verb can stay short and consistent.
     private func post(_ event: CGEvent, on target: InputTarget) {
+        Self.postEvent(event, on: target)
+    }
+
+    static func postEvent(_ event: CGEvent, on target: InputTarget) {
         switch target {
         case .axPress:
             // AX press doesn't post events; callers handle that path
@@ -72,6 +76,28 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         case .cghidEventTap:
             event.post(tap: .cghidEventTap)
         }
+    }
+
+    /// Posts `text` as unicode keystrokes, one key-down/up pair per character,
+    /// through `target`. Shared with AuthDialogDomain (issue #244) so the admin
+    /// prompt gets exactly the delivery `type` uses. False when no event
+    /// source could be created.
+    static func postUnicodeKeystrokes(_ text: String, to target: InputTarget) -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        for char in text {
+            let utf16 = Array(String(char).utf16)
+            if let downEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
+                downEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+                postEvent(downEvent, on: target)
+            }
+            usleep(3000)
+            if let upEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
+                upEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+                postEvent(upEvent, on: target)
+            }
+            usleep(8000)
+        }
+        return true
     }
 
     // MARK: - Click
@@ -188,11 +214,6 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             usleep(100_000)
         }
 
-        guard let source = CGEventSource(stateID: .combinedSessionState) else {
-            completion(WireFormat.error("failed to create event source"))
-            return
-        }
-
         // Pick a delivery target for synthesized key events: prefer
         // postToPid (ref → owning PID, or explicit pid/app), else fall
         // through to cghidEventTap.
@@ -203,19 +224,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             postTarget = .cghidEventTap
         }
 
-        DispatchQueue.global().async { [self] in
-            for char in text {
-                let utf16 = Array(String(char).utf16)
-                if let downEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
-                    downEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-                    post(downEvent, on: postTarget)
-                }
-                usleep(3000)
-                if let upEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
-                    upEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-                    post(upEvent, on: postTarget)
-                }
-                usleep(8000)
+        DispatchQueue.global().async {
+            guard Self.postUnicodeKeystrokes(text, to: postTarget) else {
+                completion(WireFormat.error("failed to create event source"))
+                return
             }
             let routing: String
             switch postTarget {

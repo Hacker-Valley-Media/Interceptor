@@ -826,6 +826,9 @@ export async function runInspect(
 function output(jsonMode: boolean, result: { success: boolean; error?: string; data?: unknown }): void {
   if (jsonMode) {
     console.log(JSON.stringify(result, null, 2))
+    // Issue #237: JSON callers get the envelope AND a non-zero exit on failure,
+    // matching the text branch below and the generic-action path in cli/index.ts.
+    if (!result.success) process.exitCode = 1
   } else if (!result.success) {
     console.error(`error: ${result.error}`)
     process.exit(1)

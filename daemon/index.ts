@@ -18,13 +18,16 @@ import {
   updateSessionMeta,
 } from "../shared/monitor-artifacts"
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
-import { claimContextId, type ContextSocket } from "./context-registration"
+import { claimContextId, describeContexts, type ContextSocket } from "./context-registration"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
+import { spinWatchdogStep, SPIN_EXIT_TICKS, type SpinWatchdogState } from "./spin-watchdog"
 import { cleanupOwnedRuntimeFiles, clearDaemonRuntimeFiles, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, parseDaemonPidFile, readLockFile, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
 import { DAEMON_HEALTH_SERVICE, LEGACY_HEALTH_BODY, probeDaemonHealth } from "../shared/daemon-health"
 import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 import { VERSION } from "../cli/version"
+import { actionLogSummary, inboundLogSummary, outboundLogSummary } from "./redact"
+import * as secrets from "./secrets"
 import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
 import { CDP_CONTEXT_PREFIX } from "../shared/cdp-app"
 import { IosManager } from "./ios/manager"
@@ -306,6 +309,412 @@ function forwardDelegateToBridge(
   }
   if (bridgeSocket) dispatch()
   else connectBridge().then((ok) => { (ok && bridgeSocket) ? dispatch() : fail("bridge unavailable for delegation") })
+}
+
+// Route a macos_ action to the bridge, connecting first when needed.
+function routeToBridge(id: string, action: Record<string, unknown>, socket: { write: (data: Buffer | string) => number }, actionType: string): void {
+  if (bridgeSocket) {
+    sendToBridge(id, action, socket, actionType)
+    return
+  }
+  connectBridge().then((connected) => {
+    if (connected && bridgeSocket) {
+      sendToBridge(id, action, socket, actionType)
+    } else {
+      socketWriteFramed(socket, JSON.stringify({
+        id,
+        result: { success: false, error: formatBridgeUnavailableError(readBridgeRecoveryLayout(), { launchAgentLoaded: isLaunchAgentBootstrapped() }) },
+      }))
+    }
+  })
+}
+
+// ── issue #244: secret vault plumbing ───────────────────────────────────────────
+//
+// The daemon is the only process that ever holds a resolved secret. Every
+// entry point below logs the action first (name only, see daemon/redact.ts),
+// then resolves, then hands the value to exactly one delivery leg.
+
+type DaemonResult = { success: boolean; error?: string; data?: unknown; [k: string]: unknown }
+type CliRequest = { id?: string; action?: unknown; tabId?: number; contextId?: string }
+
+/** Ask the bridge and await its result as a promise (same framing as sendToBridge). */
+function bridgeCall(action: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<DaemonResult> {
+  return new Promise((resolve) => {
+    const id = crypto.randomUUID()
+    const actionType = String(action.type ?? "unknown")
+    const fail = (error: string) => resolve({ success: false, error })
+    const dispatch = () => {
+      const encoded = Buffer.from(JSON.stringify({ id, action }), "utf-8")
+      const header = Buffer.alloc(4)
+      header.writeUInt32LE(encoded.byteLength, 0)
+      try { socketWriteAll(bridgeSocket as any, Buffer.concat([header, encoded])) } catch { fail("bridge connection lost"); return }
+      const timer = setTimeout(() => { bridgePending.delete(id); fail("bridge timeout") }, timeoutMs)
+      bridgePending.set(id, {
+        resolve: (response: string) => {
+          clearTimeout(timer)
+          try {
+            const parsed = JSON.parse(response) as { result?: DaemonResult }
+            resolve(parsed.result ?? { success: false, error: "empty bridge result" })
+          } catch { fail("bridge response parse error") }
+        },
+        timer,
+        cliSocket: { write: () => 0 } as any,
+        startTime: Date.now(),
+        actionType,
+      })
+    }
+    if (bridgeSocket) dispatch()
+    else connectBridge().then((ok) => {
+      if (ok && bridgeSocket) dispatch()
+      else fail(formatBridgeUnavailableError(readBridgeRecoveryLayout(), { launchAgentLoaded: isLaunchAgentBootstrapped() }))
+    })
+  })
+}
+
+/** Ask the extension (one tab) and await its result as a promise. */
+function extensionCall(action: Record<string, unknown>, contextId?: string, tabId?: number, timeoutMs = 15_000): Promise<DaemonResult> {
+  return new Promise((resolve) => {
+    const validation = validateContextRouting({
+      contextId,
+      connectedContexts: [...extensionWsMap.keys()],
+      nativeRelayAvailable: !!nativeRelaySocket,
+      cdpContexts: cdpManager.contextIds(),
+      iosContexts: iosManager.contextIds(),
+    })
+    if (!validation.ok) { resolve({ success: false, error: validation.error }); return }
+    const id = crypto.randomUUID()
+    const timer = setTimeout(() => { pendingRequests.delete(id); resolve({ success: false, error: "timeout" }) }, timeoutMs)
+    pendingRequests.set(id, {
+      resolve: (response: string) => {
+        clearTimeout(timer)
+        try {
+          const parsed = JSON.parse(response) as { result?: DaemonResult }
+          resolve(parsed.result ?? { success: false, error: "empty result" })
+        } catch { resolve({ success: false, error: "response parse error" }) }
+      },
+      timer,
+      socket: { write: () => 0, remoteAddress: "daemon" } as any,
+      startTime: Date.now(),
+      actionType: String(action.type ?? "unknown"),
+    })
+    sendNativeMessage({ id, action, tabId }, contextId)
+  })
+}
+
+/** The extension dispatch tail: context validation, timeout, pending entry, send. */
+function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket<undefined>, actionType: string, sensitiveText?: string): void {
+  const contextValidation = validateContextRouting({
+    contextId: request.contextId,
+    connectedContexts: [...extensionWsMap.keys()],
+    nativeRelayAvailable: !!nativeRelaySocket,
+    cdpContexts: cdpManager.contextIds(),
+    iosContexts: iosManager.contextIds(),
+  })
+  if (!contextValidation.ok) {
+    socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: contextValidation.error } }))
+    return
+  }
+
+  const timer = setTimeout(() => {
+    pendingRequests.delete(id)
+    timedOutRequests.add(id)
+    setTimeout(() => timedOutRequests.delete(id), 60_000)
+    log(`request timeout: ${id}`)
+    emitEvent("request_timeout", { requestId: id, action: actionType })
+    socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "timeout" } }))
+  }, requestTimeoutForAction(actionType))
+  pendingRequests.set(id, {
+    resolve: (response: string) => {
+      clearTimeout(timer)
+      socketWriteFramed(socket, response)
+    },
+    timer,
+    socket,
+    startTime: Date.now(),
+    actionType,
+    sensitiveText,
+  })
+
+  sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
+}
+
+const SECRET_DELIVERY_TYPES = new Set(["macos_type", "macos_authdialog", "input_text", "find_and_type", "os_type", "ios_type", "ios_keys", "ios_unlock", "macos_sudo"])
+
+const bunVault = new secrets.BunSecretsVault()
+
+/** Items in the data protection keychain owned by the signed bridge. */
+class BridgeVault implements secrets.Vault {
+  readonly backend = "data-protection-keychain"
+  async set(name: string, value: string): Promise<void> {
+    const r = await bridgeCall({ type: "macos_secrets", sub: "set", name, value }, 20_000)
+    if (!r.success) throw new Error(r.error || "bridge keychain write failed")
+  }
+  async get(name: string): Promise<string | null> {
+    const r = await bridgeCall({ type: "macos_secrets", sub: "get", name }, 20_000)
+    if (!r.success) {
+      if (/not found/i.test(r.error || "")) return null
+      throw new Error(r.error || "bridge keychain read failed")
+    }
+    const d = r.data as { value?: unknown } | undefined
+    return typeof d?.value === "string" ? d.value : null
+  }
+  async delete(name: string): Promise<boolean> {
+    const r = await bridgeCall({ type: "macos_secrets", sub: "delete", name }, 20_000)
+    return r.success
+  }
+}
+
+/** Writes go to the bridge; reads fall back to the login keychain (v1 items); deletes clear both. */
+class LayeredVault implements secrets.Vault {
+  readonly backend = "data-protection-keychain"
+  constructor(private primary: BridgeVault, private fallback: secrets.BunSecretsVault) {}
+  async set(name: string, value: string): Promise<void> {
+    await this.primary.set(name, value)
+    await this.fallback.delete(name)
+  }
+  async get(name: string): Promise<string | null> {
+    const v = await this.primary.get(name)
+    if (v !== null) return v
+    return this.fallback.get(name)
+  }
+  async delete(name: string): Promise<boolean> {
+    const a = await this.primary.delete(name)
+    const b = await this.fallback.delete(name)
+    return a || b
+  }
+}
+
+let vaultProbe: { dataProtection: boolean; checkedAt: number } | null = null
+
+async function bridgeDataProtection(force = false): Promise<boolean> {
+  if (!force && vaultProbe && Date.now() - vaultProbe.checkedAt < 60_000) return vaultProbe.dataProtection
+  const r = await bridgeCall({ type: "macos_secrets", sub: "status" }, 10_000)
+  const dp = r.success && (r.data as { dataProtection?: unknown } | undefined)?.dataProtection === true
+  vaultProbe = { dataProtection: dp, checkedAt: Date.now() }
+  return dp
+}
+
+async function activeVault(): Promise<secrets.Vault> {
+  return (await bridgeDataProtection()) ? new LayeredVault(new BridgeVault(), bunVault) : bunVault
+}
+
+const gateViaBridge: secrets.GateFn = async ({ reason, policy, reuseSeconds }) => {
+  const r = await bridgeCall({ type: "macos_auth", sub: "confirm", reason, policy: policy === "biometry" ? "biometry" : "any", reuse_seconds: reuseSeconds }, 180_000)
+  if (!r.success) return { ok: false, error: r.error || "authentication prompt failed" }
+  const d = r.data as { ok?: boolean; error?: string } | undefined
+  return d?.ok === true ? { ok: true } : { ok: false, error: d?.error || "not approved" }
+}
+
+function sessionLabel(action: Record<string, unknown>): string | undefined {
+  return typeof action.group === "string" && action.group.length > 0 ? action.group : undefined
+}
+
+async function handleSecretAction(action: Record<string, unknown>, request: CliRequest): Promise<DaemonResult> {
+  const sub = String(action.sub ?? "")
+  const session = sessionLabel(action)
+  try {
+    switch (sub) {
+      case "status": {
+        const bridgeStatus = await bridgeCall({ type: "macos_secrets", sub: "status" }, 10_000)
+        const auth = await bridgeCall({ type: "macos_auth", sub: "status" }, 10_000)
+        const dp = await bridgeDataProtection(true)
+        return {
+          success: true,
+          data: {
+            backend: dp ? "data-protection-keychain" : "login-keychain",
+            dataProtection: dp,
+            bridge: bridgeStatus.success ? bridgeStatus.data : { error: bridgeStatus.error },
+            auth: auth.success ? auth.data : { error: auth.error },
+            secrets: secrets.listSecrets().length,
+            unlocked: secrets.openUnlocks().map((u) => ({ name: u.name, until: new Date(u.until).toISOString() })),
+            metadata: secrets.metadataPath(),
+          },
+        }
+      }
+      case "list":
+        return { success: true, data: { backend: (await activeVault()).backend, secrets: secrets.listSecrets() } }
+      case "register": {
+        const name = secrets.assertName(action.name)
+        const gate = secrets.parseGate(action.gate)
+        const targets = secrets.parseTargets(action.targets)
+        const r = await bridgeCall({
+          type: "macos_secrets", sub: "register", name, gate, targets,
+          reuse_seconds: typeof action.reuseSeconds === "number" ? action.reuseSeconds : 0,
+          session: session ?? "",
+        }, 600_000)
+        if (!r.success) return { success: false, error: r.error }
+        const d = r.data as { cancelled?: boolean; value?: unknown; gate?: unknown; targets?: unknown } | undefined
+        if (!d || d.cancelled === true || typeof d.value !== "string") return { success: false, error: "registration cancelled" }
+        const vault = await activeVault()
+        const meta = await secrets.storeSecret(vault, name, d.value, { gate: d.gate ?? gate, targets: d.targets ?? targets, reuseSeconds: action.reuseSeconds })
+        emitEvent("secret_stored", { name, gate: meta.gate, targets: meta.targets, via: "register", backend: vault.backend })
+        return { success: true, data: { stored: true, name, gate: meta.gate, targets: meta.targets, backend: vault.backend } }
+      }
+      case "set": {
+        const name = secrets.assertName(action.name)
+        if (typeof action.value !== "string" || action.value.length === 0) return { success: false, error: "secret set needs a value on stdin (or the hidden prompt); never on argv" }
+        const vault = await activeVault()
+        const meta = await secrets.storeSecret(vault, name, action.value, { gate: action.gate, targets: action.targets, reuseSeconds: action.reuseSeconds })
+        emitEvent("secret_stored", { name, gate: meta.gate, targets: meta.targets, via: "set", backend: vault.backend })
+        return { success: true, data: { stored: true, name, gate: meta.gate, targets: meta.targets, backend: vault.backend } }
+      }
+      case "rm": {
+        const name = secrets.assertName(action.name)
+        const removed = await secrets.removeSecret(await activeVault(), name)
+        emitEvent("secret_removed", { name, removed })
+        return removed ? { success: true, data: { removed: true, name } } : { success: false, error: `no secret named '${name}'` }
+      }
+      case "unlock": {
+        const name = secrets.assertName(action.name)
+        const seconds = secrets.parseDuration(action.forSeconds ?? action.for)
+        const meta = secrets.loadMeta().secrets[name]
+        if (!meta) return { success: false, error: `no secret named '${name}'` }
+        const minutes = Math.max(1, Math.round(seconds / 60))
+        const res = await gateViaBridge({
+          reason: `Interceptor: unlock "${name}" for ${minutes} min${session ? ` (session ${session})` : ""}`,
+          policy: meta.gate === "biometry" ? "biometry" : "any",
+          reuseSeconds: 0,
+        })
+        if (!res.ok) return { success: false, error: res.error }
+        const until = secrets.openUnlock(name, seconds)
+        emitEvent("secret_unlock", { name, seconds })
+        return { success: true, data: { unlocked: true, name, until: new Date(until).toISOString(), seconds } }
+      }
+      case "lock": {
+        const names = secrets.lock(typeof action.name === "string" ? action.name : undefined)
+        emitEvent("secret_lock", { names })
+        return { success: true, data: { locked: names } }
+      }
+      case "reveal": {
+        const name = secrets.assertName(action.name)
+        const vault = await activeVault()
+        const res = await secrets.resolveSecret(vault, name, { kind: "reveal" }, { gate: gateViaBridge, session, alwaysGate: true })
+        emitEvent("secret_release", { name, target: "reveal", action: "macos_secret", outcome: "released", gated: true })
+        return { success: true, data: { name, value: res.value } }
+      }
+      default:
+        return { success: false, error: `unknown secret verb '${sub}' (register|set|list|rm|status|unlock|lock|reveal)` }
+    }
+  } catch (err) {
+    const e = err as secrets.SecretError
+    return { success: false, error: e.message, code: e.code }
+  }
+}
+
+function parseAppsList(data: unknown): Array<{ pid: number; name: string; bundleId: string }> {
+  if (typeof data !== "string") return []
+  const out: Array<{ pid: number; name: string; bundleId: string }> = []
+  for (const line of data.split("\n")) {
+    const m = /^\[(\d+)\]\s+(.*?)(?: \*)?(?: \(hidden\))?\s+—\s+(\S*)$/.exec(line.trim())
+    if (m) out.push({ pid: parseInt(m[1], 10), name: m[2], bundleId: m[3] })
+  }
+  return out
+}
+
+/** Where a delivery lands, for the per-secret allowlist. */
+async function targetForAction(action: Record<string, unknown>, actionType: string, request: CliRequest): Promise<secrets.SecretTarget> {
+  switch (actionType) {
+    case "macos_sudo": return { kind: "sudo" }
+    case "macos_authdialog": return { kind: "macos", id: "com.apple.SecurityAgent" }
+    case "macos_type": {
+      const app = typeof action.app === "string" ? action.app : undefined
+      const pid = typeof action.pid === "number" ? action.pid : undefined
+      if (app !== undefined || pid !== undefined) {
+        const r = await bridgeCall({ type: "macos_apps" }, 10_000)
+        const match = parseAppsList(r.data).find((a) => (pid !== undefined && a.pid === pid) || (app !== undefined && (a.name.toLowerCase() === app.toLowerCase() || a.bundleId.toLowerCase() === app.toLowerCase())))
+        if (!match || !match.bundleId) throw new Error(`could not resolve the bundle id of ${app ?? `pid ${pid}`} for the target check`)
+        return { kind: "macos", id: match.bundleId }
+      }
+      const fm = await bridgeCall({ type: "macos_frontmost" }, 10_000)
+      const bid = (fm.data as { bundleId?: unknown } | undefined)?.bundleId
+      if (!fm.success || typeof bid !== "string" || !bid) throw new Error(`could not read the frontmost app for the target check: ${fm.error ?? "no bundle id"}`)
+      return { kind: "macos", id: bid }
+    }
+    case "input_text":
+    case "find_and_type":
+    case "os_type": {
+      // Same tab as the delivery: the group scope rides inside the action, so
+      // the page_info probe carries it too (else the extension answers for the
+      // active tab, which may sit outside the caller's group).
+      const probe: Record<string, unknown> = { type: "page_info" }
+      for (const k of ["group", "groupSoft", "groupColor"]) if (action[k] !== undefined) probe[k] = action[k]
+      const info = await extensionCall(probe, request.contextId, request.tabId)
+      const url = (info.data as { url?: unknown } | undefined)?.url
+      if (!info.success || typeof url !== "string") throw new Error(`could not read the page URL for the target check: ${info.error ?? "no url"}`)
+      let host = ""
+      try { host = new URL(url).hostname } catch {}
+      return { kind: "browser", id: host || url }
+    }
+    default:
+      return { kind: "ios" }
+  }
+}
+
+/** Resolve `secret` on an action and hand the value to its delivery leg. */
+async function deliverWithSecret(id: string, action: Record<string, unknown>, request: CliRequest, socket: Bun.Socket<undefined>, actionType: string): Promise<void> {
+  const reply = (result: DaemonResult) => socketWriteFramed(socket, JSON.stringify({ id, result }))
+  if (!SECRET_DELIVERY_TYPES.has(actionType)) { reply({ success: false, error: `--secret is not supported for '${actionType}'` }); return }
+  const name = action.secret
+  if (typeof name !== "string") { reply({ success: false, error: "macos sudo requires --secret <name>" }); return }
+  const literal = typeof action.text === "string" ? action.text : typeof action.inputText === "string" ? action.inputText : ""
+  if (literal.length > 0) { reply({ success: false, error: "--secret and literal text are mutually exclusive" }); return }
+  const session = sessionLabel(action)
+
+  let target: secrets.SecretTarget
+  try { target = await targetForAction(action, actionType, request) }
+  catch (err) { reply({ success: false, error: (err as Error).message }); return }
+
+  let value: string
+  try {
+    const res = await secrets.resolveSecret(await activeVault(), name, target, { gate: gateViaBridge, session })
+    value = res.value
+    emitEvent("secret_release", { requestId: id, name, target: secrets.describeTarget(target), action: actionType, outcome: "released", gated: res.gated })
+  } catch (err) {
+    const e = err as secrets.SecretError
+    emitEvent("secret_release", { requestId: id, name, target: secrets.describeTarget(target), action: actionType, outcome: "denied", code: e.code })
+    reply({ success: false, error: e.message, code: e.code })
+    return
+  }
+
+  const delivered: Record<string, unknown> = { ...action, sensitive: true }
+  delete delivered.secret
+  switch (actionType) {
+    case "macos_type":
+    case "macos_authdialog":
+      delivered.text = value
+      routeToBridge(id, delivered, socket, actionType)
+      return
+    case "input_text":
+      delivered.text = value
+      dispatchToExtension(id, { ...request, action: delivered }, socket, actionType)
+      return
+    case "find_and_type":
+      delivered.inputText = value
+      dispatchToExtension(id, { ...request, action: delivered }, socket, actionType)
+      return
+    case "os_type":
+      // The extension only focuses the target; the text is posted by the
+      // daemon from the pending entry, so the value never leaves this process.
+      dispatchToExtension(id, { ...request, action: delivered }, socket, actionType, value)
+      return
+    case "ios_type":
+    case "ios_keys":
+      delivered.text = value
+      iosManager.executeVerb(request.contextId ?? "", delivered as { type: string; [k: string]: unknown })
+        .then(reply)
+        .catch((err) => reply({ success: false, error: `ios verb failed: ${(err as Error).message}` }))
+      return
+    case "ios_unlock":
+      delivered.passcode = value
+      iosManager.executeVerb(request.contextId ?? "", delivered as { type: string; [k: string]: unknown })
+        .then(reply)
+        .catch((err) => reply({ success: false, error: `ios verb failed: ${(err as Error).message}` }))
+      return
+    case "macos_sudo":
+      reply(await secrets.runSudo(value, action.cmd as string[], { keep: action.keep === true }))
+      return
+  }
 }
 
 // Start bridge connection on daemon startup
@@ -653,6 +1062,9 @@ try {
 const pendingRequests = new Map<string, {
   resolve: (v: string) => void
   timer: ReturnType<typeof setTimeout>
+  // issue #244: a resolved secret for os_type stays here, never in the extension
+  // round trip, and is dropped with the entry.
+  sensitiveText?: string
   socket: { write: (data: Buffer | string) => number; readonly remoteAddress: string }
   startTime: number
   actionType: string
@@ -663,14 +1075,6 @@ const socketBuffers = new Map<object, Buffer>()
 const LARGE_PAYLOAD_THRESHOLD = 16 * 1024
 const MAX_RESPONSE_CHARS = 50000
 const NATIVE_HOST_TO_CHROME_MAX_BYTES = 1024 * 1024
-
-function actionLogSummary(action: unknown): string {
-  if (action && typeof action === "object" && !Array.isArray(action) && (action as { type?: string }).type === "daemon_shutdown") {
-    const value = action as { type: string; protocolVersion?: unknown; reason?: unknown }
-    return JSON.stringify({ type: value.type, protocolVersion: value.protocolVersion, reason: value.reason, token: "<redacted>" })
-  }
-  return JSON.stringify(action).slice(0, 100)
-}
 
 function socketWriteFramed(socket: { write: (data: Buffer | string) => number }, json: string): boolean {
   try {
@@ -725,7 +1129,7 @@ function processStdinBuffer() {
     stdinBuffer = stdinBuffer.subarray(4 + msgLen)
     try {
       const msg = JSON.parse(jsonBuf.toString("utf-8"))
-      log(`received: ${JSON.stringify(msg).slice(0, 200)}`)
+      log(`received: ${inboundLogSummary(msg)}`)
       handleNativeMessage(msg)
     } catch (err) {
       log(`json parse error: ${(err as Error).message}`)
@@ -782,7 +1186,8 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
             enrichedAction.modifiers = data.modifiers
           }
           if (pending.actionType === "os_type") {
-            enrichedAction.text = data.text
+            enrichedAction.text = pending.sensitiveText ?? data.text
+            if (pending.sensitiveText !== undefined) enrichedAction.sensitive = true
           }
           if (pending.actionType === "os_move") {
             enrichedAction.path = data.path
@@ -900,7 +1305,7 @@ function drainWsOutboundQueue(ctxId: string): void {
     if (!queue) continue
     while (queue.length > 0) {
       const msg = queue.shift()!
-      log(`draining queued ws message [${key}]: ${msg.slice(0, 100)}`)
+      log(`draining queued ws message [${key}]: ${(() => { try { return outboundLogSummary(JSON.parse(msg)).slice(0, 100) } catch { return msg.slice(0, 100) } })()}`)
       try { ws.send(msg) } catch (err) { log(`ws drain error: ${(err as Error).message}`) }
     }
     wsOutboundQueues.delete(key)
@@ -930,7 +1335,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
   }
 
   if (preferred === "ws" && resolvedWs) {
-    log(`forwarding via ws: ${json.slice(0, 200)}`)
+    log(`forwarding via ws: ${outboundLogSummary(msg)}`)
     try {
       resolvedWs.send(json)
       return
@@ -941,7 +1346,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
 
   if (preferred === "relay" && nativeRelaySocket) {
     if (failOversizedNativeMessage("native relay")) return
-    log(`forwarding via relay: ${json.slice(0, 200)}`)
+    log(`forwarding via relay: ${outboundLogSummary(msg)}`)
     const relayAtSend = nativeRelaySocket
     try {
       socketWriteFramed(relayAtSend, json)
@@ -958,7 +1363,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
 
   if (preferred === "native" && !STANDALONE && stdinAlive) {
     if (failOversizedNativeMessage("native stdio")) return
-    log(`forwarding via runtime agent: ${json.slice(0, 200)}`)
+    log(`forwarding via runtime agent: ${outboundLogSummary(msg)}`)
     const encoded = Buffer.from(json, "utf-8")
     const header = Buffer.alloc(4)
     header.writeUInt32LE(encoded.byteLength, 0)
@@ -968,7 +1373,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
   }
 
   if (resolvedWs) {
-    log(`fallback via ws: ${json.slice(0, 200)}`)
+    log(`fallback via ws: ${outboundLogSummary(msg)}`)
     try {
       resolvedWs.send(json)
       return
@@ -979,7 +1384,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
 
   if (nativeRelaySocket) {
     if (failOversizedNativeMessage("fallback native relay")) return
-    log(`fallback via relay: ${json.slice(0, 200)}`)
+    log(`fallback via relay: ${outboundLogSummary(msg)}`)
     const relayAtSend = nativeRelaySocket
     try {
       socketWriteFramed(relayAtSend, json)
@@ -992,7 +1397,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
 
   if (!STANDALONE && stdinAlive) {
     if (failOversizedNativeMessage("fallback native stdio")) return
-    log(`fallback via runtime agent: ${json.slice(0, 200)}`)
+    log(`fallback via runtime agent: ${outboundLogSummary(msg)}`)
     const encoded = Buffer.from(json, "utf-8")
     const header = Buffer.alloc(4)
     header.writeUInt32LE(encoded.byteLength, 0)
@@ -1006,7 +1411,7 @@ function sendNativeMessage(msg: unknown, contextId?: string): void {
   const queue = wsOutboundQueues.get(queueKey)!
   if (queue.length >= WS_QUEUE_CAP) queue.shift()
   queue.push(json)
-  log(`queued for ws [${queueKey}] (${queue.length} pending): ${json.slice(0, 100)}`)
+  log(`queued for ws [${queueKey}] (${queue.length} pending): ${outboundLogSummary(msg).slice(0, 100)}`)
 }
 
 let stdinAlive = !STANDALONE
@@ -1270,7 +1675,8 @@ async function handleOsAction(
     case "os_type": {
       const text = action.text as string
       if (!text) return { success: false, error: "os_type requires text" }
-      log(`[${id.slice(0, 8)}] os_type "${text.slice(0, 50)}"`)
+      if (action.sensitive === true) log(`[${id.slice(0, 8)}] os_type (sensitive, ${text.length} chars)`)
+      else log(`[${id.slice(0, 8)}] os_type "${text.slice(0, 50)}"`)
       const result = await osType(text)
       emitEvent("os_action", { requestId: id, action: "os_type", duration: Date.now() - startTime, success: result.success })
       return result
@@ -1397,7 +1803,10 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           }
 
           if (action?.type === "contexts") {
-            const list = [...extensionWsMap.keys(), ...cdpManager.contextIds(), ...iosManager.contextIds()]
+            const ids = [...extensionWsMap.keys(), ...cdpManager.contextIds(), ...iosManager.contextIds()]
+            const list = action.verbose === true
+              ? describeContexts(ids, (c) => extensionWsMap.get(c), { runtime: NATIVE_CONTEXT_PREFIX, cdp: CDP_CONTEXT_PREFIX, ios: IOS_CONTEXT_PREFIX })
+              : ids
             socketWriteFramed(socket, JSON.stringify({ id, result: { success: true, data: list } }))
             continue
           }
@@ -1405,6 +1814,20 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           // Runtime Agent surface: list connected in-process agents.
           if (action?.type === "native_status") {
             socketWriteFramed(socket, JSON.stringify({ id, result: { success: true, data: [...nativeAgentMeta.values()] } }))
+            continue
+          }
+
+          // issue #244: vault verbs and secret-bearing deliveries resolve here,
+          // before any surface dispatch. The log line above carried the name
+          // only (daemon/redact.ts).
+          if (action?.type === "macos_secret") {
+            handleSecretAction(action, request).then((result) => socketWriteFramed(socket, JSON.stringify({ id, result })))
+            continue
+          }
+          if (action && (action.type === "macos_sudo" || typeof action.secret === "string")) {
+            deliverWithSecret(id, action, request, socket, actionType).catch((err) => {
+              socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: `secret delivery failed: ${(err as Error).message}` } }))
+            })
             continue
           }
 
@@ -1475,56 +1898,11 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
 
           // Route macos_ actions to the native bridge
           if (action?.type?.startsWith("macos_")) {
-            if (bridgeSocket) {
-              sendToBridge(id, action, socket, actionType)
-            } else {
-              // Try to connect (async), respond when done
-              connectBridge().then((connected) => {
-                if (connected && bridgeSocket) {
-                  sendToBridge(id, action, socket, actionType)
-                } else {
-                  socketWriteFramed(socket, JSON.stringify({
-                    id,
-                    result: { success: false, error: formatBridgeUnavailableError(readBridgeRecoveryLayout(), { launchAgentLoaded: isLaunchAgentBootstrapped() }) },
-                  }))
-                }
-              })
-            }
+            routeToBridge(id, action, socket, actionType)
             continue
           }
 
-          const contextValidation = validateContextRouting({
-            contextId: request.contextId,
-            connectedContexts: [...extensionWsMap.keys()],
-            nativeRelayAvailable: !!nativeRelaySocket,
-            cdpContexts: cdpManager.contextIds(),
-            iosContexts: iosManager.contextIds(),
-          })
-          if (!contextValidation.ok) {
-            socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: contextValidation.error } }))
-            continue
-          }
-
-          const timer = setTimeout(() => {
-            pendingRequests.delete(id)
-            timedOutRequests.add(id)
-            setTimeout(() => timedOutRequests.delete(id), 60_000)
-            log(`request timeout: ${id}`)
-            emitEvent("request_timeout", { requestId: id, action: actionType })
-            socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: "timeout" } }))
-          }, requestTimeoutForAction(actionType))
-          pendingRequests.set(id, {
-            resolve: (response: string) => {
-              clearTimeout(timer)
-              socketWriteFramed(socket, response)
-            },
-            timer,
-            socket,
-            startTime: Date.now(),
-            actionType
-          })
-
-          sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
+          dispatchToExtension(id, request, socket, actionType)
         }
 
         socketBuffers.set(socket, buf)
@@ -1680,7 +2058,9 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           if (claim.status === "conflict") {
             return
           }
-          log(`ws extension registered [context: ${ctxId}]`)
+          const extVersion = (request as { version?: unknown }).version
+          ;(ws as ContextSocket).__version = typeof extVersion === "string" ? extVersion : undefined
+          log(`ws extension registered [context: ${ctxId}]${typeof extVersion === "string" ? ` extension ${extVersion}` : ""}`)
           drainWsOutboundQueue(ctxId)
           return
         }
@@ -1926,6 +2306,45 @@ process.on("unhandledRejection", (reason) => {
   log(`unhandled rejection: ${reason}`)
 })
 
+// Issue #216 — idle-spin watchdog (see daemon/spin-watchdog.ts for the
+// rationale and the limit: it cannot see a blocked main thread). "Idle" means
+// nothing is connected and nothing is in flight; the bridge is our own outbound
+// link, not a client, so it does not count.
+function daemonIsIdle(): boolean {
+  return socketBuffers.size === 0
+    && extensionWsMap.size === 0
+    && !nativeRelaySocket
+    && pendingRequests.size === 0
+    && bridgePending.size === 0
+    && cdpManager.contextIds().length === 0
+    && iosManager.contextIds().length === 0
+}
+let spinState: SpinWatchdogState = { busyIdleTicks: 0 }
+let spinCpu = process.cpuUsage()
+let spinWall = Date.now()
+function spinWatchdogTick(): void {
+  if (process.env.INTERCEPTOR_SPIN_WATCHDOG === "off") return
+  const now = Date.now()
+  const wallMs = now - spinWall
+  const cpu = process.cpuUsage(spinCpu)
+  const step = spinWatchdogStep(spinState, { cpuMicros: cpu.user + cpu.system, wallMs, idle: daemonIsIdle() })
+  spinCpu = process.cpuUsage()
+  spinWall = now
+  spinState = step.state
+  if (step.verdict === "ok") return
+  const pct = Math.round(step.busyFraction * 100)
+  const rssMb = Math.round(process.memoryUsage().rss / 1048576)
+  log(`spin watchdog: ${pct}% CPU over the last ${Math.round(wallMs / 1000)}s with no clients or in-flight requests (tick ${step.state.busyIdleTicks}/${SPIN_EXIT_TICKS}, rss ${rssMb} MiB) — issue #216`)
+  emitEvent("daemon_spin_detected", { busyFraction: step.busyFraction, ticks: step.state.busyIdleTicks, rssMb })
+  if (step.verdict !== "exit") return
+  log("spin watchdog: exiting so the next CLI call respawns a fresh daemon (INTERCEPTOR_SPIN_WATCHDOG=off disables this)")
+  emitEvent("daemon_spin_exit", { busyFraction: step.busyFraction, ticks: step.state.busyIdleTicks, rssMb })
+  // gracefulShutdown ends in process.exit(0); if whatever is spinning keeps it
+  // from getting there, force the exit.
+  setTimeout(() => process.exit(21), 2000)
+  gracefulShutdown("spin watchdog")
+}
+
 // Global keepalive — prevent Bun from exiting when stdin closes.
 // Bun compiled binaries exit when the event loop is empty.
 // An infinite async loop guarantees the process stays alive.
@@ -1933,6 +2352,7 @@ async function keepAliveForever() {
   while (true) {
     await Bun.sleep(10_000)
     try { healRuntimeFiles("keepalive tick") } catch (err) { log(`keepalive heal failed: ${err instanceof Error ? err.message : String(err)}`) }
+    try { spinWatchdogTick() } catch (err) { log(`spin watchdog failed: ${err instanceof Error ? err.message : String(err)}`) }
   }
 }
 keepAliveForever()

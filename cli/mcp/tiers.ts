@@ -52,6 +52,9 @@ const READ_VERBS: Record<Surface, Set<string>> = {
 const EXEC: TierMap = {
   "browser:eval": "exec", "browser:save": "exec", "browser:raw": "exec",
   "macos:script": "exec", "macos:intent": "exec", "macos:container": "exec",
+  // issue #244: sudo runs an arbitrary command as root; reveal prints a secret
+  // to a human and is refused for model callers anyway (INTERCEPTOR_MCP).
+  "macos:sudo": "exec", "macos:secret:reveal": "exec",
   "macos:overlay:eval": "exec",
   "macos:vm:exec": "exec",
   "macos:cdp:raw": "exec",
@@ -76,6 +79,8 @@ const DESTRUCTIVE_SUB: TierMap = {
   "macos:runtime:enable": "destructive", "macos:runtime:disable": "destructive",
   // macOS update install
   "macos:update:install": "destructive",
+  // issue #244: vault deletion and filling the admin prompt.
+  "macos:secret:rm": "destructive", "macos:authdialog:fill": "destructive",
   // iOS lifecycle / device-mutating
   "ios:app:terminate": "destructive",
   // iOS fs push (write into app container)
@@ -115,6 +120,10 @@ const FAMILY_FLOOR: Record<string, Tier> = {
   "macos:reminders": "destructive",
   "macos:contacts": "destructive",
   "macos:photos": "destructive",
+  // issue #244: the vault, the admin-prompt filler, and the Touch ID prompt.
+  "macos:secret": "destructive",
+  "macos:authdialog": "destructive",
+  "macos:auth": "mutate",
   "ios:app": "destructive",
   "ios:web": "mutate",
   "ios:fs": "destructive",
@@ -192,6 +201,9 @@ const FAMILY_READ_SUBS: Record<string, Set<string>> = {
   "macos:reminders": new Set(["status", "lists", "default", "all", "incomplete", "completed"]),
   "macos:contacts": new Set(["status", "containers", "default-container", "groups", "group", "list", "contact", "me", "find", "vcard", "current-token", "changes"]),
   "macos:photos": new Set(["status", "albums", "album", "assets", "asset", "thumbnail", "export", "export-video", "export-live", "current-token", "changes"]),
+  "macos:secret": new Set(["list", "status"]),
+  "macos:authdialog": new Set(["status"]),
+  "macos:auth": new Set(["status", "domain-state"]),
   "ios:app": new Set([]),
   "ios:web": new Set(["targets", "status", "explain", "read", "text", "find", "inspect", "console", "network", "screenshot"]),
   "ios:fs": new Set(["ls"]),
@@ -199,6 +211,8 @@ const FAMILY_READ_SUBS: Record<string, Set<string>> = {
 const FAMILY_MUTATE_SUBS: Record<string, Set<string>> = {
   "macos:app": new Set(["activate", "launch", "focus", "hide", "unhide"]),
   "macos:tcc": new Set([]),
+  "macos:secret": new Set(["register", "set", "unlock", "lock"]),
+  "macos:auth": new Set(["confirm", "invalidate"]),
   "ios:app": new Set(["launch", "activate"]),
   "ios:web": new Set(["attach", "detach", "click", "type", "keys", "scroll", "calibrate"]),
   "ios:fs": new Set(["pull"]),

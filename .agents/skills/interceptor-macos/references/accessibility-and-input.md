@@ -60,9 +60,17 @@ interceptor macos inspect                        # Tree + apps + frontmost info
 
 `act` mirrors the browser side: read, change, re-read in one call. Use the narrower commands (`click`, `type`, `keys`) when you specifically don't want a follow-up tree read.
 
-## Sensitive-app gate
+## Credentials: deliver by name, never by value
 
-`mac_type`, `mac_keys`, `mac_click(coords)`, `mac_drag` are rejected when the frontmost app's bundle ID matches the denylist (Keychain, 1Password, Dashlane, LastPass, Bitwarden, System Settings, common banking apps). The gate runs before the request hits the bridge. Extend the list per environment via `SENSITIVE_BUNDLE_IDS` in the identity layer.
+There is no frontmost-app denylist. Credentials come from the keychain-backed vault and are delivered by name:
+
+```bash
+interceptor macos type <ref> --secret <name>        # AX value-set, then keystrokes; value resolved in the daemon
+interceptor macos sudo --secret <name> -- <cmd...>  # password piped to sudo -S stdin
+interceptor macos authdialog fill --secret <name> --submit   # the macOS administrator prompt
+```
+
+Each secret carries a target allowlist (`sudo`, `macos:<bundleId>`, `browser:<host>`, `ios`, `any`). The daemon checks the frontmost or `--app` bundle id against it before reading the keychain; a mismatch fails with `target_denied`. Never put a password in a literal `type` call: `--secret` and literal text are mutually exclusive, and the vault is the only sanctioned path. Register secrets with `interceptor macos secret register <name>` (native box) or `secret set <name> --stdin`.
 
 ## Common mistakes
 

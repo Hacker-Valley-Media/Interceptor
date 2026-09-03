@@ -124,7 +124,7 @@ async function ensureNamedGroup(label) {
     }
   }
   const title = groupTitleFor(label);
-  const groups = await chrome.tabGroups.query({});
+  const groups = await chrome.tabGroups.query({}).catch(() => []);
   const match = groups.find((g) => g.title === title);
   if (match) {
     namedGroups.set(label, match.id);
@@ -207,7 +207,7 @@ async function ensureInterceptorGroup() {
     }
   }
   const candidates = await getCandidateTitles();
-  const groups = await chrome.tabGroups.query({});
+  const groups = await chrome.tabGroups.query({}).catch(() => []);
   const match = groups.find((g) => typeof g.title === "string" && candidates.includes(g.title));
   if (match) {
     interceptorGroupId = match.id;
@@ -2110,7 +2110,7 @@ async function handleTabActions(action, tabId) {
       }
       await ensureInterceptorGroup();
       await hydrateNamedGroups();
-      const live = await chrome.tabGroups.query({});
+      const live = await chrome.tabGroups.query({}).catch(() => []);
       const prefix = `${groupTitleFor("")}`;
       for (const g of live) {
         if (typeof g.title !== "string" || !g.title.startsWith(prefix))
@@ -2316,6 +2316,64 @@ async function handleWindowActions(action, _tabId) {
 }
 
 // extension/src/background/capabilities/navigation.ts
+var HISTORY_GO_START_MS = 2000;
+async function waitForNavigationStart(tabId, beforeUrl, timeoutMs = HISTORY_GO_START_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab)
+      return false;
+    if (tab.status === "loading" || (tab.url ?? "") !== beforeUrl)
+      return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
+async function historyGo(tabId, delta, deps = { waitForTabLoad }) {
+  const label = delta < 0 ? "back" : "forward";
+  const before = await chrome.tabs.get(tabId).catch(() => null);
+  if (!before)
+    return { success: false, error: `tab ${tabId} not found` };
+  let apiError;
+  try {
+    if (delta < 0)
+      await chrome.tabs.goBack(tabId);
+    else
+      await chrome.tabs.goForward(tabId);
+    await deps.waitForTabLoad(tabId);
+    return { success: true };
+  } catch (err) {
+    apiError = err.message;
+  }
+  let ack;
+  try {
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (d) => new Promise((resolve) => {
+        for (const ev of ["popstate", "hashchange", "pagehide"])
+          addEventListener(ev, () => resolve(ev), { once: true });
+        setTimeout(() => resolve(false), 800);
+        history.go(d);
+      }),
+      args: [delta]
+    });
+    const results = Array.isArray(injected) ? injected.map((r) => r?.result) : [];
+    ack = results.find((r) => typeof r === "string");
+  } catch (err) {
+    if (!await waitForNavigationStart(tabId, before.url ?? "")) {
+      return { success: false, error: `${apiError} (page-side history.${label}() also failed: ${err.message})` };
+    }
+    await deps.waitForTabLoad(tabId);
+    return { success: true };
+  }
+  if (ack === "popstate" || ack === "hashchange")
+    return { success: true };
+  if (!ack && !await waitForNavigationStart(tabId, before.url ?? "")) {
+    return { success: false, error: `no ${label} history for tab ${tabId} — nothing to go ${label} to` };
+  }
+  await deps.waitForTabLoad(tabId);
+  return { success: true };
+}
 async function handleNavigationActions(action, tabId) {
   switch (action.type) {
     case "navigate":
@@ -2323,13 +2381,9 @@ async function handleNavigationActions(action, tabId) {
       await waitForTabLoad(tabId);
       return { success: true };
     case "go_back":
-      await chrome.tabs.goBack(tabId);
-      await waitForTabLoad(tabId);
-      return { success: true };
+      return historyGo(tabId, -1);
     case "go_forward":
-      await chrome.tabs.goForward(tabId);
-      await waitForTabLoad(tabId);
-      return { success: true };
+      return historyGo(tabId, 1);
     case "reload":
       await chrome.tabs.reload(tabId, { bypassCache: !!action.bypassCache });
       await waitForTabLoad(tabId);
@@ -4942,6 +4996,9 @@ function drainMessageQueue() {
     handleDaemonMessage(queued);
   }
 }
+function noActiveTabError(windowCount) {
+  return windowCount === 0 ? "no browser window is open in this profile — 'interceptor open <url>' creates one in the background" : "no active tab";
+}
 async function handleDaemonMessage(msg) {
   if (!msg.action || !msg.id)
     return;
@@ -5024,11 +5081,12 @@ async function handleDaemonMessage(msg) {
     }
   }
   if (!tabId && needsTab(action.type)) {
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
     tabId = activeTab?.id;
   }
   if (!tabId && needsTab(action.type)) {
-    fail("no active tab");
+    const windows = await chrome.windows.getAll().catch(() => null);
+    fail(noActiveTabError(windows ? windows.length : null));
     return;
   }
   if (tabId && needsTab(action.type) && !action.anyTab) {
@@ -5393,10 +5451,17 @@ function sendWs(msg) {
     return false;
   }
 }
+function extensionVersion() {
+  try {
+    return chrome.runtime.getManifest().version;
+  } catch {
+    return;
+  }
+}
 function sendWsRegistration(ws, contextId) {
   markWsUnregistered();
   try {
-    ws.send(JSON.stringify({ type: "extension", contextId }));
+    ws.send(JSON.stringify({ type: "extension", contextId, version: extensionVersion() }));
     return true;
   } catch (err) {
     console.error("ws context registration send error:", err);

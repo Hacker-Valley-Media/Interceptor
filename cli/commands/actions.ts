@@ -80,7 +80,19 @@ export function parseActionsCommand(filtered: string[], positionalCount?: number
       // callers (tests) that don't pass the boundary working.
       const textArgs = positionalCount !== undefined
         ? filtered.slice(2, positionalCount + 1)
-        : filtered.slice(2).filter(a => a !== "--append" && !TRUSTED_FLAG_VALUES.includes(a))
+        : filtered.slice(2).filter(a => a !== "--append" && !TRUSTED_FLAG_VALUES.includes(a) && a !== "--secret" && filtered[filtered.indexOf(a) - 1] !== "--secret")
+      // issue #244: `--secret <name>` types a vault value by name. The daemon
+      // resolves it after logging and checks the page host against the
+      // secret's allowlist; the CLI process never holds the value.
+      const secretIdx = filtered.indexOf("--secret")
+      if (secretIdx !== -1) {
+        const secretName = filtered[secretIdx + 1]
+        if (!secretName || secretName.startsWith("--")) { console.error("error: --secret requires a secret name"); process.exit(1) }
+        if (textArgs.join("").length) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
+        if (useOs) return { type: "os_type", ...target, secret: secretName }
+        if (target.semantic) return { type: "find_and_type", name: target.semantic.name, role: target.semantic.role, secret: secretName, clear: !append }
+        return { type: "input_text", ...target, secret: secretName, clear: !append }
+      }
       if (useOs) {
         return { type: "os_type", ...target, text: textArgs.join(" ") }
       } else if (target.semantic) {

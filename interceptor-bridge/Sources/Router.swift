@@ -20,6 +20,8 @@ final class Router: @unchecked Sendable {
         "tree", "find", "inspect", "value", "action", "focused", "windows",
         "resize", "move", "click", "type", "keys", "scroll", "drag",
         "menu", "text",
+        // issue #244: the admin-prompt filler reads and drives SecurityAgent via AX.
+        "authdialog",
     ]
 
     // Injectable so tests can force trusted/untrusted without live TCC state.

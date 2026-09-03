@@ -63,7 +63,8 @@ const STATE = ["--depth", "--filter", "--limit", "--max-chars", "--role"]
 // --selector/--nth take VALUES. Without them declared here the normalizer
 // treats them as booleans and strips their operands, so
 // `click --selector button --nth 4` arrives with selector === "--nth".
-const ACTIONS = ["--at", "--duration", "--from", "--nth", "--selector", "--steps", "--to"]
+// --secret names a vault entry for `type` (issue #244); the value never rides argv.
+const ACTIONS = ["--at", "--duration", "--from", "--nth", "--secret", "--selector", "--steps", "--to"]
 const NAV = ["--amount", "--ms", "--timeout"]
 const NET = ["--filter", "--format", "--limit", "--out", "--since", "--pattern", "--patterns", "--type"]
 const SCREENSHOT = ["--clip", "--element", "--filter", "--format", "--kind", "--limit", "--quality", "--ref", "--region", "--scale", "--selector", "--target-max-long-edge", "--threshold"]

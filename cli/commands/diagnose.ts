@@ -28,6 +28,7 @@ import { readLockFile, type LockFileData } from "../../daemon/lifecycle"
 import { LOCK_PATH } from "../../shared/platform"
 import { IOS_CONTEXT_PREFIX } from "../../shared/ios-device"
 import { CDP_CONTEXT_PREFIX } from "../../shared/cdp-app"
+import { VERSION } from "../version"
 
 type BinaryMismatch = {
   browser: string
@@ -38,9 +39,26 @@ type BinaryMismatch = {
 type ContextProbe = {
   contextId: string
   kind: "extension" | "ios" | "cdp"
-  extension: { reachable: boolean; reason?: string }
+  extension: { reachable: boolean; reason?: string; version?: string }
   tab: { id: number; url: string; title: string } | null
   elements: number | null
+}
+
+/**
+ * Issue #241: a pkg install replaces the extension on disk, but a running
+ * browser keeps executing the OLD extension snapshot until it is reloaded. The
+ * symptom is a CLI that reports one version while the extension behaves like
+ * an older one (e.g. asking for a bundle file the build no longer ships). The
+ * daemon now records the version each extension registered with; when it
+ * differs from this CLI's, say so and name the fix.
+ */
+export function extensionVersionMismatchLine(
+  contextId: string,
+  extensionVersion: string | undefined,
+  cliVersion: string,
+): string | null {
+  if (!extensionVersion || extensionVersion === cliVersion) return null
+  return `⚠ extension snapshot ${extensionVersion} ≠ CLI ${cliVersion} — the browser is still running the old extension; run 'interceptor reload --context ${contextId}' and retry.`
 }
 
 // `contexts` returns extension ids plus ios:/cdp: manager contexts. Browser
@@ -100,7 +118,7 @@ export function detectBinaryMismatches(lock: LockFileData | null): BinaryMismatc
   return mismatches
 }
 
-export async function probeContext(contextId: string | undefined): Promise<ContextProbe> {
+export async function probeContext(contextId: string | undefined, version?: string): Promise<ContextProbe> {
   const label = contextId ?? "default"
   const kind = contextKind(contextId)
 
@@ -146,6 +164,7 @@ export async function probeContext(contextId: string | undefined): Promise<Conte
     elements = (treeResp.result.data.match(/\be\d+\b/g) ?? []).length
   }
 
+  if (version) extension.version = version
   return { contextId: label, kind, extension, tab, elements }
 }
 
@@ -165,18 +184,21 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
   }
 
   if (status.daemon) {
-    if (contextId) {
-      snap.contexts = [await probeContext(contextId)]
-    } else {
-      const contextsResp = await probeWithTimeout(() => sendCommand({ type: "contexts" }))
-      const contextIds =
-        contextsResp?.result.success && Array.isArray(contextsResp.result.data)
-          ? (contextsResp.result.data as string[])
-          : []
+    // verbose: true → [{contextId, kind, version}] on a current daemon; an
+    // older daemon ignores the flag and returns plain ids — accept both.
+    const contextsResp = await probeWithTimeout(() => sendCommand({ type: "contexts", verbose: true }))
+    const raw = contextsResp?.result.success && Array.isArray(contextsResp.result.data)
+      ? (contextsResp.result.data as Array<string | { contextId: string; version?: string }>)
+      : []
+    const contexts = raw.map(entry => typeof entry === "string" ? { contextId: entry } : entry)
+    const versionOf = (id: string | undefined) => contexts.find(c => c.contextId === id)?.version
 
+    if (contextId) {
+      snap.contexts = [await probeContext(contextId, versionOf(contextId))]
+    } else {
       snap.contexts = await Promise.all(
-        contextIds.length > 0
-          ? contextIds.map(id => probeContext(id))
+        contexts.length > 0
+          ? contexts.map(c => probeContext(c.contextId, c.version))
           : [probeContext(undefined)]
       )
     }
@@ -236,8 +258,10 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
           ctx.extension.reachable
             ? "connected"
             : `disconnected${ctx.extension.reason ? `  (${ctx.extension.reason})` : ""}`
-        }`
+        }${ctx.extension.version ? `  (extension ${ctx.extension.version})` : ""}`
       )
+      const mismatch = extensionVersionMismatchLine(ctx.contextId, ctx.extension.version, VERSION)
+      if (mismatch) lines.push(`${indent}${mismatch}`)
 
       if (ctx.tab) {
         const { id, url, title } = ctx.tab

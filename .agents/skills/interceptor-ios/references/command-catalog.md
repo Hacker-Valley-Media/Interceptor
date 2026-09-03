@@ -28,6 +28,8 @@ phone is set up. Phones auto-connect on the first drive verb.
 | `interceptor ios click <ref> \| --x N --y N` | Deterministic coordinate tap at the ref's frame center (or raw coordinates). |
 | `interceptor ios type <ref> "text"` | Focus the field at `<ref>`, then type. Most reliable text entry — focus is atomic. |
 | `interceptor ios keys "text"` | Type into whatever is already focused (append). |
+| `interceptor ios type <ref> --secret <name>` / `ios keys --secret <name>` | Type a vault secret (passcode) by name; the daemon resolves it and the runner falls back to SpringBoard when a system passcode sheet owns the keyboard. Register once: `interceptor macos secret register ios-passcode --target ios`. |
+| `interceptor ios unlock --secret <name>` / `ios unlock --probe` | Lock screen: wake, swipe up, type the passcode into SpringBoard's passcode field, wait for unlock. Needs the runner resident (it cannot start on a locked phone). `--probe` reports lock state + whether the passcode field appeared, without typing. |
 | `interceptor ios scroll [<ref>] --dir up\|down\|left\|right` | Scroll the view (or the element at `<ref>`). |
 | `interceptor ios drag <from> <to> [--duration s]` | Drag between two element refs (frame center to frame center). |
 | `interceptor ios press home\|lock\|volume-up\|volume-down` | Hardware button. `lock` locks the phone (avoid mid-flow — it blocks launches). |
@@ -75,8 +77,12 @@ they work even when the runner is idle or asleep. Routed before the runner fallb
 - **Refs are coordinates, not handles.** They are re-minted on every `tree` read, so
   they never go stale the way server-side element ids do — but they only reflect the
   screen at read time. Re-read after any navigation.
-- **Unlocked + foreground.** A locked phone refuses app launches. The runner drops on
-  idle and re-dials per verb, so chain a `launch` and its follow-up verbs closely.
-- **UI only.** Cannot pass Face ID / passcode / Apple Pay or unlock the phone.
+- **Unlocked + foreground.** A locked phone refuses app launches. Keep Auto-Lock off so
+  the runner stays resident; while it is resident, `ios unlock --secret <name>` clears the
+  lock screen. After a reboot the runner cannot start on a locked phone, so unlock once by hand.
+- **Passcodes come from the vault.** Nothing can fake Face ID or Apple Pay. A passcode sheet
+  is typed with `ios type <ref> --secret <name>` / `ios keys --secret <name>`; never put a
+  passcode in a literal `type` call. Register it once with
+  `interceptor macos secret register <name> --target ios`.
 - **After a device reboot.** The phone drops off usbmux (its Wi‑Fi route is cleared even though `xcrun devicectl list devices` still lists it) → a brief USB cable touch reseeds it. The first runner launch also pops an on-device *"Enter iPhone Passcode for XCTest — Enable UI Automation"* dialog; approve it, then a daemon restart clears the stale testmanagerd session. Runner-free lanes (`proc`/`shot`) keep working through all of this.
 - Add `--json` to any command for machine-readable output.

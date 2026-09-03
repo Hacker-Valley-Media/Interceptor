@@ -12,15 +12,15 @@ The native macOS tools are powerful. This page documents the guardrails and your
 - **Ask** (interactive): `mac_click`, `mac_type`, `mac_keys`, `mac_drag`, `mac_app_quit`, `mac_app_hide`, `mac_clipboard_write`.
 - **Deny**: none by default — tune per environment.
 
-## Sensitive frontmost-app gate
+## Credentials: the secret vault and per-secret target allowlists
 
-Before `mac_type` / `mac_keys` / `mac_click(coords)` / `mac_drag` hit the bridge, the host-side identity layer queries `mac_frontmost` and rejects the call if the bundle ID is on the denylist:
+There is no frontmost-app denylist. The control that keeps a credential out of the wrong field is the per-secret target allowlist in the vault (`interceptor macos secret`):
 
-- Keychain Access, 1Password, Dashlane, LastPass, Bitwarden
-- System Settings
-- Chase, Bank of America, Wells Fargo (common banking apps)
-
-Extend the `SENSITIVE_BUNDLE_IDS` list in your host-side identity layer as needed.
+- Secrets are stored in the macOS keychain (login keychain via Bun.secrets, or the data protection keychain owned by the signed bridge when the build carries the keychain-access-groups entitlement). Nothing is written to a file; `~/.interceptor/secrets.json` holds names, gates, targets, and release counts only.
+- Every delivery is by name: `type --secret <name>`, `macos type --secret <name>`, `ios type|keys|unlock --secret <name>`, `macos sudo --secret <name> -- <cmd>`, `macos authdialog fill --secret <name>`. The daemon logs the action first (name only), then resolves the value, then hands it to exactly one delivery leg. The value never appears in argv, the daemon log, the events file, a monitor transcript, an MCP result, or a diagnose bundle.
+- Each secret carries targets: `sudo`, `macos:<bundleId>`, `browser:<host>`, `ios`, or `any`. The daemon checks the real target (frontmost or `--app` bundle id, the tab's URL host, the sudo verb) before the keychain read and refuses a mismatch with `target_denied`.
+- Releases are unattended by default. A per-secret `--gate touchid` asks the OS prompt (Touch ID, Apple Watch, or the Mac password when no sensor is available) before each release, or once per `secret unlock --for <duration>` window. `secret reveal` is always gated and prints only to a terminal.
+- Browser deliveries mark the field so the content monitor records `***SECURE***` even when the input is not `type=password`.
 
 ## TCC permissions (macOS)
 

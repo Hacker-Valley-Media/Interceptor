@@ -170,10 +170,16 @@ function sendWs(msg: unknown): boolean {
   }
 }
 
+function extensionVersion(): string | undefined {
+  try { return chrome.runtime.getManifest().version } catch { return undefined }
+}
+
 function sendWsRegistration(ws: WebSocket, contextId: string): boolean {
   markWsUnregistered()
   try {
-    ws.send(JSON.stringify({ type: "extension", contextId }))
+    // Issue #241: the daemon records which extension build is connected so
+    // `interceptor diagnose` can show a stale snapshot next to the CLI version.
+    ws.send(JSON.stringify({ type: "extension", contextId, version: extensionVersion() }))
     return true
   } catch (err) {
     console.error("ws context registration send error:", err)

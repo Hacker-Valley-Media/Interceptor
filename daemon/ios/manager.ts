@@ -249,6 +249,7 @@ export class IosManager {
         case "ios_scroll": return await this.verbScroll(ctx, action)
         case "ios_drag": return await this.verbDrag(ctx, action)
         case "ios_press": return await this.verbPress(ctx, action)
+        case "ios_unlock": return await this.verbUnlock(ctx, action)
         case "ios_screenshot": return await this.verbScreenshot(ctx, action)
         case "ios_apps": return this.verbApps(ctx)
         case "ios_app": return await this.verbApp(ctx, action)
@@ -405,7 +406,7 @@ export class IosManager {
     let session: signer.AppleSession
     try { session = await signer.appleLogin(appleId, password, twoFactor) }
     catch (err) { return { success: false, error: (err as Error).message } }
-    const stored = keychain.storeToken(session.token)
+    const stored = await keychain.storeToken(session.token)
     if (!stored.ok) return { success: false, error: `could not store token in Keychain: ${stored.error}` }
     setAppleAccount({ teamId: session.teamId, kind: session.kind })
     return { success: true, data: { teamId: session.teamId, tier: session.kind, note: "signed in — run: interceptor ios setup" } }
@@ -423,13 +424,13 @@ export class IosManager {
       return { success: false, error: "no device — plug your iPhone in over USB and tap \"Trust This Computer\" (enter the passcode), then re-run." }
     }
     const xcodeSetup = await this.setupWithXcode(action, udid)
-    if (xcodeSetup.success || !getAppleAccount() || !keychain.hasToken()) return xcodeSetup
+    if (xcodeSetup.success || !getAppleAccount() || !(await keychain.hasToken())) return xcodeSetup
 
     const account = getAppleAccount()!
     // register UDID under the user's team + create a get-task-allow cert/profile.
     let prov: signer.ProvisionResult
     try {
-      const token = keychain.loadToken()!
+      const token = (await keychain.loadToken())!
       prov = await signer.provisionForDevice({ token, teamId: account.teamId, kind: account.kind }, udid)
     } catch (err) { return { success: false, error: (err as Error).message } }
 
@@ -540,7 +541,7 @@ export class IosManager {
 
   /** Drop the stored Apple-ID token + account metadata. Always works (no gate). */
   private async logout(): Promise<IosResult> {
-    const del = keychain.deleteToken()
+    const del = await keychain.deleteToken()
     clearAppleAccount()
     if (!del.ok) return { success: false, error: `token removed from state, but Keychain delete failed: ${del.error}` }
     return { success: true, data: { note: "signed out — Apple-ID token removed from the Keychain" } }
@@ -841,15 +842,33 @@ export class IosManager {
       if ("error" in pt) return { success: false, error: `ios type ${pt.error}` }
       await ctx.channel.tap(pt.x, pt.y)
     }
-    await ctx.channel.sendKeys(text)
+    await ctx.channel.sendKeys(text, typeof action.bundleId === "string" ? action.bundleId : undefined)
     return { success: true, data: { typed: text.length } }
   }
 
   private async verbKeys(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
     const text = typeof action.text === "string" ? action.text : typeof action.keys === "string" ? action.keys : undefined
     if (!text) return { success: false, error: "ios keys requires text" }
-    await ctx.channel.sendKeys(text)
+    await ctx.channel.sendKeys(text, typeof action.bundleId === "string" ? action.bundleId : undefined)
     return { success: true, data: { sent: text.length } }
+  }
+
+  /**
+   * issue #244: lock-screen passcode entry. The runner wakes the phone, swipes up,
+   * waits for SpringBoard's "Passcode field", types, and waits for lockstate 0.
+   * `probe` stops before typing and reports what it found.
+   */
+  private async verbUnlock(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
+    if (!(ctx.channel instanceof RunnerChannel)) return { success: false, error: "ios unlock is runner-only" }
+    const probe = action.probe === true
+    const passcode = typeof action.passcode === "string" ? action.passcode : undefined
+    if (!probe && !passcode) return { success: false, error: "ios unlock requires --secret <name> (or --probe)" }
+    const data = await ctx.channel.unlock(passcode, probe)
+    const d = (data ?? {}) as { unlocked?: boolean; passcodeField?: boolean; locked?: boolean }
+    if (!probe && d.unlocked !== true) {
+      return { success: false, error: d.passcodeField === false ? "no passcode field appeared on the lock screen (is the phone locked? is the runner resident?)" : "the phone is still locked after typing the passcode", data }
+    }
+    return { success: true, data }
   }
 
   private async verbScroll(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {

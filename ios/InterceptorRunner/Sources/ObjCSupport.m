@@ -4,6 +4,7 @@
 #import "ObjCSupport.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <notify.h>
 
 NSError * _Nullable ICRunCatching(void (^block)(void)) {
     @try {
@@ -128,4 +129,35 @@ NSString * _Nullable ICActiveApplicationDebug(void) {
         [out appendFormat:@"{%@ fg=%d}", bid ?: @"nil", fg];
     }
     return out;
+}
+
+// ── issue #244: lock state + hardware button events ──────────────────────────────
+
+BOOL ICIsScreenLocked(void) {
+    int token = 0;
+    if (notify_register_check("com.apple.springboard.lockstate", &token) != NOTIFY_STATUS_OK) return NO;
+    uint64_t state = 0;
+    notify_get_state(token, &state);
+    notify_cancel(token);
+    return state != 0;
+}
+
+static NSError *ICEventError(NSString *message) {
+    return [NSError errorWithDomain:@"InterceptorRunner" code:2 userInfo:@{ NSLocalizedDescriptionKey: message }];
+}
+
+NSError * _Nullable ICPerformDeviceEvent(unsigned int page, unsigned int usage, double duration) {
+    Class eventClass = NSClassFromString(@"XCDeviceEvent");
+    id device = ICSharedDevice();
+    if (!eventClass || !device) return ICEventError(@"XCDeviceEvent is unavailable in this XCTest");
+    SEL make = NSSelectorFromString(@"deviceEventWithPage:usage:duration:");
+    if (![eventClass respondsToSelector:make]) return ICEventError(@"XCDeviceEvent lacks deviceEventWithPage:usage:duration:");
+    id event = ((id(*)(id, SEL, unsigned int, unsigned int, double))objc_msgSend)((id)eventClass, make, page, usage, duration);
+    if (!event) return ICEventError(@"XCDeviceEvent could not be created");
+    SEL perform = NSSelectorFromString(@"performDeviceEvent:error:");
+    if (![device respondsToSelector:perform]) return ICEventError(@"XCUIDevice lacks performDeviceEvent:error:");
+    NSError *error = nil;
+    BOOL ok = ((BOOL(*)(id, SEL, id, NSError **))objc_msgSend)(device, perform, event, &error);
+    if (!ok) return error ?: ICEventError(@"performDeviceEvent failed");
+    return nil;
 }

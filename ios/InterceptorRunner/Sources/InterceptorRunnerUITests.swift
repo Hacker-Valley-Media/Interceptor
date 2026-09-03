@@ -245,8 +245,10 @@ enum Runner {
             from.press(forDuration: dbl(args["duration"], 0.5), thenDragTo: to)
             return ok(nil)
         case "keys":
-            app().typeText(args["text"] as? String ?? "")
-            return ok(nil)
+            return typeKeys(args["text"] as? String ?? "", bundleId: args["bundleId"] as? String)
+        case "unlock":
+            // issue #244: lock-screen passcode entry. `probe` stops before typing.
+            return unlockDevice(passcode: args["passcode"] as? String ?? "", probe: args["probe"] as? Bool ?? false)
         case "press":
             return pressButton(args["name"] as? String ?? "")
         case "app":
@@ -296,12 +298,84 @@ enum Runner {
             return ok(nil)
             #endif
         case "lock":
-            let sel = NSSelectorFromString("pressLockButton")
-            if XCUIDevice.shared.responds(to: sel) { _ = XCUIDevice.shared.perform(sel); return ok(nil) }
-            return err("lock is not supported by this runner")
+            // iOS 27: pressLockButton no longer locks. Post the Power key
+            // (consumer page 0x0C, usage 0x30, 0.5 s hold) like WebDriverAgent,
+            // and fall back to the old selector when the private event API is
+            // missing.
+            if let hidError = ICPerformDeviceEvent(0x0C, 0x30, 0.5) {
+                let sel = NSSelectorFromString("pressLockButton")
+                if XCUIDevice.shared.responds(to: sel) {
+                    _ = XCUIDevice.shared.perform(sel)
+                    return ok(["via": "pressLockButton", "hidError": hidError.localizedDescription, "locked": waitForLockState(true, seconds: 4)])
+                }
+                return err("lock failed: \(hidError.localizedDescription)")
+            }
+            return ok(["via": "iohid", "locked": waitForLockState(true, seconds: 4)])
         default:
             return err("unknown button '\(name)' (home|lock|volumeUp|volumeDown)")
         }
+    }
+
+    // MARK: issue #244 — typing target fallback, lock state, lock-screen unlock
+
+    /// Typing goes to the element with keyboard focus. A system passcode sheet
+    /// (Face ID fallback, Settings) belongs to SpringBoard, so when the app
+    /// refuses ("no keyboard focus") the same text is retried against SpringBoard.
+    private static func typeKeys(_ text: String, bundleId: String?) -> [String: Any] {
+        if let bid = bundleId, !bid.isEmpty {
+            XCUIApplication(bundleIdentifier: bid).typeText(text)
+            return ok(["via": bid])
+        }
+        if ICRunCatching({ app().typeText(text) }) == nil { return ok(nil) }
+        if let e = ICRunCatching({ XCUIApplication(bundleIdentifier: springboard).typeText(text) }) {
+            return err("typeText failed in the app and in SpringBoard: \(e.localizedDescription)")
+        }
+        return ok(["via": springboard])
+    }
+
+    private static func waitForLockState(_ locked: Bool, seconds: Double) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if ICIsScreenLocked() == locked { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return ICIsScreenLocked() == locked
+    }
+
+    /// Wake, swipe up to the passcode pad, type into SpringBoard's "Passcode
+    /// field", and wait for lockstate 0. Only works while this runner is still
+    /// resident (XCTest cannot start on a locked phone).
+    private static func unlockDevice(passcode: String, probe: Bool) -> [String: Any] {
+        let sb = XCUIApplication(bundleIdentifier: springboard)
+        let lockedBefore = ICIsScreenLocked()
+        if !lockedBefore {
+            // Already unlocked: report without touching the device (a probe must not
+            // press Home or swipe over whatever app is in front).
+            if probe { return ok(["probe": true, "lockedBefore": false, "lockedNow": false, "passcodeField": false]) }
+            return ok(["unlocked": true, "alreadyUnlocked": true])
+        }
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 0.6)
+        // Face ID may have unlocked on wake when the owner is looking.
+        if !ICIsScreenLocked() && !probe { return ok(["unlocked": true, "via": "wake"]) }
+        let from = sb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.96))
+        let to = sb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+        from.press(forDuration: 0.05, thenDragTo: to)
+        let field = sb.secureTextFields["Passcode field"]
+        let present = field.waitForExistence(timeout: 6)
+        if probe {
+            return ok(["probe": true, "lockedBefore": lockedBefore, "lockedNow": ICIsScreenLocked(), "passcodeField": present])
+        }
+        guard present else { return err("no passcode field appeared on the lock screen") }
+        guard !passcode.isEmpty else { return err("unlock requires a passcode") }
+        field.typeText(passcode)
+        var unlocked = waitForLockState(false, seconds: 6)
+        if !unlocked && field.exists {
+            // Alphanumeric passcodes need Return; numeric ones submit on the last digit.
+            field.typeText("\n")
+            unlocked = waitForLockState(false, seconds: 6)
+        }
+        return ok(["unlocked": unlocked, "passcodeField": true, "via": "passcode"])
     }
 
     private static func appOp(action: String, bundleId: String) -> [String: Any] {

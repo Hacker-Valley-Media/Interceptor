@@ -29,7 +29,9 @@ export async function runInterceptor(args: string[], opts: { timeoutMs?: number 
   const cmd = [...selfPrefix(), ...args]
   let proc: ReturnType<typeof Bun.spawn>
   try {
-    proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", stdin: "ignore" })
+    // INTERCEPTOR_MCP marks the call as model-driven so the CLI can refuse
+    // human-only verbs (issue #244: `macos secret reveal`).
+    proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env, INTERCEPTOR_MCP: "1" } })
   } catch (err) {
     return { stdout: "", stderr: `failed to spawn interceptor: ${(err as Error).message}`, code: 127 }
   }
