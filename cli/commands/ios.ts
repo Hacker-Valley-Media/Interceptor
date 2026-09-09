@@ -138,9 +138,8 @@ Drive a phone (add --on <name>, or it uses your only phone):
 
 Connection model (how the runner reaches the phone):
   • The phone runs an on-device XCUITest runner (InterceptorRunner) that DIALS IN
-    to the daemon over WiFi. There is no persistent socket held open while idle.
-  • 'devices' shows "connected: false" whenever the runner isn't actively dialed in.
-    That is the NORMAL idle state for a correctly-installed phone — it means
+    to the daemon over WiFi.
+  • 'devices' shows "connected: false" when the runner isn't dialed in. That is
     "installed, will auto-connect on the next verb", NOT "broken" or "offline".
   • You do NOT need to connect manually. Just run a verb — e.g.
     'interceptor ios tree --on <name>' — and the daemon launches the runner and
@@ -179,11 +178,10 @@ Troubleshooting — when things aren't working, try these IN ORDER:
      Disk Image unmounts every boot. Re-mount it:
        'xcrun devicectl device info details --device <udid>'   (brings back
        testmanagerd/Instruments), then retry.
-  4. Runner drops mid-sequence ('ios runner disconnected') — the runner dials in
-     per session and iOS suspends its socket when it backgrounds to drive another
-     app. Keep the phone UNLOCKED with Auto-Lock = Never (Settings › Display &
-     Brightness › Auto-Lock), and run multi-step flows as a tight burst (don't let
-     it idle between verbs). The next verb re-launches it automatically.
+  4. Runner drops mid-sequence ('ios runner disconnected') — iOS can suspend the
+     runner's socket when it backgrounds to drive another app. Keep the phone
+     UNLOCKED with Auto-Lock = Never (Settings › Display & Brightness › Auto-Lock).
+     The next verb re-launches it automatically.
   5. Still stuck — capture detail with 'DEBUG_IOS=1 DBG=1' in the daemon env, and
      check 'interceptor ios status' (tunnel/connection) + 'interceptor ios devices'.
 
