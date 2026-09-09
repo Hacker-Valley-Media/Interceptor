@@ -26,6 +26,23 @@ async function isTabInNormalWindow(tabId: number): Promise<boolean> {
   }
 }
 
+/**
+ * Mint a new group holding `tabId` in the TAB'S OWN window. Without
+ * `createProperties.windowId`, chrome.tabs.group puts the new group in the
+ * "current" window (for a service worker: the last active window, per the
+ * windows API docs) and moves the tab there — which yanks the first tab out of
+ * a freshly created background window (collapsing it) and lands agent groups in
+ * whichever window the user last touched.
+ */
+async function createGroupInTabWindow(tabId: number): Promise<number> {
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined)
+  return chrome.tabs.group(
+    tab?.windowId !== undefined
+      ? { tabIds: tabId, createProperties: { windowId: tab.windowId } }
+      : { tabIds: tabId }
+  )
+}
+
 // --- Named per-agent groups ------------------------------------------------
 // Registry of label -> live groupId, mirrored to chrome.storage.session
 // ("namedTabGroups"). session lifetime matches tab-group-id lifetime exactly:
@@ -146,7 +163,7 @@ async function addTabToNamedGroupSerialized(
   let groupId = await ensureNamedGroup(label)
   try {
     if (groupId === -1) {
-      groupId = await chrome.tabs.group({ tabIds: tabId })
+      groupId = await createGroupInTabWindow(tabId)
       const color = typeof colorOverride === "string" && (VALID_COLORS as readonly string[]).includes(colorOverride)
         ? normalizeColor(colorOverride)
         : colorForLabel(label)
@@ -190,6 +207,42 @@ export async function isTabInAnyManagedGroup(tabId: number): Promise<boolean> {
 /** True when at least one managed group (default or named) is known to exist. */
 export function anyManagedGroupKnown(): boolean {
   return interceptorGroupId !== null || namedGroups.size > 0
+}
+
+/**
+ * Where managed groups live right now. `hosting` maps windowId → number of
+ * managed groups in that window (the default brand group, registered named
+ * groups, or any `<brand>-<label>` titled group — the same heuristic group_list
+ * uses). `own` is the window of the caller's target group (named `label`, else
+ * the default group) when it already exists. Never throws; empty without the
+ * group API. Used by tab_create to keep agent tabs in the window that already
+ * holds Interceptor groups instead of following the user's focus.
+ */
+export async function managedGroupWindows(label?: string): Promise<{ own?: number; hosting: Map<number, number> }> {
+  const hosting = new Map<number, number>()
+  let own: number | undefined
+  if (!hasTabGroupApi()) return { hosting }
+  try {
+    await hydrateNamedGroups()
+    const candidates = await getCandidateTitles()
+    const prefix = groupTitleFor("")
+    const groups = await chrome.tabGroups.query({}).catch(() => [])
+    for (const g of groups) {
+      const title = typeof g.title === "string" ? g.title : ""
+      const isDefault = g.id === interceptorGroupId || candidates.includes(title)
+      const isNamed = labelForGroupId(g.id) !== null
+        || (title.startsWith(prefix) && GROUP_LABEL_RE.test(title.slice(prefix.length)))
+      if (!isDefault && !isNamed) continue
+      hosting.set(g.windowId, (hosting.get(g.windowId) ?? 0) + 1)
+      const isOwn = label
+        ? namedGroups.get(label) === g.id || title === groupTitleFor(label)
+        : isDefault
+      if (isOwn && own === undefined) own = g.windowId
+    }
+  } catch {
+    // grouping is a UX nicety — placement falls back to the plain window pick
+  }
+  return { own, hosting }
 }
 
 /**
@@ -268,7 +321,7 @@ async function addTabToInterceptorGroupSerialized(tabId: number): Promise<number
   if (!(await isTabInNormalWindow(tabId))) return -1
   try {
     if (groupId === -1) {
-      groupId = await chrome.tabs.group({ tabIds: tabId })
+      groupId = await createGroupInTabWindow(tabId)
       await chrome.tabGroups.update(groupId, {
         title: getTabGroupTitle(),
         color: getTabGroupColor() as `${chrome.tabGroups.Color}`,

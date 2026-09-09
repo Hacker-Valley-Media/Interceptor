@@ -197,6 +197,8 @@ interceptor tabs
 interceptor tab new <url>             # Background tab in the interceptor group
 interceptor tab new <url> --activate  # Explicit foregrounding
 interceptor tab new <url> --reuse     # Navigate the group's most-recent tab instead of creating
+                                      # New tabs land in the window that already holds Interceptor groups (own group's window first),
+                                      # not the focused window; the result's windowId says where. A window is created only when none is normal.
 interceptor tab switch <tab-id>
 interceptor tab close <tab-id>
 
