@@ -229,7 +229,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "upgrade", surface: "local", usage: "interceptor upgrade --full", summary: "Promote browser-only install to full computer-use mode (macOS)", returns: "Installer output." },
   // ── other surfaces (verbs enumerated via their own --help) ──────────────────
   { name: "macos", surface: "macos", usage: "interceptor macos <verb> … (see: interceptor help macos)", summary: "Native macOS control: AX trees, background input, windows, screenshots, Apple Events, Electron CDP, app runtime", returns: "Per-verb; background-first — only 'app activate'/'open --activate' move focus." },
-  { name: "ios", surface: "ios", usage: "interceptor ios <verb> … (see: interceptor help ios)", summary: "iPhone automation via on-device XCUITest runner over WiFi", returns: "Per-verb: element trees, taps, typing, screenshots, app lifecycle. NOTE: 'ios devices' → connected:false means the runner is not dialed in; the next verb auto-connects. Keep the phone unlocked & awake." },
+  { name: "ios", surface: "ios", usage: "interceptor ios <verb> … (see: interceptor help ios)", summary: "iPhone automation via on-device XCUITest runner over WiFi", returns: "Per-verb: element trees, taps, typing, screenshots, app lifecycle. NOTE: 'ios devices' → connected:false means the runner is not dialed in; the next drive verb auto-connects ('ios unlock' needs it already connected). Keep the phone unlocked & awake." },
 ]
 
 export function runManifestCommand(argv: string[]): null {

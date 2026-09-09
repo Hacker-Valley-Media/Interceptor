@@ -140,7 +140,8 @@ Connection model (how the runner reaches the phone):
   • The phone runs an on-device XCUITest runner (InterceptorRunner) that DIALS IN
     to the daemon over WiFi.
   • 'devices' shows "connected: false" when the runner isn't dialed in. That is
-    "installed, will auto-connect on the next verb", NOT "broken" or "offline".
+    "installed, will auto-connect on the next drive verb", NOT "broken" or "offline".
+    ('ios unlock' is the exception: it needs the runner already connected.)
   • You do NOT need to connect manually. Just run a verb — e.g.
     'interceptor ios tree --on <name>' — and the daemon launches the runner and
     the phone dials in. 'connected' flips to true for the life of that session.

@@ -145,7 +145,8 @@ const MAP_IOS = `iOS — automate a physical iPhone over WiFi (on-device XCUITes
   Connection model (read this before you panic about 'connected: false'):
     • Phone must be owned, unlocked, in Developer Mode, and WiFi-paired to this Mac.
     • 'ios devices' showing "connected: false" means the runner is not dialed in right now
-      — run a verb (e.g. 'ios tree --on <name>') and it auto-connects. Not "broken".
+      — run a drive verb (e.g. 'ios tree --on <name>') and it auto-connects; 'ios unlock' needs it
+      already connected. Not "broken".
     • Keep the phone unlocked and awake while driving — auto-lock drops the runner.
     • 'interceptor help ios' / 'ios help' has the full setup + troubleshooting flow.`
 
