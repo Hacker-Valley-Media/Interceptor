@@ -1,7 +1,7 @@
 import {
   addTabToInterceptorGroup, ensureInterceptorGroup, interceptorGroupId,
   GROUP_LABEL_RE, ensureNamedGroup, addTabToNamedGroup, labelForGroupId,
-  namedGroups, hydrateNamedGroups, groupTitleFor, hasTabGroupApi
+  namedGroups, hydrateNamedGroups, groupTitleFor, hasTabGroupApi, managedGroupWindows
 } from "../tab-group"
 import { resolveTabLifecycle, policyMayDecideReuse } from "../tab-lifecycle"
 import { waitForTabLoad } from "../content-bridge"
@@ -20,13 +20,21 @@ function sessionArea(): chrome.storage.StorageArea {
   return storage.session ?? chrome.storage.local
 }
 
-// Resolve a normal (groupable) window to birth a new tab in: the focused normal
-// window, else the first normal window, else create one. Without an explicit
-// windowId, chrome.tabs.create opens in whatever window last had focus — which
-// may be a popup, devtools, or app window, and tabs there can't be grouped
-// (chrome.tabs.group rejects with "Tabs can only be moved to and from normal
-// windows"). Returns {} when chrome.windows is unavailable (MV2/Electron) so
-// the caller falls back to chrome.tabs.create's default placement.
+// Resolve a normal (groupable) window to birth a new tab in. Precedence:
+//   1. the window that already holds the caller's own group (named label, else
+//      the default group) — so chrome.tabs.group never drags the tab across
+//      windows to join it;
+//   2. a window that already hosts ANY managed group (the focused one first,
+//      then the one holding most, then getAll order) — agent tabs stay together
+//      instead of following the user's focus into a fresh window, which used to
+//      scatter one new per-session group into every window the user touched;
+//   3. the focused normal window, else the first normal window, else create one.
+// Without an explicit windowId, chrome.tabs.create opens in whatever window
+// last had focus — which may be a popup, devtools, or app window, and tabs
+// there can't be grouped (chrome.tabs.group rejects with "Tabs can only be
+// moved to and from normal windows"). Returns {} when chrome.windows is
+// unavailable (MV2/Electron) so the caller falls back to chrome.tabs.create's
+// default placement.
 //
 // The create-a-window branch carries the target url INTO chrome.windows.create
 // and returns the window's initial tab as `createdTab`: creating an empty
@@ -45,11 +53,17 @@ export function groupWarningFor(groupId: number, groupApiAvailable: boolean): st
   return undefined
 }
 
-export async function resolveNormalWindowPlacement(focusNew: boolean, url: string): Promise<NormalWindowPlacement> {
+export async function resolveNormalWindowPlacement(focusNew: boolean, url: string, group?: string): Promise<NormalWindowPlacement> {
   if (!chrome.windows || typeof chrome.windows.getAll !== "function") return {}
   try {
     const normal = await chrome.windows.getAll({ windowTypes: ["normal"] })
-    const existing = normal.find(w => w.focused)?.id ?? normal[0]?.id
+    const home = await managedGroupWindows(group)
+    if (home.own !== undefined && normal.some(w => w.id === home.own)) return { windowId: home.own }
+    const hosting = normal
+      .filter(w => w.id !== undefined && home.hosting.has(w.id))
+      .sort((a, b) => (home.hosting.get(b.id as number) ?? 0) - (home.hosting.get(a.id as number) ?? 0))
+    const pool = hosting.length > 0 ? hosting : normal
+    const existing = pool.find(w => w.focused)?.id ?? pool[0]?.id
     if (existing !== undefined) return { windowId: existing }
     if (typeof chrome.windows.create === "function") {
       const created = await chrome.windows.create({ url, focused: focusNew })
@@ -140,7 +154,7 @@ export async function handleTabActions(
                 await sessionArea().set({ [activeTabKey(group)]: candidate.id })
                 return {
                   success: true,
-                  data: { tabId: candidate.id, url: updated?.url ?? targetUrl, groupId, group, reused: true }
+                  data: { tabId: candidate.id, url: updated?.url ?? targetUrl, windowId: updated?.windowId ?? candidate.windowId, groupId, group, reused: true }
                 }
               } catch {
                 // Tab vanished between query and update — fall through to create.
@@ -155,11 +169,12 @@ export async function handleTabActions(
       // --activate` is the explicit opt-in). Callers pass `action.active:
       // true` only when the new tab is genuinely meant to be foregrounded.
       const shouldActivate = (action.active as boolean | undefined) === true
-      // Pin creation to a normal window so the tab is groupable (see
+      // Pin creation to a normal window so the tab is groupable, homing on the
+      // window that already holds the caller's group / any managed group (see
       // resolveNormalWindowPlacement). When a window had to be created, its
       // initial tab already carries the url — creating another would leave an
       // orphan NTP tab. Empty placement → chrome.tabs.create's default.
-      const placement = await resolveNormalWindowPlacement(shouldActivate, targetUrl)
+      const placement = await resolveNormalWindowPlacement(shouldActivate, targetUrl, group)
       const newTab = placement.createdTab ?? await chrome.tabs.create({
         url: targetUrl,
         active: shouldActivate,
@@ -179,7 +194,7 @@ export async function handleTabActions(
         // stale activeTabId or whatever Chrome reports as "active in currentWindow"
         // (which may be the user's foreground tab, not the one we just opened).
         await sessionArea().set({ [activeTabKey(group)]: newTab.id })
-        const data: Record<string, unknown> = { tabId: newTab.id, url: newTab.url, groupId, group, reused: false }
+        const data: Record<string, unknown> = { tabId: newTab.id, url: newTab.url, windowId: newTab.windowId, groupId, group, reused: false }
         const groupWarning = groupWarningFor(groupId, hasTabGroupApi())
         if (groupWarning) data.groupWarning = groupWarning
         return { success: true, data }

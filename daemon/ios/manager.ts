@@ -380,7 +380,7 @@ export class IosManager {
         ...(out.length === 0
           ? { note: "no devices have the Interceptor agent yet — plug your iPhone in (unlocked) and run: interceptor ios install" }
           : anyIdle
-            ? { note: "connected:false is the normal idle state — the on-device runner auto-connects on the next verb (e.g. 'interceptor ios tree --on <name>'). Keep the phone unlocked & awake while driving." }
+            ? { note: "connected:false means the runner is not dialed in — it auto-connects on the next drive verb (e.g. 'interceptor ios tree --on <name>'); 'ios unlock' needs the runner already connected. Keep the phone unlocked & awake while driving." }
             : {}),
       },
     }

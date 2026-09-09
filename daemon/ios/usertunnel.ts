@@ -164,7 +164,11 @@ export type TcpChan = { write: (b: Buffer) => void; onData: (cb: (b: Buffer) => 
 
 // ── XPC wire codec (from rsd.ts, matches go-ios xpc/encoding.go) ──────────────
 const WRAPPER_MAGIC = 0x29b00b92, OBJ_MAGIC = 0x42133742, OBJ_VERSION = 5
-const F_ALWAYS = 0x00000001, F_DATA = 0x00000100, F_HEARTBEAT_REQ = 0x00010000, F_INIT = 0x00400000
+// Flag names follow go-ios ios/xpc/encoding.go. pymobiledevice3 calls the same
+// bits WANTING_REPLY / REPLY. 0x00010000 on an empty wrapper is the RemoteXPC
+// keepalive the device expects answered with 0x00020000 + the same message id.
+export const F_ALWAYS = 0x00000001, F_DATA = 0x00000100, F_HEARTBEAT_REQ = 0x00010000, F_HEARTBEAT_REPLY = 0x00020000, F_INIT = 0x00400000
+const F_TERMINATOR = 0x0200 // 0x0201 handshake terminator; never a heartbeat
 class U64 { constructor(public v: bigint | number) {} }
 class I64 { constructor(public v: bigint | number) {} }
 class Dbl { constructor(public v: number) {} }
@@ -199,7 +203,7 @@ function encObject(v: unknown): Buffer {
   }
   throw new Error(`encObject: cannot encode ${typeof v}`)
 }
-function encodeWrapper(dict: Record<string, unknown> | null, flags: number, messageId = 0): Buffer {
+export function encodeWrapper(dict: Record<string, unknown> | null, flags: number, messageId = 0): Buffer {
   const hdr = Buffer.alloc(24)
   hdr.writeUInt32LE(WRAPPER_MAGIC, 0); hdr.writeUInt32LE(flags >>> 0, 4); hdr.writeBigUInt64LE(BigInt(messageId), 16)
   if (dict === null) { hdr.writeBigUInt64LE(0n, 8); return hdr }
@@ -242,7 +246,7 @@ function decObject(r: Reader): unknown {
     default: throw new Error(`decObject: unknown type 0x${t.toString(16)} at off ${r.off - 4}`)
   }
 }
-function tryDecodeWrapper(buf: Buffer): { flags: number; msgId: number; body: Record<string, unknown> | null; consumed: number } | null {
+export function tryDecodeWrapper(buf: Buffer): { flags: number; msgId: number; body: Record<string, unknown> | null; consumed: number } | null {
   if (buf.length < 24) return null
   const bodyLen = Number(buf.readBigUInt64LE(8))
   const need = 24 + bodyLen
@@ -254,10 +258,24 @@ function tryDecodeWrapper(buf: Buffer): { flags: number; msgId: number; body: Re
   return { flags, msgId, body: decObject(r) as Record<string, unknown>, consumed: need }
 }
 
+/** Empty inbound wrapper with WANTING_REPLY set: answer it, do not hand it to request waiters. */
+export function isXpcEmptyHeartbeatRequest(flags: number, body: Record<string, unknown> | null): boolean {
+  if ((flags & F_HEARTBEAT_REQ) === 0) return false
+  if ((flags & F_HEARTBEAT_REPLY) !== 0) return false
+  if ((flags & F_INIT) !== 0) return false
+  if ((flags & F_TERMINATOR) !== 0) return false
+  if (body == null) return true
+  return (flags & F_DATA) === 0 && Object.keys(body).length === 0
+}
+
+export function encodeXpcHeartbeatReply(msgId: number): Buffer {
+  return encodeWrapper(null, F_ALWAYS | F_HEARTBEAT_REPLY, msgId)
+}
+
 // ── HTTP/2 minimal framing (from rsd.ts) ──────────────────────────────────────
 const H2_MAGIC = Buffer.from("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-const FT_DATA = 0x0, FT_HEADERS = 0x1, FT_RST = 0x3, FT_SETTINGS = 0x4, FT_PING = 0x6, FT_GOAWAY = 0x7, FT_WINDOW_UPDATE = 0x8
-function h2frame(type: number, flags: number, streamId: number, payload: Buffer): Buffer {
+export const FT_DATA = 0x0, FT_HEADERS = 0x1, FT_RST = 0x3, FT_SETTINGS = 0x4, FT_PING = 0x6, FT_GOAWAY = 0x7, FT_WINDOW_UPDATE = 0x8
+export function h2frame(type: number, flags: number, streamId: number, payload: Buffer): Buffer {
   const h = Buffer.alloc(9); h.writeUIntBE(payload.length, 0, 3); h.writeUInt8(type, 3); h.writeUInt8(flags, 4); h.writeUInt32BE(streamId >>> 0, 5)
   return Buffer.concat([h, payload])
 }
@@ -265,7 +283,7 @@ function settingsFrame(s: [number, number][]): Buffer {
   const p = Buffer.alloc(s.length * 6); s.forEach(([id, v], i) => { p.writeUInt16BE(id, i * 6); p.writeUInt32BE(v >>> 0, i * 6 + 2) }); return h2frame(FT_SETTINGS, 0, 0, p)
 }
 function windowUpdate(streamId: number, incr: number): Buffer { const p = Buffer.alloc(4); p.writeUInt32BE(incr >>> 0, 0); return h2frame(FT_WINDOW_UPDATE, 0, streamId, p) }
-const ROOT = 1, REPLY = 3
+export const ROOT = 1, REPLY = 3
 
 // A RemoteXPC "service" connection over one TCP chan: 2 H2 streams (1=cs, 3=sc),
 // the per-service init handshake, then send()/receive() XPC dicts. Mirrors
@@ -309,6 +327,15 @@ export class XpcService {
     let dec = tryDecodeWrapper((this as any)[bufName])
     while (dec) {
       ;(this as any)[bufName] = (this as any)[bufName].subarray(dec.consumed)
+      if (isXpcEmptyHeartbeatRequest(dec.flags, dec.body)) {
+        if (DBG) console.error(`[${this.tag}] heartbeat req msgId=${dec.msgId} on ${which}`)
+        // Device-originated empty WANTING_REPLY. Answer on the opposite H2
+        // stream (cs↔sc) and do not deliver to request waiters — a pending
+        // app.request() would otherwise take the keepalive as its reply.
+        this.writeStream(which === "cs" ? REPLY : ROOT, encodeXpcHeartbeatReply(dec.msgId))
+        dec = tryDecodeWrapper((this as any)[bufName])
+        continue
+      }
       const m = { flags: dec.flags, msgId: dec.msgId, body: dec.body }
       if (DBG) console.error(`[${this.tag}] <${which} flags=0x${dec.flags.toString(16)} msgId=${dec.msgId} keys=${dec.body ? Object.keys(dec.body).join(",") : "∅"}`)
       // advance our send counter past the reply's message id (device tracks it per stream)
@@ -580,6 +607,15 @@ function archiveNodeAbs(n: PlistNode, objects: string[]): number {
 }
 function plutilToBinary(xml: Buffer): Buffer {
   return execFileSync("plutil", ["-convert", "binary1", "-o", "-", "-"], { input: xml, maxBuffer: 64 * 1024 * 1024 })
+}
+
+/** go-ios appservice UI-test launch flags. An empty dict leaves the runner unable to background (XCTest 10300). */
+export function uiTestPlatformSpecificOptionsXml(): string {
+  return `<?xml version="1.0"?><plist version="1.0"><dict>` +
+    `<key>ActivateSuspended</key><integer>1</integer>` +
+    `<key>StartSuspendedKey</key><integer>0</integer>` +
+    `<key>__ActivateSuspended</key><integer>1</integer>` +
+    `</dict></plist>`
 }
 function plutilToXml(bin: Buffer): string {
   try { return execFileSync("plutil", ["-convert", "xml1", "-o", "-", "-"], { input: bin, maxBuffer: 64 * 1024 * 1024 }).toString("utf8") }
@@ -883,18 +919,14 @@ export async function launchRunnerOverUserspaceTunnel(udid: string, opts: Usersp
   dtx1.onCall("_XCT_logDebugMessage:", (m) => { const s = decodeArg0(m); if (s.trim()) log(`RUNNER LOG: ${s.slice(0, 240)}`) })
   dtx1.onCall("_XCT_didFinishExecutingTestPlan", () => { log("*** test plan FINISHED ***") })
   dtx1.onCall("_XCT_didBeginExecutingTestPlan", () => { log("*** test plan BEGAN ***") })
-  // The runner reports XCUITest init failures here. The dominant one (error 10300
-  // "Failed to background test runner within 30.0s") is NOT a transport/DTX defect:
-  // the test plan began fine and the runner is talking to us — XCUITest simply
-  // could not send the runner app to the background because the device screen is
-  // LOCKED/asleep, so it times out after 30s and the runner aborts in
-  // +[XCTRunnerDaemonSession sharedSession]. Surface the real cause + fix instead
-  // of leaving a cryptic ~30s timeout. [reports/ios-runner-30s-session-death*]
+  // The runner reports XCUITest init failures here. Error 10300 ("Failed to
+  // background test runner within 30.0s") happens when the screen is locked
+  // OR when appservice launched the runner without UI-test activation flags.
   dtx1.onCall("_XCT_initializationForUITestingDidFailWithError:", (m) => {
     const err = decodeArg0(m)
     log(`*** UI-TESTING INIT FAILED: ${err.slice(0, 220)} ***`)
     if (/background test runner|\b10300\b/i.test(err)) {
-      log("HINT: the iPhone screen is LOCKED/asleep — XCUITest cannot background the runner while locked. Unlock the device and set Settings → Display & Brightness → Auto-Lock → Never, then retry. (This is the real cause of the '30s session death'.)")
+      log("HINT: XCUITest could not background the runner within 30s. Unlock the iPhone and set Settings → Display & Brightness → Auto-Lock → Never, then retry.")
     }
   })
   const localCaps: Record<string, PlistNode> = {
@@ -948,7 +980,7 @@ export async function launchRunnerOverUserspaceTunnel(udid: string, opts: Usersp
     "XCTestConfigurationFilePath": "", "XCTestManagerVariant": "DDI",
     "XCTestSessionIdentifier": testSessionID,
   }
-  const platformOpts = plutilToBinary(Buffer.from(`<?xml version="1.0"?><plist version="1.0"><dict/></plist>`, "utf8"))
+  const platformOpts = plutilToBinary(Buffer.from(uiTestPlatformSpecificOptionsXml(), "utf8"))
 
   const logRunnerStdio = (b: Buffer) => {
     const text = b.toString("utf8").replace(/\0/g, "").trim()
@@ -1187,13 +1219,37 @@ async function rsdHandshake(chan: TcpChan): Promise<Record<string, number>> {
 }
 // RSD uses the same H2/XPC but a slightly different message sequence (Handshake
 // with Services). Reuse XpcService's frame plumbing via a thin subclass.
-class XpcServiceRaw {
+export class XpcServiceRaw {
   private inbound = Buffer.alloc(0)
   private rootBuf = Buffer.alloc(0)
+  private replyBuf = Buffer.alloc(0)
   private waiters: Array<(w: any) => void> = []
   private pend: any[] = []
   private gotSettings = false
+  private rootHeadersSent = false
+  private replyHeadersSent = false
   constructor(private chan: TcpChan) { chan.onData((c) => this.onData(c)) }
+  private writeRaw(sid: number, xpc: Buffer) {
+    if (sid === ROOT && !this.rootHeadersSent) { this.chan.write(h2frame(FT_HEADERS, 0x4, ROOT, Buffer.alloc(0))); this.rootHeadersSent = true }
+    if (sid === REPLY && !this.replyHeadersSent) { this.chan.write(h2frame(FT_HEADERS, 0x4, REPLY, Buffer.alloc(0))); this.replyHeadersSent = true }
+    this.chan.write(h2frame(FT_DATA, 0, sid, xpc))
+  }
+  private drainRaw(which: "root" | "reply") {
+    const bufName = which === "root" ? "rootBuf" : "replyBuf"
+    let dec = tryDecodeWrapper((this as any)[bufName] as Buffer)
+    while (dec) {
+      ;(this as any)[bufName] = ((this as any)[bufName] as Buffer).subarray(dec.consumed)
+      if (isXpcEmptyHeartbeatRequest(dec.flags, dec.body)) {
+        this.writeRaw(which === "root" ? REPLY : ROOT, encodeXpcHeartbeatReply(dec.msgId))
+        dec = tryDecodeWrapper((this as any)[bufName] as Buffer)
+        continue
+      }
+      if (which === "root") {
+        const w = this.waiters.shift(); if (w) w(dec); else this.pend.push(dec)
+      }
+      dec = tryDecodeWrapper((this as any)[bufName] as Buffer)
+    }
+  }
   private onData(chunk: Buffer) {
     this.inbound = Buffer.concat([this.inbound, chunk])
     while (this.inbound.length >= 9) {
@@ -1205,8 +1261,10 @@ class XpcServiceRaw {
       else if (type === FT_PING) { if (!(flags & 0x1)) this.chan.write(h2frame(FT_PING, 0x1, 0, Buffer.from(payload))) }
       else if (type === FT_DATA && sid === ROOT) {
         this.rootBuf = Buffer.concat([this.rootBuf, payload])
-        let dec = tryDecodeWrapper(this.rootBuf)
-        while (dec) { this.rootBuf = this.rootBuf.subarray(dec.consumed); const w = this.waiters.shift(); if (w) w(dec); else this.pend.push(dec); dec = tryDecodeWrapper(this.rootBuf) }
+        this.drainRaw("root")
+      } else if (type === FT_DATA && sid === REPLY) {
+        this.replyBuf = Buffer.concat([this.replyBuf, payload])
+        this.drainRaw("reply")
       }
     }
   }
@@ -1218,9 +1276,9 @@ class XpcServiceRaw {
     this.chan.write(H2_MAGIC)
     this.chan.write(settingsFrame([[0x3, 100], [0x4, 16 * 1024 * 1024]]))
     this.chan.write(windowUpdate(0, 16 * 1024 * 1024 - 65535))
-    this.chan.write(h2frame(FT_HEADERS, 0x4, ROOT, Buffer.alloc(0)))
+    this.chan.write(h2frame(FT_HEADERS, 0x4, ROOT, Buffer.alloc(0))); this.rootHeadersSent = true
     this.chan.write(h2frame(FT_DATA, 0, ROOT, encodeWrapper({}, F_ALWAYS, 0)))
-    this.chan.write(h2frame(FT_HEADERS, 0x4, REPLY, Buffer.alloc(0)))
+    this.chan.write(h2frame(FT_HEADERS, 0x4, REPLY, Buffer.alloc(0))); this.replyHeadersSent = true
     this.chan.write(h2frame(FT_DATA, 0, ROOT, encodeWrapper(null, 0x0201, 0)))
     this.chan.write(h2frame(FT_DATA, 0, REPLY, encodeWrapper(null, F_ALWAYS | F_INIT, 0)))
     const start = Date.now(); while (!this.gotSettings && Date.now() - start < 4000) await new Promise((r) => setTimeout(r, 50))

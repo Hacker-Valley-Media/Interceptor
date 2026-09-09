@@ -20,8 +20,9 @@ paired and the runner is installed (`interceptor ios devices` lists it).
 
 2. **Open the target app.** `interceptor ios app launch <bundleId> --on phone`.
    Get the bundle id from `interceptor ios apps --on phone` if you don't know it.
-   Immediately follow with a `tree` — the runner can drop on idle and re-land on the
-   Home screen if you pause, so keep launch and follow-up verbs close together.
+   Immediately follow with a `tree`. If the runner dropped (app switch or lock),
+   unlock the phone if it locked; the next drive verb relaunches the runner on the
+   Home screen, so re-launch the app and re-read.
 
 3. **Read the screen.** `interceptor ios tree --on phone`. This is the ref-tagged
    element tree. Use `--filter interactive` to trim to actionable elements.

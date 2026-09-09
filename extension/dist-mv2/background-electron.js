@@ -58,6 +58,12 @@ async function isTabInNormalWindow(tabId) {
     return true;
   }
 }
+async function createGroupInTabWindow(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => {
+    return;
+  });
+  return chrome.tabs.group(tab?.windowId !== undefined ? { tabIds: tabId, createProperties: { windowId: tab.windowId } } : { tabIds: tabId });
+}
 var GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/;
 var SESSION_NAMED_GROUPS_KEY = "namedTabGroups";
 var namedGroups = new Map;
@@ -144,7 +150,7 @@ async function addTabToNamedGroupSerialized(tabId, label, colorOverride) {
   let groupId = await ensureNamedGroup(label);
   try {
     if (groupId === -1) {
-      groupId = await chrome.tabs.group({ tabIds: tabId });
+      groupId = await createGroupInTabWindow(tabId);
       const color = typeof colorOverride === "string" && VALID_COLORS.includes(colorOverride) ? normalizeColor(colorOverride) : colorForLabel(label);
       await chrome.tabGroups.update(groupId, {
         title: groupTitleFor(label),
@@ -187,6 +193,30 @@ async function isTabInAnyManagedGroup(tabId) {
 }
 function anyManagedGroupKnown() {
   return interceptorGroupId !== null || namedGroups.size > 0;
+}
+async function managedGroupWindows(label) {
+  const hosting = new Map;
+  let own;
+  if (!hasTabGroupApi())
+    return { hosting };
+  try {
+    await hydrateNamedGroups();
+    const candidates = await getCandidateTitles();
+    const prefix = groupTitleFor("");
+    const groups = await chrome.tabGroups.query({}).catch(() => []);
+    for (const g of groups) {
+      const title = typeof g.title === "string" ? g.title : "";
+      const isDefault = g.id === interceptorGroupId || candidates.includes(title);
+      const isNamed = labelForGroupId(g.id) !== null || title.startsWith(prefix) && GROUP_LABEL_RE.test(title.slice(prefix.length));
+      if (!isDefault && !isNamed)
+        continue;
+      hosting.set(g.windowId, (hosting.get(g.windowId) ?? 0) + 1);
+      const isOwn = label ? namedGroups.get(label) === g.id || title === groupTitleFor(label) : isDefault;
+      if (isOwn && own === undefined)
+        own = g.windowId;
+    }
+  } catch {}
+  return { own, hosting };
 }
 function labelForGroupId(groupId) {
   for (const [label, gid] of namedGroups) {
@@ -237,7 +267,7 @@ async function addTabToInterceptorGroupSerialized(tabId) {
     return -1;
   try {
     if (groupId === -1) {
-      groupId = await chrome.tabs.group({ tabIds: tabId });
+      groupId = await createGroupInTabWindow(tabId);
       await chrome.tabGroups.update(groupId, {
         title: getTabGroupTitle(),
         color: getTabGroupColor()
@@ -1989,12 +2019,17 @@ function groupWarningFor(groupId, groupApiAvailable) {
   }
   return;
 }
-async function resolveNormalWindowPlacement(focusNew, url) {
+async function resolveNormalWindowPlacement(focusNew, url, group) {
   if (!chrome.windows || typeof chrome.windows.getAll !== "function")
     return {};
   try {
     const normal = await chrome.windows.getAll({ windowTypes: ["normal"] });
-    const existing = normal.find((w) => w.focused)?.id ?? normal[0]?.id;
+    const home = await managedGroupWindows(group);
+    if (home.own !== undefined && normal.some((w) => w.id === home.own))
+      return { windowId: home.own };
+    const hosting = normal.filter((w) => w.id !== undefined && home.hosting.has(w.id)).sort((a, b) => (home.hosting.get(b.id) ?? 0) - (home.hosting.get(a.id) ?? 0));
+    const pool = hosting.length > 0 ? hosting : normal;
+    const existing = pool.find((w) => w.focused)?.id ?? pool[0]?.id;
     if (existing !== undefined)
       return { windowId: existing };
     if (typeof chrome.windows.create === "function") {
@@ -2043,7 +2078,7 @@ async function handleTabActions(action, tabId) {
                 await sessionArea4().set({ [activeTabKey(group)]: candidate.id });
                 return {
                   success: true,
-                  data: { tabId: candidate.id, url: updated?.url ?? targetUrl, groupId, group, reused: true }
+                  data: { tabId: candidate.id, url: updated?.url ?? targetUrl, windowId: updated?.windowId ?? candidate.windowId, groupId, group, reused: true }
                 };
               } catch {}
             }
@@ -2051,7 +2086,7 @@ async function handleTabActions(action, tabId) {
         }
       }
       const shouldActivate = action.active === true;
-      const placement = await resolveNormalWindowPlacement(shouldActivate, targetUrl);
+      const placement = await resolveNormalWindowPlacement(shouldActivate, targetUrl, group);
       const newTab = placement.createdTab ?? await chrome.tabs.create({
         url: targetUrl,
         active: shouldActivate,
@@ -2062,7 +2097,7 @@ async function handleTabActions(action, tabId) {
         if (shouldActivate)
           await chrome.tabs.update(newTab.id, { active: true });
         await sessionArea4().set({ [activeTabKey(group)]: newTab.id });
-        const data = { tabId: newTab.id, url: newTab.url, groupId, group, reused: false };
+        const data = { tabId: newTab.id, url: newTab.url, windowId: newTab.windowId, groupId, group, reused: false };
         const groupWarning = groupWarningFor(groupId, hasTabGroupApi());
         if (groupWarning)
           data.groupWarning = groupWarning;

@@ -15,7 +15,7 @@ phone is set up. Phones auto-connect on the first drive verb.
 | `interceptor ios install [<device>]` | Push / refresh the prebuilt agent (operator path). |
 | `interceptor ios devices` | Phones with the agent installed, plus aliases, transport (USB/network), and iOS version. |
 | `interceptor ios discover` | Full device discovery with toolchain + readiness notes. |
-| `interceptor ios status` | Per-phone connection state: `connected` while driving, `disconnected` when installed but idle. |
+| `interceptor ios status` | Per-phone connection state: `connected` while the runner is dialed in, `disconnected` when it is not (next drive verb auto-connects). |
 | `interceptor ios name <device> <alias>` | Alias a phone so you can use `--on <alias>` (e.g. `--on phone`). |
 
 ## Drive verbs
