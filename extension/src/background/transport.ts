@@ -1,4 +1,5 @@
 import { handleDaemonMessage, drainMessageQueue, pendingRequests } from "./message-dispatch"
+import type { ExtensionInstallType } from "../../../shared/extension-identity"
 import { safeNativePortDisconnect, safeNativePortPing, safeNativePortPost, shouldSkipNativeKeepalive } from "./native-port-lifecycle"
 import { recoverPendingRequestsAfterNativeDisconnect } from "./pending-request-recovery"
 import { INITIAL_RECONNECT_DELAY_MS, delayWithJitter, nextReconnectDelay } from "./reconnect-lifecycle"
@@ -175,8 +176,27 @@ function extensionVersion(): string | undefined {
   try { return chrome.runtime.getManifest().version } catch { return undefined }
 }
 
-type ExtensionInstallType = "development" | "normal" | "sideload" | "admin" | "other"
 let cachedInstallType: ExtensionInstallType | undefined
+
+/** Chrome honors the callback form of its APIs in every manifest version; the
+ *  promise form is MV3-only, so the MV2 (Electron) bundle would get undefined
+ *  back. Call with a callback and also accept a returned promise (MV3 doubles).
+ *  Rejects on chrome.runtime.lastError so callers keep their try/catch. */
+export function chromeCall<T>(
+  invoke: (cb: (...args: unknown[]) => void) => unknown,
+  map: (...args: unknown[]) => T,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const ret = invoke((...args) => {
+      const err = (chrome.runtime as { lastError?: { message?: string } } | undefined)?.lastError?.message
+      if (err) reject(new Error(err))
+      else resolve(map(...args))
+    })
+    if (ret && typeof (ret as Promise<unknown>).then === "function") {
+      ;(ret as Promise<unknown>).then((v) => resolve(map(v)), reject)
+    }
+  })
+}
 
 /** chrome.management.getSelf() needs no permission. Once the store install and
  *  the unpacked copy share the store ID, installType is what tells them apart
@@ -185,11 +205,12 @@ let cachedInstallType: ExtensionInstallType | undefined
 export async function detectInstallType(): Promise<ExtensionInstallType | undefined> {
   if (cachedInstallType) return cachedInstallType
   const management = (chrome as unknown as {
-    management?: { getSelf?: () => Promise<{ installType?: string }> }
+    management?: { getSelf?: (cb?: (info: { installType?: string }) => void) => unknown }
   }).management
-  if (typeof management?.getSelf !== "function") return undefined
+  const getSelf = management?.getSelf
+  if (typeof getSelf !== "function") return undefined
   try {
-    const info = await management.getSelf()
+    const info = await chromeCall((cb) => getSelf.call(management, cb), (i) => i as { installType?: string } | undefined)
     if (typeof info?.installType === "string") cachedInstallType = info.installType as ExtensionInstallType
   } catch {}
   return cachedInstallType
@@ -204,12 +225,19 @@ export async function extensionIdentity(): Promise<ExtensionIdentity> {
   return { version: extensionVersion(), extensionId, installType: await detectInstallType() }
 }
 
+let wsRegistrationSeq = 0
+
 async function sendWsRegistration(ws: WebSocket, contextId: string): Promise<boolean> {
   markWsUnregistered()
+  const seq = ++wsRegistrationSeq
   // Issue #241: the daemon records which extension build is connected so
   // `interceptor diagnose` can show a stale snapshot next to the CLI version;
   // extensionId + installType say which copy (store or unpacked) it is.
   const identity = await extensionIdentity()
+  // A newer registration (a context rename during the identity lookup) owns
+  // the socket now; leave the send to it so the daemon never maps the socket
+  // back to a stale context id. The socket itself is still being registered.
+  if (seq !== wsRegistrationSeq) return true
   if (wsChannel !== ws || ws.readyState !== WebSocketImpl.OPEN) return false
   try {
     ws.send(JSON.stringify({ type: "extension", contextId, ...identity }))
@@ -338,7 +366,12 @@ export function connectToHost(): void {
         }
         isConnecting = false
         console.log("native host connected (pong received)")
-        void extensionIdentity().then((identity) => emitEvent("connection_established", identity))
+        void extensionIdentity().then((identity) => {
+          // The identity lookup is async: report the connection only while this
+          // port still owns the native transport, so the event cannot fall back
+          // to the WebSocket after a disconnect and read as a native connection.
+          if (nativePort === port && activeTransport === "native") emitEvent("connection_established", identity)
+        })
         drainMessageQueue()
       }
       if (keepalivePongTimer) {

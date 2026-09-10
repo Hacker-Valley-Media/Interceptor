@@ -1,4 +1,4 @@
-import { activeTransport, detectInstallType } from "../transport"
+import { activeTransport, chromeCall, detectInstallType } from "../transport"
 import { debuggerAttached, cdpAttachActDetach } from "../cdp"
 import { resolveTabLifecycle } from "../tab-lifecycle"
 
@@ -10,13 +10,18 @@ type UpdateCheck = { updateCheck: string; updateVersion?: string }
  *  so the reload that follows installs the downloaded version. */
 export async function requestStoreUpdate(waitMs = 8_000): Promise<UpdateCheck> {
   const runtime = chrome.runtime as unknown as {
-    requestUpdateCheck?: () => Promise<{ status: string; version?: string }>
+    requestUpdateCheck?: (cb?: (status: string, details?: { version?: string }) => void) => unknown
     onUpdateAvailable?: { addListener: (cb: (d: { version: string }) => void) => void; removeListener: (cb: (d: { version: string }) => void) => void }
   }
-  if (typeof runtime.requestUpdateCheck !== "function") return { updateCheck: "unavailable" }
+  const requestUpdateCheck = runtime.requestUpdateCheck
+  if (typeof requestUpdateCheck !== "function") return { updateCheck: "unavailable" }
   let result: { status: string; version?: string }
   try {
-    result = await runtime.requestUpdateCheck()
+    // Callback form (MV2 + MV3); the promise form returns one object instead.
+    result = await chromeCall(
+      (cb) => requestUpdateCheck.call(runtime, cb),
+      (a, b) => (typeof a === "string" ? { status: a, version: (b as { version?: string } | undefined)?.version } : (a as { status: string; version?: string })),
+    )
   } catch (err) {
     return { updateCheck: `error: ${(err as Error).message || String(err)}` }
   }

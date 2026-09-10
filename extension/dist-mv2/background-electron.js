@@ -3618,11 +3618,12 @@ async function handleFrameActions(action, tabId, sendFrame = sendToContentScript
 // extension/src/background/capabilities/meta.ts
 async function requestStoreUpdate(waitMs = 8000) {
   const runtime = chrome.runtime;
-  if (typeof runtime.requestUpdateCheck !== "function")
+  const requestUpdateCheck = runtime.requestUpdateCheck;
+  if (typeof requestUpdateCheck !== "function")
     return { updateCheck: "unavailable" };
   let result;
   try {
-    result = await runtime.requestUpdateCheck();
+    result = await chromeCall((cb) => requestUpdateCheck.call(runtime, cb), (a, b) => typeof a === "string" ? { status: a, version: b?.version } : a);
   } catch (err) {
     return { updateCheck: `error: ${err.message || String(err)}` };
   }
@@ -5604,14 +5605,29 @@ function extensionVersion() {
   }
 }
 var cachedInstallType;
+function chromeCall(invoke, map) {
+  return new Promise((resolve, reject) => {
+    const ret = invoke((...args) => {
+      const err = chrome.runtime?.lastError?.message;
+      if (err)
+        reject(new Error(err));
+      else
+        resolve(map(...args));
+    });
+    if (ret && typeof ret.then === "function") {
+      ret.then((v) => resolve(map(v)), reject);
+    }
+  });
+}
 async function detectInstallType() {
   if (cachedInstallType)
     return cachedInstallType;
   const management = chrome.management;
-  if (typeof management?.getSelf !== "function")
+  const getSelf = management?.getSelf;
+  if (typeof getSelf !== "function")
     return;
   try {
-    const info = await management.getSelf();
+    const info = await chromeCall((cb) => getSelf.call(management, cb), (i) => i);
     if (typeof info?.installType === "string")
       cachedInstallType = info.installType;
   } catch {}
@@ -5624,9 +5640,13 @@ async function extensionIdentity() {
   } catch {}
   return { version: extensionVersion(), extensionId, installType: await detectInstallType() };
 }
+var wsRegistrationSeq = 0;
 async function sendWsRegistration(ws, contextId) {
   markWsUnregistered();
+  const seq = ++wsRegistrationSeq;
   const identity = await extensionIdentity();
+  if (seq !== wsRegistrationSeq)
+    return true;
   if (wsChannel !== ws || ws.readyState !== WebSocketImpl.OPEN)
     return false;
   try {
@@ -5756,7 +5776,10 @@ function connectToHost() {
         }
         isConnecting = false;
         console.log("native host connected (pong received)");
-        extensionIdentity().then((identity) => emitEvent("connection_established", identity));
+        extensionIdentity().then((identity) => {
+          if (nativePort === port && activeTransport === "native")
+            emitEvent("connection_established", identity);
+        });
         drainMessageQueue();
       }
       if (keepalivePongTimer) {
