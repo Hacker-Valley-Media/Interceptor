@@ -37,18 +37,18 @@ describe("Windows production release contract", () => {
     for (const sha of Object.values(lock.actions) as string[]) expect(sha).toMatch(/^[0-9a-f]{40}$/)
   })
 
-  test("derives the development identity and blocks unapproved production identities", () => {
+  test("derives the approved Chrome Web Store identity and renders it in production", () => {
     const identities = parseStoreIdentities(JSON.parse(read("extension/store-identities.json")))
     const extension = JSON.parse(read("extension/manifest.json"))
-    expect(deriveChromiumExtensionId(identities.chrome.publicKey)).toBe("hkjbaciefhhgekldhncknbjkofbpenng")
+    expect(deriveChromiumExtensionId(identities.chrome.publicKey)).toBe("gomcpnagjjlhehnkoobkjgnkbleiooed")
     validateStoreIdentities(identities, { production: false, extensionManifestKey: extension.key })
-    expect(() => validateStoreIdentities(identities, { production: true, extensionManifestKey: extension.key })).toThrow("not approved")
-    expect(makeNativeHostManifest(identities, false)).toEqual({
+    validateStoreIdentities(identities, { production: true, extensionManifestKey: extension.key })
+    expect(makeNativeHostManifest(identities, true)).toEqual({
       name: "com.interceptor.host",
       description: "Interceptor daemon bridge",
       path: "interceptor-daemon.exe",
       type: "stdio",
-      allowed_origins: ["chrome-extension://hkjbaciefhhgekldhncknbjkofbpenng/"],
+      allowed_origins: ["chrome-extension://gomcpnagjjlhehnkoobkjgnkbleiooed/"],
     })
   })
 
@@ -107,10 +107,9 @@ describe("Windows production release contract", () => {
     expect(workflow).toContain("attestations: write")
     expect(workflow).toContain("artifact-metadata: write")
     expect(workflow).toContain("INNO_SETUP_LICENSE_ACKNOWLEDGED")
-    // Releases ship the development (Load-unpacked) identity until the store
-    // listings in store-identities.json are approved; production mode still
-    // hard-blocks, so removing this env is the deliberate flip back.
-    expect(workflow).toContain("INTERCEPTOR_WINDOWS_IDENTITY_MODE: development")
+    // The Chrome Web Store identity is approved (store-identities.json), so the
+    // release lane runs the production gate; the development override is gone.
+    expect(workflow).not.toContain("INTERCEPTOR_WINDOWS_IDENTITY_MODE")
     expect(workflow).toContain("gh attestation verify")
     expect(workflow).toContain("Get-AuthenticodeSignature")
     for (const sha of Object.values(lock.actions) as string[]) expect(workflow).toContain(sha)

@@ -136,17 +136,17 @@ To test:
 The debugger permission is used only by `interceptor net --bodies` style commands and is detached afterwards. userScripts requires the user to enable "Allow User Scripts" on the extension's details page; the CLI falls back to chrome.scripting when it is off.
 ```
 
-## 5. After the first upload: adopt the store identity
+## 5. Store identity: adopted in 0.25.0
 
-1. Dashboard, Package tab, **View public key**. Copy the single-line base64 body.
-2. `extension/manifest.json#key` = that key. `extension/store-identities.json`: `chrome.publicKey` = same key, `chrome.storeId` = the dashboard item ID, `listingUrl` = `https://chromewebstore.google.com/detail/<storeId>`, `approvalStatus` = `approved`, `approvalDate` = the approval date.
-3. `daemon/com.interceptor.host.json`: add `chrome-extension://<storeId>/` to `allowed_origins`. Keep the development ID so Load-unpacked installs keep working. The macOS installers render this file; the Windows generator derives its own from `store-identities.json`.
-4. `bun test test/windows-store-identity.test.ts` must pass with the new key. Update the expected ID in that test.
-5. `.github/workflows/windows-installer.yml`: remove `INTERCEPTOR_WINDOWS_IDENTITY_MODE: development` and switch the validation step back to production. Update `test/windows-release-contract.test.ts` to match.
-6. Update the Load-unpacked wording in `README.md`, `docs/windows-install.md`, and `scripts/installer/post-install.txt` to point at the listing URL.
-7. Rebuild, rerun `scripts/build-store-zip.sh`, and upload the new package so the store copy carries the same ID the daemon trusts.
+The store's public key is `extension/manifest.json#key`, so an unpacked load of `extension/dist` (or of the folder the installers leave on disk) carries the store ID `gomcpnagjjlhehnkoobkjgnkbleiooed`. Store install and unpacked copy are the same extension to Chrome; `chrome.management.getSelf().installType` (`normal` = store, `development` = unpacked) is what tells them apart, and the extension reports it, its ID, and its version when it registers with the daemon. `interceptor contexts --verbose` and `interceptor diagnose` show them.
 
-The extension only uses native messaging on Chrome and Brave; there is no localhost fallback when `connectNative` exists. A store install whose ID is missing from `allowed_origins` reconnects forever, so step 3 is not optional.
+- `extension/store-identities.json` records the key, the ID, the listing URL, and the approval (2026-09-08).
+- `daemon/com.interceptor.host.json` lists the store origin first and keeps the pre-store development origin `hkjbaciefhhgekldhncknbjkofbpenng` through 0.25.x so unpacked copies that have not been reloaded keep native messaging. It is removed in 0.26.0. `diagnose` names such a copy so the user can retire it.
+- The Windows generator (`scripts/installer/generate-native-host.ts`) emits the store origin alone; the Edge record becomes mandatory the moment any Edge field is filled in.
+- Same ID, two copies (verified 2026-09-09 in a scratch Chrome for Testing profile): a `--load-extension` of the store-keyed `extension/dist` over an installed store copy rewrote the profile's entry for the ID from location 1 (store) to location 8 (command line) with the unpacked path; relaunching without the flag left that entry in place and loaded nothing, so the store copy did not return. One copy per profile; reinstall from the store to get it back.
+- Changing the key changed the ID of every existing unpacked install, and Chrome treats a new ID as a new extension with empty storage. Context name, tab-group label, and tab-lifecycle settings need re-entering once; `interceptor contexts rename <name> --context <id>` restores the name from the CLI.
+
+How the two copies reach the daemon: both open the localhost WebSocket at startup regardless of native messaging (`extension/src/background.ts` calls `connectToHost()` and `connectWsChannel()`), and the daemon accepts that registration without an origin check. A copy whose origin is missing from `allowed_origins` therefore still works over the WebSocket; what it loses is Chrome spawning the daemon on browser start and the relay path. Verified 2026-09-09 with a key-stripped copy under a random ID in Chrome for Testing 148: registered in 2 s, ran `tabs`, `open`, and text extraction.
 
 ## 6. Review risks to expect
 
@@ -154,3 +154,13 @@ The extension only uses native messaging on Chrome and Brave; there is no localh
 - CSP and CORS header removal through declarativeNetRequest reads as circumventing site security. The justification is that it is scoped to one tab the user's own agent is instrumenting, applied only after a command fails, and removed with the session rule.
 - `(0, eval)` in the injected function is the fallback when userScripts is off. Expect a question; the answer is the userScripts-first order in `capabilities/evaluate.ts`.
 - Reviews of a Manifest V3 extension normally complete within three days. Escalate through developer support after two weeks.
+
+## 7. Updating the listing
+
+Every CLI release ships the matching store package, or store users answer new CLI verbs with `unknown action type`.
+
+1. `bash scripts/release.sh` builds `dist/Interceptor-Extension-<version>.zip` after the pkgs (`scripts/build-store-zip.sh` strips `key`; the store signs with the same key, so the ID does not change).
+2. Dashboard, Interceptor, **Package**, **Upload new package**, pick the zip. Listing and privacy answers carry over; re-answer only what changed (a new permission needs a new justification, and Chrome asks existing users to accept it).
+3. **Submit for review.** Every update is reviewed; the `<all_urls>` host permission can stretch it to days. Deferred publishing holds an approved version until the pkg is out.
+4. Store copies pick the update up on Chrome's next check (startup and every few hours, installed once the extension is idle). `interceptor reload --context <id>` on a store copy calls `chrome.runtime.requestUpdateCheck()`, waits briefly for the download, and reloads; `diagnose` says when the store copy is behind the CLI.
+5. Until the store carries the new version, the unpacked copy is the way to run ahead of it.

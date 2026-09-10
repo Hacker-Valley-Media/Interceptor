@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "brand": "Interceptor",
   "chrome": {
-    "storeId": "hkjbaciefhhgekldhncknbjkofbpenng",
-    "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr8I3MwCNVrLcP0OCP8fRpiGWHIpbu2iMsyweU4YcX/CWdmO2fnZAJ6UP+IKkM5Zw9mt9kY4CFW4tZt096ChuMKiVBg4HM47ffWHTlo6rXOzdLuXMQ6MtFDuqbQuq6x0tLgYlOr7UxSiPVFgPRuczOz+kPkTO/h8nJNDaouNY1WnG4/ESruv10gwLwxgNKEvisnjxDU6lw9zDm/+pF8aAB8RMJbJQpRRBKDVL8rTRb4yCp6qi8E9VkJRK3sTD9sX0fgZoYd4pkvbK+7kPh9oxiuzPKNCKm9v8XTCVBh+sWBJBdke7PAoERkdXOs2MEijjO2A0X4/tzqygr3oARSghkQIDAQAB",
-    "listingUrl": "",
-    "approvalStatus": "pending",
-    "approvalDate": null
+    "storeId": "gomcpnagjjlhehnkoobkjgnkbleiooed",
+    "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyljKQEzlPuYlL05dFD0YK65p/SqJuG+Juszv94MIwmGEspBcPN+cim4kA0VJWwkRT1Be5xWV3h2zm0Gs5p1jefg5DxccLfqEZ9ODKNySCm8Z59d1bmbLGl8GBKKm1F3Cq6Go7Mhn8BSyNxBxZhRhvMrLfLl3pCEKeRB/I5lbmaJkh09hTlpbW25j/MTvxwpPkm0WwTby4Qjiy2VbhQaLrTOtzDMEq823pS6xaRGGTbA7BrnccPmP9jex/I+xjJuia0936jaOO5yKujBZwHDlURKsc9CRMaaIhGIKstPsfw7qZzq4SRTah7cVZKmwNKC9aHP6ZHNdhn42Hhh3oN7DqwIDAQAB",
+    "listingUrl": "https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed",
+    "approvalStatus": "approved",
+    "approvalDate": "2026-09-08"
   },
   "edge": {
     "storeId": "",

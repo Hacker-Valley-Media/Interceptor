@@ -754,6 +754,20 @@ if [[ "$DRY_RUN" != "1" ]]; then
   rm -f "$UNSIGNED_BROWSER_PKG" "$UNSIGNED_FULL_PKG"
 fi
 
+# ── Step 12b: Chrome Web Store package ────────────────────────────────────────
+# The store copy of the extension must move in lockstep with the pkg, or store
+# users answer new CLI verbs with "unknown action type". Build the upload zip
+# here; uploading is the manual dashboard step named below.
+echo "==> Step 12b: Chrome Web Store package"
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "    DRY: bash scripts/build-store-zip.sh"
+else
+  bash "$REPO_ROOT/scripts/build-store-zip.sh"
+fi
+echo "    Upload dist/Interceptor-Extension-$VERSION.zip: dashboard → Interceptor → Package → Upload new package,"
+echo "    then Submit for review (docs/chrome-web-store.md §7)."
+echo ""
+
 # ── Step 13: Publish Sparkle appcast — REMOVED ────────────────────────────────
 # Sparkle publish is intentionally NOT part of release.sh anymore. Auto-pushing
 # the appcast inside the same script that produced the .pkg meant a fresh build

@@ -154,21 +154,33 @@ export function validateStoreIdentities(
 
   if (!options.production) return
 
-  for (const [label, identity] of [["chrome", identities.chrome], ["edge", identities.edge]] as const) {
+  // Production needs the Chrome Web Store identity approved. Edge Add-ons is a
+  // separate submission; while its record is untouched the Windows package
+  // ships the Chrome identity alone, and once any Edge field is filled in the
+  // whole Edge record must be approved and consistent.
+  const gates: Array<readonly ["chrome" | "edge", StoreIdentity]> = [["chrome", identities.chrome]]
+  if (edgeDeclared(identities.edge)) gates.push(["edge", identities.edge])
+  for (const [label, identity] of gates) {
     if (!EXTENSION_ID.test(identity.storeId)) throw new Error(`${label}.storeId is not production-ready`)
     if (identity.approvalStatus !== "approved" || !identity.approvalDate) {
       throw new Error(`${label} store identity is not approved`)
     }
   }
   validateListingUrl(identities.chrome.listingUrl, "chromewebstore.google.com", identities.chrome.storeId, "chrome")
-  validateListingUrl(identities.edge.listingUrl, "microsoftedge.microsoft.com", identities.edge.storeId, "edge")
+  if (edgeDeclared(identities.edge)) {
+    validateListingUrl(identities.edge.listingUrl, "microsoftedge.microsoft.com", identities.edge.storeId, "edge")
+  }
+}
+
+export function edgeDeclared(edge: StoreIdentity): boolean {
+  return edge.storeId !== "" || edge.listingUrl !== "" || edge.approvalStatus !== "pending" || edge.approvalDate !== null
 }
 
 export function makeNativeHostManifest(identities: StoreIdentities, production = true): NativeHostManifest {
   validateStoreIdentities(identities, { production })
-  const ids = production
-    ? [identities.chrome.storeId, identities.edge.storeId]
-    : [identities.chrome.storeId, identities.edge.storeId].filter(id => EXTENSION_ID.test(id))
+  // Only well-formed IDs are emitted; in production the gate above has already
+  // required each emitted identity to be approved.
+  const ids = [identities.chrome.storeId, identities.edge.storeId].filter(id => EXTENSION_ID.test(id))
   const allowedOrigins = [...new Set(ids.map(id => `chrome-extension://${id}/`))].sort()
   if (allowedOrigins.length === 0) throw new Error("no valid extension identity is available")
   return {

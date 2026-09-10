@@ -450,7 +450,8 @@ Recording (Session Monitor):
     --with-bodies                        (P1) Merge cached response bodies
 
 Meta:
-  interceptor contexts                       List IDs of all connected browser contexts (use with --context)
+  interceptor contexts [--verbose]           List connected browser contexts (verbose: version, store/unpacked, id, transports)
+  interceptor contexts rename <name>         Name the targeted context (what the popup does); use --context <id> to pick it
   interceptor init                           First-run preflight: verify daemon, bridge, and extension are reachable
   interceptor init --verbose                 Same as 'init', plus a per-component reachability breakdown
   interceptor status                         Check daemon status (local — no connection needed)

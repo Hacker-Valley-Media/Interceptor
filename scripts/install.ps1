@@ -296,7 +296,9 @@ if ($SkipExtension) {
 } else {
   $targets = if ($Browser -eq 'both') { @('chrome', 'brave') } else { @($Browser) }
   Write-Host ""
-  Write-Host "==> [browser] Load the unpacked extension manually:"
+  Write-Host "==> [browser] Install the extension (both copies share one extension ID):"
+  Write-Host "    Chrome Web Store: https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed"
+  Write-Host "    or load the unpacked copy manually:"
   foreach ($target in $targets) {
     Write-Host ""
     Write-Host "    $(Get-ExtensionsUrl $target)"

@@ -3616,6 +3616,35 @@ async function handleFrameActions(action, tabId, sendFrame = sendToContentScript
 }
 
 // extension/src/background/capabilities/meta.ts
+async function requestStoreUpdate(waitMs = 8000) {
+  const runtime = chrome.runtime;
+  const requestUpdateCheck = runtime.requestUpdateCheck;
+  if (typeof requestUpdateCheck !== "function")
+    return { updateCheck: "unavailable" };
+  let result;
+  try {
+    result = await chromeCall((cb) => requestUpdateCheck.call(runtime, cb), (a, b) => typeof a === "string" ? { status: a, version: b?.version } : a);
+  } catch (err) {
+    return { updateCheck: `error: ${err.message || String(err)}` };
+  }
+  const onUpdateAvailable = runtime.onUpdateAvailable;
+  if (result.status !== "update_available" || !onUpdateAvailable) {
+    return { updateCheck: result.status, ...result.version ? { updateVersion: result.version } : {} };
+  }
+  const version = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      onUpdateAvailable.removeListener(cb);
+      resolve(result.version);
+    }, waitMs);
+    const cb = (d) => {
+      clearTimeout(timer);
+      onUpdateAvailable.removeListener(cb);
+      resolve(d.version);
+    };
+    onUpdateAvailable.addListener(cb);
+  });
+  return { updateCheck: "update_available", ...version ? { updateVersion: version } : {} };
+}
 async function handleMetaActions(action, tabId) {
   switch (action.type) {
     case "status": {
@@ -3633,9 +3662,25 @@ async function handleMetaActions(action, tabId) {
         }
       };
     }
-    case "reload_extension":
+    case "reload_extension": {
+      const installType = await detectInstallType();
+      if (installType && installType !== "development") {
+        const check = await requestStoreUpdate();
+        setTimeout(() => chrome.runtime.reload(), 100);
+        return { success: true, data: { installType, ...check, reloading: true } };
+      }
       setTimeout(() => chrome.runtime.reload(), 100);
       return { success: true, data: "reloading in 100ms" };
+    }
+    case "context_set": {
+      const name = typeof action.name === "string" ? action.name.trim() : "";
+      if (!name)
+        return { success: false, error: "context_set requires a nonempty name" };
+      setTimeout(() => {
+        chrome.storage.local.set({ contextId: name }).catch((err) => console.error("context_set failed:", err));
+      }, 100);
+      return { success: true, data: { contextId: name } };
+    }
     case "capabilities": {
       const daemonConnected = activeTransport !== "none";
       const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false;
@@ -4855,7 +4900,7 @@ var EVALUATE_ACTIONS = new Set(["evaluate"]);
 var BINARY_SINK_ACTIONS = new Set(["binary_sink_save"]);
 var STYLE_ACTIONS = new Set(["style_inject", "style_remove"]);
 var FRAME_ACTIONS = new Set(["frames_list", "frames_read_tree", "frames_find"]);
-var META_ACTIONS = new Set(["status", "reload_extension", "capabilities", "cdp_tree", "brand_set_tab_group"]);
+var META_ACTIONS = new Set(["status", "reload_extension", "capabilities", "cdp_tree", "brand_set_tab_group", "context_set"]);
 var PASSIVE_NET_ACTIONS = new Set([
   "net_log",
   "net_clear",
@@ -5009,6 +5054,7 @@ async function routeAction(action, tabId) {
 var NO_TAB_ACTIONS = new Set([
   "status",
   "reload_extension",
+  "context_set",
   "tab_create",
   "tab_list",
   "window_create",
@@ -5558,10 +5604,53 @@ function extensionVersion() {
     return;
   }
 }
-function sendWsRegistration(ws, contextId) {
-  markWsUnregistered();
+var cachedInstallType;
+function chromeCall(invoke, map) {
+  return new Promise((resolve, reject) => {
+    const ret = invoke((...args) => {
+      const err = chrome.runtime?.lastError?.message;
+      if (err)
+        reject(new Error(err));
+      else
+        resolve(map(...args));
+    });
+    if (ret && typeof ret.then === "function") {
+      ret.then((v) => resolve(map(v)), reject);
+    }
+  });
+}
+async function detectInstallType() {
+  if (cachedInstallType)
+    return cachedInstallType;
+  const management = chrome.management;
+  const getSelf = management?.getSelf;
+  if (typeof getSelf !== "function")
+    return;
   try {
-    ws.send(JSON.stringify({ type: "extension", contextId, version: extensionVersion() }));
+    const info = await chromeCall((cb) => getSelf.call(management, cb), (i) => i);
+    if (typeof info?.installType === "string")
+      cachedInstallType = info.installType;
+  } catch {}
+  return cachedInstallType;
+}
+async function extensionIdentity() {
+  let extensionId;
+  try {
+    extensionId = typeof chrome.runtime.id === "string" ? chrome.runtime.id : undefined;
+  } catch {}
+  return { version: extensionVersion(), extensionId, installType: await detectInstallType() };
+}
+var wsRegistrationSeq = 0;
+async function sendWsRegistration(ws, contextId) {
+  markWsUnregistered();
+  const seq = ++wsRegistrationSeq;
+  const identity = await extensionIdentity();
+  if (seq !== wsRegistrationSeq)
+    return true;
+  if (wsChannel !== ws || ws.readyState !== WebSocketImpl.OPEN)
+    return false;
+  try {
+    ws.send(JSON.stringify({ type: "extension", contextId, ...identity }));
     return true;
   } catch (err) {
     console.error("ws context registration send error:", err);
@@ -5687,7 +5776,10 @@ function connectToHost() {
         }
         isConnecting = false;
         console.log("native host connected (pong received)");
-        emitEvent("connection_established");
+        extensionIdentity().then((identity) => {
+          if (nativePort === port && activeTransport === "native")
+            emitEvent("connection_established", identity);
+        });
         drainMessageQueue();
       }
       if (keepalivePongTimer) {
@@ -5884,7 +5976,7 @@ function connectWsChannel() {
       }
       if (ws.readyState !== WebSocketImpl.OPEN)
         return;
-      if (!sendWsRegistration(ws, contextId)) {
+      if (!await sendWsRegistration(ws, contextId)) {
         closeWsForReconnect(ws);
         return;
       }
@@ -5959,9 +6051,10 @@ function registerStorageContextListener() {
     if (!newId || !wsChannel || wsChannel.readyState !== WebSocketImpl.OPEN)
       return;
     const channel = wsChannel;
-    if (!sendWsRegistration(channel, newId)) {
-      closeWsForReconnect(channel);
-    }
+    sendWsRegistration(channel, newId).then((ok) => {
+      if (!ok)
+        closeWsForReconnect(channel);
+    });
   });
 }
 

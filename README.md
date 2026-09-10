@@ -117,10 +117,12 @@ interceptor macos tree                         # macOS surface (Full pkg only, a
 | `interceptor-bridge.app` | `/Applications/interceptor-bridge.app` |
 | LaunchAgent (auto-start at login) | `/Library/LaunchAgents/com.interceptor.bridge.plist` |
 
-**Chrome/Brave extension load** is the one manual step the core installers cannot do for you, because those browsers do not allow programmatic extension installation outside of the Web Store. After install:
+**Chrome/Brave extension**: install it either way. Both copies share one extension ID and work the same. The installers stage the files and register the native messaging host, but never install into a browser profile without a click from you.
 
-- **Brave:** open `brave://extensions/`, enable Developer Mode, click **Load unpacked**, select `/Library/Application Support/Interceptor/extension/`.
-- **Chrome:** open `chrome://extensions/`, enable Developer Mode, click **Load unpacked**, select `/Library/Application Support/Interceptor/extension/`.
+- **Chrome Web Store** (default): https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed. One click; new versions arrive when they clear store review.
+- **Unpacked copy** (developer path, always the same version as the installed CLI): open `brave://extensions/` or `chrome://extensions/`, enable Developer Mode, click **Load unpacked**, select `/Library/Application Support/Interceptor/extension/`.
+
+Keep one copy per profile. Loading the unpacked folder over a store install takes over the same extension entry (Chrome prefers the unpacked location), and removing it later does not bring the store copy back; reinstall from the store if you want it again. `interceptor diagnose` names which copy is connected (store or unpacked), its version, and whether the native messaging port is up.
 
 **Safari extension load** uses its signed containing app:
 
@@ -343,7 +345,7 @@ bash scripts/uninstall.sh --bridge-only     # Remove only the macOS bridge (down
 |---|---|---|
 | `interceptor open <url>` returns `error: timeout: no response for 'tab_create' after 15s` | Browser extension is not loaded — most often because **Developer mode is off** in the target profile. Chromium silently drops `--load-extension` when Dev mode is off. | Open `brave://extensions/` or `chrome://extensions/`, toggle Developer mode ON. Quit the browser fully. Re-run `bash scripts/install.sh` (it will preflight Dev mode and re-launch). |
 | A timeout whose message says `A browser context is connected, so the extension is reachable` | The daemon still holds a live extension connection, so the request itself timed out — usually an oversized or slow response (for `net log`, too many full bodies in one reply). | Narrow the request: `net log --limit 20`, `--since <ts>` to page incrementally, or `--filter <host>`. The extension also budgets `net log` replies to 8 MiB of bodies; entries past the budget come back with `truncated: true` and an empty body. |
-| `interceptor status --verbose` says `extension: not reachable` | Same as above, or extension is registered but the Interceptor extension was disabled in the browser. | Open the extensions page, confirm Interceptor (ID `hkjbaciefhhgekldhncknbjkofbpenng`) is present and enabled. If missing, click **Load unpacked** and select `extension/dist/`. |
+| `interceptor status --verbose` says `extension: not reachable` | Same as above, or extension is registered but the Interceptor extension was disabled in the browser. | Open the extensions page, confirm Interceptor (ID `gomcpnagjjlhehnkoobkjgnkbleiooed`) is present and enabled. If missing, install it from the Chrome Web Store, or click **Load unpacked** and select `/Library/Application Support/Interceptor/extension/` (pkg install) or `extension/dist/` (source build). |
 | Chrome's extension error page shows `A preload for ... is found, but is not used because the request credentials mode does not match` attributed to `inject-net.js` | A page-level Chromium preload warning was attributed to Interceptor because the passive network shim calls through to the page's original `fetch()` there. The warning is not the same as an Interceptor connection failure. | Treat it as a site warning unless commands fail. If Interceptor commands fail, check the `extension: not reachable` row above. |
 | `chrome://extensions/` reports the extension as version `0.10.0` while `interceptor --version` reports a higher version | Extension manifest drift fixed in this release — rebuild from current source: `bash scripts/build.sh` then re-run `scripts/install.sh`. | Restart the browser after re-loading the extension so Chromium picks up the bumped manifest. |
 
@@ -666,7 +668,9 @@ interceptor raw '{"type":"any_action","key":"value"}'  # Send any raw action
 interceptor status                           # Daemon status (local check, no connection needed)
 interceptor help                             # Full CLI help
 interceptor contexts                         # List IDs of all connected browser contexts
-interceptor reload                           # Reload extension
+interceptor contexts --verbose               # Also kind, version, store/unpacked, extension ID, transports
+interceptor contexts rename <name>           # Restore a context name after an extension ID change
+interceptor reload                           # Unpacked copy: reload from disk; store copy: ask the store for an update first
 interceptor capabilities                     # Check available input layers
 ```
 

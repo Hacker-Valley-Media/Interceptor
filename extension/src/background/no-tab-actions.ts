@@ -1,5 +1,5 @@
 export const NO_TAB_ACTIONS = new Set([
-  "status", "reload_extension", "tab_create", "tab_list",
+  "status", "reload_extension", "context_set", "tab_create", "tab_list",
   "window_create", "window_close", "window_focus", "window_resize", "window_list", "window_get_all",
   "history_search", "history_delete_all", "bookmark_tree", "bookmark_search",
   "bookmark_create", "downloads_search", "browsing_data_remove",

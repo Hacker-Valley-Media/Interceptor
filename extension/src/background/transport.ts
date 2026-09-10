@@ -1,4 +1,5 @@
 import { handleDaemonMessage, drainMessageQueue, pendingRequests } from "./message-dispatch"
+import type { ExtensionInstallType } from "../../../shared/extension-identity"
 import { safeNativePortDisconnect, safeNativePortPing, safeNativePortPost, shouldSkipNativeKeepalive } from "./native-port-lifecycle"
 import { recoverPendingRequestsAfterNativeDisconnect } from "./pending-request-recovery"
 import { INITIAL_RECONNECT_DELAY_MS, delayWithJitter, nextReconnectDelay } from "./reconnect-lifecycle"
@@ -84,6 +85,7 @@ export function resetTransportForTesting(): void {
   configuredContextId = null
   forceWebSocketTransport = false
   safariNativeRelayEnabled = false
+  cachedInstallType = undefined
   WebSocketImpl = globalThis.WebSocket
 }
 
@@ -174,12 +176,71 @@ function extensionVersion(): string | undefined {
   try { return chrome.runtime.getManifest().version } catch { return undefined }
 }
 
-function sendWsRegistration(ws: WebSocket, contextId: string): boolean {
-  markWsUnregistered()
+let cachedInstallType: ExtensionInstallType | undefined
+
+/** Chrome honors the callback form of its APIs in every manifest version; the
+ *  promise form is MV3-only, so the MV2 (Electron) bundle would get undefined
+ *  back. Call with a callback and also accept a returned promise (MV3 doubles).
+ *  Rejects on chrome.runtime.lastError so callers keep their try/catch. */
+export function chromeCall<T>(
+  invoke: (cb: (...args: unknown[]) => void) => unknown,
+  map: (...args: unknown[]) => T,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const ret = invoke((...args) => {
+      const err = (chrome.runtime as { lastError?: { message?: string } } | undefined)?.lastError?.message
+      if (err) reject(new Error(err))
+      else resolve(map(...args))
+    })
+    if (ret && typeof (ret as Promise<unknown>).then === "function") {
+      ;(ret as Promise<unknown>).then((v) => resolve(map(v)), reject)
+    }
+  })
+}
+
+/** chrome.management.getSelf() needs no permission. Once the store install and
+ *  the unpacked copy share the store ID, installType is what tells them apart
+ *  (development = unpacked, normal = store), so the daemon and `diagnose` can
+ *  offer the fix that fits the copy. */
+export async function detectInstallType(): Promise<ExtensionInstallType | undefined> {
+  if (cachedInstallType) return cachedInstallType
+  const management = (chrome as unknown as {
+    management?: { getSelf?: (cb?: (info: { installType?: string }) => void) => unknown }
+  }).management
+  const getSelf = management?.getSelf
+  if (typeof getSelf !== "function") return undefined
   try {
-    // Issue #241: the daemon records which extension build is connected so
-    // `interceptor diagnose` can show a stale snapshot next to the CLI version.
-    ws.send(JSON.stringify({ type: "extension", contextId, version: extensionVersion() }))
+    const info = await chromeCall((cb) => getSelf.call(management, cb), (i) => i as { installType?: string } | undefined)
+    if (typeof info?.installType === "string") cachedInstallType = info.installType as ExtensionInstallType
+  } catch {}
+  return cachedInstallType
+}
+
+export type ExtensionIdentity = { version?: string; extensionId?: string; installType?: ExtensionInstallType }
+
+/** Identity both transports report so the daemon knows which copy connected. */
+export async function extensionIdentity(): Promise<ExtensionIdentity> {
+  let extensionId: string | undefined
+  try { extensionId = typeof chrome.runtime.id === "string" ? chrome.runtime.id : undefined } catch {}
+  return { version: extensionVersion(), extensionId, installType: await detectInstallType() }
+}
+
+let wsRegistrationSeq = 0
+
+async function sendWsRegistration(ws: WebSocket, contextId: string): Promise<boolean> {
+  markWsUnregistered()
+  const seq = ++wsRegistrationSeq
+  // Issue #241: the daemon records which extension build is connected so
+  // `interceptor diagnose` can show a stale snapshot next to the CLI version;
+  // extensionId + installType say which copy (store or unpacked) it is.
+  const identity = await extensionIdentity()
+  // A newer registration (a context rename during the identity lookup) owns
+  // the socket now; leave the send to it so the daemon never maps the socket
+  // back to a stale context id. The socket itself is still being registered.
+  if (seq !== wsRegistrationSeq) return true
+  if (wsChannel !== ws || ws.readyState !== WebSocketImpl.OPEN) return false
+  try {
+    ws.send(JSON.stringify({ type: "extension", contextId, ...identity }))
     return true
   } catch (err) {
     console.error("ws context registration send error:", err)
@@ -305,7 +366,12 @@ export function connectToHost(): void {
         }
         isConnecting = false
         console.log("native host connected (pong received)")
-        emitEvent("connection_established")
+        void extensionIdentity().then((identity) => {
+          // The identity lookup is async: report the connection only while this
+          // port still owns the native transport, so the event cannot fall back
+          // to the WebSocket after a disconnect and read as a native connection.
+          if (nativePort === port && activeTransport === "native") emitEvent("connection_established", identity)
+        })
         drainMessageQueue()
       }
       if (keepalivePongTimer) {
@@ -549,7 +615,7 @@ export function connectWsChannel(): void {
         return
       }
       if (ws.readyState !== WebSocketImpl.OPEN) return
-      if (!sendWsRegistration(ws, contextId)) {
+      if (!(await sendWsRegistration(ws, contextId))) {
         closeWsForReconnect(ws)
         return
       }
@@ -626,9 +692,9 @@ export function registerStorageContextListener(): void {
     if (typeof newId !== "string" || newId.length === 0) return
     if (!newId || !wsChannel || wsChannel.readyState !== WebSocketImpl.OPEN) return
     const channel = wsChannel
-    if (!sendWsRegistration(channel, newId)) {
-      closeWsForReconnect(channel)
-    }
+    void sendWsRegistration(channel, newId).then((ok) => {
+      if (!ok) closeWsForReconnect(channel)
+    })
   })
 }
 

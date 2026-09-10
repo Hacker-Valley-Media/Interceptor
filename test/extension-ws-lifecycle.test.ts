@@ -104,4 +104,58 @@ describe("extension websocket lifecycle", () => {
       JSON.stringify({ type: "extension", contextId: "safari" }),
     ])
   })
+
+  test("registration carries version, extension id, and install type when the host exposes them", async () => {
+    installFakeChrome()
+    const c = (globalThis as { chrome: Record<string, any> }).chrome
+    c.runtime.id = "gomcpnagjjlhehnkoobkjgnkbleiooed"
+    c.runtime.getManifest = () => ({ version: "0.25.0" })
+    c.management = { getSelf: async () => ({ installType: "normal" }) }
+
+    const { configureTransport, connectWsChannel } = await import("../extension/src/background/transport")
+    configureTransport({ contextId: "main", forceWebSocket: true, webSocketImpl: FakeWebSocket as unknown as typeof WebSocket })
+    connectWsChannel()
+    FakeWebSocket.instances[0].readyState = FakeWebSocket.OPEN
+    await FakeWebSocket.instances[0].onopen?.()
+
+    expect(FakeWebSocket.instances[0].sent).toHaveLength(1)
+    expect(JSON.parse(FakeWebSocket.instances[0].sent[0])).toEqual({
+      type: "extension",
+      contextId: "main",
+      version: "0.25.0",
+      extensionId: "gomcpnagjjlhehnkoobkjgnkbleiooed",
+      installType: "normal",
+    })
+  })
+
+  test("a registration overtaken during the identity lookup does not send its stale context", async () => {
+    installFakeChrome()
+    const c = (globalThis as { chrome: Record<string, any> }).chrome
+    c.runtime.id = "gomcpnagjjlhehnkoobkjgnkbleiooed"
+    c.runtime.getManifest = () => ({ version: "0.25.0" })
+    const resolvers: Array<(info: { installType: string }) => void> = []
+    c.management = { getSelf: () => new Promise((resolve) => { resolvers.push(resolve) }) }
+    let onStorageChanged: ((changes: Record<string, { newValue?: unknown }>, area: string) => void) | undefined
+    c.storage.onChanged = { addListener: (fn: typeof onStorageChanged) => { onStorageChanged = fn } }
+
+    const { configureTransport, connectWsChannel, registerStorageContextListener } = await import("../extension/src/background/transport")
+    configureTransport({ contextId: "main", forceWebSocket: true, webSocketImpl: FakeWebSocket as unknown as typeof WebSocket })
+    registerStorageContextListener()
+    connectWsChannel()
+    const ws = FakeWebSocket.instances[0]
+    ws.readyState = FakeWebSocket.OPEN
+    const first = ws.onopen?.()
+    while (resolvers.length < 1) await new Promise((r) => setTimeout(r, 0))
+
+    // Rename lands while the first registration still waits on getSelf().
+    onStorageChanged?.({ contextId: { newValue: "renamed" } }, "local")
+    while (resolvers.length < 2) await new Promise((r) => setTimeout(r, 0))
+    resolvers[1]({ installType: "development" })
+    await new Promise((r) => setTimeout(r, 0))
+    resolvers[0]({ installType: "development" })
+    await first
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ws.sent.map((m) => JSON.parse(m).contextId)).toEqual(["renamed"])
+  })
 })

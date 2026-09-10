@@ -168,7 +168,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   capabilities: META_BOOL, modals: META_BOOL, panels: META_BOOL,
   eval: EVAL_BOOL, save: SAVE_BOOL, brand: [], group: [], batch: BATCH_BOOL, raw: BATCH_BOOL,
   monitor: MONITOR_BOOL, scene: SCENE_BOOL, sse: [], override: [],
-  upgrade: ["--full"], init: ["--explain", "--verbose"], research: RESEARCH_BOOL, extensions: ["--remove"], contexts: [],
+  upgrade: ["--full"], init: ["--explain", "--verbose"], research: RESEARCH_BOOL, extensions: ["--remove"], contexts: ["--verbose"],
   skills: SKILLS_BOOL, daemon: [], manifest: [],
   keepawake: POWER_BOOL, idle: POWER_BOOL,
 }

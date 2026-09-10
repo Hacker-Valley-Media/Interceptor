@@ -1,8 +1,41 @@
-import { activeTransport } from "../transport"
+import { activeTransport, chromeCall, detectInstallType } from "../transport"
 import { debuggerAttached, cdpAttachActDetach } from "../cdp"
 import { resolveTabLifecycle } from "../tab-lifecycle"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+
+type UpdateCheck = { updateCheck: string; updateVersion?: string }
+
+/** chrome.runtime.requestUpdateCheck, then wait briefly for onUpdateAvailable
+ *  so the reload that follows installs the downloaded version. */
+export async function requestStoreUpdate(waitMs = 8_000): Promise<UpdateCheck> {
+  const runtime = chrome.runtime as unknown as {
+    requestUpdateCheck?: (cb?: (status: string, details?: { version?: string }) => void) => unknown
+    onUpdateAvailable?: { addListener: (cb: (d: { version: string }) => void) => void; removeListener: (cb: (d: { version: string }) => void) => void }
+  }
+  const requestUpdateCheck = runtime.requestUpdateCheck
+  if (typeof requestUpdateCheck !== "function") return { updateCheck: "unavailable" }
+  let result: { status: string; version?: string }
+  try {
+    // Callback form (MV2 + MV3); the promise form returns one object instead.
+    result = await chromeCall(
+      (cb) => requestUpdateCheck.call(runtime, cb),
+      (a, b) => (typeof a === "string" ? { status: a, version: (b as { version?: string } | undefined)?.version } : (a as { status: string; version?: string })),
+    )
+  } catch (err) {
+    return { updateCheck: `error: ${(err as Error).message || String(err)}` }
+  }
+  const onUpdateAvailable = runtime.onUpdateAvailable
+  if (result.status !== "update_available" || !onUpdateAvailable) {
+    return { updateCheck: result.status, ...(result.version ? { updateVersion: result.version } : {}) }
+  }
+  const version = await new Promise<string | undefined>((resolve) => {
+    const timer = setTimeout(() => { onUpdateAvailable.removeListener(cb); resolve(result.version) }, waitMs)
+    const cb = (d: { version: string }) => { clearTimeout(timer); onUpdateAvailable.removeListener(cb); resolve(d.version) }
+    onUpdateAvailable.addListener(cb)
+  })
+  return { updateCheck: "update_available", ...(version ? { updateVersion: version } : {}) }
+}
 
 export async function handleMetaActions(
   action: { type: string; [key: string]: unknown },
@@ -27,9 +60,33 @@ export async function handleMetaActions(
       }
     }
 
-    case "reload_extension":
+    case "reload_extension": {
+      // An unpacked copy picks up new code from disk on reload. A store copy
+      // only has what the Chrome Web Store published, so ask the store first
+      // and give a downloaded update a moment to become installable.
+      const installType = await detectInstallType()
+      if (installType && installType !== "development") {
+        const check = await requestStoreUpdate()
+        setTimeout(() => chrome.runtime.reload(), 100)
+        return { success: true, data: { installType, ...check, reloading: true } }
+      }
       setTimeout(() => chrome.runtime.reload(), 100)
       return { success: true, data: "reloading in 100ms" }
+    }
+
+    case "context_set": {
+      // Store the context name the popup would set, so a copy whose ID changed
+      // (and whose storage therefore started over) gets its name back from the
+      // CLI. The storage listener re-registers with the daemon on change.
+      const name = typeof action.name === "string" ? action.name.trim() : ""
+      if (!name) return { success: false, error: "context_set requires a nonempty name" }
+      // Write after replying: the storage listener re-registers this socket
+      // under the new name the moment the value lands, and a reply sent after
+      // that arrives under a context the daemon no longer expects it from
+      // (the CLI saw a 15 s timeout although the rename had worked).
+      setTimeout(() => { void chrome.storage.local.set({ contextId: name }).catch((err) => console.error("context_set failed:", err)) }, 100)
+      return { success: true, data: { contextId: name } }
+    }
 
     case "capabilities": {
       const daemonConnected = activeTransport !== "none"

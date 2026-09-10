@@ -40,7 +40,8 @@ import { runIosCommand } from "./commands/ios"
 import { runUpgradeCommand } from "./commands/upgrade"
 import { runInitCommand } from "./commands/init"
 import { runResearchCommand } from "./commands/research"
-import { runDiagnoseCommand } from "./commands/diagnose"
+import { runDiagnoseCommand, staleExtensionHint } from "./commands/diagnose"
+import { installTypeLabel } from "../shared/extension-identity"
 import { runExtensionsCommand } from "./commands/extensions"
 import { runDaemonCommand } from "./commands/daemon"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
@@ -369,11 +370,60 @@ async function main() {
 
   if (cmd === "contexts") {
     try {
-      const response = await sendCommand({ type: "contexts" }, undefined, undefined)
+      // `contexts rename <name>`: give the targeted extension copy a context
+      // name (what the popup does). Needed once after the store-key switch,
+      // which gave unpacked copies a new ID and therefore fresh storage.
+      if (filtered[1] === "rename") {
+        const name = filtered[2]
+        if (!name || name.startsWith("--")) {
+          console.error("error: usage: interceptor contexts rename <new-name> [--context <current-id>]")
+          process.exit(1)
+        }
+        const response = await sendCommand({ type: "context_set", name }, undefined, globalContextId)
+        if (!response.result.success) {
+          console.error(`error: ${response.result.error || "context rename failed"}`)
+          // An extension older than context_set (pre-0.25.0, including the
+          // store copy until the store carries this version) answers
+          // "unknown action type"; name the copy-specific fix as the generic
+          // action path does.
+          if (typeof response.result.error === "string" && response.result.error.startsWith("unknown action type:")) {
+            process.stderr.write(`${await staleExtensionHint(VERSION, globalContextId)}\n`)
+          }
+          process.exit(1)
+        }
+        console.log(jsonMode
+          ? JSON.stringify(response.result.data)
+          : `context renamed to '${name}'; it re-registers under that name within a second (verify: interceptor contexts)`)
+        return
+      }
+      const verbose = filtered.includes("--verbose")
+      const response = await sendCommand({ type: "contexts", ...(verbose ? { verbose: true } : {}) }, undefined, undefined)
       const result = response.result
       if (!result.success) {
         console.error(`error: ${result.error || "failed to list browser contexts"}`)
         process.exit(1)
+      }
+      if (verbose) {
+        // Plain ids stay the default contract; --verbose adds kind, version,
+        // which copy (store/unpacked), the extension id, and the transports.
+        type Entry = { contextId: string; kind?: string; version?: string; extensionId?: string; installType?: string; native?: boolean }
+        const list: Entry[] = (Array.isArray(result.data) ? result.data as Array<string | Entry> : [])
+          .map(e => typeof e === "string" ? { contextId: e, kind: "extension" } : e)
+        if (jsonMode) {
+          console.log(JSON.stringify(list))
+        } else if (list.length === 0) {
+          console.log("no browser contexts connected")
+        } else {
+          for (const c of list) {
+            const parts = [c.contextId, c.kind ?? "extension"]
+            if (c.version) parts.push(c.version)
+            if (c.installType) parts.push(installTypeLabel(c.installType))
+            if (c.extensionId) parts.push(c.extensionId)
+            if ((c.kind ?? "extension") === "extension" && (c.installType || c.extensionId)) parts.push(c.native ? "ws+native" : "ws")
+            console.log(parts.join("  "))
+          }
+        }
+        return
       }
       const ids = Array.isArray(result.data) ? result.data as string[] : []
       if (jsonMode) {
@@ -624,10 +674,7 @@ async function main() {
     // the stale-extension-snapshot symptom after a pkg install (the running
     // browser keeps the old service worker until reloaded). Label it.
     if (!result.success && typeof result.error === "string" && result.error.startsWith("unknown action type:")) {
-      process.stderr.write(
-        `hint: the browser may be running an older Interceptor extension snapshot than this CLI (${VERSION}). ` +
-        `Run 'interceptor reload' (or reload the extension in the browser) and retry.\n`,
-      )
+      process.stderr.write(`${await staleExtensionHint(VERSION, globalContextId)}\n`)
     }
     console.log(formatResult(result, jsonMode))
     // Issue #237: a failed action (`back` with no history, a rejected
