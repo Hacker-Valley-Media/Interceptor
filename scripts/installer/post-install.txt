@@ -1,14 +1,16 @@
 Interceptor (Browser-Only) is installed.
 
-1. Load the bundled Interceptor extension. Setup dropped an unpacked copy on
-   disk at:
+1. Install the Interceptor extension, either way (both share one extension ID):
 
+   Chrome Web Store (Chrome, Brave, Edge):
+       https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed
+
+   Or the unpacked copy Setup dropped on disk (developer path, same version
+   as this CLI):
        %LOCALAPPDATA%\Programs\Interceptor\extension
-
-   In Chrome, Brave, or Edge: open the extensions page (chrome://extensions,
-   brave://extensions, or edge://extensions), turn on Developer mode, click
-   "Load unpacked", and select that folder. (Once the store listing is public
-   you can install from the Chrome Web Store / Microsoft Edge Add-ons instead.)
+   Open the extensions page (chrome://extensions, brave://extensions, or
+   edge://extensions), turn on Developer mode, click "Load unpacked", and
+   select that folder.
 2. Open a new terminal so Windows loads the updated user PATH.
 3. Run:
 

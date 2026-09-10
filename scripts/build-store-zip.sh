@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Build the Chrome Web Store upload zip from extension/dist.
 #
-# The store generates its own signing key on first upload and assigns the item
-# ID from it, so the pinned development `key` is stripped here. After the first
-# upload, copy the store's public key back into extension/manifest.json and
-# extension/store-identities.json (see docs/chrome-web-store.md).
+# The store signs the package with its own key (the same key pinned in
+# extension/manifest.json since 0.25.0, so the ID stays
+# gomcpnagjjlhehnkoobkjgnkbleiooed) and rejects uploads that carry `key`, so it
+# is stripped here. Run by scripts/release.sh after the pkgs; upload steps are
+# in docs/chrome-web-store.md §7.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,15 +15,11 @@ VERSION=$(sed -nE 's/.*"version": *"([^"]+)".*/\1/p' extension/dist/manifest.jso
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp -R extension/dist/. "$STAGE/"
-python3 - "$STAGE/manifest.json" <<'EOF'
-import json, sys
-path = sys.argv[1]
-manifest = json.load(open(path))
-manifest.pop("key", None)
-with open(path, "w") as f:
-    json.dump(manifest, f, indent=2)
-    f.write("\n")
-EOF
+bun -e '
+const fs = require("fs"); const p = process.argv[1]
+const m = JSON.parse(fs.readFileSync(p, "utf8")); delete m.key
+fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n")
+' "$STAGE/manifest.json"
 
 mkdir -p dist
 OUT="$PWD/dist/Interceptor-Extension-$VERSION.zip"

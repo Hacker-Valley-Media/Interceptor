@@ -54,11 +54,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Store listings are not approved yet, so releases ship the development
-      # (pinned-key / Load-unpacked) identity — the only one that works today.
-      # Flip back to production mode once store-identities.json is approved.
+      # The Chrome Web Store identity is approved (store-identities.json), so the
+      # release lane validates and ships the production identity: the manifest
+      # key must derive the approved store ID, and only approved IDs are emitted.
       - name: Validate store identity consistency
-        run: bun scripts/installer/generate-native-host.ts --development --output native-host-development.json
+        run: bun scripts/installer/generate-native-host.ts --output native-host-production.json
 
       # Bun's own cross-target fetch renames across drives (workspace on D:,
       # cache on C:) and fails on these runners, so pre-seed the pinned target
@@ -80,8 +80,6 @@ jobs:
 
       - name: Build native Windows payloads
         shell: bash
-        env:
-          INTERCEPTOR_WINDOWS_IDENTITY_MODE: development
         run: |
           bash scripts/build.sh --target=windows-x64
           bash scripts/build.sh --target=windows-arm64

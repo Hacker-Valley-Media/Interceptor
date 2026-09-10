@@ -192,12 +192,23 @@ describe("CLI exit codes follow the action result (issue #237)", () => {
     expect(run.code).toBe(1)
   })
 
+  test("contexts rename against an extension without context_set gets the same hint", async () => {
+    const run = await cli("contexts", "rename", "renamed", "--context", CONTEXT)
+    expect(run.stdout + run.stderr).toContain("unknown action type: context_set")
+    expect(run.stderr).toContain("extension 0.0.0-fake is older than this CLI")
+    expect(run.stderr).toContain(`interceptor reload --context ${CONTEXT}`)
+    expect(run.code).toBe(1)
+  })
+
   test("the stale-snapshot hint path exits 1 too", async () => {
     // An action the fake does not know answers "unknown action type: …", the
     // symptom of a browser still running an older extension snapshot.
     const run = await cli("scroll", "down", "--context", CONTEXT)
     expect(run.stdout).toContain("error: unknown action type: scroll")
-    expect(run.stderr).toContain("older Interceptor extension snapshot")
+    // The fake registers 0.24.x-style (version, no installType), so the hint
+    // names the version and the copy-agnostic reload fix.
+    expect(run.stderr).toContain("extension 0.0.0-fake is older than this CLI")
+    expect(run.stderr).toContain(`interceptor reload --context ${CONTEXT}`)
     expect(run.code).toBe(1)
   })
 

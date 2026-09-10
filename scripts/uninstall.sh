@@ -111,8 +111,10 @@ if [[ -d "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/daemon/.generated" ]]; t
 fi
 
 echo "==> Removing extension metadata from old installs if present..."
-rm -f "$USER_HOME/Library/Application Support/Google/Chrome/External Extensions/hkjbaciefhhgekldhncknbjkofbpenng.json"
-rm -f "$USER_HOME/Library/Application Support/BraveSoftware/Brave-Browser/External Extensions/hkjbaciefhhgekldhncknbjkofbpenng.json"
+for ext_id in gomcpnagjjlhehnkoobkjgnkbleiooed hkjbaciefhhgekldhncknbjkofbpenng; do
+  rm -f "$USER_HOME/Library/Application Support/Google/Chrome/External Extensions/$ext_id.json"
+  rm -f "$USER_HOME/Library/Application Support/BraveSoftware/Brave-Browser/External Extensions/$ext_id.json"
+done
 
 echo "==> Removing bridge LaunchAgent (both system and per-user paths)..."
 TARGET_UID="$(id -u "${SUDO_USER:-$USER}" 2>/dev/null || echo "")"

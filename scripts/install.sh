@@ -670,8 +670,9 @@ load_extension() {
     esac
     echo ""
     echo "==> $BROWSER_NAME ignores --load-extension in branded desktop builds."
-    echo "    Use one of these paths instead:"
-    echo "      1. Developer flow: open ${SCHEMA}://extensions, enable Developer Mode,"
+    echo "    Install the extension one of these ways (both share one extension ID):"
+    echo "      1. Chrome Web Store: https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed"
+    echo "      2. Developer flow: open ${SCHEMA}://extensions, enable Developer Mode,"
     echo "         then Load unpacked -> $EXTENSION_DIR"
     echo ""
     echo "    Native messaging metadata has already been installed."
@@ -713,7 +714,7 @@ load_extension() {
 
   if [[ "$probed" == "1" ]]; then
     echo "==> Extension loaded into $BROWSER_NAME and reachable."
-    echo "    Extension ID: hkjbaciefhhgekldhncknbjkofbpenng"
+    echo "    Extension ID: gomcpnagjjlhehnkoobkjgnkbleiooed (same as the Chrome Web Store listing)"
     [[ -n "$PROFILE" ]] && echo "    Profile: $PROFILE"
   else
     echo "==> WARNING: $BROWSER_NAME launched, but the extension is NOT reachable after 8s."
@@ -729,7 +730,7 @@ load_extension() {
       vivaldi)                                                               echo "      1. Open vivaldi://extensions/" ;;
     esac
     echo "      2. Confirm Developer mode is ON (top-right toggle)."
-    echo "      3. Confirm 'Interceptor' appears with ID hkjbaciefhhgekldhncknbjkofbpenng."
+    echo "      3. Confirm 'Interceptor' appears with ID gomcpnagjjlhehnkoobkjgnkbleiooed."
     echo "      4. If the extension is missing, click 'Load unpacked' and select:"
     echo "         $EXTENSION_DIR"
     echo ""

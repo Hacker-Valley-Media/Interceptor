@@ -84,6 +84,7 @@ export function resetTransportForTesting(): void {
   configuredContextId = null
   forceWebSocketTransport = false
   safariNativeRelayEnabled = false
+  cachedInstallType = undefined
   WebSocketImpl = globalThis.WebSocket
 }
 
@@ -174,12 +175,44 @@ function extensionVersion(): string | undefined {
   try { return chrome.runtime.getManifest().version } catch { return undefined }
 }
 
-function sendWsRegistration(ws: WebSocket, contextId: string): boolean {
-  markWsUnregistered()
+type ExtensionInstallType = "development" | "normal" | "sideload" | "admin" | "other"
+let cachedInstallType: ExtensionInstallType | undefined
+
+/** chrome.management.getSelf() needs no permission. Once the store install and
+ *  the unpacked copy share the store ID, installType is what tells them apart
+ *  (development = unpacked, normal = store), so the daemon and `diagnose` can
+ *  offer the fix that fits the copy. */
+export async function detectInstallType(): Promise<ExtensionInstallType | undefined> {
+  if (cachedInstallType) return cachedInstallType
+  const management = (chrome as unknown as {
+    management?: { getSelf?: () => Promise<{ installType?: string }> }
+  }).management
+  if (typeof management?.getSelf !== "function") return undefined
   try {
-    // Issue #241: the daemon records which extension build is connected so
-    // `interceptor diagnose` can show a stale snapshot next to the CLI version.
-    ws.send(JSON.stringify({ type: "extension", contextId, version: extensionVersion() }))
+    const info = await management.getSelf()
+    if (typeof info?.installType === "string") cachedInstallType = info.installType as ExtensionInstallType
+  } catch {}
+  return cachedInstallType
+}
+
+export type ExtensionIdentity = { version?: string; extensionId?: string; installType?: ExtensionInstallType }
+
+/** Identity both transports report so the daemon knows which copy connected. */
+export async function extensionIdentity(): Promise<ExtensionIdentity> {
+  let extensionId: string | undefined
+  try { extensionId = typeof chrome.runtime.id === "string" ? chrome.runtime.id : undefined } catch {}
+  return { version: extensionVersion(), extensionId, installType: await detectInstallType() }
+}
+
+async function sendWsRegistration(ws: WebSocket, contextId: string): Promise<boolean> {
+  markWsUnregistered()
+  // Issue #241: the daemon records which extension build is connected so
+  // `interceptor diagnose` can show a stale snapshot next to the CLI version;
+  // extensionId + installType say which copy (store or unpacked) it is.
+  const identity = await extensionIdentity()
+  if (wsChannel !== ws || ws.readyState !== WebSocketImpl.OPEN) return false
+  try {
+    ws.send(JSON.stringify({ type: "extension", contextId, ...identity }))
     return true
   } catch (err) {
     console.error("ws context registration send error:", err)
@@ -305,7 +338,7 @@ export function connectToHost(): void {
         }
         isConnecting = false
         console.log("native host connected (pong received)")
-        emitEvent("connection_established")
+        void extensionIdentity().then((identity) => emitEvent("connection_established", identity))
         drainMessageQueue()
       }
       if (keepalivePongTimer) {
@@ -549,7 +582,7 @@ export function connectWsChannel(): void {
         return
       }
       if (ws.readyState !== WebSocketImpl.OPEN) return
-      if (!sendWsRegistration(ws, contextId)) {
+      if (!(await sendWsRegistration(ws, contextId))) {
         closeWsForReconnect(ws)
         return
       }
@@ -626,9 +659,9 @@ export function registerStorageContextListener(): void {
     if (typeof newId !== "string" || newId.length === 0) return
     if (!newId || !wsChannel || wsChannel.readyState !== WebSocketImpl.OPEN) return
     const channel = wsChannel
-    if (!sendWsRegistration(channel, newId)) {
-      closeWsForReconnect(channel)
-    }
+    void sendWsRegistration(channel, newId).then((ok) => {
+      if (!ok) closeWsForReconnect(channel)
+    })
   })
 }
 

@@ -43,6 +43,7 @@ This document describes the live architecture as of the current monitor, CSP-fal
 - The primary repo install path builds `dist/interceptor`, `daemon/interceptor-daemon`, and `extension/dist/`, then runs `scripts/install.sh --brave --profile <profile>`.
 - `scripts/install.sh` writes native messaging host manifests for Chrome and Brave, then launches Brave with `--load-extension=extension/dist`. If Brave is already running, the script prompts before quitting and relaunching it.
 - Google Chrome branded desktop builds ignore `--load-extension`; the Chrome CLI path installs native messaging metadata, but the unpacked extension must be loaded manually from `chrome://extensions`.
+- The extension has one identity for both install paths: `extension/manifest.json#key` carries the Chrome Web Store item public key, so an unpacked load of `extension/dist` (or of the installed extension folder) derives the same extension ID as the store install. `daemon/com.interceptor.host.json` lists that origin first in `allowed_origins`, so both copies get native messaging. Keep one copy per profile: both bind the same extension entry, and loading the unpacked folder over a store install takes the entry over.
 - Safari ships as the separate notarized `Interceptor-Safari-<version>.pkg` containing app. Opening the app once registers its appex; the user then enables Interceptor in Safari Settings through Safari's protected user-presence gate. Until that approval, Safari does not start the worker and no `safari` context exists. Its stable daemon context is `safari` after connection.
 - `interceptor macos trust` is a permission snapshot for native macOS automation. Browser runtime health should be checked through `interceptor status`, which confirms daemon, extension, and browser bridge state.
 
@@ -307,6 +308,8 @@ Two Safari-specific behaviors live above the transport. **Navigation acknowledgm
 #### Named contexts (multi-browser isolation)
 
 The daemon tracks all connected extensions in `extensionWsMap: Map<string, WebSocket>` rather than a single scalar. Chrome/Brave profiles generate a UUID and persist it in `chrome.storage.local`; Safari uses the fixed id `safari`, and its registration does not depend on storage being available. The id is announced in every WebSocket registration message `{ type: "extension", contextId: "<id>" }`; for Safari, the appex sends that registration over its relay-owned socket.
+
+The registration also carries `version`, `extensionId`, and `installType` (`chrome.management.getSelf`: `normal` for a store copy, `development` for an unpacked one). `daemon/context-registration.ts` keeps them per socket, and the native relay forwards Chrome caller origin (the `chrome-extension://<id>/` argument Chrome passes to the host) so `describeContexts` can mark which context owns the native-messaging relay. `contexts --verbose` and `diagnose` render these fields; an extension older than 0.25.0 registers with a version only and is shown as an unknown copy, and the version-mismatch hint picks the fix by copy (reload for unpacked, a store update for store).
 
 CLI commands carry an optional `contextId` field in the IPC message. `sendNativeMessage` resolves the target WebSocket by:
 1. Exact `contextId` match from the map (when `--context <id>` is passed)

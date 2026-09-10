@@ -1,14 +1,42 @@
+import { isExtensionInstallType, type ExtensionInstallType } from "../shared/extension-identity"
+
 export type ContextSocket = {
   send: (data: string) => void
   __contextId?: string
   __native?: boolean
   /** Manifest version the extension registered with (issue #241). */
   __version?: string
+  /** chrome.runtime.id; the store install and the unpacked copy share it since 0.25.0. */
+  __extensionId?: string
+  /** chrome.management.getSelf().installType: development = unpacked, normal = store. */
+  __installType?: ExtensionInstallType
 }
 
 export type ContextKind = "extension" | "runtime" | "cdp" | "ios"
 
-export type ContextDescription = { contextId: string; kind: ContextKind; version?: string }
+export type ContextDescription = {
+  contextId: string
+  kind: ContextKind
+  version?: string
+  extensionId?: string
+  installType?: ExtensionInstallType
+  /** True when the native-messaging relay Chrome spawned belongs to this extension ID. */
+  native?: boolean
+}
+
+/** Copy the identity fields of an `extension` registration onto its socket.
+ *  Every field is optional so a 0.24.x extension (version only) or an older one
+ *  (context id only) registers exactly as before. */
+export function recordExtensionIdentity(
+  sock: ContextSocket,
+  payload: { version?: unknown; extensionId?: unknown; installType?: unknown },
+): void {
+  sock.__version = typeof payload.version === "string" ? payload.version : undefined
+  sock.__extensionId = typeof payload.extensionId === "string" && /^[a-p]{32}$/.test(payload.extensionId)
+    ? payload.extensionId
+    : undefined
+  sock.__installType = isExtensionInstallType(payload.installType) ? payload.installType : undefined
+}
 
 /**
  * `contexts` returns plain ids by default — the CLI's `contexts` verb and every
@@ -22,14 +50,22 @@ export function describeContexts(
   ids: string[],
   lookup: (contextId: string) => ContextSocket | undefined,
   prefixes: { runtime: string; cdp: string; ios: string },
+  nativeExtensionId?: string,
 ): ContextDescription[] {
   return ids.map((contextId) => {
     const kind: ContextKind = contextId.startsWith(prefixes.runtime) ? "runtime"
       : contextId.startsWith(prefixes.cdp) ? "cdp"
       : contextId.startsWith(prefixes.ios) ? "ios"
       : "extension"
-    const version = lookup(contextId)?.__version
-    return version ? { contextId, kind, version } : { contextId, kind }
+    const sock = lookup(contextId)
+    const out: ContextDescription = { contextId, kind }
+    if (sock?.__version) out.version = sock.__version
+    if (kind === "extension") {
+      if (sock?.__extensionId) out.extensionId = sock.__extensionId
+      if (sock?.__installType) out.installType = sock.__installType
+      if (nativeExtensionId && sock?.__extensionId === nativeExtensionId) out.native = true
+    }
+    return out
   })
 }
 

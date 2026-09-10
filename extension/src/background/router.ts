@@ -81,7 +81,7 @@ const EVALUATE_ACTIONS = new Set(["evaluate"])
 const BINARY_SINK_ACTIONS = new Set(["binary_sink_save"])
 const STYLE_ACTIONS = new Set(["style_inject", "style_remove"])
 const FRAME_ACTIONS = new Set(["frames_list", "frames_read_tree", "frames_find"])
-const META_ACTIONS = new Set(["status", "reload_extension", "capabilities", "cdp_tree", "brand_set_tab_group"])
+const META_ACTIONS = new Set(["status", "reload_extension", "capabilities", "cdp_tree", "brand_set_tab_group", "context_set"])
 const PASSIVE_NET_ACTIONS = new Set([
   "net_log", "net_clear", "net_headers", "sse_log", "sse_streams", "sse_chunk",
   "set_net_overrides", "clear_net_overrides",

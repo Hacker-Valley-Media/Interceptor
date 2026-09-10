@@ -104,4 +104,27 @@ describe("extension websocket lifecycle", () => {
       JSON.stringify({ type: "extension", contextId: "safari" }),
     ])
   })
+
+  test("registration carries version, extension id, and install type when the host exposes them", async () => {
+    installFakeChrome()
+    const c = (globalThis as { chrome: Record<string, any> }).chrome
+    c.runtime.id = "gomcpnagjjlhehnkoobkjgnkbleiooed"
+    c.runtime.getManifest = () => ({ version: "0.25.0" })
+    c.management = { getSelf: async () => ({ installType: "normal" }) }
+
+    const { configureTransport, connectWsChannel } = await import("../extension/src/background/transport")
+    configureTransport({ contextId: "main", forceWebSocket: true, webSocketImpl: FakeWebSocket as unknown as typeof WebSocket })
+    connectWsChannel()
+    FakeWebSocket.instances[0].readyState = FakeWebSocket.OPEN
+    await FakeWebSocket.instances[0].onopen?.()
+
+    expect(FakeWebSocket.instances[0].sent).toHaveLength(1)
+    expect(JSON.parse(FakeWebSocket.instances[0].sent[0])).toEqual({
+      type: "extension",
+      contextId: "main",
+      version: "0.25.0",
+      extensionId: "gomcpnagjjlhehnkoobkjgnkbleiooed",
+      installType: "normal",
+    })
+  })
 })

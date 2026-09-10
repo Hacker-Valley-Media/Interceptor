@@ -263,6 +263,8 @@ interceptor raw '{"type":"any_action","key":"value"}'
 
 ```bash
 interceptor contexts                                # List IDs of all connected browser contexts
+interceptor contexts --verbose                      # Also kind, version, store/unpacked, extension ID, transports
+interceptor contexts rename <name> --context <id>   # Restore a context name after an extension ID change (the new ID starts empty)
 interceptor --context <id> read                     # Route command to a specific profile
 interceptor --context <id> open <url>
 interceptor --context <id> act e7 "value"
@@ -277,7 +279,7 @@ Primary use cases: multiple Chrome profiles logged in to different accounts, or 
 
 ```bash
 interceptor capabilities                            # Available input layers
-interceptor reload                                  # After extension changes during dev
+interceptor reload                                  # Unpacked copy: picks up the installed files; store copy: asks the Chrome Web Store for an update first
 ```
 
 ## Branding (white-label)

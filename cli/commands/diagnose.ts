@@ -29,6 +29,28 @@ import { LOCK_PATH } from "../../shared/platform"
 import { IOS_CONTEXT_PREFIX } from "../../shared/ios-device"
 import { CDP_CONTEXT_PREFIX } from "../../shared/cdp-app"
 import { VERSION } from "../version"
+import {
+  installTypeLabel,
+  isPreStoreVersion,
+  isStoreManaged,
+  LEGACY_DEVELOPMENT_EXTENSION_ID,
+  STORE_LISTING_URL,
+} from "../../shared/extension-identity"
+
+/** Where the installers leave the unpacked copy (the developer path). */
+export const UNPACKED_EXTENSION_DIR = process.platform === "win32"
+  ? "%LOCALAPPDATA%\\Programs\\Interceptor\\extension"
+  : "/Library/Application Support/Interceptor/extension"
+
+/** What the daemon knows about the extension behind a context. */
+export type ContextIdentity = {
+  version?: string
+  extensionId?: string
+  /** chrome.management installType: development = unpacked, normal = store. */
+  installType?: string
+  /** The native-messaging relay Chrome spawned belongs to this extension ID. */
+  native?: boolean
+}
 
 type BinaryMismatch = {
   browser: string
@@ -39,7 +61,7 @@ type BinaryMismatch = {
 type ContextProbe = {
   contextId: string
   kind: "extension" | "ios" | "cdp"
-  extension: { reachable: boolean; reason?: string; version?: string }
+  extension: { reachable: boolean; reason?: string } & ContextIdentity
   tab: { id: number; url: string; title: string } | null
   elements: number | null
 }
@@ -56,9 +78,65 @@ export function extensionVersionMismatchLine(
   contextId: string,
   extensionVersion: string | undefined,
   cliVersion: string,
+  installType?: string,
 ): string | null {
   if (!extensionVersion || extensionVersion === cliVersion) return null
-  return `⚠ extension snapshot ${extensionVersion} ≠ CLI ${cliVersion} — the browser is still running the old extension; run 'interceptor reload --context ${contextId}' and retry.`
+  if (isStoreManaged(installType)) {
+    // A store copy has only what the Chrome Web Store published; reload asks the
+    // store for an update (chrome.runtime.requestUpdateCheck) and cannot go past it.
+    return `⚠ extension snapshot ${extensionVersion} ≠ CLI ${cliVersion} — this is the Chrome Web Store copy, so a reload alone cannot change its code; run 'interceptor reload --context ${contextId}' to ask the store for an update (Chrome installs it once the extension is idle), or click Update on chrome://extensions with Developer mode on. If the store has not published ${cliVersion} yet, load the unpacked copy from ${UNPACKED_EXTENSION_DIR} instead.`
+  }
+  const base = `⚠ extension snapshot ${extensionVersion} ≠ CLI ${cliVersion} — the browser is still running the old extension; run 'interceptor reload --context ${contextId}' and retry.`
+  // A copy older than 0.25.0 cannot say which copy it is (that field is new).
+  // If it is the unpacked one, the reload loads the store-keyed files: a new
+  // extension ID to Chrome, so its storage (context name, tab-group label,
+  // lifecycle) starts empty. Say so before the user loses the name.
+  if (!installType && isPreStoreVersion(extensionVersion)) {
+    return `${base} This copy predates the store identity: an unpacked copy comes back from the reload under the store extension ID with empty settings, so restore its name afterwards with 'interceptor contexts rename ${contextId} --context <new id>'; a Chrome Web Store copy updates when the store publishes ${cliVersion}.`
+  }
+  return base
+}
+
+/** The pre-store development ID still connects (its origin stays allowed through
+ *  0.25.x) but it is a second copy next to the store-ID one; name it. */
+export function legacyDevelopmentCopyLine(contextId: string, extensionId: string | undefined): string | null {
+  if (extensionId !== LEGACY_DEVELOPMENT_EXTENSION_ID) return null
+  return `⚠ context ${contextId} is the pre-store development copy (id ${extensionId}); it keeps working through 0.25.x. Remove it on chrome://extensions, then load ${UNPACKED_EXTENSION_DIR} again or install ${STORE_LISTING_URL}, and restore its name with 'interceptor contexts rename ${contextId} --context <new id>'.`
+}
+
+/** Text for the CLI's "unknown action type" failure: the connected extension
+ *  predates a verb this CLI sends. Copy-specific when the daemon knows the copy. */
+export function staleExtensionHintLine(cliVersion: string, ctx?: ContextIdentity & { contextId?: string }): string {
+  if (!ctx?.version && !ctx?.installType) {
+    return `hint: the browser is running an Interceptor extension older than this CLI (${cliVersion}). Unpacked copy: run 'interceptor reload' (or reload it on chrome://extensions). Chrome Web Store copy: 'interceptor reload' asks the store for an update, which only helps once the store carries ${cliVersion}; until then load the unpacked copy from ${UNPACKED_EXTENSION_DIR}. 'interceptor diagnose' names the connected copy and its version.`
+  }
+  const label = installTypeLabel(ctx.installType)
+  const version = ctx.version ?? "of unknown version"
+  const target = ctx.contextId ? ` --context ${ctx.contextId}` : ""
+  if (isStoreManaged(ctx.installType)) {
+    return `hint: the ${label} extension ${version} is older than this CLI (${cliVersion}); a Chrome Web Store copy only changes when the store publishes a new version. Run 'interceptor reload${target}' to ask the store for an update, or load the unpacked copy from ${UNPACKED_EXTENSION_DIR}.`
+  }
+  return `hint: the ${label} extension ${version} is older than this CLI (${cliVersion}); run 'interceptor reload${target}' (or reload it on chrome://extensions) and retry.`
+}
+
+type ContextListEntry = { contextId: string } & ContextIdentity
+
+async function listContextIdentities(): Promise<ContextListEntry[]> {
+  // verbose: true → [{contextId, kind, version, …}] on a current daemon; an
+  // older daemon ignores the flag and returns plain ids — accept both.
+  const resp = await probeWithTimeout(() => sendCommand({ type: "contexts", verbose: true }))
+  const raw = resp?.result.success && Array.isArray(resp.result.data)
+    ? (resp.result.data as Array<string | ContextListEntry>)
+    : []
+  return raw.map(entry => typeof entry === "string" ? { contextId: entry } : entry)
+}
+
+/** Resolve the connected copy for the stale-extension hint; falls back to the
+ *  generic text when the context cannot be determined. */
+export async function staleExtensionHint(cliVersion: string, contextId?: string): Promise<string> {
+  const exts = (await listContextIdentities()).filter(c => contextKind(c.contextId) === "extension")
+  const ctx = contextId ? exts.find(c => c.contextId === contextId) : (exts.length === 1 ? exts[0] : undefined)
+  return staleExtensionHintLine(cliVersion, ctx)
 }
 
 // `contexts` returns extension ids plus ios:/cdp: manager contexts. Browser
@@ -118,7 +196,7 @@ export function detectBinaryMismatches(lock: LockFileData | null): BinaryMismatc
   return mismatches
 }
 
-export async function probeContext(contextId: string | undefined, version?: string): Promise<ContextProbe> {
+export async function probeContext(contextId: string | undefined, identity?: ContextIdentity): Promise<ContextProbe> {
   const label = contextId ?? "default"
   const kind = contextKind(contextId)
 
@@ -164,7 +242,10 @@ export async function probeContext(contextId: string | undefined, version?: stri
     elements = (treeResp.result.data.match(/\be\d+\b/g) ?? []).length
   }
 
-  if (version) extension.version = version
+  if (identity?.version) extension.version = identity.version
+  if (identity?.extensionId) extension.extensionId = identity.extensionId
+  if (identity?.installType) extension.installType = identity.installType
+  if (identity?.native) extension.native = true
   return { contextId: label, kind, extension, tab, elements }
 }
 
@@ -184,21 +265,18 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
   }
 
   if (status.daemon) {
-    // verbose: true → [{contextId, kind, version}] on a current daemon; an
-    // older daemon ignores the flag and returns plain ids — accept both.
-    const contextsResp = await probeWithTimeout(() => sendCommand({ type: "contexts", verbose: true }))
-    const raw = contextsResp?.result.success && Array.isArray(contextsResp.result.data)
-      ? (contextsResp.result.data as Array<string | { contextId: string; version?: string }>)
-      : []
-    const contexts = raw.map(entry => typeof entry === "string" ? { contextId: entry } : entry)
-    const versionOf = (id: string | undefined) => contexts.find(c => c.contextId === id)?.version
+    const contexts = await listContextIdentities()
+    const identityOf = (id: string | undefined): ContextIdentity | undefined => {
+      const c = contexts.find(entry => entry.contextId === id)
+      return c ? { version: c.version, extensionId: c.extensionId, installType: c.installType, native: c.native } : undefined
+    }
 
     if (contextId) {
-      snap.contexts = [await probeContext(contextId, versionOf(contextId))]
+      snap.contexts = [await probeContext(contextId, identityOf(contextId))]
     } else {
       snap.contexts = await Promise.all(
         contexts.length > 0
-          ? contexts.map(c => probeContext(c.contextId, c.version))
+          ? contexts.map(c => probeContext(c.contextId, identityOf(c.contextId)))
           : [probeContext(undefined)]
       )
     }
@@ -253,15 +331,23 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
         continue
       }
 
+      const ext = ctx.extension
+      // "(extension 0.24.2)" for a copy that did not say what it is; otherwise
+      // "(store extension 0.25.0 via ws + native)" so the copy and its
+      // transports are visible at a glance.
+      const copy = ext.installType ? `${installTypeLabel(ext.installType)} extension` : "extension"
+      const transport = ext.installType || ext.extensionId ? (ext.native ? " via ws + native" : " via ws") : ""
       lines.push(
         `${indent}extension: ${
-          ctx.extension.reachable
+          ext.reachable
             ? "connected"
-            : `disconnected${ctx.extension.reason ? `  (${ctx.extension.reason})` : ""}`
-        }${ctx.extension.version ? `  (extension ${ctx.extension.version})` : ""}`
+            : `disconnected${ext.reason ? `  (${ext.reason})` : ""}`
+        }${ext.version ? `  (${copy} ${ext.version}${transport})` : ""}`
       )
-      const mismatch = extensionVersionMismatchLine(ctx.contextId, ctx.extension.version, VERSION)
+      const mismatch = extensionVersionMismatchLine(ctx.contextId, ext.version, VERSION, ext.installType)
       if (mismatch) lines.push(`${indent}${mismatch}`)
+      const legacy = legacyDevelopmentCopyLine(ctx.contextId, ext.extensionId)
+      if (legacy) lines.push(`${indent}${legacy}`)
 
       if (ctx.tab) {
         const { id, url, title } = ctx.tab
