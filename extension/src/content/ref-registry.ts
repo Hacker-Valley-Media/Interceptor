@@ -1,5 +1,3 @@
-import { findBestMatch } from "./semantic-match"
-
 // content.js can evaluate more than once in the same isolated-world context:
 // the background script may inject it via `chrome.scripting.executeScript` on
 // a freshly-created tab to beat `document_idle`, and then the manifest's
@@ -22,10 +20,6 @@ export const refMetadata: Map<string, { role: string; name: string; tag: string;
   g.__interceptor_refMetadata ?? (g.__interceptor_refMetadata = new Map<string, { role: string; name: string; tag: string; value: string }>())
 const refIdCounter: { value: number } =
   g.__interceptor_nextRefId ?? (g.__interceptor_nextRefId = { value: 1 })
-let staleWarning: string | null = null
-
-export function getStaleWarning(): string | null { return staleWarning }
-export function clearStaleWarning() { staleWarning = null }
 
 export function getOrAssignRef(el: Element): string {
   const existing = elementToRef.get(el)
@@ -53,26 +47,21 @@ export function getOrAssignRef(el: Element): string {
   return refId
 }
 
+// A ref resolves to the element it was issued for, or to nothing. It used to
+// fall back to a name+role search over the registry (score >= 70) and act on
+// the best match: with two "Delete" buttons, removing row A made `e1` click
+// row B (browser-ref probe, reliability review 2026-09-10). Search stays the
+// contract of `find` / `find_and_click`; identity stays the contract of a ref.
 export function resolveRef(refId: string): Element | null {
   const ref = refRegistry.get(refId)
-  if (ref) {
-    const el = ref.deref()
-    // Visibility intentionally not in this gate. A transient layout hiccup
-    // (a sibling toggling display, a transition briefly removing offsetParent)
-    // would otherwise invalidate refs the consumer just received. Action
-    // handlers re-check visibility themselves and surface a clearer error
-    // when the element exists but cannot be acted on.
-    if (el && el.isConnected) return el
-  }
-  const meta = refMetadata.get(refId)
-  if (meta) {
-    const match = findBestMatch(meta.name, meta.role)
-    if (match && match.score >= 70) {
-      staleWarning = `stale ref ${refId} re-resolved to ${match.refId} (${match.role} '${match.name}', score: ${match.score})`
-      return match.element
-    }
-  }
-  return null
+  if (!ref) return null
+  const el = ref.deref()
+  // Visibility intentionally not in this gate. A transient layout hiccup
+  // (a sibling toggling display, a transition briefly removing offsetParent)
+  // would otherwise invalidate refs the consumer just received. Action
+  // handlers re-check visibility themselves and surface a clearer error
+  // when the element exists but cannot be acted on.
+  return el && el.isConnected ? el : null
 }
 
 export function pruneStaleRefs() {

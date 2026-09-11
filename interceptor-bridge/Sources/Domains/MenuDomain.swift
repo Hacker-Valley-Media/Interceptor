@@ -28,7 +28,7 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
     private func targetPid(_ action: [String: Any]) -> pid_t {
         if let pid = action["pid"] as? Int32 { return pid }
         if let appName = action["app"] as? String,
-           let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }) {
+           let app = RunningApps.resolve(appName) {
             return app.processIdentifier
         }
         return FrontmostResolver.resolvePID(transport: transport)?.pid ?? 0

@@ -21,7 +21,7 @@
  */
 
 import { readFileSync } from "node:fs"
-import { readStatusSnapshot, installedNmhManifests } from "../lib/status-renderer"
+import { readStatusSnapshot, installedNmhManifests, describeEvalMain, formatEvalMainLine, type EvalMainState } from "../lib/status-renderer"
 import { sendCommand } from "../transport"
 import { listSessions } from "./monitor"
 import { readLockFile, type LockFileData } from "../../daemon/lifecycle"
@@ -61,7 +61,7 @@ type BinaryMismatch = {
 type ContextProbe = {
   contextId: string
   kind: "extension" | "ios" | "cdp"
-  extension: { reachable: boolean; reason?: string } & ContextIdentity
+  extension: { reachable: boolean; reason?: string; evalMain?: EvalMainState } & ContextIdentity
   tab: { id: number; url: string; title: string } | null
   elements: number | null
 }
@@ -212,11 +212,15 @@ export async function probeContext(contextId: string | undefined, identity?: Con
     }
   }
 
-  const [tabResp, treeResp] = await Promise.all([
+  const [tabResp, treeResp, capsResp] = await Promise.all([
     probeWithTimeout(() => sendCommand({ type: "tab_list" }, undefined, contextId)),
     probeWithTimeout(() =>
       sendCommand({ type: "get_a11y_tree", filter: "interactive", depth: 3, maxChars: 100_000 }, undefined, contextId)
     ),
+    // Page-world eval availability (chrome.userScripts + the Chrome 138+
+    // "Allow User Scripts" toggle). The extension already knew; diagnose
+    // never showed it, so agents hit CSP/"unavailable" errors blind.
+    probeWithTimeout(() => sendCommand({ type: "capabilities" }, undefined, contextId)),
   ])
 
   let extension: ContextProbe["extension"] = { reachable: false }
@@ -246,6 +250,7 @@ export async function probeContext(contextId: string | undefined, identity?: Con
   if (identity?.extensionId) extension.extensionId = identity.extensionId
   if (identity?.installType) extension.installType = identity.installType
   if (identity?.native) extension.native = true
+  if (capsResp?.result.success) extension.evalMain = describeEvalMain(capsResp.result.data, identity?.extensionId)
   return { contextId: label, kind, extension, tab, elements }
 }
 
@@ -346,6 +351,7 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
       )
       const mismatch = extensionVersionMismatchLine(ctx.contextId, ext.version, VERSION, ext.installType)
       if (mismatch) lines.push(`${indent}${mismatch}`)
+      if (ext.reachable) lines.push(`${indent}${formatEvalMainLine(ext.evalMain)}`)
       const legacy = legacyDevelopmentCopyLine(ctx.contextId, ext.extensionId)
       if (legacy) lines.push(`${indent}${legacy}`)
 

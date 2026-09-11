@@ -184,6 +184,12 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
         }
         let scope = (action["scope"] as? String) ?? "everywhere"
         let limit = (action["limit"] as? Int) ?? 20
+        // Deadline for the Spotlight passes. `mdfind` has no timeout flag and
+        // the gather phase blocks (Apple: kMDQuerySynchronous); an unbounded
+        // content search over a 1.4M-file volume ran past the CLI's 15 s
+        // transport timeout and was reported as a TCC problem (2026-09-10).
+        let timeoutMs = max(200, (action["timeoutMs"] as? Int) ?? 10_000)
+        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
         let sessionCwd = action["cwd"] as? String
         let homePath = FileManager.default.homeDirectoryForCurrentUser.path
         let requestedKinds = normalizedKinds(action["kinds"] as? [String])
@@ -292,17 +298,24 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
             scopePaths: bfsRoots,                 // [] for "everywhere" → no -onlyin
             nameOnly: scope == "everywhere",      // content across the whole machine is unbounded
             limit: limit,
-            requestedKinds: requestedKinds
+            requestedKinds: requestedKinds,
+            deadline: deadline
         )
-        if !spotlight.isEmpty {
-            completion(WireFormat.success([
-                "matches": spotlight,
+        if !spotlight.matches.isEmpty || spotlight.partial {
+            var payload: [String: Any] = [
+                "matches": spotlight.matches,
                 "indexed": true,
                 "source": "spotlight",
                 "scope": scopeLabel,
                 "query": query,
-                "count": spotlight.count
-            ]))
+                "count": spotlight.matches.count,
+                "partial": spotlight.partial,
+                "deadlineMs": timeoutMs
+            ]
+            if spotlight.partial {
+                payload["hint"] = "the \(timeoutMs) ms deadline cut the Spotlight \(spotlight.cutPass ?? "content") pass; results are what arrived in time. Narrow --scope, add --kinds, or raise --timeout-ms."
+            }
+            completion(WireFormat.success(payload))
             return
         }
 
@@ -333,35 +346,50 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
     /// scope root (mdfind takes a single `-onlyin`), or one global run when
     /// unscoped. Results are enriched with kind/size/modified in-process via
     /// URLResourceValues — no per-result subprocess.
+    struct SpotlightResult {
+        var matches: [[String: Any]]
+        var partial: Bool
+        var cutPass: String?
+    }
+
     private func spotlightSearchViaMdfind(
         query: String,
         scopePaths: [String],
         nameOnly: Bool,
         limit: Int,
-        requestedKinds: Set<String>
-    ) -> [[String: Any]] {
+        requestedKinds: Set<String>,
+        deadline: Date
+    ) -> SpotlightResult {
         let esc = query
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let pat = "*\(esc)*"
-        let expr: String
-        if nameOnly {
-            expr = "(kMDItemFSName = \"\(pat)\"cd) || (kMDItemDisplayName = \"\(pat)\"cd)"
-        } else {
-            expr = "(kMDItemFSName = \"\(pat)\"cd) || (kMDItemDisplayName = \"\(pat)\"cd) || (kMDItemTextContent = \"\(pat)\"cd)"
-        }
+        let nameExpr = "(kMDItemFSName = \"\(pat)\"cd) || (kMDItemDisplayName = \"\(pat)\"cd)"
+        let contentExpr = "(kMDItemTextContent = \"\(pat)\"cd)"
 
         // Gather candidate paths (dedupe; a few extra to survive kinds-filtering).
+        // The name pass runs first: it answers in well under a second on an
+        // indexed volume, so name hits are never held hostage by the content
+        // pass, which is the one the deadline usually cuts.
         let gatherCap = max(limit * 4, limit)
         var seen = Set<String>()
         var paths: [String] = []
+        var partial = false
+        var cutPass: String? = nil
         let runs: [String?] = scopePaths.isEmpty ? [nil] : scopePaths
-        outer: for sp in runs {
-            for p in runMdfind(onlyIn: sp, queryExpr: expr, maxResults: gatherCap) {
-                if seen.insert(p).inserted {
-                    paths.append(p)
-                    if paths.count >= gatherCap { break outer }
+        let passes: [(String, String)] = nameOnly ? [("name", nameExpr)] : [("name", nameExpr), ("content", contentExpr)]
+        outer: for (passName, expr) in passes {
+            for sp in runs {
+                if Date() >= deadline { partial = true; cutPass = passName; break outer }
+                let run = runMdfind(onlyIn: sp, queryExpr: expr, maxResults: gatherCap, deadline: deadline)
+                if run.timedOut { partial = true; cutPass = passName }
+                for p in run.lines {
+                    if seen.insert(p).inserted {
+                        paths.append(p)
+                        if paths.count >= gatherCap { break outer }
+                    }
                 }
+                if run.timedOut { break outer }
             }
         }
 
@@ -381,7 +409,7 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
             }
             matches.append(entry)
         }
-        return matches
+        return SpotlightResult(matches: matches, partial: partial, cutPass: cutPass)
     }
 
     /// Run `/usr/bin/mdfind` synchronously and return result paths (one absolute
@@ -391,7 +419,10 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
     /// a huge set (e.g. 11k files for "media kit") still returns the first page
     /// near-instantly instead of paying to enumerate every match. Returns `[]`
     /// if mdfind cannot be launched.
-    private func runMdfind(onlyIn: String?, queryExpr: String, maxResults: Int) -> [String] {
+    /// `deadline`: mdfind is terminated when it passes, and `timedOut` is set so
+    /// the caller can report a partial result instead of letting the CLI's
+    /// transport timeout fire with an unrelated hint.
+    private func runMdfind(onlyIn: String?, queryExpr: String, maxResults: Int, deadline: Date) -> (lines: [String], timedOut: Bool) {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
         var args: [String] = []
@@ -404,8 +435,20 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
         do {
             try proc.run()
         } catch {
-            return []
+            return ([], false)
         }
+        // Deadline watchdog: terminate() closes mdfind's stdout, which ends the
+        // blocking availableData loop below with EOF.
+        let timedOutBox = TimedOutBox()
+        let remaining = max(0.01, deadline.timeIntervalSinceNow)
+        let watchdog = DispatchWorkItem { [proc] in
+            if proc.isRunning {
+                timedOutBox.set()
+                proc.terminate()
+            }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + remaining, execute: watchdog)
+        defer { watchdog.cancel() }
         let handle = out.fileHandleForReading
         let cap = max(maxResults, 1)
         var buffer = Data()
@@ -426,7 +469,15 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
         // Stop mdfind once we have enough — don't enumerate the whole match set.
         proc.terminate()
         proc.waitUntilExit()
-        return lines
+        return (lines, timedOutBox.isSet)
+    }
+
+    /// Lock-guarded flag shared between the read loop and the watchdog.
+    private final class TimedOutBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var flag = false
+        func set() { lock.lock(); flag = true; lock.unlock() }
+        var isSet: Bool { lock.lock(); defer { lock.unlock() }; return flag }
     }
 
     /// Breadth-first fallback that visits the workspace root's top-level

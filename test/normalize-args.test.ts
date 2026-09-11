@@ -104,4 +104,13 @@ describe("normalizeArgs", () => {
     expect(normalizeArgs(["click", "--nth", "4", "--selector", "button span"]))
       .toEqual(["click", "--nth", "4", "--selector", "button span"])
   })
+  test("--selector is a click flag: dblclick rejects it with a query hint instead of taking it as the target", () => {
+    // Agent session log, 2026-09-09: `dblclick --selector '[data-test-id=…]'`
+    // parsed the literal `--selector` as the element and failed as stale.
+    expect(() => normalizeArgs(["dblclick", "--selector", "[data-test-id=canvas-node]"]))
+      .toThrow(/unknown flag '--selector' for 'dblclick'.*query "<css>"/)
+    expect(normalizeArgs(["click", "--selector", "button span", "--nth", "1"]))
+      .toEqual(["click", "--selector", "button span", "--nth", "1"])
+  })
+
 })

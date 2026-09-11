@@ -9,6 +9,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { IS_WIN, SOCKET_PATH, PID_PATH, transportLabel } from "../../shared/platform"
+import { bridgePidPathForDetection, bridgeSocketPathForDetection } from "../../shared/bridge-paths"
 import { skillsStatusSummary } from "../commands/skills"
 
 export type StatusSnapshot = {
@@ -40,6 +41,11 @@ export type StatusSnapshot = {
     reachable: boolean
     reason?: string
   }
+  // Per-context view (verbose + daemon alive). `status --verbose` used to probe
+  // one context and fail with "multiple extensions connected" when several
+  // were (144 results, 2026-09-10 review); it now reports each one, with
+  // whether page-world eval (`eval --main`, chrome.userScripts) is available.
+  contexts?: ContextStatus[]
   // tab-lifecycle policy as the extension resolved it — populated only
   // when verbose + extension reachable
   tabLifecycle?: {
@@ -52,6 +58,49 @@ export type StatusSnapshot = {
     packDir: string | null
     targets: Array<{ id: string; linked: number; total: number }>
   }
+}
+
+export type EvalMainState = { available: boolean; hint?: string }
+
+export type ContextStatus = {
+  contextId: string
+  kind: string
+  version?: string
+  installType?: string
+  extensionId?: string
+  reachable: boolean
+  reason?: string
+  evalMain?: EvalMainState
+}
+
+/**
+ * Turn the extension's `capabilities` answer into one line agents can act on.
+ * Chrome 138+ gates chrome.userScripts behind the per-extension "Allow User
+ * Scripts" toggle (older Chrome: Developer mode); when it is off,
+ * `chrome.userScripts` is undefined and every `eval --main` fails with a CSP
+ * or "unavailable" error that never named the toggle (273 + 6 results,
+ * 2026-09-10 review; Chrome userScripts reference, "Allow User Scripts").
+ */
+export function describeEvalMain(
+  caps: unknown,
+  extensionId?: string,
+): EvalMainState {
+  const us = (caps as { userScripts?: { manifest_permission?: boolean; api_present?: boolean; enabled?: boolean; error?: string } } | undefined)?.userScripts
+  if (!us) return { available: false, hint: "the extension did not report userScripts state (older extension copy); run 'interceptor capabilities'" }
+  if (us.enabled) return { available: true }
+  const page = extensionId ? `chrome://extensions/?id=${extensionId}` : "chrome://extensions (Details of the Interceptor extension)"
+  if (!us.manifest_permission) {
+    return { available: false, hint: `this extension copy has no userScripts permission; install the current extension` }
+  }
+  return {
+    available: false,
+    hint: `enable "Allow User Scripts" on ${page} (Chrome 138+; on older Chrome turn on Developer mode), then run 'interceptor reload'. Structured reads (read, find, text, html) do not need it.${us.error ? ` Chrome said: ${us.error}` : ""}`,
+  }
+}
+
+export function formatEvalMainLine(state: EvalMainState | undefined): string {
+  if (!state) return "eval --main: unknown"
+  return state.available ? "eval --main: available (userScripts)" : `eval --main: unavailable — ${state.hint ?? "userScripts disabled"}`
 }
 
 const BRIDGE_LABEL = "com.interceptor.bridge"
@@ -96,8 +145,10 @@ export function readStatusSnapshot(): StatusSnapshot {
     } catch {}
   }
 
-  const BRIDGE_PID_PATH = "/tmp/interceptor-bridge.pid"
-  const BRIDGE_SOCK_PATH = "/tmp/interceptor-bridge.sock"
+  // Per-user runtime files, with the legacy /tmp files still detected so an
+  // older running bridge is reported instead of declared missing.
+  const BRIDGE_PID_PATH = bridgePidPathForDetection()
+  const BRIDGE_SOCK_PATH = bridgeSocketPathForDetection()
   const LAUNCH_AGENT_PATH_USER = `${process.env.HOME || ""}/Library/LaunchAgents/com.interceptor.bridge.plist`
   const LAUNCH_AGENT_PATH_SYSTEM = "/Library/LaunchAgents/com.interceptor.bridge.plist"
   const userPlistPresent = !IS_WIN && existsSync(LAUNCH_AGENT_PATH_USER)
@@ -356,7 +407,25 @@ export function formatStatus(snap: StatusSnapshot, opts: { verbose?: boolean }):
   }
 
   // extension reachability block (#49) — verbose-only when daemon alive
-  if (snap.extension) {
+  if (snap.contexts && snap.contexts.length > 0) {
+    lines.push("")
+    const multi = snap.contexts.length > 1
+    for (const c of snap.contexts) {
+      const label = multi ? ` [${c.contextId}]` : ""
+      const copy = c.version ? ` (${c.installType === "normal" ? "store" : c.installType === "development" ? "unpacked" : "extension"} ${c.version})` : ""
+      if (c.kind !== "extension") {
+        lines.push(`${c.kind}${label}: connected`)
+        continue
+      }
+      if (c.reachable) {
+        lines.push(`extension${label}: reachable${copy}${v && !multi ? " (a content-script ping succeeded against an interceptor-group tab)" : ""}`)
+      } else {
+        lines.push(`extension${label}: not reachable${copy} — ${c.reason || "no tabs in interceptor group; run 'interceptor open <url>' to verify"}`)
+      }
+      lines.push(`  ${formatEvalMainLine(c.evalMain)}`)
+    }
+    if (multi) lines.push("  several browser contexts are connected: set INTERCEPTOR_CONTEXT=<id> once per lane, or pass --context <id>")
+  } else if (snap.extension) {
     lines.push("")
     if (snap.extension.reachable) {
       lines.push(`extension: reachable${v ? " (a content-script ping succeeded against an interceptor-group tab)" : ""}`)
@@ -417,6 +486,7 @@ export function snapshotToJson(snap: StatusSnapshot): Record<string, unknown> {
   }
   if (snap.browser) base.browser = snap.browser
   if (snap.extension) base.extension = snap.extension
+  if (snap.contexts) base.contexts = snap.contexts
   if (snap.tabLifecycle) base.tabLifecycle = snap.tabLifecycle
   if (snap.skills) base.skills = snap.skills
   return base

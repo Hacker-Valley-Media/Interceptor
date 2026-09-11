@@ -67,13 +67,53 @@ function listSlugs(base: string): string[] {
     .map(d => d.name)
 }
 
+// `.current` names the ledger the last `init` (or `use`) selected. Once a
+// workspace held two ledgers, every `note`/`add`/`status` without --slug was
+// refused (180 results, 2026-09-10 review); agents rarely pass the slug on
+// every call, and the ledger they mean is the one they just opened.
+const CURRENT_MARKER = ".current"
+
+function readCurrentSlug(base: string): string | undefined {
+  const p = join(base, CURRENT_MARKER)
+  if (!existsSync(p)) return undefined
+  const slug = readFileSync(p, "utf-8").trim()
+  return slug.length > 0 ? slug : undefined
+}
+
+function writeCurrentSlug(base: string, slug: string): void {
+  mkdirSync(base, { recursive: true })
+  writeFileSync(join(base, CURRENT_MARKER), slug + "\n")
+}
+
 /** Resolve which slug a non-init subcommand operates on. */
 function resolveSlug(base: string, explicit: string | undefined): string | { error: string } {
   if (explicit) return explicit
   const slugs = listSlugs(base)
   if (slugs.length === 1) return slugs[0]
   if (slugs.length === 0) return { error: `no research ledger found under ${base}/. Run 'interceptor research init <slug>' first.` }
-  return { error: `multiple ledgers under ${base}/ (${slugs.join(", ")}). Pass the slug, e.g. 'interceptor research status <slug>'.` }
+  const current = readCurrentSlug(base)
+  if (current && slugs.includes(current)) {
+    console.error(`ledger: ${current} (last init/use; --slug <s> overrides, 'interceptor research use <slug>' switches)`)
+    return current
+  }
+  return { error: `multiple ledgers under ${base}/ (${slugs.join(", ")}). Pass the slug, e.g. 'interceptor research status <slug>', or pick one with 'interceptor research use <slug>'.` }
+}
+
+function cmdUse(filtered: string[]): null {
+  const slug = filtered[2]
+  if (!slug || slug.startsWith("--")) {
+    console.error("error: interceptor research use requires a slug. Usage: interceptor research use <slug>")
+    process.exit(1)
+  }
+  const base = resolveBase(filtered)
+  if (!existsSync(ledgerPath(base, slug))) {
+    const slugs = listSlugs(base)
+    console.error(`error: no ledger '${slug}' under ${base}/${slugs.length ? ` (have: ${slugs.join(", ")})` : ""}. Run 'interceptor research init ${slug}' to create it.`)
+    process.exit(1)
+  }
+  writeCurrentSlug(base, slug)
+  console.log(`current ledger: ${slug}`)
+  return null
 }
 
 function ledgerPath(base: string, slug: string): string { return join(base, slug, "links.json") }
@@ -179,6 +219,7 @@ function cmdInit(filtered: string[]): null {
   mkdirSync(sourcesDir(base, slug), { recursive: true })
   const ledger: Ledger = { slug, effort, floor, createdAt: new Date().toISOString(), leads: [] }
   writeFileSync(ledgerPath(base, slug), JSON.stringify(ledger, null, 2) + "\n")
+  writeCurrentSlug(base, slug)
   writeFileSync(
     insightsPath(base, slug),
     `# Insights — ${slug}\n\n` +
@@ -389,11 +430,12 @@ export async function runResearchCommand(filtered: string[], jsonMode = false): 
 
   switch (sub) {
     case "init":   return cmdInit(filtered)
+    case "use":    return cmdUse(filtered)
     case "add":    return cmdAdd(filtered, jsonMode)
     case "note":   return cmdNote(filtered)
     case "status": return cmdStatus(filtered, jsonMode)
     default:
-      console.error(`error: unknown research subcommand '${sub}'. Use: (none) | --full | init | add | note | status`)
+      console.error(`error: unknown research subcommand '${sub}'. Use: (none) | --full | init | use | add | note | status`)
       process.exit(1)
   }
 }

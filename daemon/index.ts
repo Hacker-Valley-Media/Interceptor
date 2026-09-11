@@ -20,6 +20,7 @@ import {
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
 import { claimContextId, describeContexts, recordExtensionIdentity, type ContextSocket } from "./context-registration"
 import { extensionIdFromOrigin, installTypeLabel } from "../shared/extension-identity"
+import { bridgePidPath, bridgeSocketPath } from "../shared/bridge-paths"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
 import { captureSpinSample, spinWatchdogStep, SPIN_EXIT_TICKS, type SpinWatchdogState } from "./spin-watchdog"
@@ -55,8 +56,12 @@ if (process.argv.includes("--ios-tunnel-helper")) {
 }
 
 // ── Native Bridge (interceptor-bridge) connection ────────────────────────────────
-const BRIDGE_SOCKET_PATH = "/tmp/interceptor-bridge.sock"
-const BRIDGE_PID_PATH = "/tmp/interceptor-bridge.pid"
+// Per-user runtime files (shared/bridge-paths.ts mirrors the bridge's
+// Platform.runtimeDir). The daemon and bridge install together, so the daemon
+// looks only at the current layout; user-facing detection (status, diagnose,
+// preflight) is what falls back to the legacy /tmp paths.
+const BRIDGE_SOCKET_PATH = bridgeSocketPath()
+const BRIDGE_PID_PATH = bridgePidPath()
 const BRIDGE_RECONNECT_MS = 2000
 const BRIDGE_CONNECT_TIMEOUT_MS = 5000
 const BRIDGE_RECOVERY_ACTION_TIMEOUT_MS = 1500

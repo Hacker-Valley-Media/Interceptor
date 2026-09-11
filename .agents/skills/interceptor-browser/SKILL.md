@@ -36,14 +36,18 @@ This installed skill is self-contained. Source checkouts also have `AGENTS.md`, 
 ## Fast Path
 
 ```bash
-interceptor status                        # 1. Confirm daemon + extension are alive
+interceptor contexts                      # 0. Browser profiles connected. More than one? Pick the lane's once:
+export INTERCEPTOR_CONTEXT=<id>           #    (or pass --context <id> on every call; the flag overrides the env)
+interceptor status --verbose              # 1. Daemon + extension alive per context; eval --main availability
 interceptor websearch "example docs"      # 2a. Default provider → managed background results tab
-interceptor open "https://example.com"    # 2b. Or open a known URL → wait + tree + text
+interceptor open "https://example.com" --tree-format compact   # 2b. Or open a known URL → wait + compact tree + text
 interceptor read                          # 3. Current state (re-read after any mutation)
 interceptor act e5                        # 4. Click ref e5 (refs come from `read`)
 interceptor act e7 "example user"         # 5. Type into ref e7
 interceptor inspect                       # 6. Tree + text + network in one read
 ```
+
+If your harness truncates tool results, also set `INTERCEPTOR_TREE_MAX_CHARS` / `INTERCEPTOR_TEXT_MAX_CHARS` once (defaults 50000 / 8000); a truncated tree or text ends in a marker that says how to scope or widen. A `stale element [eN]` error means the element left the DOM and nothing was clicked or typed; refs never re-bind to look-alike elements, so `read` again. A `timeout … The outcome is unknown` means the action may still land; `read` before retrying it.
 
 Inside this repo without `interceptor` on PATH, use `./dist/interceptor ...`.
 

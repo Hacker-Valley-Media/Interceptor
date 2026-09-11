@@ -1,4 +1,4 @@
-import { resolveElement } from "../input-simulation"
+import { resolveElement, staleElementError } from "../input-simulation"
 import { getShadowRoot } from "../element-discovery"
 import { getOrAssignRef } from "../ref-registry"
 import { markSensitive } from "../sensitive"
@@ -8,7 +8,7 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 
 export async function handleInputText(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
-  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
+  if (!el) return staleElementError(action, "typed")
   // issue #244: a vault delivery marks the field so the monitor masks its value.
   if (action.sensitive === true) markSensitive(el)
   el.focus()
@@ -70,7 +70,7 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
 
 export async function handleSelectOption(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLSelectElement | null
-  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
+  if (!el) return staleElementError(action, "selected")
   el.value = action.value as string
   el.dispatchEvent(new Event("change", { bubbles: true }))
   return { success: true }
@@ -78,7 +78,7 @@ export async function handleSelectOption(action: Action): Promise<ActionResult> 
 
 export async function handleCheck(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLInputElement | null
-  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
+  if (!el) return staleElementError(action, "toggled")
   const target = action.checked !== undefined ? !!(action.checked) : !el.checked
   if (el.checked !== target) {
     el.checked = target

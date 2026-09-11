@@ -365,7 +365,7 @@ The legacy individual commands (`interceptor tab new`, `interceptor tree`, `inte
 
 ## Core Concepts
 
-**Element Refs** — `interceptor tree` returns elements with refs like `e1`, `e5`, `e23`. Use these to click, type, hover. Refs survive between commands until the DOM changes.
+**Element Refs** — `interceptor tree` returns elements with refs like `e1`, `e5`, `e23`. Use these to click, type, hover. Refs survive between commands until the DOM changes. A ref whose element left the DOM fails as `stale element [eN] … nothing was clicked`; it is never re-bound to another element with the same label, so run `read` again for fresh refs (`find "<name>"` is the verb for search).
 
 **Interceptor Group** — Every `interceptor tab new` adds tabs to a managed Interceptor group. In supported agent shells, bare commands use a soft per-session group so `open` reuses one tab and idle cleanup can reap the session. `INTERCEPTOR_SESSION_ID` is the neutral contract; verified Maestro, Claude Code, and Codex variables are detected automatically and hashed into an opaque `s-<hash16>` label. Use a unique `--group <label>` or neutral session id for each concurrent lane. Explicit groups are hard-scoped by default. `--shared-group` uses the shared default Interceptor group, not unmanaged tabs. Your personal tabs stay outside the managed boundary unless you explicitly authorize `--any-tab`. `tab close <id>` and `tab switch <id>` act on exactly the id you pass; the applicable group check validates that same tab, and an explicit id takes precedence over `--tab`.
 
@@ -666,7 +666,8 @@ interceptor raw '{"type":"any_action","key":"value"}'  # Send any raw action
 ### Meta
 ```bash
 interceptor status                           # Daemon status (local check, no connection needed)
-interceptor help                             # Full CLI help
+interceptor status --verbose                 # Per-context reachability and whether eval --main (userScripts) is available
+interceptor help [<command> [<sub>]]         # Full CLI help, or one verb (e.g. help upload, help macos tree)
 interceptor contexts                         # List IDs of all connected browser contexts
 interceptor contexts --verbose               # Also kind, version, store/unpacked, extension ID, transports
 interceptor contexts rename <name>           # Restore a context name after an extension ID change
@@ -681,13 +682,13 @@ interceptor capabilities                     # Check available input layers
 | `--json` | JSON output instead of plain text |
 | `--tab <id>` | Target specific tab by ID. When an action names its own tab (`tab close <id>`, `tab switch <id>`), the explicit id wins over `--tab`. |
 | `--any-tab` | Operate outside the interceptor group (also required to `tab close <id>` / `tab switch <id>` an unmanaged tab) |
-| `--context <id>` | Route command to a specific browser context (profile). See `interceptor contexts`. Omitting this flag succeeds only when exactly one context is connected; the daemon errors when zero or multiple contexts are present. |
+| `--context <id>` | Route command to a specific browser context (profile). See `interceptor contexts`. `INTERCEPTOR_CONTEXT=<id>` sets the lane default (the flag overrides it). With neither, the command succeeds only when exactly one context is connected; `status --verbose`, `group list`, and `group close` work across every connected context. |
 | `--os` | FALLBACK: use OS-level CGEvent (macOS) when synthetic input is observed to fail. Default to synthetic — the pre-load `userActivation` override + `__interceptor_trust` event marker satisfy most `isTrusted` checks. |
 | `--frame <id>` | Target exactly that iframe on any browser verb, including `eval`. Accepted before or after the command; a missing frame fails instead of silently running in the top frame. |
 | `--changes` | Include DOM diff in response |
 | `--flag=value`, `--` | `--flag=value` is accepted everywhere; `--` ends flag parsing so a positional may begin with `--` |
 
-Flags are order-independent on browser commands, and **unknown flags are rejected** (exit 1, naming the flag and the command) instead of being ignored — a typo such as `screenshot --out shot.png` no longer looks like a success (`screenshot` writes to disk with `--save`). `INTERCEPTOR_LAX_FLAGS=1` downgrades the rejection to a one-line warning for legacy scripts. `interceptor macos *` and `interceptor ios *` keep their verb-first parsing and are not strict. A command whose result is a failure prints `error: …` (or the JSON envelope under `--json`) **and exits non-zero** — since 0.23.40 that covers every browser verb (`back`/`forward` with no history used to print the error and exit 0), so scripts can trust `$?`.
+Flags are order-independent on browser commands, and **unknown flags are rejected** (exit 1, naming the flag and the command) instead of being ignored — a typo such as `screenshot --out shot.png` no longer looks like a success (`screenshot` writes to disk with `--save`). `--selector`/`--nth` belong to `click` alone; other action verbs reject them with a `query "<css>"` hint. Output budget: `INTERCEPTOR_TREE_MAX_CHARS` (default 50000) and `INTERCEPTOR_TEXT_MAX_CHARS` (default 8000) cap `open`/`read` output, and `open --tree-format compact` returns the compact tree; a truncated result ends in a marker that says how to scope or widen. `INTERCEPTOR_LAX_FLAGS=1` downgrades the rejection to a one-line warning for legacy scripts. `interceptor macos *` and `interceptor ios *` keep their verb-first parsing and are not strict. A command whose result is a failure prints `error: …` (or the JSON envelope under `--json`) **and exits non-zero** — since 0.23.40 that covers every browser verb (`back`/`forward` with no history used to print the error and exit 0), so scripts can trust `$?`.
 
 `interceptor eval` reports thrown exceptions, rejected promises, and syntax errors as failures (exit 1) in both the isolated and `--main` worlds, and supports top-level `await`. `--main` on a strict-CSP page may strip the header and reload the tab once; the result discloses the reload.
 
@@ -1203,7 +1204,7 @@ Every status is a string from Apple's `AVAuthorizationStatus` vocabulary (`grant
 interceptor macos files watch ~/Desktop          # Watch directory for changes
 interceptor macos fs read /path/to/file          # Native FileManager read
 interceptor macos fs write /path/to/file "..."   # Native FileManager write
-interceptor macos fs search "query"              # Spotlight (NSMetadataQuery)
+interceptor macos fs search "query" [--timeout-ms N]   # Spotlight; partial:true when the deadline (default 10 s) cut a pass
 ```
 
 See [`docs/native/fs.md`](docs/native/fs.md) for the `fs` domain detail.

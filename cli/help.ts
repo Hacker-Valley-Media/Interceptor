@@ -57,7 +57,7 @@ const COMMAND_HELP: Record<string, string> = {
 // extracted from the HELP string below by matching lines that begin with
 // "  interceptor <cmd> ". User types `interceptor <cmd> --help` (or `-h`) and
 // gets exactly the slice for that command.
-export function helpForCommand(cmd: string): string | null {
+export function helpForCommand(cmd: string, sub?: string): string | null {
   const footer = `Run 'interceptor help --all' for the full command list, or 'interceptor ${cmd} -h' is an alias for --help.`
   // per-verb returns semantics from the manifest spec, so an
   // agent forming an invocation also learns exactly what comes back.
@@ -68,26 +68,47 @@ export function helpForCommand(cmd: string): string | null {
     if (spec.example) semantics.push(`Example: ${spec.example}`)
   }
   const curated = COMMAND_HELP[cmd]
-  if (curated) {
+  if (curated && !sub) {
     return [curated, ...semantics, "", footer].join("\n")
   }
+  // `help macos tree` / `help ios click`: only that sub-verb's lines. The
+  // unknown-flag error tells agents to run `help <cmd>`; a page that answers
+  // "no help" for a listed verb sent them guessing (106+ results, 2026-09-10).
   const lines = HELP.split("\n")
   const matched: string[] = []
   for (const line of lines) {
-    const m = line.match(/^\s+interceptor\s+(\S+)\b/)
-    if (m && m[1] === cmd) {
+    const m = line.match(/^\s+interceptor\s+(\S+)(?:\s+(\S+))?/)
+    // Grouped sub-verbs (`interceptor ios tree|find|inspect …`) match any of
+    // their alternatives, so `help ios tree` finds the line.
+    if (m && m[1] === cmd && (!sub || (m[2] ?? "").split("|").includes(sub))) {
       matched.push(line)
     }
   }
-  if (!matched.length) return null
-  return [
-    `interceptor ${cmd} — usage`,
-    "",
-    ...matched,
-    ...semantics,
-    "",
-    footer,
-  ].join("\n")
+  if (matched.length) {
+    return [
+      `interceptor ${cmd}${sub ? ` ${sub}` : ""} — usage`,
+      "",
+      ...matched,
+      ...semantics,
+      "",
+      footer,
+    ].join("\n")
+  }
+  // Manifest fallback: verbs the HELP text never listed line-by-line but the
+  // machine-readable manifest describes (usage, flags, what comes back).
+  if (spec && !sub) {
+    const flags = (spec.flags ?? []).map(f => `  ${f.name}${f.value ? ` <${f.value}>` : ""}  ${f.description}`)
+    return [
+      `interceptor ${cmd} — ${spec.summary}`,
+      "",
+      `  ${spec.usage}`,
+      ...(flags.length ? ["", "Flags:", ...flags] : []),
+      ...semantics,
+      "",
+      footer,
+    ].join("\n")
+  }
+  return null
 }
 
 // ── progressive disclosure ─────────────────────────────────────
@@ -161,6 +182,8 @@ GLOBAL FLAGS (any command, any position — flag order never changes meaning):
   --json  --context <id>  --tab <id>  --group <label>  --frame <id>  --all-surfaces
   e.g. 'open --text-only <url>' ≡ 'open <url> --text-only'
   unknown flags are rejected (exit 1) on browser commands; INTERCEPTOR_LAX_FLAGS=1 downgrades to a warning
+  env defaults, set once per lane: INTERCEPTOR_CONTEXT=<id> (browser profile when several are connected),
+  INTERCEPTOR_GROUP=<label> (tab group), INTERCEPTOR_TREE_MAX_CHARS / INTERCEPTOR_TEXT_MAX_CHARS (open/read output budget)
 
 Docs & issues: https://github.com/Hacker-Valley-Media/Interceptor`
 
@@ -182,7 +205,7 @@ const HELP_BROWSER = `interceptor — browser control CLI
 Flags:
   -V, --version                       Print version, build SHA, and build date
   --json                              Output as JSON
-  --context <id>                      Target a specific browser context (see: interceptor contexts)
+  --context <id>                      Target a specific browser context (see: interceptor contexts; env: INTERCEPTOR_CONTEXT)
   --group <label>                     Hard-scope this command to a named tab group (env: INTERCEPTOR_GROUP).
                                       Agent shells default to a soft per-session group, labeled s-<hash16>,
                                       using INTERCEPTOR_SESSION_ID or a verified Maestro, Claude Code, or Codex id.
@@ -197,6 +220,7 @@ Compound (agent-optimized):
   interceptor open <url> --tree-only         Skip text, return only tree
   interceptor open <url> --text-only         Skip tree, return only text
   interceptor open <url> --full              Full text (200K cap) instead of the 8000-char summary
+  interceptor open <url> --tree-format compact   Compact tree; INTERCEPTOR_TREE_MAX_CHARS / INTERCEPTOR_TEXT_MAX_CHARS cap open/read output
   interceptor open <url> --timeout <ms>      Override wait-stable timeout (default 5000)
   interceptor open <url> --no-wait           Return immediately after tab creation
   interceptor open <url> --reuse             Navigate the most recent managed tab instead of opening a new one (cleans up long automation runs)
@@ -229,6 +253,7 @@ Research (deep-research mode — local, no daemon, no browser):
   interceptor research --full                Print the extended playbook + verb cookbook
   interceptor research init <slug>           Scaffold a source ledger (links.json, insights.md, sources/)
   interceptor research init <slug> --effort quick|standard|exhaustive   Set the breadth floor (8 / 20 / 40)
+  interceptor research use <slug>            Make <slug> the current ledger (init does this; add/note/status use it when several exist)
   interceptor research add <url> --note "..."  Append a lead to the ledger
   interceptor research note "<insight>"      Append a running insight
   interceptor research status [<slug>]       Rubric readout: sources vs floor, domains, saturation, verdict
@@ -252,6 +277,42 @@ State:
   interceptor text --markdown                All visible text rendered as markdown
   interceptor text <ref> --markdown          Element text rendered as markdown
   interceptor html <index|ref>               HTML of specific element
+
+Page meta and data (one call each):
+  interceptor info                           Page URL, title, viewport, readyState
+  interceptor page_info                      Same as info
+  interceptor meta                           <meta> tags of the current page
+  interceptor capabilities                   What this extension can do here: userScripts (eval --main), debugger, OS input layer
+  interceptor modals                         Open dialogs / modals on the page
+  interceptor panels                         Side panels / drawers on the page
+  interceptor regions                        Landmark regions (header, nav, main, aside, footer) with refs
+  interceptor frames                         List frames in the active tab (ids for --frame <id>)
+  interceptor what-at <x,y>                  Element under viewport coordinates (ref, role, name, rect)
+  interceptor check <ref> [true|false]       Set a checkbox / toggle (omit the value to toggle)
+  interceptor blur                           Remove focus from the active element
+  interceptor wait_for <css> [timeout-ms]    Wait until a selector matches (default 10000 ms)
+  interceptor reload                         Reload the extension (an unpacked copy picks up installed files; a store copy asks the store for an update)
+  interceptor notify <title> <message...>    Post a browser notification
+  interceptor events [--tail] [--since <ms>] Daemon event log (request timings, timeouts)
+  interceptor sessions [max]                 Recently closed tabs / windows (chrome.sessions)
+  interceptor sessions restore <id>          Restore a closed session entry
+  interceptor session start|end              Mark a CLI session (advisory; enables batch hints)
+  interceptor history "<query>" [max]        Search browser history
+  interceptor history delete <url>           Remove a history entry
+  interceptor bookmarks "<query>"            Search bookmarks
+  interceptor bookmarks add <title> <url>    Create a bookmark
+  interceptor bookmarks delete <id>          Delete a bookmark
+  interceptor bookmarks tree                 Full bookmark tree
+  interceptor downloads ["<query>"]          List downloads
+  interceptor downloads start <url> [name]   Start a download
+  interceptor downloads cancel <id>          Cancel a download
+  interceptor clipboard                      Read the clipboard
+  interceptor clipboard write <text...>      Write the clipboard
+  interceptor clear <type...> [--since <ms>] Clear browsing data (cache, cookies, history, localStorage, ...)
+  interceptor raw '<json action>'            Send one raw action object to the extension (debugging)
+  interceptor extensions list|sync           Interceptor extension packs (the capability fabric), not browser extensions
+  interceptor mcp install|status|uninstall   Register / inspect / remove Interceptor as an MCP server in installed AI runtimes
+  interceptor mcp serve                      Run the MCP server on stdio (what the runtimes launch)
 
 Actions:
   interceptor click <index|ref>              Click element (e.g. interceptor click e5)

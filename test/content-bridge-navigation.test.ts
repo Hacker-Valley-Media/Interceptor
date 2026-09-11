@@ -189,4 +189,30 @@ describe("no double-fire for delivered input actions", () => {
 
     expect(await pending).toEqual({ success: true, data: "Example Domain" })
   })
+  test("no receiver, then reply lost on the re-send → no reinjection, no third send (input action)", async () => {
+    // Retry probe from the 2026-09-10 reliability review: the response-loss
+    // guard used to run only after the first attempt, so this sequence went on
+    // to reinject and send a third time — the keystroke fired twice.
+    const pending = sendToContentScript(99, { type: "send_keys", keys: "Enter" })
+    await Promise.resolve()
+
+    runtimeState.lastError = { message: "Could not establish connection. Receiving end does not exist." }
+    sendMessageCallback?.(undefined)
+
+    // Bridge waits 250ms for document_idle, then re-sends without injecting.
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(sendMessageCount).toBe(2)
+
+    currentTab = { id: 99, status: "complete", url: "https://example.com/" } as chrome.tabs.Tab
+    runtimeState.lastError = { message: "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received" }
+    sendMessageCallback?.(undefined)
+
+    const result = await pending as { success: boolean; error?: string }
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("not auto-retried to avoid firing it twice")
+    // No injection and no third send happened.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(sendMessageCount).toBe(2)
+  })
+
 })

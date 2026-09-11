@@ -3,7 +3,7 @@ import { HELP, shortHelp, fullHelp, helpForCommand } from "./help"
 import { detectSurfaces, SURFACE_UPGRADE_HINT } from "./lib/surfaces"
 import { runSkillsCommand, maybeEmitSkillsHint } from "./commands/skills"
 import { runManifestCommand } from "./manifest"
-import { parseTabFlag, parseContextFlag, resolveGroupScope, parseGroupColorFlag } from "./parse"
+import { parseTabFlag, resolveContextId, resolveGroupScope, parseGroupColorFlag } from "./parse"
 import { formatState, formatTabs, formatCookies, formatFind, formatResult } from "./format"
 import { sendCommand, sendCommandWs, setGlobalGroup, setGlobalFrame, type DaemonResult, type DaemonResponse, type Action } from "./transport"
 import { UPLOAD_CHUNK_B64_BYTES } from "../shared/platform"
@@ -27,7 +27,7 @@ import { parseMetaCommand } from "./commands/meta"
 import { parseEvalCommand } from "./commands/eval"
 import { parseSaveCommand } from "./commands/save"
 import { parseBrandCommand } from "./commands/brand"
-import { parseGroupCommand } from "./commands/group"
+import { parseGroupCommand, listExtensionContextIds, runGroupAcrossContexts } from "./commands/group"
 import { parseBatchCommand } from "./commands/batch"
 import { parseMonitorCommand } from "./commands/monitor"
 import { parseSceneCommand } from "./commands/scene"
@@ -143,7 +143,7 @@ async function main() {
   const useWs = !carriesSecret && (globalArgs.includes("--ws") || isSaveCmd || (isScreenshotCmd && !globalArgs.includes("--no-ws")))
   const anyTab = globalArgs.includes("--any-tab")
   const globalTabId = parseTabFlag(globalArgs)
-  const globalContextId = parseContextFlag(globalArgs)
+  const globalContextId = resolveContextId(globalArgs)
   // Explicit or automatic session scope is injected into every outgoing
   // action at the transport choke point, covering simple, compound, and loop paths.
   const groupScope = resolveGroupScope(args)
@@ -160,11 +160,15 @@ async function main() {
   if (filtered.length === 0 || filtered[0] === "help") {
     const helpArg = filtered[1]
     if (helpArg && !helpArg.startsWith("-")) {
-      const sub = helpForCommand(helpArg)
+      // `help macos tree` narrows to one sub-verb; `help <verb>` alone keeps
+      // the whole verb's block.
+      const subArg = filtered[2] && !filtered[2].startsWith("-") ? filtered[2] : undefined
+      const sub = helpForCommand(helpArg, subArg)
       if (sub) {
         console.log(sub)
       } else {
-        console.error(`error: no help for '${helpArg}'. Run 'interceptor help --all' for the full reference.`)
+        const topic = subArg ? `${helpArg} ${subArg}` : helpArg
+        console.error(`error: no help for '${topic}'. Run 'interceptor help' for the command map or 'interceptor help --all' for the full reference.`)
         process.exit(1)
       }
     } else if (filtered.includes("--all")) {
@@ -571,6 +575,20 @@ async function main() {
   // Apply global modifiers
   if (anyTab) action.anyTab = true
   if (filtered.includes("--changes")) action.changes = true
+
+  // Groups are per browser profile: with several extension contexts connected
+  // and no context resolved, list/close across all of them instead of failing
+  // with "multiple extensions connected" (cli/commands/group.ts).
+  if (GROUP_CMDS.has(cmd) && !globalContextId) {
+    const sendFn = (a: Action, tabId?: number, ctx?: string) => useWs ? sendCommandWs(a, tabId, ctx) : sendCommand(a, tabId, ctx)
+    const contextIds = await listExtensionContextIds(sendFn)
+    if (contextIds.length > 1) {
+      const result = await runGroupAcrossContexts(action, contextIds, sendFn)
+      console.log(formatResult(result, jsonMode))
+      if (!result.success) process.exitCode = 1
+      return
+    }
+  }
 
   try {
     const response = useWs

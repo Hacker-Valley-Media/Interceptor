@@ -66,7 +66,12 @@ const STATE = ["--depth", "--filter", "--limit", "--max-chars", "--role"]
 // --secret names a vault entry for `type` (issue #244); the value never rides argv.
 // --browser-login names the host whose saved login to fill; --browser picks one
 // Chromium browser to read (issue #248).
-const ACTIONS = ["--at", "--browser", "--browser-login", "--duration", "--from", "--nth", "--secret", "--selector", "--steps", "--to"]
+const ACTIONS = ["--at", "--browser", "--browser-login", "--duration", "--from", "--secret", "--steps", "--to"]
+// CSS targeting is implemented by `click` alone (cli/commands/actions.ts). When
+// every action verb accepted --selector here, `dblclick --selector x` parsed
+// `--selector` as the element target and failed as "stale element" (agent
+// session log, 2026-09-09). Other verbs reject it with a hint instead.
+const CLICK = [...ACTIONS, "--nth", "--selector"]
 const NAV = ["--amount", "--ms", "--timeout"]
 const NET = ["--filter", "--format", "--limit", "--out", "--since", "--pattern", "--patterns", "--type"]
 const SCREENSHOT = ["--clip", "--element", "--filter", "--format", "--kind", "--limit", "--quality", "--ref", "--region", "--scale", "--selector", "--target-max-long-edge", "--threshold"]
@@ -98,7 +103,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   // state
   state: STATE, tree: STATE, diff: STATE, find: STATE, text: STATE, html: STATE,
   // actions
-  click: ACTIONS, type: ACTIONS, select: ACTIONS, focus: ACTIONS, blur: ACTIONS,
+  click: CLICK, type: ACTIONS, select: ACTIONS, focus: ACTIONS, blur: ACTIONS,
   hover: ACTIONS, drag: ACTIONS, dblclick: ACTIONS, rightclick: ACTIONS,
   check: ACTIONS, keys: ACTIONS, "click-at": ACTIONS, "what-at": ACTIONS, regions: ACTIONS,
   // navigation
@@ -193,6 +198,9 @@ function rejectUnknownFlag(cmd: string, tok: string): void {
   const name = tok.includes("=") ? tok.slice(0, tok.indexOf("=")) : tok
   if (name === "--out" && (cmd === "screenshot" || cmd === "canvas" || cmd === "capture" || cmd === "ocr")) {
     extra = " (--out belongs to 'save' and 'net'; 'screenshot --save' writes the image to disk)"
+  }
+  if ((name === "--selector" || name === "--nth") && cmd !== "click") {
+    extra = ` (CSS targeting is a 'click' flag; for '${cmd}' run 'interceptor query "<css>"' to get an e<ref>, then 'interceptor ${cmd} e<ref>')`
   }
   const msg = `unknown flag '${tok}' for '${cmd}'${extra}. Run 'interceptor help ${cmd}' for its flags; use '--' before positional values that begin with --.`
   if (lax) {

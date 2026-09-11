@@ -58,6 +58,17 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         return selector.resolveTargetPid(ref: ref, appName: appName, pid: pid)
     }
 
+    // Refuse before posting anything when the caller named a target that
+    // cannot be honored: an expired ref, an app that is not running, or a ref
+    // whose owner is not the requested app. Every input verb checks this first
+    // so a failed explicit target never becomes an implicit frontmost target.
+    private func explicitTargetProblem(_ action: [String: Any]) -> String? {
+        let ref = action["ref"] as? String
+        let appName = action["app"] as? String
+        let pid: pid_t? = (action["pid"] as? Int).map { pid_t($0) } ?? (action["pid"] as? pid_t)
+        return selector.explicitTargetProblem(ref: ref, appName: appName, pid: pid)
+    }
+
     // Posts a single CGEvent through the right layer for the resolved
     // target. Centralizes the post-tap vs post-to-pid choice so every
     // verb can stay short and consistent.
@@ -107,6 +118,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         let right = action["right"] as? Bool ?? false
         let clickCount = double ? 2 : 1
 
+        if let problem = explicitTargetProblem(action) {
+            completion(WireFormat.error(problem))
+            return
+        }
         let target = selectTarget(action)
 
         // Pure AX press — only for plain single left clicks against a ref.
@@ -188,6 +203,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     private func handleType(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let text = action["text"] as? String else {
             completion(WireFormat.error("type requires text"))
+            return
+        }
+        if let problem = explicitTargetProblem(action) {
+            completion(WireFormat.error(problem))
             return
         }
 
@@ -302,6 +321,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             return
         }
 
+        if let problem = explicitTargetProblem(action) {
+            completion(WireFormat.error(problem))
+            return
+        }
         // Same routing rule as click/type: ref → owning PID, else
         // explicit pid/app, else cghidEventTap.
         let postTarget: InputTarget
@@ -363,6 +386,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         let amount = action["amount"] as? Int32 ?? 300
         let times = max(1, action["times"] as? Int ?? 1)
         let intervalMs = max(0, action["intervalMs"] as? Int ?? 50)
+        if let problem = explicitTargetProblem(action) {
+            completion(WireFormat.error(problem))
+            return
+        }
         // Prefer ref-resolved owning PID, then explicit --pid, then
         // --app name lookup. Same precedence as click/type/keys.
         let pidFromAction = targetPid(action)
@@ -417,6 +444,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     // MARK: - Drag
 
     private func handleDrag(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let problem = explicitTargetProblem(action) {
+            completion(WireFormat.error(problem))
+            return
+        }
         let postTarget: InputTarget
         if let pid = targetPid(action) {
             postTarget = .postToPid(pid)

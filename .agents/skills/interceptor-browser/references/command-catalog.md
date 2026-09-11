@@ -265,6 +265,7 @@ interceptor raw '{"type":"any_action","key":"value"}'
 interceptor contexts                                # List IDs of all connected browser contexts
 interceptor contexts --verbose                      # Also kind, version, store/unpacked, extension ID, transports
 interceptor contexts rename <name> --context <id>   # Restore a context name after an extension ID change (the new ID starts empty)
+export INTERCEPTOR_CONTEXT=<id>                     # Lane default when several profiles are connected (--context overrides)
 interceptor --context <id> read                     # Route command to a specific profile
 interceptor --context <id> open <url>
 interceptor --context <id> act e7 "value"

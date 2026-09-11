@@ -88,3 +88,39 @@ describe("interceptor research — ledger round-trip (no daemon)", () => {
     expect(r.stderr).toContain("ledger not found")
   })
 })
+
+describe("interceptor research — current ledger memory", () => {
+  let DIR2 = ""
+  beforeAll(() => { DIR2 = mkdtempSync(join(tmpdir(), "interceptor-research-current-")) })
+  afterAll(() => { if (DIR2) rmSync(DIR2, { recursive: true, force: true }) })
+
+  test("the last init is the current ledger, so note/status need no slug with two ledgers", () => {
+    expect(run(["research", "init", "alpha", "--dir", DIR2]).status).toBe(0)
+    expect(run(["research", "init", "beta", "--dir", DIR2]).status).toBe(0)
+    expect(readFileSync(join(DIR2, ".current"), "utf-8").trim()).toBe("beta")
+    const note = run(["research", "note", "goes to beta", "--dir", DIR2])
+    expect(note.status).toBe(0)
+    expect(note.stderr).toContain("ledger: beta")
+    expect(readFileSync(join(DIR2, "beta", "insights.md"), "utf-8")).toContain("goes to beta")
+    expect(readFileSync(join(DIR2, "alpha", "insights.md"), "utf-8")).not.toContain("goes to beta")
+    expect(run(["research", "status", "--dir", DIR2]).status).toBe(0)
+  })
+
+  test("research use switches the current ledger and refuses unknown slugs", () => {
+    const bad = run(["research", "use", "nope", "--dir", DIR2])
+    expect(bad.status).toBe(1)
+    expect(bad.stderr).toContain("no ledger 'nope'")
+    const ok = run(["research", "use", "alpha", "--dir", DIR2])
+    expect(ok.status).toBe(0)
+    expect(ok.stdout).toContain("current ledger: alpha")
+    const note = run(["research", "note", "goes to alpha", "--dir", DIR2])
+    expect(note.status).toBe(0)
+    expect(readFileSync(join(DIR2, "alpha", "insights.md"), "utf-8")).toContain("goes to alpha")
+  })
+
+  test("--slug still overrides the current ledger", () => {
+    const note = run(["research", "note", "explicit beta", "--slug", "beta", "--dir", DIR2])
+    expect(note.status).toBe(0)
+    expect(readFileSync(join(DIR2, "beta", "insights.md"), "utf-8")).toContain("explicit beta")
+  })
+})

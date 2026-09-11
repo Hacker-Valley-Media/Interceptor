@@ -16,7 +16,7 @@ async function injectContentScript(
   }
 }
 
-type ContentScriptResult = { success: boolean; error?: string; data?: unknown }
+type ContentScriptResult = { success: boolean; error?: string; data?: unknown; warning?: string }
 
 const NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector"])
 
@@ -135,22 +135,11 @@ export async function sendToContentScript(
   // sendToContentScriptOnce; this guards the rest (worker death with the
   // reply in flight, same-URL reloads). Delivery failures ("Receiving end
   // does not exist") mean no receiver existed — those stay on the retry path
-  // below for every action type.
-  if (INPUT_ACTIONS.has(action.type) && isResponseLoss(first.error)) {
-    let navigating = false
-    try { navigating = (await chrome.tabs.get(tabId)).status === "loading" } catch {}
-    if (navigating) {
-      return {
-        success: true,
-        data: `${action.type} delivered; the page began navigating before the reply arrived`,
-        warning: "reply channel closed during navigation — re-read page state to confirm the outcome",
-      }
-    }
-    return {
-      success: false,
-      error: `${action.type} was delivered but the reply channel closed (${first.error}) — not auto-retried to avoid firing it twice; re-read page state to confirm the outcome, then retry deliberately`,
-    }
-  }
+  // below for every action type. The guard runs after EVERY attempt: it used
+  // to run only here, so "no receiver, then reply lost on the re-send" went on
+  // to reinject and send a third time (retry probe, review 2026-09-10).
+  const firstGuard = await inputReplayGuard(tabId, action, first)
+  if (firstGuard) return firstGuard
 
   // Before reinjecting via executeScript (which re-evaluates content.js and
   // blows away the in-page refRegistry the consumer has been using), give the
@@ -161,6 +150,10 @@ export async function sendToContentScript(
   await new Promise(resolve => setTimeout(resolve, 250))
   const retryWithoutInject = await sendToContentScriptOnce(tabId, action, frameId)
   if (retryWithoutInject.success) return retryWithoutInject
+  const secondGuard = await inputReplayGuard(tabId, action, retryWithoutInject)
+  if (secondGuard) return secondGuard
+  // Reinjection follows only a recoverable delivery failure.
+  if (!shouldRetryContentScript(retryWithoutInject.error)) return retryWithoutInject
 
   const injected = await injectContentScript(tabId, frameId)
   if (!injected.success) {
@@ -178,10 +171,38 @@ export async function sendToContentScript(
 
   const retried = await sendToContentScriptOnce(tabId, action, frameId)
   if (retried.success) return retried
+  const thirdGuard = await inputReplayGuard(tabId, action, retried)
+  if (thirdGuard) return thirdGuard
 
   return {
     success: false,
     error: `content script re-injected on tab ${tabId} but action still failed: ${retried.error || "unknown error"}`,
+  }
+}
+
+/**
+ * The delivered-but-reply-lost decision for one attempt. Returns the result to
+ * hand back (never a retry) when the action is input-like and the channel died
+ * after delivery; null when the caller may keep going.
+ */
+async function inputReplayGuard(
+  tabId: number,
+  action: { type: string; [key: string]: unknown },
+  attempt: ContentScriptResult
+): Promise<ContentScriptResult | null> {
+  if (attempt.success || !INPUT_ACTIONS.has(action.type) || !isResponseLoss(attempt.error)) return null
+  let navigating = false
+  try { navigating = (await chrome.tabs.get(tabId)).status === "loading" } catch {}
+  if (navigating) {
+    return {
+      success: true,
+      data: `${action.type} delivered; the page began navigating before the reply arrived`,
+      warning: "reply channel closed during navigation — re-read page state to confirm the outcome",
+    }
+  }
+  return {
+    success: false,
+    error: `${action.type} was delivered but the reply channel closed (${attempt.error}) — not auto-retried to avoid firing it twice; re-read page state to confirm the outcome, then retry deliberately`,
   }
 }
 

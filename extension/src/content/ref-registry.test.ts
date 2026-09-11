@@ -94,4 +94,22 @@ describe("resolveRef", () => {
     expect(second).toBe(first)
     expect(reg.resolveRef(first)).toBe(btn)
   })
+  test("a ref for a removed element never re-binds to a look-alike (two Delete buttons)", async () => {
+    // Browser-ref probe from the 2026-09-10 reliability review: with two
+    // buttons named Delete, removing row A used to make A's ref resolve to row
+    // B through the name+role fallback (score 150), so `click e1` deleted the
+    // wrong row. Identity is the ref's contract; search belongs to `find`.
+    const reg = await freshRegistry()
+    document.body.innerHTML = '<button id="row-a">Delete</button><button id="row-b">Delete</button>'
+    const a = document.querySelector("#row-a")!
+    const b = document.querySelector("#row-b")!
+    const refA = reg.getOrAssignRef(a)
+    const refB = reg.getOrAssignRef(b)
+    reg.refMetadata.set(refA, { role: "button", name: "Delete", tag: "button", value: "" })
+    reg.refMetadata.set(refB, { role: "button", name: "Delete", tag: "button", value: "" })
+    a.remove()
+    expect(reg.resolveRef(refA)).toBeNull()
+    expect(reg.resolveRef(refB)).toBe(b)
+  })
+
 })

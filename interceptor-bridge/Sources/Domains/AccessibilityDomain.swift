@@ -49,8 +49,10 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
             return NSRunningApplication(processIdentifier: pid_t(pid))
         }
         if let name = action["app"] as? String {
-            let apps = NSWorkspace.shared.runningApplications
-            return apps.first { $0.localizedName == name }
+            // Case-insensitive, .app-name and bundle-id tolerant (RunningApps);
+            // the exact compare made `--app finder` fail while `type --app finder`
+            // worked through the input selector's lowercased lookup.
+            return RunningApps.resolve(name)
         }
         return getFrontmostApp()
     }

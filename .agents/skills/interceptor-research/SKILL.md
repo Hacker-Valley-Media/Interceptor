@@ -174,7 +174,8 @@ Full version: interceptor research --full   |   Skill: interceptor-research
 ## The source ledger (collect-before-synthesize, made concrete)
 
 ```bash
-interceptor research init <slug> [--effort quick|standard|exhaustive]   # floor 8 / 20 / 40
+interceptor research init <slug> [--effort quick|standard|exhaustive]   # floor 8 / 20 / 40; becomes the current ledger
+interceptor research use <slug>                                         # switch the current ledger (add/note/status use it when several exist)
 interceptor research add <url> --note "why it matters"                  # append a lead
 interceptor research note "<running insight>"                           # append to insights.md
 interceptor research status [<slug>]                                    # rubric readout + verdict

@@ -158,11 +158,11 @@ Runs against `OSLogStore.local()` — system-wide.
 ```bash
 interceptor macos fs read <path>
 interceptor macos fs write <path> <content>
-interceptor macos fs search --scope home|workspace|granted|<absolute-path>
+interceptor macos fs search --scope home|workspace|granted|<absolute-path> [--timeout-ms N]
 interceptor macos files watch --watch-path <p>
 ```
 
-Unresolvable scopes return an explicit error.
+Unresolvable scopes return an explicit error. Spotlight passes run under a deadline (`--timeout-ms`, default 10000): a result with `partial: true` means the deadline cut a pass; narrow `--scope` or `--kinds`, or raise the deadline.
 
 ## URL Fetch
 

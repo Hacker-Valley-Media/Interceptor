@@ -21,8 +21,15 @@ RENDERED_MANIFEST="$INSTALL_ROOT/com.interceptor.host.json"
 LAUNCH_AGENT_PATH="/Library/LaunchAgents/com.interceptor.bridge.plist"
 DAEMON_PID_PATH="/tmp/interceptor.pid"
 DAEMON_SOCKET_PATH="/tmp/interceptor.sock"
-BRIDGE_PID_PATH="/tmp/interceptor-bridge.pid"
-BRIDGE_SOCKET_PATH="/tmp/interceptor-bridge.sock"
+# Bridge runtime files live in the installing user's temporary directory
+# (Platform.runtimeDir = NSTemporaryDirectory(), the same path `getconf
+# DARWIN_USER_TEMP_DIR` prints for that user). These defaults are the legacy
+# machine-global paths a pre-0.26 bridge still uses; they are re-pointed once
+# the target user is known, and both generations are cleaned up.
+LEGACY_BRIDGE_PID_PATH="/tmp/interceptor-bridge.pid"
+LEGACY_BRIDGE_SOCKET_PATH="/tmp/interceptor-bridge.sock"
+BRIDGE_PID_PATH="$LEGACY_BRIDGE_PID_PATH"
+BRIDGE_SOCKET_PATH="$LEGACY_BRIDGE_SOCKET_PATH"
 INSTALL_LOG_PATH="/tmp/interceptor-install.log"
 
 log_install() {
@@ -110,7 +117,8 @@ refresh_interceptor_bridge() {
   done
   pkill -KILL -u "$TARGET_UID" -x interceptor-bridge 2>/dev/null || true
 
-  rm -f "$BRIDGE_PID_PATH" "$BRIDGE_SOCKET_PATH" 2>/dev/null || true
+  rm -f "$BRIDGE_PID_PATH" "$BRIDGE_SOCKET_PATH" \
+        "$LEGACY_BRIDGE_PID_PATH" "$LEGACY_BRIDGE_SOCKET_PATH" /tmp/interceptor-bridge.lock 2>/dev/null || true
 }
 
 bootstrap_bridge_launchagent() {
@@ -174,6 +182,14 @@ fi
 # come up next login even if bootstrap here fails. This block just makes the
 # bridge start immediately for the user who's installing right now.
 if [[ -n "$TARGET_UID" && -f "$LAUNCH_AGENT_PATH" ]]; then
+  # The new bridge writes its pid/socket under the user's temp dir; resolve it
+  # as that user (the installer runs as root, whose temp dir is a different one).
+  BRIDGE_RUNTIME_DIR="$(sudo -u "$TARGET_USER" /usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+  BRIDGE_RUNTIME_DIR="${BRIDGE_RUNTIME_DIR%/}"
+  if [[ -n "$BRIDGE_RUNTIME_DIR" ]]; then
+    BRIDGE_PID_PATH="$BRIDGE_RUNTIME_DIR/interceptor-bridge.pid"
+    BRIDGE_SOCKET_PATH="$BRIDGE_RUNTIME_DIR/interceptor-bridge.sock"
+  fi
   # Bootout first for idempotency across re-installs, stop any direct-launched
   # bridge left by a prior install, then start the LaunchAgent-managed bridge.
   refresh_interceptor_bridge
