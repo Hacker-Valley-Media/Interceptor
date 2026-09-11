@@ -128,7 +128,10 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false, con
         const targets = contextId ? all.filter(c => c.contextId === contextId) : all
         if (targets.length > 0) {
           snap.contexts = await Promise.all(targets.map(probeContextStatus))
-          const first = snap.contexts.find(c => c.kind === "extension") ?? snap.contexts[0]
+          // The aggregate line follows a reachable extension when there is one,
+          // so an unreachable profile listed first does not hide a working one.
+          const extensions = snap.contexts.filter(c => c.kind === "extension")
+          const first = extensions.find(c => c.reachable) ?? extensions[0] ?? snap.contexts[0]
           snap.extension = { probed: true, reachable: first.reachable, reason: first.reason }
         } else {
           const probe = await probeExtensionReachability(contextId)

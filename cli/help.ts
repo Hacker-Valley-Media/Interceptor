@@ -71,6 +71,11 @@ export function helpForCommand(cmd: string, sub?: string): string | null {
   if (curated && !sub) {
     return [curated, ...semantics, "", footer].join("\n")
   }
+  // A curated page that documents the sub-verb answers for it too
+  // (`help update status`).
+  if (curated && sub && curated.includes(`interceptor ${cmd} ${sub}`)) {
+    return [curated, ...semantics, "", footer].join("\n")
+  }
   // `help macos tree` / `help ios click`: only that sub-verb's lines. The
   // unknown-flag error tells agents to run `help <cmd>`; a page that answers
   // "no help" for a listed verb sent them guessing (106+ results, 2026-09-10).

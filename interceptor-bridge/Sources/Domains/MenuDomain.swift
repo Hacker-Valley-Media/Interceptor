@@ -25,6 +25,15 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
+    // `--app <name>` that matches nothing is an error, not the frontmost app:
+    // listing or invoking another app's menu under the requested name is the
+    // same wrong-target failure the input verbs refuse.
+    private func explicitAppProblem(_ action: [String: Any]) -> String? {
+        guard action["pid"] == nil, let appName = action["app"] as? String, !appName.isEmpty,
+              RunningApps.resolve(appName) == nil else { return nil }
+        return "no running app matches '\(appName)' — names are case-insensitive and accept the .app name or bundle id; 'interceptor macos apps' lists them"
+    }
+
     private func targetPid(_ action: [String: Any]) -> pid_t {
         if let pid = action["pid"] as? Int32 { return pid }
         if let appName = action["app"] as? String,
@@ -35,6 +44,10 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func listMenu(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let problem = explicitAppProblem(action) {
+            completion(WireFormat.error(problem))
+            return
+        }
         let pid = targetPid(action)
         guard pid != 0 else {
             completion(WireFormat.error("no frontmost app"))
@@ -81,6 +94,10 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func invokeMenu(items: [String], action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let problem = explicitAppProblem(action) {
+            completion(WireFormat.error(problem))
+            return
+        }
         let pid = targetPid(action)
         guard pid != 0 else {
             completion(WireFormat.error("no frontmost app"))

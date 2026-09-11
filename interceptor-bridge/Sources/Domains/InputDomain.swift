@@ -63,10 +63,16 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     // whose owner is not the requested app. Every input verb checks this first
     // so a failed explicit target never becomes an implicit frontmost target.
     private func explicitTargetProblem(_ action: [String: Any]) -> String? {
-        let ref = action["ref"] as? String
         let appName = action["app"] as? String
         let pid: pid_t? = (action["pid"] as? Int).map { pid_t($0) } ?? (action["pid"] as? pid_t)
-        return selector.explicitTargetProblem(ref: ref, appName: appName, pid: pid)
+        // Every ref the action names must resolve and belong to the explicit
+        // app/pid: "ref" for click/type/keys/scroll, "from"/"to" for drag.
+        let refs = ["ref", "from", "to"].compactMap { action[$0] as? String }.filter { !$0.isEmpty }
+        if refs.isEmpty { return selector.explicitTargetProblem(ref: nil, appName: appName, pid: pid) }
+        for ref in refs {
+            if let problem = selector.explicitTargetProblem(ref: ref, appName: appName, pid: pid) { return problem }
+        }
+        return nil
     }
 
     // Posts a single CGEvent through the right layer for the resolved

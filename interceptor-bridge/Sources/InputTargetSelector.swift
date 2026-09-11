@@ -46,13 +46,23 @@ struct InputTargetSelector {
     // real RefRegistry / NSWorkspace lookups.
     let resolveRef: (String) -> (element: AXUIElement, pid: pid_t?)?
     let resolvePidByName: (String) -> pid_t?
+    // Liveness for an explicit --pid. kill(pid, 0) delivers no signal; EPERM
+    // still means the process exists. Pid reuse is not detectable here.
+    let pidIsLive: (pid_t) -> Bool
+
+    static func defaultPidIsLive(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
 
     init(
         resolveRef: @escaping (String) -> (element: AXUIElement, pid: pid_t?)?,
-        resolvePidByName: @escaping (String) -> pid_t?
+        resolvePidByName: @escaping (String) -> pid_t?,
+        pidIsLive: @escaping (pid_t) -> Bool = InputTargetSelector.defaultPidIsLive
     ) {
         self.resolveRef = resolveRef
         self.resolvePidByName = resolvePidByName
+        self.pidIsLive = pidIsLive
     }
 
     // Live-AX selection. Called from InputDomain when the request
@@ -99,6 +109,9 @@ struct InputTargetSelector {
                 return "ref \(ref) not found — refs expire when the tree changes or after a newer tree/find read; run 'interceptor macos tree' or 'macos find' again and use a fresh ref (nothing was delivered)"
             }
             refOwner = entry.pid
+        }
+        if let pid = pid, !pidIsLive(pid) {
+            return "no running process has pid \(pid); 'interceptor macos apps' lists running apps with their pids (nothing was delivered)"
         }
         var explicitPid: pid_t? = pid
         if explicitPid == nil, let appName = appName, !appName.isEmpty {

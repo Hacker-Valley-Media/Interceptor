@@ -76,8 +76,12 @@ const CURRENT_MARKER = ".current"
 function readCurrentSlug(base: string): string | undefined {
   const p = join(base, CURRENT_MARKER)
   if (!existsSync(p)) return undefined
-  const slug = readFileSync(p, "utf-8").trim()
-  return slug.length > 0 ? slug : undefined
+  try {
+    const slug = readFileSync(p, "utf-8").trim()
+    return slug.length > 0 ? slug : undefined
+  } catch {
+    return undefined // unreadable marker (a directory, permissions): behave as if absent
+  }
 }
 
 function writeCurrentSlug(base: string, slug: string): void {

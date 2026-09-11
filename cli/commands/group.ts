@@ -69,11 +69,12 @@ export async function runGroupAcrossContexts(action: Action, contextIds: string[
 
   // group_close: the first context that closed it wins; "not found" everywhere
   // is one honest error; any other failure is reported as is.
-  const closed = results.find(r => r.result.success)
-  if (closed) {
-    const data = (typeof closed.result.data === "object" && closed.result.data) ? closed.result.data as Record<string, unknown> : {}
-    return { success: true, data: { context: closed.contextId, ...data } }
-  }
+  // Every context that held the group closed it. One context keeps the flat
+  // shape; several are listed so the caller sees each close.
+  const closed = results.filter(r => r.result.success)
+  const dataOf = (r: DaemonResult) => (typeof r.data === "object" && r.data) ? r.data as Record<string, unknown> : {}
+  if (closed.length === 1) return { success: true, data: { context: closed[0].contextId, ...dataOf(closed[0].result) } }
+  if (closed.length > 1) return { success: true, data: { closed: closed.map(c => ({ context: c.contextId, ...dataOf(c.result) })) } }
   const notFound = results.every(r => /not found/.test(r.result.error ?? ""))
   if (notFound) {
     return { success: false, error: `group '${String(action.label)}' not found in any connected context (checked: ${contextIds.join(", ")})` }

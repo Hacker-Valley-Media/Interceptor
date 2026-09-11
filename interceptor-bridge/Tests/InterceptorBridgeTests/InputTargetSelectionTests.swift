@@ -131,12 +131,24 @@ final class InputTargetSelectionTests: XCTestCase {
     func testRefOwnedByAnotherAppThanRequestedIsAProblem() {
         let selector = InputTargetSelector(
             resolveRef: { ref in ref == "e1" ? (self.anyElement, pid_t(101)) : nil },
-            resolvePidByName: { name in name == "Other" ? pid_t(202) : nil }
+            resolvePidByName: { name in name == "Other" ? pid_t(202) : nil },
+            pidIsLive: { _ in true }
         )
         let problem = selector.explicitTargetProblem(ref: "e1", appName: "Other", pid: nil)
         XCTAssertNotNil(problem)
         XCTAssertTrue(problem!.contains("belongs to pid 101"))
         XCTAssertNil(selector.explicitTargetProblem(ref: "e1", appName: nil, pid: pid_t(101)))
+    }
+
+    // An explicit --pid must name a live process; CGEvent.postToPid to a dead
+    // pid reports success while delivering nothing.
+    func testExplicitDeadPidIsAProblemAndLivePidIsNot() {
+        let selector = InputTargetSelector(resolveRef: { _ in nil }, resolvePidByName: { _ in nil })
+        let dead = selector.explicitTargetProblem(ref: nil, appName: nil, pid: pid_t(2_000_000))
+        XCTAssertNotNil(dead)
+        XCTAssertTrue(dead!.contains("no running process has pid 2000000"))
+        XCTAssertNil(selector.explicitTargetProblem(ref: nil, appName: nil, pid: getpid()))
+        XCTAssertNotNil(selector.explicitTargetProblem(ref: nil, appName: nil, pid: pid_t(0)))
     }
 
     func testResolvedTargetsAndNoExplicitTargetAreNotProblems() {

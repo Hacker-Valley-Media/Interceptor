@@ -30,7 +30,7 @@ export function detectSurfaces(argv: string[] = [], env: Record<string, string |
   }
   const full = process.platform === "darwin" &&
     (existsSync(LAUNCH_AGENT_SYSTEM) || existsSync(launchAgentUser()) ||
-     existsSync(bridgeSocketPathForDetection()))
+     existsSync(bridgeSocketPathForDetection(env)))
   return { browser: true, macos: full, ios: full }
 }
 

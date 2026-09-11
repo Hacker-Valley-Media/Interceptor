@@ -92,6 +92,10 @@ export function describeEvalMain(
   if (!us.manifest_permission) {
     return { available: false, hint: `this extension copy has no userScripts permission; install the current extension` }
   }
+  if (us.api_present === false) {
+    // No toggle can restore an API the browser does not expose.
+    return { available: false, hint: "chrome.userScripts is not available in this browser (Chrome 120+ exposes it); structured reads (read, find, text, html) do not need it" }
+  }
   return {
     available: false,
     hint: `enable "Allow User Scripts" on ${page} (Chrome 138+; on older Chrome turn on Developer mode), then run 'interceptor reload'. Structured reads (read, find, text, html) do not need it.${us.error ? ` Chrome said: ${us.error}` : ""}`,

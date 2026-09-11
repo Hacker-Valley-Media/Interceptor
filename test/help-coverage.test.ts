@@ -51,6 +51,12 @@ describe("help coverage", () => {
     expect(page).not.toContain("interceptor ios devices")
   })
 
+  test("a curated page that documents the sub-verb answers for it (help update status)", () => {
+    const page = helpForCommand("update", "status")
+    expect(page).not.toBeNull()
+    expect(page).toContain("interceptor update status")
+  })
+
   test("help for an unknown sub-verb is null, not the whole block", () => {
     expect(helpForCommand("macos", "definitely-not-a-verb")).toBeNull()
   })
