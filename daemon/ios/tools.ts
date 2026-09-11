@@ -434,6 +434,8 @@ export function inspectRunnerIdentity(
   const profilePath = join(appPath, "embedded.mobileprovision")
   const profile = readMobileProvisionSummary(profilePath)
   if (!profile) return fail("runner has no readable provisioning profile")
+  if (typeof profile.expiresAt !== "number") return fail("runner provisioning profile has no valid expiration date")
+  if (profile.expiresAt <= Date.now()) return fail("runner provisioning profile has expired")
   if (!profile.teamIds.includes(teamId)) fail("runner signature and provisioning team do not match")
   if (opts.udid && !profile.provisionedDevices.some((value) => value.toUpperCase() === opts.udid!.toUpperCase())) {
     fail(`runner provisioning profile does not include device '${opts.udid}'`)

@@ -7,6 +7,8 @@ import electronManifest from "../extension/dist-mv2/manifest.json"
 
 const runnerPlist = readFileSync(resolve(import.meta.dir, "../ios/InterceptorRunner/Generated/InterceptorRunner-Info.plist"), "utf8")
 const runnerProject = readFileSync(resolve(import.meta.dir, "../ios/InterceptorRunner/project.yml"), "utf8")
+const plistValue = (key: string): string | undefined =>
+  new RegExp(`<key>${key}</key>\\s*<string>([^<]+)</string>`).exec(runnerPlist)?.[1]
 
 describe("version sync", () => {
   test("extension/manifest.json#version matches package.json#version", () => {
@@ -18,7 +20,8 @@ describe("version sync", () => {
   })
 
   test("iOS runner version matches package.json#version", () => {
-    expect(runnerPlist).toContain(`<string>${pkg.version}</string>`)
+    expect(plistValue("CFBundleShortVersionString")).toBe(pkg.version)
+    expect(plistValue("CFBundleVersion")).toBe(pkg.version)
     expect(runnerProject).toContain(`CFBundleShortVersionString: "${pkg.version}"`)
     expect(runnerProject).toContain(`CFBundleVersion: "${pkg.version}"`)
   })

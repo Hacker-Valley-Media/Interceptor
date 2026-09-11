@@ -67,6 +67,7 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
     // Replace only external Xcode/install processes; exercise real build staging
     // and installer selection without touching a device or signing identity.
     let buildArgs = [];
+    let expiration = new Date(Date.now() + 86_400_000).toISOString();
     Bun.spawnSync = ((args, opts) => {
       if (args.includes("build-for-testing")) {
         buildArgs = args;
@@ -86,7 +87,7 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
         if (key === "TeamIdentifier") return ok(JSON.stringify(["FIXTURE"]));
         if (key === "ProvisionedDevices") return ok(JSON.stringify(["fixture"]));
         if (key === "Entitlements.application-identifier") return ok("FIXTURE.*");
-        if (key === "ExpirationDate") return ok("2027-09-10T00:00:00Z");
+        if (key === "ExpirationDate") return ok(expiration);
       }
       if (command.endsWith("security")) return ok("PROFILE");
       if (command.endsWith("plutil") && args.includes("json")) {
@@ -106,6 +107,12 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
     if (!buildArgs.includes("PRODUCT_BUNDLE_IDENTIFIER=com.interceptor.runner.fixture")) throw new Error("derived bundle id was not passed to Xcode");
     if (built.bundleId !== "com.interceptor.runner.fixture.xctrunner") throw new Error("actual bundle id was not returned");
     if (!(await installRunnerApp("fixture", built.bundleId, true)).ok) throw new Error("install failed");
+    expiration = "2000-01-01T00:00:00Z";
+    const expired = await installRunnerApp("fixture", built.bundleId, true);
+    if (expired.ok || !expired.error?.includes("profile has expired")) throw new Error("expired profile reached device install");
+    expiration = "";
+    const undated = await installRunnerApp("fixture", built.bundleId, true);
+    if (undated.ok || !undated.error?.includes("no valid expiration date")) throw new Error("undated profile reached device install");
     if (stageRunner().error || readFileSync(staged(), "utf8") !== "xcode-signed") throw new Error("launch replaced prepared runner");
     if (readFileSync(built.xctestrunPath, "utf8") !== "xcode-launch") throw new Error("launch descriptor replaced");
     writeFileSync(join(source, "Debug-iphoneos", "Fixture-Runner.app", "Fixture"), "v3");

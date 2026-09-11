@@ -448,16 +448,17 @@ export class IosManager {
 
   /** Force a re-sign+reinstall+relaunch now (also runs on the refresh timer). */
   private async refresh(action: { [k: string]: unknown }): Promise<IosResult> {
+    const team = typeof action.team === "string" ? action.team : getAppleAccount()?.teamId
     const ref = typeof action.device === "string" ? action.device : typeof action.udid === "string" ? action.udid : undefined
     // No device ref → refresh everything that's expiring.
     if (!ref) {
       const due = installsExpiringBy(REFRESH_LEAD_MS)
       if (due.length === 0) return { success: true, data: { note: "nothing to refresh — all installs are current" } }
       const results = [] as Array<{ udid: string; ok: boolean; error?: string }>
-      for (const udid of due) { const r = await this.setup({ udid }); results.push({ udid, ok: r.success, error: r.error }) }
+      for (const udid of due) { const r = await this.setup({ udid, team }); results.push({ udid, ok: r.success, error: r.error }) }
       return { success: results.every((r) => r.ok), data: { refreshed: results } }
     }
-    return this.setup(action)
+    return this.setup({ ...action, team })
   }
 
   /** Legacy root-helper diagnostic retained only to give operators a clear hint. */

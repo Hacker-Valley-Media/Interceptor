@@ -51,7 +51,7 @@ the resulting identity, installs it with `devicectl`, and launches it with Xcode
 staged result; it refuses the unsigned package input. Verbs **auto-connect** (no
 `enable`); address a phone with `--on <name>` (or it uses your only phone).
 
-```
+```bash
 interceptor ios setup [<device>]            # build, sign, install, and launch with Xcode
 interceptor ios install [<device>]          # reinstall the runner previously signed by setup
 interceptor ios devices                      # phones that have the agent (+ names)
@@ -76,7 +76,6 @@ Release builds the agent: `release.sh` runs an unsigned `build-for-testing` of
 Override with `INTERCEPTOR_RUNNER_PREBUILT=<Products dir>` to provide a prepared
 build, or `INTERCEPTOR_SKIP_RUNNER=1` to omit it. Legacy/internal:
 `enable`/`disable`/`status`/`discover` still exist; `--wda-url` is the deprecated WDA hatch.
-```
 
 `interceptor contexts` lists `ios:<udid>` beside browser / `cdp:` / `runtime:` contexts.
 
