@@ -69,11 +69,17 @@ if launchctl list | grep -q "$PLIST_NAME" 2>/dev/null; then
   launchctl bootout "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
 fi
 
-if [[ -f /tmp/interceptor-bridge.pid ]]; then
-  PID="$(head -1 /tmp/interceptor-bridge.pid)"
-  kill "$PID" 2>/dev/null || true
-  sleep 1
-fi
+# The bridge keeps its pid/socket in the user's temp dir (Platform.runtimeDir);
+# a pre-0.26 bridge used /tmp. Stop whichever generation is running.
+RUNTIME_DIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)"
+RUNTIME_DIR="${RUNTIME_DIR%/}"
+for PIDFILE in /tmp/interceptor-bridge.pid "$RUNTIME_DIR/interceptor-bridge.pid"; do
+  if [[ -f "$PIDFILE" ]]; then
+    PID="$(head -1 "$PIDFILE")"
+    kill "$PID" 2>/dev/null || true
+    sleep 1
+  fi
+done
 
 # install the .app bundle for TCC tracking, then a back-compat symlink
 # at the legacy bare-binary path. INTERCEPTOR_BRIDGE_BIN override skips this
@@ -151,10 +157,6 @@ cat > "$PLIST_DST" <<PLIST
         <key>SuccessfulExit</key>
         <false/>
     </dict>
-    <key>StandardOutPath</key>
-    <string>/tmp/interceptor-bridge.stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/interceptor-bridge.stderr.log</string>
     <key>ThrottleInterval</key>
     <integer>5</integer>
 </dict>

@@ -1,4 +1,4 @@
-import { resolveElement } from "../input-simulation"
+import { resolveElement, staleElementError } from "../input-simulation"
 import { getOrAssignRef } from "../ref-registry"
 import { getEffectiveRole, getAccessibleName } from "../a11y-tree"
 
@@ -7,7 +7,7 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 
 export async function handleFocus(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
-  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
+  if (!el) return staleElementError(action, "focused")
   el.focus()
   return { success: true }
 }

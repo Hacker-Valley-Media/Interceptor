@@ -328,7 +328,7 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
             )
         }
         if let appName = appName,
-           let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }) {
+           let app = RunningApps.resolve(appName) {
             return Self.preferredAppIdentity(
                 requested: (app.localizedName ?? appName, app.processIdentifier, app.bundleIdentifier ?? ""),
                 frontmost: nil

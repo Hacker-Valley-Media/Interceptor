@@ -55,6 +55,26 @@ export function parseContextFlag(args: string[]): string | undefined {
   return args[idx + 1]
 }
 
+/**
+ * Browser-context resolution, highest precedence first:
+ *   1. --context <id>          explicit per-call choice
+ *   2. $INTERCEPTOR_CONTEXT    per-lane default, set once (parallel to
+ *                              $INTERCEPTOR_GROUP); empty means unset
+ *   3. undefined               the daemon auto-routes when exactly one browser
+ *                              context is connected and refuses otherwise
+ *
+ * "multiple extensions connected, use --context <id>" was the most frequent
+ * error in 80k agent CLI calls (924 results, 286 sessions, 2026-09-10 review)
+ * because every command had to repeat the flag; agents dropped it on the
+ * cleanup and status calls.
+ */
+export function resolveContextId(args: string[], env: Record<string, string | undefined> = process.env): string | undefined {
+  const explicit = parseContextFlag(args)
+  if (explicit !== undefined) return explicit
+  const fromEnv = env.INTERCEPTOR_CONTEXT?.trim()
+  return fromEnv ? fromEnv : undefined
+}
+
 // per-agent named tab groups. Labels become part of a tab-strip title.
 export const GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/
 

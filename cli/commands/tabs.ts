@@ -160,9 +160,15 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
           }
           return { type: "tab_switch", tabId: parseInt(switchId) }
         }
-        default:
-          console.error("error: unknown tab subcommand. Use: new, close, switch")
+        default: {
+          // `tab list` was guessed 179 times in 90 agent sessions (2026-09-10
+          // review); the listing verb is `tabs`, so say so instead of only
+          // naming the three real subcommands.
+          const sub = filtered[1]
+          const listHint = sub === "list" || sub === "ls" ? " To list tabs run 'interceptor tabs'." : " (to list tabs: 'interceptor tabs')"
+          console.error(`error: unknown tab subcommand${sub ? ` '${sub}'` : ""}. Use: new, close, switch.${listHint}`)
           process.exit(1)
+        }
       }
       break
 

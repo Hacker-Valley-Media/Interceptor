@@ -1,11 +1,11 @@
-import { resolveElement, dispatchHoverSequence } from "../input-simulation"
+import { resolveElement, dispatchHoverSequence, staleElementError } from "../input-simulation"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
 
 export async function handleHover(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
-  if (!el) return { success: false, error: `stale element [${action.index}] — run interceptor state to refresh` }
+  if (!el) return staleElementError(action, "hovered")
   const hoverFromX = action.fromX as number | undefined
   const hoverFromY = action.fromY as number | undefined
   if (hoverFromX !== undefined && hoverFromY !== undefined) {

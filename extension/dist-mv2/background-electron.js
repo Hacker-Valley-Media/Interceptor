@@ -302,10 +302,11 @@ async function verifyTabUrl(tabId, expectedUrl) {
 }
 
 // shared/content-script-retry.ts
+var REPLY_CHANNEL_CLOSED = /message (?:port|channel) (?:is )?closed/i;
 function shouldRetryContentScript(error) {
   if (!error)
     return false;
-  return error.includes("Receiving end does not exist") || error.includes("Could not establish connection") || error.includes("disconnected port") || error.includes("message channel is closed") || error.includes("no response from content script");
+  return error.includes("Receiving end does not exist") || error.includes("Could not establish connection") || error.includes("disconnected port") || REPLY_CHANNEL_CLOSED.test(error) || error.includes("no response from content script");
 }
 var INPUT_ACTIONS = new Set([
   "click",
@@ -331,7 +332,7 @@ var INPUT_ACTIONS = new Set([
 function isResponseLoss(error) {
   if (!error)
     return false;
-  return error.includes("message channel is closed") || error.includes("disconnected port") || error.includes("no response from content script");
+  return REPLY_CHANNEL_CLOSED.test(error) || error.includes("disconnected port") || error.includes("no response from content script");
 }
 
 // extension/src/background/content-bridge.ts
@@ -415,26 +416,17 @@ async function sendToContentScript(tabId, action, frameId) {
   const first = await sendToContentScriptOnce(tabId, action, frameId);
   if (first.success || !shouldRetryContentScript(first.error))
     return first;
-  if (INPUT_ACTIONS.has(action.type) && isResponseLoss(first.error)) {
-    let navigating = false;
-    try {
-      navigating = (await chrome.tabs.get(tabId)).status === "loading";
-    } catch {}
-    if (navigating) {
-      return {
-        success: true,
-        data: `${action.type} delivered; the page began navigating before the reply arrived`,
-        warning: "reply channel closed during navigation — re-read page state to confirm the outcome"
-      };
-    }
-    return {
-      success: false,
-      error: `${action.type} was delivered but the reply channel closed (${first.error}) — not auto-retried to avoid firing it twice; re-read page state to confirm the outcome, then retry deliberately`
-    };
-  }
+  const firstGuard = await inputReplayGuard(tabId, action, first);
+  if (firstGuard)
+    return firstGuard;
   await new Promise((resolve) => setTimeout(resolve, 250));
   const retryWithoutInject = await sendToContentScriptOnce(tabId, action, frameId);
   if (retryWithoutInject.success)
+    return retryWithoutInject;
+  const secondGuard = await inputReplayGuard(tabId, action, retryWithoutInject);
+  if (secondGuard)
+    return secondGuard;
+  if (!shouldRetryContentScript(retryWithoutInject.error))
     return retryWithoutInject;
   const injected = await injectContentScript(tabId, frameId);
   if (!injected.success) {
@@ -452,9 +444,31 @@ async function sendToContentScript(tabId, action, frameId) {
   const retried = await sendToContentScriptOnce(tabId, action, frameId);
   if (retried.success)
     return retried;
+  const thirdGuard = await inputReplayGuard(tabId, action, retried);
+  if (thirdGuard)
+    return thirdGuard;
   return {
     success: false,
     error: `content script re-injected on tab ${tabId} but action still failed: ${retried.error || "unknown error"}`
+  };
+}
+async function inputReplayGuard(tabId, action, attempt) {
+  if (attempt.success || !INPUT_ACTIONS.has(action.type) || !isResponseLoss(attempt.error))
+    return null;
+  let navigating = false;
+  try {
+    navigating = (await chrome.tabs.get(tabId)).status === "loading";
+  } catch {}
+  if (navigating) {
+    return {
+      success: true,
+      data: `${action.type} delivered; the page began navigating before the reply arrived`,
+      warning: "reply channel closed during navigation — re-read page state to confirm the outcome"
+    };
+  }
+  return {
+    success: false,
+    error: `${action.type} was delivered but the reply channel closed (${attempt.error}) — not auto-retried to avoid firing it twice; re-read page state to confirm the outcome, then retry deliberately`
   };
 }
 async function sendNetDirect(tabId, msg) {
@@ -869,13 +883,33 @@ function mimeTypeForFormat(format) {
     return "image/png";
   return "image/jpeg";
 }
+var captureQueueByWindow = new Map;
 async function withCaptureVisibleTabFocus(tabId, windowId, fn) {
+  const tail = captureQueueByWindow.get(windowId) ?? Promise.resolve();
+  const run = tail.catch(() => {
+    return;
+  }).then(() => borrowFocusAndCapture(tabId, windowId, fn));
+  captureQueueByWindow.set(windowId, run);
+  try {
+    return await run;
+  } finally {
+    if (captureQueueByWindow.get(windowId) === run)
+      captureQueueByWindow.delete(windowId);
+  }
+}
+async function borrowFocusAndCapture(tabId, windowId, fn) {
   const [priorActive] = await chrome.tabs.query({ active: true, windowId });
   const targetAlreadyActive = priorActive?.id === tabId;
   if (!targetAlreadyActive) {
     try {
       await chrome.tabs.update(tabId, { active: true });
-    } catch {}
+    } catch (err) {
+      throw new Error(`could not activate tab ${tabId} for capture: ${err.message}. captureVisibleTab reads the window's active tab, so capturing anyway would return a different page; retry, or pass --tab <id> of a tab that can be activated.`);
+    }
+    const [nowActive] = await chrome.tabs.query({ active: true, windowId });
+    if (nowActive?.id !== tabId) {
+      throw new Error(`tab ${tabId} did not become the active tab of window ${windowId} (active is ${nowActive?.id ?? "none"}); refusing to capture a different page.`);
+    }
   }
   try {
     return await fn();

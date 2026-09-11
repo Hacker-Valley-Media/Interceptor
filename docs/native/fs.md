@@ -48,6 +48,7 @@ Wire fields (mirrored by the CLI flags):
 - `query` — free-text substring or Spotlight predicate. `*` / `**` is a wildcard listing.
 - `--scope` — alias (`everywhere` | `cwd` | `workspace` | `home` | `granted` | `path`) or an absolute path. Default `everywhere`.
 - `--paths /a,/b` (or repeated) — multi-root, only with `--scope path`. An empty/missing list errors.
+- `--timeout-ms N` (`timeoutMs`, default 10000, floor 200) — deadline for the Spotlight passes. `mdfind` has no timeout of its own and a content search over a large indexed volume can outlive the CLI's transport timeout; the name pass runs first, the content pass second, and when the deadline cuts a pass the result carries `partial: true`, `deadlineMs`, and a `hint` naming the pass that was cut. Results are what arrived in time.
 - `--cwd /path` — root for `cwd` / `workspace`. Defaults to the CLI's working directory when omitted.
 - `--kinds public.folder,file` — additive UTI / class filter (`directory`, `file`, `public.folder`, etc.).
 - `--limit N` — match cap (default 50 from the CLI, 20 from the wire default).

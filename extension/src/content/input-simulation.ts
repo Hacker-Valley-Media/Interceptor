@@ -2,6 +2,22 @@ import { resolveRef } from "./ref-registry"
 import { isVisible } from "./element-discovery"
 import { selectorMap } from "./element-discovery"
 
+export type StaleElementResult = { success: false; error: string; delivered: false }
+
+// One wording for every handler. Name the ref the caller passed (the handlers
+// used to print the internal `index`, so agents saw `stale element [undefined]`
+// 339 times in the 2026-09-10 session review), say that nothing happened, and
+// name the recovery. `delivered: false` lets the CLI drop its "delivery is
+// unverified" caveat: the content script answered before touching the page.
+export function staleElementError(action: { [key: string]: unknown }, verb: string): StaleElementResult {
+  const label = String(action.ref ?? action.index ?? "unknown")
+  return {
+    success: false,
+    error: `stale element [${label}] — it is no longer in the DOM, so nothing was ${verb}. Run 'interceptor read' for fresh refs.`,
+    delivered: false,
+  }
+}
+
 export function resolveElement(indexOrRef: number | undefined, ref?: string): Element | null {
   if (ref) {
     return resolveRef(ref)

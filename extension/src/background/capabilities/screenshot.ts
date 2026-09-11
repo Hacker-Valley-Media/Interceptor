@@ -45,7 +45,28 @@ function mimeTypeForFormat(format: string): string {
 // ship. Caller is expected to wrap the entire captureVisibleTab block —
 // including the rate-limit gap between strips — so the prior-active tab is
 // only restored once the full sequence is done.
+// Captures sharing a window take turns. Two concurrent borrows would each
+// activate their own tab and restore the other's, and captureVisibleTab reads
+// whichever tab is active at the instant it runs (Chrome tabs API reference:
+// "the currently active tab in the specified window").
+const captureQueueByWindow = new Map<number, Promise<unknown>>()
+
 export async function withCaptureVisibleTabFocus<T>(
+  tabId: number,
+  windowId: number,
+  fn: () => Promise<T>
+): Promise<T> {
+  const tail = captureQueueByWindow.get(windowId) ?? Promise.resolve()
+  const run = tail.catch(() => undefined).then(() => borrowFocusAndCapture(tabId, windowId, fn))
+  captureQueueByWindow.set(windowId, run)
+  try {
+    return await run
+  } finally {
+    if (captureQueueByWindow.get(windowId) === run) captureQueueByWindow.delete(windowId)
+  }
+}
+
+async function borrowFocusAndCapture<T>(
   tabId: number,
   windowId: number,
   fn: () => Promise<T>
@@ -53,12 +74,17 @@ export async function withCaptureVisibleTabFocus<T>(
   const [priorActive] = await chrome.tabs.query({ active: true, windowId })
   const targetAlreadyActive = priorActive?.id === tabId
   if (!targetAlreadyActive) {
+    // Fail closed. Capturing after a failed activation returned whichever tab
+    // WAS active — a screenshot of the wrong page labeled as the requested
+    // one (screenshot probe, reliability review 2026-09-10).
     try {
       await chrome.tabs.update(tabId, { active: true })
-    } catch {
-      // If activation fails (tab vanished, window state changed), let the
-      // caller's captureVisibleTab call surface the underlying error so the
-      // existing diagnostics path stays authoritative.
+    } catch (err) {
+      throw new Error(`could not activate tab ${tabId} for capture: ${(err as Error).message}. captureVisibleTab reads the window's active tab, so capturing anyway would return a different page; retry, or pass --tab <id> of a tab that can be activated.`)
+    }
+    const [nowActive] = await chrome.tabs.query({ active: true, windowId })
+    if (nowActive?.id !== tabId) {
+      throw new Error(`tab ${tabId} did not become the active tab of window ${windowId} (active is ${nowActive?.id ?? "none"}); refusing to capture a different page.`)
     }
   }
   try {

@@ -48,13 +48,23 @@ fi
 PATH_MARKER_START="# >>> interceptor path >>>"
 PATH_MARKER_END="# <<< interceptor path <<<"
 
+# Bridge runtime files: the current user's temp dir (Platform.runtimeDir) plus
+# the legacy /tmp paths a pre-0.26 bridge used. Resolve the dir as the real user
+# when this script runs under sudo.
+USER_RUNTIME_DIR="$(sudo -u "${SUDO_USER:-$USER}" /usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || /usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)"
+USER_RUNTIME_DIR="${USER_RUNTIME_DIR%/}"
+remove_bridge_runtime_files() {
+  rm -f /tmp/interceptor-bridge.sock /tmp/interceptor-bridge.pid /tmp/interceptor-bridge.lock
+  rm -f "$USER_RUNTIME_DIR"/interceptor-bridge.sock "$USER_RUNTIME_DIR"/interceptor-bridge.pid "$USER_RUNTIME_DIR"/interceptor-bridge.lock
+}
+
 # ── Bridge-only path (downgrade) ──────────────────────────────────────────────
 if [[ "$BRIDGE_ONLY" == "1" ]]; then
   echo "==> Downgrading to browser-only mode (--bridge-only)..."
 
   echo "==> Stopping bridge process..."
   pkill -f "interceptor-bridge" 2>/dev/null || true
-  rm -f /tmp/interceptor-bridge.sock /tmp/interceptor-bridge.pid
+  remove_bridge_runtime_files
 
   echo "==> Removing bridge LaunchAgent..."
   TARGET_UID="$(id -u "${SUDO_USER:-$USER}" 2>/dev/null || echo "")"
@@ -97,7 +107,7 @@ pkill -f "interceptor-bridge" 2>/dev/null || true
 
 echo "==> Removing runtime files..."
 rm -f /tmp/interceptor.sock /tmp/interceptor.pid
-rm -f /tmp/interceptor-bridge.sock /tmp/interceptor-bridge.pid
+remove_bridge_runtime_files
 
 echo "==> Removing native messaging manifests..."
 rm -f "$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.interceptor.host.json"

@@ -14,6 +14,7 @@
  */
 
 import { existsSync } from "node:fs"
+import { bridgeSocketPathForDetection } from "../../shared/bridge-paths"
 
 export type Surfaces = { browser: true; macos: boolean; ios: boolean }
 
@@ -29,7 +30,7 @@ export function detectSurfaces(argv: string[] = [], env: Record<string, string |
   }
   const full = process.platform === "darwin" &&
     (existsSync(LAUNCH_AGENT_SYSTEM) || existsSync(launchAgentUser()) ||
-     existsSync("/tmp/interceptor-bridge.sock"))
+     existsSync(bridgeSocketPathForDetection(env)))
   return { browser: true, macos: full, ios: full }
 }
 

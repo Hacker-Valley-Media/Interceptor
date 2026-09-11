@@ -117,10 +117,12 @@ describe("withCaptureVisibleTabFocus — borrow-and-restore", () => {
     expect(fakeTabs.find(t => t.id === 200)?.active).toBe(true)
   })
 
-  test("ignores activation errors and surfaces capture-closure errors verbatim", async () => {
-    // Replace chrome.tabs.update with a thrower for the initial activate call,
-    // then succeed on the restore. The capture closure runs regardless.
+  test("a failed activation fails the capture instead of capturing the wrong tab", async () => {
+    // captureVisibleTab reads the window's ACTIVE tab; when the target could
+    // not be activated the closure would have captured tab 100 and labeled it
+    // as tab 200 (screenshot probe, reliability review 2026-09-10).
     let updateCalls = 0
+    let closureRan = false
     const chromeUnderTest = (globalThis as { chrome: { tabs: { update: (id: number, props: chrome.tabs.UpdateProperties) => Promise<unknown> } } }).chrome
     const originalUpdate = chromeUnderTest.tabs.update
     chromeUnderTest.tabs.update = async (tabId: number, props: chrome.tabs.UpdateProperties) => {
@@ -129,10 +131,51 @@ describe("withCaptureVisibleTabFocus — borrow-and-restore", () => {
       return originalUpdate(tabId, props)
     }
     const { withCaptureVisibleTabFocus } = await import("../extension/src/background/capabilities/screenshot")
-    const out = await withCaptureVisibleTabFocus(200, 1, async () => "captured-anyway")
-    expect(out).toBe("captured-anyway")
-    // Final restore call was issued even though the initial activate threw.
-    expect(updateCalls).toBe(2)
+    await expect(
+      withCaptureVisibleTabFocus(200, 1, async () => { closureRan = true; return "captured-anyway" })
+    ).rejects.toThrow(/could not activate tab 200 for capture: tab vanished/)
+    expect(closureRan).toBe(false)
+    // Only the failed activation ran; nothing to restore since focus never moved.
+    expect(updateCalls).toBe(1)
+    expect(fakeTabs.find(t => t.id === 100)?.active).toBe(true)
+  })
+
+  test("refuses when the tab did not actually become active", async () => {
+    const chromeUnderTest = (globalThis as { chrome: { tabs: { update: (id: number, props: chrome.tabs.UpdateProperties) => Promise<unknown> } } }).chrome
+    // update "succeeds" but the window's active tab does not change.
+    chromeUnderTest.tabs.update = async (tabId: number, props: chrome.tabs.UpdateProperties) => {
+      activations.push({ tabId, props })
+      return fakeTabs.find(t => t.id === tabId)
+    }
+    const { withCaptureVisibleTabFocus } = await import("../extension/src/background/capabilities/screenshot")
+    await expect(withCaptureVisibleTabFocus(200, 1, async () => "x")).rejects.toThrow(/did not become the active tab/)
+  })
+
+  test("captures sharing a window run one after the other and each restores the prior-active tab", async () => {
+    const { withCaptureVisibleTabFocus } = await import("../extension/src/background/capabilities/screenshot")
+    fakeTabs.push({ id: 300, active: false, windowId: 1 })
+    const order: string[] = []
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>(r => { releaseFirst = r })
+    const first = withCaptureVisibleTabFocus(200, 1, async () => {
+      order.push(`first:start active=${fakeTabs.find(t => t.active && t.windowId === 1)?.id}`)
+      await firstGate
+      order.push(`first:end active=${fakeTabs.find(t => t.active && t.windowId === 1)?.id}`)
+      return "a"
+    })
+    const second = withCaptureVisibleTabFocus(300, 1, async () => {
+      order.push(`second:start active=${fakeTabs.find(t => t.active && t.windowId === 1)?.id}`)
+      return "b"
+    })
+    // Let the first borrow start; the second must not have touched focus yet.
+    await new Promise(r => setTimeout(r, 10))
+    expect(order).toEqual(["first:start active=200"])
+    releaseFirst()
+    expect(await first).toBe("a")
+    expect(await second).toBe("b")
+    expect(order).toEqual(["first:start active=200", "first:end active=200", "second:start active=300"])
+    // Both borrows restored tab 100.
+    expect(fakeTabs.find(t => t.id === 100)?.active).toBe(true)
   })
 
   test("does not restore when prior-active tab is the same as the target (no spurious update)", async () => {

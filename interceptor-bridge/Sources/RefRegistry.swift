@@ -13,10 +13,13 @@ final class RefRegistry: @unchecked Sendable {
     private var refs: [String: Entry] = [:]
     private var counter: Int = 0
 
+    // Refs are unique for the bridge lifetime: `clear()` drops the entries so
+    // an old ref fails as "not found", but never rewinds the counter. The
+    // rewind reissued `e1` to a different app's element while an agent still
+    // held the old `e1` (native-ref probe, reliability review 2026-09-10).
     func clear() {
         lock.lock()
         refs.removeAll()
-        counter = 0
         lock.unlock()
     }
 

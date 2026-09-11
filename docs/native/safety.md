@@ -52,5 +52,5 @@ The dashboard surfaces a deep-link to `System Settings → Privacy & Security` w
 
 1. `Ctrl+Opt+Cmd+Escape` kills all overlays.
 2. `/native-restart` restarts the bridge.
-3. `kill $(cat /tmp/interceptor-bridge.pid)` if the bridge is unresponsive.
+3. `kill $(cat "$(getconf DARWIN_USER_TEMP_DIR)interceptor-bridge.pid")` if the bridge is unresponsive (the pid, socket, lock, and log live in the current user's temporary directory; releases before 0.26 used `/tmp/interceptor-bridge.pid`).
 4. `tccutil reset Accessibility com.interceptor.bridge` as last resort (triggers re-grant on next run).

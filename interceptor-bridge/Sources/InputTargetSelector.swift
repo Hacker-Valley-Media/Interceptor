@@ -46,13 +46,23 @@ struct InputTargetSelector {
     // real RefRegistry / NSWorkspace lookups.
     let resolveRef: (String) -> (element: AXUIElement, pid: pid_t?)?
     let resolvePidByName: (String) -> pid_t?
+    // Liveness for an explicit --pid. kill(pid, 0) delivers no signal; EPERM
+    // still means the process exists. Pid reuse is not detectable here.
+    let pidIsLive: (pid_t) -> Bool
+
+    static func defaultPidIsLive(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
 
     init(
         resolveRef: @escaping (String) -> (element: AXUIElement, pid: pid_t?)?,
-        resolvePidByName: @escaping (String) -> pid_t?
+        resolvePidByName: @escaping (String) -> pid_t?,
+        pidIsLive: @escaping (pid_t) -> Bool = InputTargetSelector.defaultPidIsLive
     ) {
         self.resolveRef = resolveRef
         self.resolvePidByName = resolvePidByName
+        self.pidIsLive = pidIsLive
     }
 
     // Live-AX selection. Called from InputDomain when the request
@@ -85,6 +95,37 @@ struct InputTargetSelector {
         return .cghidEventTap
     }
 
+    // An explicit target that does not resolve is an error, never a
+    // fall-through. The legacy chain ended at cghidEventTap (the frontmost
+    // app), so `type --ref e9` after the ref expired typed into whatever the
+    // user was looking at (native-ref probe, reliability review 2026-09-10).
+    // Returns a message when the caller named a ref/app/pid that cannot be
+    // honored, or when the ref's owner is not the requested app; nil when the
+    // target resolves or nothing explicit was given.
+    func explicitTargetProblem(ref: String?, appName: String?, pid: pid_t?) -> String? {
+        var refOwner: pid_t? = nil
+        if let ref = ref, !ref.isEmpty {
+            guard let entry = resolveRef(ref) else {
+                return "ref \(ref) not found — refs expire when the tree changes or after a newer tree/find read; run 'interceptor macos tree' or 'macos find' again and use a fresh ref (nothing was delivered)"
+            }
+            refOwner = entry.pid
+        }
+        if let pid = pid, !pidIsLive(pid) {
+            return "no running process has pid \(pid); 'interceptor macos apps' lists running apps with their pids (nothing was delivered)"
+        }
+        var explicitPid: pid_t? = pid
+        if explicitPid == nil, let appName = appName, !appName.isEmpty {
+            guard let resolved = resolvePidByName(appName) else {
+                return "no running app matches '\(appName)' — names are case-insensitive and accept the .app name or bundle id; 'interceptor macos apps' lists them (nothing was delivered)"
+            }
+            explicitPid = resolved
+        }
+        if let owner = refOwner, let explicitPid = explicitPid, owner != explicitPid, let ref = ref {
+            return "ref \(ref) belongs to pid \(owner), not the requested app/pid \(explicitPid); re-read that app's tree (nothing was delivered)"
+        }
+        return nil
+    }
+
     // Ref-aware PID resolution: when a ref is provided and registered,
     // its owning PID is the right target for any keyboard fallback path
     // that needs CGEvent.postToPid (e.g. text-field type when AX value
@@ -108,11 +149,7 @@ extension InputTargetSelector {
                 guard let entry = refRegistry.resolveInfo(ref) else { return nil }
                 return (entry.element, entry.pid)
             },
-            resolvePidByName: { name in
-                NSWorkspace.shared.runningApplications
-                    .first(where: { $0.localizedName?.lowercased() == name.lowercased() })?
-                    .processIdentifier
-            }
+            resolvePidByName: { name in RunningApps.resolve(name)?.processIdentifier }
         )
     }
 }

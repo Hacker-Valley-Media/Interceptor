@@ -19,10 +19,10 @@
     </dict>
     <key>ThrottleInterval</key>
     <integer>5</integer>
-    <key>StandardOutPath</key>
-    <string>/tmp/interceptor-bridge.stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/interceptor-bridge.stderr.log</string>
+    <!-- No StandardOutPath/StandardErrorPath: launchd does not expand
+         variables, so a fixed /tmp path was shared by every account (the
+         second logged-in user's bridge failed with EACCES). The bridge writes
+         its own log under the user's temp dir (Platform.bridgeLogPath). -->
     <key>ProcessType</key>
     <string>Interactive</string>
 </dict>

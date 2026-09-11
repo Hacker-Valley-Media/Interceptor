@@ -2,7 +2,7 @@
 
 ## AX tree
 
-Refs (`e1`, `e2`, ...) work the same as browser refs. AXObserver auto-invalidates the tree when the app changes — re-read before acting on a stale ref.
+Refs (`e1`, `e2`, ...) work the same as browser refs. AXObserver auto-invalidates the tree when the app changes — re-read before acting on a stale ref. Ref ids are never reused within a bridge session: a ref from an older `tree`/`find` read is refused (`ref eN not found … nothing was delivered`) rather than resolved to another app's element, and an explicit `--ref`/`--app`/`--pid` that does not resolve is an error, never a fall-through to the frontmost app. `--app` names are case-insensitive and accept the `.app` name or bundle id.
 
 ```bash
 interceptor macos tree                           # Frontmost app, interactive elements only (default filter)

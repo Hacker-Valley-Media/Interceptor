@@ -1,10 +1,26 @@
 import Foundation
 
 enum Platform {
-    static let bridgeSocketPath = "/tmp/interceptor-bridge.sock"
-    static let bridgePidPath = "/tmp/interceptor-bridge.pid"
-    static let bridgeLogPath = "/tmp/interceptor-bridge.log"
-    static let bridgeEventsPath = "/tmp/interceptor-bridge-events.jsonl"
+    // Per-user runtime directory. NSTemporaryDirectory() is
+    // confstr(_CS_DARWIN_USER_TEMP_DIR) for the current uid (Apple: "the
+    // temporary directory for the current user"), so two logged-in accounts no
+    // longer share one /tmp socket + pid file (the second account's LaunchAgent
+    // failed with EACCES on the first one's files, 2026-08-31). The daemon and
+    // CLI derive the same path from $TMPDIR (shared/bridge-paths.ts); the env
+    // override exists for tests and scratch bridges.
+    static let runtimeDir: String = {
+        let raw: String
+        if let override = ProcessInfo.processInfo.environment["INTERCEPTOR_BRIDGE_RUNTIME_DIR"], !override.isEmpty {
+            raw = override
+        } else {
+            raw = NSTemporaryDirectory()
+        }
+        return raw.hasSuffix("/") ? String(raw.dropLast()) : raw
+    }()
+    static let bridgeSocketPath = runtimeDir + "/interceptor-bridge.sock"
+    static let bridgePidPath = runtimeDir + "/interceptor-bridge.pid"
+    static let bridgeLogPath = runtimeDir + "/interceptor-bridge.log"
+    static let bridgeEventsPath = runtimeDir + "/interceptor-bridge-events.jsonl"
     static let maxEventFileSize = 10 * 1024 * 1024
 
     // Monitor-session artifacts. The directory mirrors the browser's
@@ -80,7 +96,7 @@ enum Platform {
         unlink(pidPath)
     }
 
-    static let bridgeLockPath = "/tmp/interceptor-bridge.lock"
+    static let bridgeLockPath = runtimeDir + "/interceptor-bridge.lock"
 
     /// Advisory `flock` guarding the pid-file + socket-path lifecycle. Returns
     /// the held descriptor, or nil if the lock could not be taken in time.

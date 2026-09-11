@@ -6,6 +6,7 @@
  */
 
 import { existsSync } from "node:fs"
+import { bridgePidPathForDetection, bridgeSocketPathForDetection } from "../../shared/bridge-paths"
 import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
 import {
   attachMonitorTaskSource,
@@ -62,8 +63,8 @@ function bridgePreflightFailure(): string | null {
   // Interceptor-Full-<v>.pkg). Either is sufficient.
   const launchAgentUser = `${home}/Library/LaunchAgents/com.interceptor.bridge.plist`
   const launchAgentSystem = "/Library/LaunchAgents/com.interceptor.bridge.plist"
-  const bridgeSock = "/tmp/interceptor-bridge.sock"
-  const bridgePid = "/tmp/interceptor-bridge.pid"
+  const bridgeSock = bridgeSocketPathForDetection()
+  const bridgePid = bridgePidPathForDetection()
   const launchAgentInstalled = existsSync(launchAgentUser) || existsSync(launchAgentSystem)
   const bridgeReachable = existsSync(bridgeSock) || existsSync(bridgePid)
   if (!launchAgentInstalled && !bridgeReachable) {
@@ -1013,6 +1014,10 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
             query,
             scope: flagVal(filtered, "--scope"),
             limit: flagInt(filtered, "--limit") || 50,
+            // Spotlight deadline (default 10 s in the bridge). The result carries
+            // partial:true when the deadline cut a pass; the CLI transport
+            // timeout for this verb is derived from it (cli/transport.ts).
+            timeoutMs: flagInt(filtered, "--timeout-ms"),
           }
           // --paths /a,/b,/c — multi-root search (only valid with --scope path).
           // Repeating --paths is also accepted; entries are concatenated.
