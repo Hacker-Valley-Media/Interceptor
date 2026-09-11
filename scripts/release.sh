@@ -29,10 +29,9 @@
 #   10. Round 2 notarize each signed pkg.
 #   11. Staple each pkg.
 #   12. Verify with stapler validate, pkgutil --check-signature, spctl --assess.
-#   13. Sparkle appcast publish: copy + sign each pkg, emit per-pkg appcast item
-#       (with sparkle:channel set to "browser-only" or "full" so client-side
-#       updaters can filter by the mode the install reported via interceptor
-#       status).
+#   13. Stop before Sparkle publication. After local validation, the separate
+#       publisher validates docs/release-notes.html, signs an immutable notes
+#       snapshot, and emits per-mode appcast items.
 #
 # Env overrides (sensible defaults assume Hacker Valley Media's HVM team):
 #   INTERCEPTOR_SIGNING_IDENTITY    Developer ID Application name
@@ -65,6 +64,7 @@ DIST_XML_FULL="$REPO_ROOT/scripts/release/distribution.xml"
 DIST_XML_BROWSER="$REPO_ROOT/scripts/release/distribution-browser.xml"
 POSTINSTALL_FULL="$REPO_ROOT/scripts/release/postinstall-full"
 POSTINSTALL_BROWSER="$REPO_ROOT/scripts/release/postinstall-browser"
+PREINSTALL_EXTENSION_STORE="$REPO_ROOT/scripts/release/preinstall-extension-store"
 ENABLE_PLATFORM_TARGETS="${INTERCEPTOR_ENABLE_PLATFORM_TARGETS:-0}"
 INCLUDE_AGENT_DYLIBS="${INTERCEPTOR_INCLUDE_AGENT_DYLIBS:-0}"
 # When 1, a stapler failure is non-fatal: the artifact is still signed +
@@ -257,6 +257,10 @@ if [[ "$BUILD_FULL" == "1" && ! -x "$POSTINSTALL_FULL" ]]; then
 fi
 if [[ "$BUILD_BROWSER" == "1" && ! -x "$POSTINSTALL_BROWSER" ]]; then
   echo "ERROR: postinstall-browser script missing or not executable: $POSTINSTALL_BROWSER" >&2
+  exit 1
+fi
+if [[ ! -x "$PREINSTALL_EXTENSION_STORE" ]]; then
+  echo "ERROR: preinstall extension Store script missing or not executable: $PREINSTALL_EXTENSION_STORE" >&2
   exit 1
 fi
 
@@ -497,12 +501,16 @@ if [[ "$BUILD_FULL" == "1" ]]; then
   fi
 fi
 
-# Per-mode --scripts dirs: exactly one postinstall per mode.
+# Per-mode --scripts dirs: a shared first-install marker plus one postinstall per mode.
 if [[ "$BUILD_BROWSER" == "1" ]]; then
+  run cp "$PREINSTALL_EXTENSION_STORE" "$SCRIPTS_BROWSER_DIR/preinstall"
+  run chmod 755 "$SCRIPTS_BROWSER_DIR/preinstall"
   run cp "$POSTINSTALL_BROWSER" "$SCRIPTS_BROWSER_DIR/postinstall"
   run chmod 755 "$SCRIPTS_BROWSER_DIR/postinstall"
 fi
 if [[ "$BUILD_FULL" == "1" ]]; then
+  run cp "$PREINSTALL_EXTENSION_STORE" "$SCRIPTS_FULL_DIR/preinstall"
+  run chmod 755 "$SCRIPTS_FULL_DIR/preinstall"
   run cp "$POSTINSTALL_FULL" "$SCRIPTS_FULL_DIR/postinstall"
   run chmod 755 "$SCRIPTS_FULL_DIR/postinstall"
 fi
@@ -773,9 +781,10 @@ echo ""
 # Sparkle publish is intentionally NOT part of release.sh anymore. Auto-pushing
 # the appcast inside the same script that produced the .pkg meant a fresh build
 # went straight into the auto-update pipeline with no human-in-the-loop test
-# gate. Run `bash scripts/publish-sparkle.sh` AFTER testing the .pkg locally,
-# only when you're sure the build is good.
+# gate. Update docs/release-notes.html, run `bash scripts/publish-sparkle.sh`
+# after testing the .pkg locally, and publish only when the build is approved.
 echo "==> Step 13: Sparkle publish — SKIPPED (run separately after testing)"
+echo "    Confirm docs/release-notes.html has a newest-first section for $VERSION."
 echo "    Test the .pkg locally, then publish with:"
 echo "        bash scripts/publish-sparkle.sh"
 echo "    See scripts/publish-sparkle.sh --help for flags."

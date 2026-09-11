@@ -83,7 +83,7 @@ Two core installers ship per release, plus an optional Safari add-on. Pick the c
 
 Both download from the same [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases) page. Start with **Browser** unless you know you need native macOS commands — you can always upgrade to Full later via `interceptor upgrade --full`.
 
-**Updating:** run `interceptor update`. It waits briefly for Sparkle and reports the selected update version, a no-update reason, or the real error. If the feed is slow, it returns `checking`; `interceptor update status` then shows the latest outcome, selected version, lifecycle phase, feed, schedule, live-session age, and `sessionInProgress`. A live session always reports `concluded: false` and includes the exact bridge restart command if recovery is needed. Full installs also auto-check in the background. When an update is found, an agent can drive Sparkle's prompt like any other window (`interceptor macos read --app interceptor-bridge`, then `interceptor macos act <ref>` on **Install Update**); the final install step always asks for an administrator password, which a person must enter.
+**Updating:** run `interceptor update`. It waits briefly for Sparkle and reports the selected update version, a no-update reason, or the real error. If the feed is slow, it returns `checking`; `interceptor update status` then shows the latest outcome, selected version, lifecycle phase, feed, schedule, live-session age, and `sessionInProgress`. A live session always reports `concluded: false` and includes the exact bridge restart command if recovery is needed. Full installs also auto-check in the background. When an update is found, both routes use Sparkle's standard window and show signed notes for the target release plus every published release since the installed version. An agent can drive that prompt like any other window (`interceptor macos read --app interceptor-bridge`, then `interceptor macos act <ref>` on **Install Update**); the final install step always asks for administrator authorization.
 
 **Windows (browser-only):** a signed per-user installer (`Interceptor-Browser-<version>-windows-{x64,arm64}.exe`, Windows 11 24H2+) is attached to each [release](https://github.com/Hacker-Valley-Media/Interceptor/releases) — see [docs/windows-install.md](docs/windows-install.md) for the install, silent-install, upgrade, and uninstall contract. Windows extension acquisition is store-based (Chrome Web Store for Chrome/Brave, Edge Add-ons for Edge); the installer never edits browser profiles or force-loads an unpacked extension. Windows developers can also build from source with `scripts/install.ps1` (PowerShell 7, source checkout).
 
@@ -121,12 +121,14 @@ interceptor macos tree                         # macOS surface (Full pkg only, a
 | `interceptor-bridge.app` | `/Applications/interceptor-bridge.app` |
 | LaunchAgent (auto-start at login) | `/Library/LaunchAgents/com.interceptor.bridge.plist` |
 
-**Chrome/Brave extension**: install it either way. Both copies share one extension ID and work the same. The installers stage the files and register the native messaging host, but never install into a browser profile without a click from you.
+**Chrome/Brave extension**: install it either way. Both copies share one extension ID and work the same. On a first package install, the installer opens the approved Chrome Web Store listing for you, but the browser still requires your click before installing it. Package and Sparkle upgrades do not reopen that page.
 
 - **Chrome Web Store** (default): https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed. One click; new versions arrive when they clear store review.
 - **Unpacked copy** (developer path, always the same version as the installed CLI): open `brave://extensions/` or `chrome://extensions/`, enable Developer Mode, click **Load unpacked**, select `/Library/Application Support/Interceptor/extension/`.
 
 Keep one copy per profile. Loading the unpacked folder over a store install takes over the same extension entry (Chrome prefers the unpacked location), and removing it later does not bring the store copy back; reinstall from the store if you want it again. `interceptor diagnose` names which copy is connected (store or unpacked), its version, and whether the native messaging port is up.
+
+Both macOS package conclusions show these same two routes after installation. The extension popup keeps the Context ID, tab-group label, and tab-lifecycle settings, then reports whether the daemon is healthy over native messaging, WebSocket, or Safari native relay. A missing native host is shown as “Interceptor may not be installed” with a link to https://github.com/Hacker-Valley-Media/Interceptor/releases/latest; a stopped daemon gets a separate recovery message.
 
 **Safari extension load** uses its signed containing app:
 

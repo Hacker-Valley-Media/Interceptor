@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interceptor release notes</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0;
+      padding: 18px 20px;
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      color: CanvasText;
+      background: Canvas;
+    }
+    main { max-width: 760px; margin: 0 auto; }
+    section { padding: 0 0 16px; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); }
+    section + section { padding-top: 16px; }
+    h2 { margin: 0 0 4px; font-size: 18px; }
+    time { color: color-mix(in srgb, CanvasText 65%, transparent); font-size: 12px; }
+    ul { margin: 9px 0 0; padding-left: 20px; }
+    p { margin: 9px 0 0; }
+    main > section.sparkle-installed-version,
+    main > section.sparkle-installed-version ~ section { display: none; }
+  </style>
+</head>
+<body>
+<main>
+  <section data-sparkle-version="0.26.4">
+    <h2>Interceptor 0.26.4</h2>
+    <time datetime="2026-09-11">September 11, 2026</time>
+    <ul>
+      <li>Sparkle now shows signed release notes for the target update and every published release since the installed version.</li>
+      <li>The Browser and Full package conclusions now offer Chrome Web Store and unpacked-extension install routes.</li>
+      <li>The extension popup now reports its desktop connection and links to Interceptor downloads when the desktop software is unavailable.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.26.2">
+    <h2>Interceptor 0.26.2</h2>
+    <time datetime="2026-09-11">September 11, 2026</time>
+    <ul>
+      <li>The iPhone runner stays resident, and runner refreshes preserve the selected project and signing identity.</li>
+      <li>Unsupported iOS login attempts now fail before the daemon starts.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.26.1">
+    <h2>Interceptor 0.26.1</h2>
+    <time datetime="2026-09-10">September 10, 2026</time>
+    <ul>
+      <li>One context environment variable now routes a browser lane, with cross-profile status and group commands.</li>
+      <li>Command help, output limits, error wording, and target identity checks were expanded.</li>
+      <li>Bridge runtime files are now isolated per macOS user.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.25.0">
+    <h2>Interceptor 0.25.0</h2>
+    <time datetime="2026-09-09">September 9, 2026</time>
+    <ul>
+      <li>Chrome Web Store and unpacked copies now share the approved extension identity.</li>
+      <li>Context diagnostics identify whether a connected copy came from the store or Developer Mode.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.24.13">
+    <h2>Interceptor 0.24.13</h2>
+    <time datetime="2026-09-09">September 9, 2026</time>
+    <ul><li>New managed tabs now prefer the window that already contains Interceptor groups.</li></ul>
+  </section>
+  <section data-sparkle-version="0.24.11">
+    <h2>Interceptor 0.24.11</h2>
+    <time datetime="2026-09-07">September 7, 2026</time>
+    <ul><li>Saved Chromium logins can be filled by host through the credential-safe browser path.</li></ul>
+  </section>
+  <section data-sparkle-version="0.24.10">
+    <h2>Interceptor 0.24.10</h2>
+    <time datetime="2026-09-07">September 7, 2026</time>
+    <ul><li>Browser actions report target results more accurately, task state is durable, and iPhone dial-back selection is clearer.</li></ul>
+  </section>
+  <section data-sparkle-version="0.24.2">
+    <h2>Interceptor 0.24.2</h2>
+    <time datetime="2026-09-03">September 3, 2026</time>
+    <ul>
+      <li>A keychain-backed secret vault delivers credentials by name to browser, macOS, sudo, administrator-prompt, and iPhone paths.</li>
+      <li>Browser navigation failures now exit nonzero, stale extension snapshots are named, and an idle-spin watchdog can recycle a stuck daemon.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.23.37">
+    <h2>Interceptor 0.23.37</h2>
+    <time datetime="2026-09-02">September 2, 2026</time>
+    <ul><li>Browser work is isolated in session-scoped tab groups with lifecycle-safe reuse and cleanup.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.33">
+    <h2>Interceptor 0.23.33</h2>
+    <time datetime="2026-08-27">August 27, 2026</time>
+    <ul><li>Sparkle update checks now report observed outcomes and retain active-session recovery details.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.32">
+    <h2>Interceptor 0.23.32</h2>
+    <time datetime="2026-08-27">August 27, 2026</time>
+    <ul><li>Release builds remove local source paths, and Windows runtime file access uses pinned system tools.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.30">
+    <h2>Interceptor 0.23.30</h2>
+    <time datetime="2026-08-23">August 23, 2026</time>
+    <ul><li>Partial socket writes are queued correctly on bridge, relay, and usbmux transports.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.29">
+    <h2>Interceptor 0.23.29</h2>
+    <time datetime="2026-08-23">August 23, 2026</time>
+    <ul><li>Daemon startup and cleanup now use port ownership to recover safely from stale runtime files.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.27">
+    <h2>Interceptor 0.23.27</h2>
+    <time datetime="2026-08-22">August 22, 2026</time>
+    <ul><li>The trusted-input flag contract was restored and checked across affected commands.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.25">
+    <h2>Interceptor 0.23.25</h2>
+    <time datetime="2026-08-21">August 21, 2026</time>
+    <ul><li>Native bridge lifecycle ownership and self-targeted Accessibility mutations were fixed.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.23">
+    <h2>Interceptor 0.23.23</h2>
+    <time datetime="2026-08-20">August 20, 2026</time>
+    <ul><li>CLI flag parsing, speech finalization, network-log limits, and export redaction were corrected.</li></ul>
+  </section>
+  <section data-sparkle-version="0.23.20">
+    <h2>Interceptor 0.23.20</h2>
+    <time datetime="2026-08-16">August 16, 2026</time>
+    <ul>
+      <li><code>interceptor websearch</code> now uses the browser's configured search provider in a managed tab.</li>
+      <li><code>interceptor find</code> searches the complete rendered page and returns typed text and element matches.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.23.19">
+    <h2>Interceptor 0.23.19</h2>
+    <time datetime="2026-08-16">August 16, 2026</time>
+    <ul>
+      <li><code>interceptor websearch</code> and complete-page <code>find</code> were introduced.</li>
+      <li>Windows release validation and runner pinning were corrected.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.23.18">
+    <h2>Interceptor 0.23.18</h2>
+    <time datetime="2026-08-11">August 11, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.17">
+    <h2>Interceptor 0.23.17</h2>
+    <time datetime="2026-08-11">August 11, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.16">
+    <h2>Interceptor 0.23.16</h2>
+    <time datetime="2026-08-10">August 10, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.15">
+    <h2>Interceptor 0.23.15</h2>
+    <time datetime="2026-08-10">August 10, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.14">
+    <h2>Interceptor 0.23.14</h2>
+    <time datetime="2026-08-09">August 9, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.13">
+    <h2>Interceptor 0.23.13</h2>
+    <time datetime="2026-08-09">August 9, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.12">
+    <h2>Interceptor 0.23.12</h2>
+    <time datetime="2026-08-09">August 9, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.10">
+    <h2>Interceptor 0.23.10</h2>
+    <time datetime="2026-08-08">August 8, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.6">
+    <h2>Interceptor 0.23.6</h2>
+    <time datetime="2026-08-08">August 8, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.23.3">
+    <h2>Interceptor 0.23.3</h2>
+    <time datetime="2026-08-07">August 7, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.38">
+    <h2>Interceptor 0.22.38</h2>
+    <time datetime="2026-08-07">August 7, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.37">
+    <h2>Interceptor 0.22.37</h2>
+    <time datetime="2026-07-26">July 26, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.35">
+    <h2>Interceptor 0.22.35</h2>
+    <time datetime="2026-07-21">July 21, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.32">
+    <h2>Interceptor 0.22.32</h2>
+    <time datetime="2026-07-20">July 20, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.21">
+    <h2>Interceptor 0.22.21</h2>
+    <time datetime="2026-07-20">July 20, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.19">
+    <h2>Interceptor 0.22.19</h2>
+    <time datetime="2026-07-19">July 19, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.10">
+    <h2>Interceptor 0.22.10</h2>
+    <time datetime="2026-07-17">July 17, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.8">
+    <h2>Interceptor 0.22.8</h2>
+    <time datetime="2026-07-17">July 17, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.6">
+    <h2>Interceptor 0.22.6</h2>
+    <time datetime="2026-07-12">July 12, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.5">
+    <h2>Interceptor 0.22.5</h2>
+    <time datetime="2026-07-05">July 5, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.2">
+    <h2>Interceptor 0.22.2</h2>
+    <time datetime="2026-07-03">July 3, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.22.1">
+    <h2>Interceptor 0.22.1</h2>
+    <time datetime="2026-07-03">July 3, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.21.3">
+    <h2>Interceptor 0.21.3</h2>
+    <time datetime="2026-07-02">July 2, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.20.12">
+    <h2>Interceptor 0.20.12</h2>
+    <time datetime="2026-07-02">July 2, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.19.1">
+    <h2>Interceptor 0.19.1</h2>
+    <time datetime="2026-06-21">June 21, 2026</time>
+    <ul>
+      <li><code>interceptor save</code> captures browser-produced bytes without a download dialog.</li>
+      <li>Runtime tab-group labels and colors can be changed without rebuilding the extension.</li>
+      <li>A dependency-free screenshot renderer and cross-platform OCR were added.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="0.17.6">
+    <h2>Interceptor 0.17.6</h2>
+    <time datetime="2026-06-18">June 18, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.17.3">
+    <h2>Interceptor 0.17.3</h2>
+    <time datetime="2026-06-17">June 17, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.16.9">
+    <h2>Interceptor 0.16.9</h2>
+    <time datetime="2026-06-07">June 7, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.16.6">
+    <h2>Interceptor 0.16.6</h2>
+    <time datetime="2026-06-04">June 4, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.16.2">
+    <h2>Interceptor 0.16.2</h2>
+    <time datetime="2026-05-31">May 31, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+  <section data-sparkle-version="0.16.1">
+    <h2>Interceptor 0.16.1</h2>
+    <time datetime="2026-05-28">May 28, 2026</time>
+    <p>No separate release notes were published for this historical release.</p>
+  </section>
+</main>
+</body>
+</html>

@@ -16,6 +16,7 @@ interceptor macos inspect                      # Tree + apps + frontmost info
 ### Self-update rules
 
 - Run `interceptor update`. Inspect `outcome`, `selectedVersion`, and `phase`.
+- When an update is available, Sparkle's standard window shows signed cumulative notes from the target version back to, but not including, the installed version. Manual and scheduled checks use the same feed item and notes.
 - If `outcome` is `checking`, run `interceptor update status`. A live session reports `concluded: false`, `sessionAgeSeconds`, and the exact bridge restart command under `recoveryHint`.
 - If `outcome` is `update_available`, run `interceptor macos read --app interceptor-bridge`, then act on **Install Update**.
 - After download, read the changed alert for a fresh ref, then act on **Install and Relaunch**.

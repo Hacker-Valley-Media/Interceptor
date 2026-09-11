@@ -1,3 +1,89 @@
+import type { ConnectionSnapshot } from "./background/transport"
+
+const DOWNLOAD_URL = "https://github.com/Hacker-Valley-Media/Interceptor/releases/latest"
+
+const transportName = (transport: ConnectionSnapshot["transport"]): string => ({
+  native: "Native messaging",
+  websocket: "WebSocket",
+  "safari-native": "Safari native",
+})[transport ?? "native"]
+
+export function renderConnectionHealth(health: HTMLElement, snapshot: ConnectionSnapshot): void {
+  health.replaceChildren()
+  health.dataset.state = snapshot.state
+  health.setAttribute("aria-live", "polite")
+  health.setAttribute("role", snapshot.state === "disconnected" ? "alert" : "status")
+
+  const title = document.createElement("strong")
+  title.style.display = "block"
+  if (snapshot.state === "connecting") {
+    title.textContent = "Checking Interceptor daemon..."
+    health.appendChild(title)
+    return
+  }
+  if (snapshot.state === "connected") {
+    title.textContent = "Interceptor daemon is healthy"
+    const detail = document.createElement("div")
+    detail.className = "connection-detail"
+    detail.textContent = transportName(snapshot.transport)
+    health.append(title, detail)
+    return
+  }
+
+  const hostMissing = snapshot.nativeError?.toLowerCase().includes("specified native messaging host not found")
+  title.textContent = hostMissing
+    ? "Interceptor may not be installed"
+    : "Interceptor daemon is not healthy"
+  const detail = document.createElement("p")
+  detail.className = "connection-detail"
+  detail.textContent = hostMissing
+    ? "Install or repair the desktop package, then reopen this popup."
+    : "Start Interceptor by running any interceptor command, then reopen this popup."
+  health.append(title, detail)
+  if (!hostMissing) return
+  const link = document.createElement("a")
+  link.href = DOWNLOAD_URL
+  link.target = "_blank"
+  link.rel = "noopener noreferrer"
+  link.textContent = "Download latest Interceptor"
+  health.appendChild(link)
+}
+
+export function terminalConnectionSnapshot(snapshot: ConnectionSnapshot, finalAttempt: boolean): ConnectionSnapshot {
+  return finalAttempt && snapshot.state === "connecting" ? { state: "disconnected" } : snapshot
+}
+
+const healthEl = document.getElementById("connectionHealth") ?? document.createElement("div")
+if (!healthEl.id) {
+  healthEl.id = "connectionHealth"
+  document.body.prepend(healthEl)
+}
+
+async function refreshConnectionHealth(): Promise<void> {
+  let renderedSnapshot = ""
+  for (let attempt = 0; attempt <= 20; attempt += 1) {
+    let snapshot: ConnectionSnapshot
+    try {
+      snapshot = await chrome.runtime.sendMessage({ type: "interceptor_connection_status" }) as ConnectionSnapshot
+    } catch {
+      snapshot = { state: "disconnected" }
+    }
+    if (!snapshot || !["connecting", "connected", "disconnected"].includes(snapshot.state)) {
+      snapshot = { state: "disconnected" }
+    }
+    snapshot = terminalConnectionSnapshot(snapshot, attempt === 20)
+    const snapshotKey = JSON.stringify(snapshot)
+    if (snapshotKey !== renderedSnapshot) {
+      renderConnectionHealth(healthEl, snapshot)
+      renderedSnapshot = snapshotKey
+    }
+    if (snapshot.state === "connected" || attempt === 20) return
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+}
+
+void refreshConnectionHealth()
+
 const input = document.getElementById("contextId") as HTMLInputElement
 const saveBtn = document.getElementById("save") as HTMLButtonElement
 const resetBtn = document.getElementById("reset") as HTMLButtonElement

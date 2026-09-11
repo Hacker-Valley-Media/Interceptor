@@ -37,22 +37,22 @@
     color: #1d1d1f;
   }
   p { margin: 6px 0; }
+  ::selection { color: #fff; background: #007aff; }
   ol { margin: 4px 0 4px 18px; padding: 0; }
   ol li { margin: 4px 0; }
   code, .path {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 12px;
-    color: #1d1d1f;
-    background: #f5f5f7;
-    padding: 1px 5px;
-    border-radius: 3px;
+    color: inherit;
+    background: transparent;
   }
   .path { user-select: all; }
   pre.cmd {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 12px;
-    color: #1d1d1f;
-    background: #f5f5f7;
+    color: inherit;
+    background: transparent;
+    border: 1px solid #d1d1d6;
     padding: 8px 10px;
     border-radius: 4px;
     margin: 4px 0 10px 0;
@@ -60,18 +60,10 @@
     user-select: all;
     overflow-x: auto;
   }
-  .step-num {
-    display: inline-block;
-    width: 18px;
-    height: 18px;
-    line-height: 18px;
-    text-align: center;
-    background: #007aff;
-    color: #fff;
-    border-radius: 50%;
+  a.store-link {
+    color: #0057b8;
     font-weight: 600;
-    margin-right: 6px;
-    font-size: 11px;
+    text-decoration: underline;
   }
   .note {
     font-size: 12px;
@@ -83,15 +75,8 @@
   @media (prefers-color-scheme: dark) {
     body { color: #dddde0; }
     h2, h3, h4 { color: #f5f5f7; }
-    code, .path {
-      color: #e8e8ea;
-      background: #3a3a3c;
-    }
-    pre.cmd {
-      color: #e8e8ea;
-      background: #2c2c2e;
-    }
-    .step-num { background: #0a84ff; color: #fff; }
+    pre.cmd { border-color: #636366; }
+    a.store-link { color: #64d2ff; }
     .note {
       color: #98989d;
       border-top-color: #48484a;
@@ -102,8 +87,12 @@
 <body>
   <h2>Interceptor (Browser-Only) is installed.</h2>
 
-  <h3><span class="step-num">1</span>Load or reload the browser extension</h3>
-  <p>Chrome and Brave do not allow installers to load or refresh extensions automatically &mdash; do this once by hand, and after package updates:</p>
+  <h3>1. Choose one browser extension route</h3>
+  <h4>Install from the Chrome Web Store</h4>
+  <p><strong>Store install:</strong> <a class="store-link" href="https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed" target="_blank" rel="noopener noreferrer">Open the Interceptor Chrome Web Store listing</a>.</p>
+
+  <h4>Install as an unpacked extension</h4>
+  <p>Use this developer route when testing the extension files installed by the package:</p>
   <ol>
     <li>Open <code>chrome://extensions/</code> (or <code>brave://extensions/</code>)</li>
     <li>Toggle <strong>Developer mode</strong> on (top right)</li>
@@ -114,8 +103,9 @@
     <li>If Interceptor was already loaded from this folder, click its <strong>Reload</strong> button instead.</li>
   </ol>
   <p>After the extension is connected, <code>interceptor reload</code> also refreshes the running extension service worker.</p>
+  <p><strong>Keep only one Interceptor extension copy in each browser profile.</strong> The package installs the desktop software and unpacked files, but your browser installs or loads the extension only after you choose one of the routes above.</p>
 
-  <h3><span class="step-num">2</span>Optional: register skill packs with your AI tooling</h3>
+  <h3>2. Optional: register skill packs with your AI tooling</h3>
   <p>Interceptor ships skill packs that teach AI agents how to drive the browser surface and how to research deeply (the <code>interceptor-research</code> methodology skill). One command links the skills you choose into the AI runtimes it detects (Claude Code, Codex, and any <code>~/.agents/skills</code> consumer) &mdash; and keeps them current across updates:</p>
   <pre class="cmd">interceptor skills adopt</pre>
   <p>Check what is linked at any time with <code>interceptor skills status</code>. Prefer to do it by hand? Symlink any skill directly, e.g. for Claude Code:</p>
