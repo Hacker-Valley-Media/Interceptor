@@ -16,7 +16,7 @@ interceptor macos inspect                      # Tree + apps + frontmost info
 ### Self-update rules
 
 - Run `interceptor update`. Inspect `outcome`, `selectedVersion`, and `phase`.
-- If `outcome` is `checking`, run `interceptor update status`.
+- If `outcome` is `checking`, run `interceptor update status`. A live session reports `concluded: false`, `sessionAgeSeconds`, and the exact bridge restart command under `recoveryHint`.
 - If `outcome` is `update_available`, run `interceptor macos read --app interceptor-bridge`, then act on **Install Update**.
 - After download, read the changed alert for a fresh ref, then act on **Install and Relaunch**.
 - When macOS requests administrator authentication and the operator stored a secret for it, fill it: `interceptor macos authdialog status` to see the prompt, then `interceptor macos authdialog fill --secret <name> --submit`. With no stored secret, stop and tell the user which secret to register.

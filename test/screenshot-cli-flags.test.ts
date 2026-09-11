@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, readdirSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 import { parseScreenshotCommand } from "../cli/commands/screenshot"
 
 describe("screenshot CLI flag parsing", () => {
@@ -61,5 +64,22 @@ describe("screenshot CLI flag parsing", () => {
       quality: 92,
     })
     expect(action.target_max_long_edge).toBeUndefined()
+  })
+
+  test("rejects a positional path instead of silently discarding it", () => {
+    expect(() => parseScreenshotCommand(["screenshot", "named.png", "--save"]))
+      .toThrow("--save takes no value")
+  })
+
+  test("positional rejection exits before creating a screenshot file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "interceptor-screenshot-arg-"))
+    try {
+      const result = Bun.spawnSync(["bun", resolve(import.meta.dir, "../cli/index.ts"), "screenshot", "--save", "named.png"], { cwd: dir })
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain("--save takes no value")
+      expect(readdirSync(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

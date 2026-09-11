@@ -42,11 +42,11 @@ struct SparkleUpdateSnapshot: Sendable {
 
     var concluded: Bool { outcome != .checking }
 
-    func payload() -> [String: Any] {
+    func payload(sessionInProgress: Bool = false, sessionStartDate: Date? = nil, now: Date = Date()) -> [String: Any] {
         var result: [String: Any] = [
             "phase": phase.rawValue,
             "outcome": outcome.rawValue,
-            "concluded": concluded,
+            "concluded": concluded && !sessionInProgress,
         ]
         if let selectedVersion { result["selectedVersion"] = selectedVersion }
         if let selectedDisplayVersion { result["selectedDisplayVersion"] = selectedDisplayVersion }
@@ -58,6 +58,11 @@ struct SparkleUpdateSnapshot: Sendable {
         if let checkStartedAt { result["checkStartedAt"] = checkStartedAt }
         if let updatedAt { result["updatedAt"] = updatedAt }
         if let cycleFinishedAt { result["cycleFinishedAt"] = cycleFinishedAt }
+        if sessionInProgress {
+            let observedStart = checkStartedAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? sessionStartDate
+            result["sessionAgeSeconds"] = observedStart.map { max(0, Int(now.timeIntervalSince($0))) } ?? 0
+            result["recoveryHint"] = "launchctl kickstart -k gui/$(id -u)/com.interceptor.bridge"
+        }
         return result
     }
 }
@@ -167,24 +172,28 @@ final class SparkleUpdateState: @unchecked Sendable {
     func recordDownloading(version: String, displayVersion: String) {
         select(version: version, displayVersion: displayVersion)
         phase = .downloading
+        updateStage = "not_downloaded"
         touch()
     }
 
     func recordDownloaded(version: String, displayVersion: String) {
         select(version: version, displayVersion: displayVersion)
         phase = .downloaded
+        updateStage = "downloaded"
         touch()
     }
 
     func recordExtracting(version: String, displayVersion: String) {
         select(version: version, displayVersion: displayVersion)
         phase = .extracting
+        updateStage = "downloaded"
         touch()
     }
 
     func recordReadyToInstall(version: String, displayVersion: String) {
         select(version: version, displayVersion: displayVersion)
         phase = .readyToInstall
+        updateStage = "downloaded"
         touch()
     }
 
@@ -192,6 +201,7 @@ final class SparkleUpdateState: @unchecked Sendable {
         select(version: version, displayVersion: displayVersion)
         phase = .installing
         outcome = .installing
+        updateStage = "installing"
         touch()
     }
 
@@ -204,9 +214,17 @@ final class SparkleUpdateState: @unchecked Sendable {
     }
 
     func recordCycleFinished(error: String?) {
+        if let error {
+            phase = .error
+            outcome = .error
+            lastError = error
+        } else if outcome == .checking {
+            phase = .idle
+            outcome = .none
+        }
         cycleFinishedAt = Self.timestamp()
         updatedAt = cycleFinishedAt
-        if let error { recordError(error) }
+        deliverConclusion()
     }
 
     private func select(version: String, displayVersion: String) {

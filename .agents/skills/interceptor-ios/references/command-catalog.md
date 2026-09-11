@@ -9,13 +9,13 @@ phone is set up. Phones auto-connect on the first drive verb.
 | Command | What it does |
 |---|---|
 | `interceptor ios setup [<device>] [--team <id>]` | Xcode self-service: build + sign + install + launch the runner using the Apple ID signed into Xcode. |
-| `interceptor ios login --apple-id <id> --password <pw> [--code <2fa>]` | No-Xcode path: sign in with the user's own Apple ID (token stored in the Keychain, never the password). One time. |
-| `interceptor ios logout` | Drop the stored Apple-ID token. |
+| `interceptor ios login` | Unsupported compatibility command. Fails before password input and points to `ios setup`. |
+| `interceptor ios logout` | Remove legacy stored Apple-ID data. |
 | `interceptor ios refresh [<device>]` | Re-sign the installed runner now (also automatic before certificate expiry). |
-| `interceptor ios install [<device>]` | Push / refresh the prebuilt agent (operator path). |
+| `interceptor ios install [<device>]` | Reinstall a runner already signed by `ios setup`. Refuses the unsigned release input. |
 | `interceptor ios devices` | Phones with the agent installed, plus aliases, transport (USB/network), and iOS version. |
 | `interceptor ios discover` | Full device discovery with toolchain + readiness notes. |
-| `interceptor ios status` | Per-phone connection state: `connected` while the runner is dialed in, `disconnected` when it is not (next drive verb auto-connects). |
+| `interceptor ios status` | Per-phone connection state: `connected` while the resident runner is dialed in, with its registration time; `disconnected` when it is not (the next drive verb auto-connects). |
 | `interceptor ios name <device> <alias>` | Alias a phone so you can use `--on <alias>` (e.g. `--on phone`). |
 
 ## Drive verbs

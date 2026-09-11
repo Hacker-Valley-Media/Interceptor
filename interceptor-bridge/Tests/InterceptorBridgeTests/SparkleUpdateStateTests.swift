@@ -109,16 +109,55 @@ final class SparkleUpdateStateTests: XCTestCase {
 
         state.recordDownloading(version: "23", displayVersion: "0.23.33")
         XCTAssertEqual(state.snapshot().phase, .downloading)
+        XCTAssertEqual(state.snapshot().updateStage, "not_downloaded")
         state.recordDownloaded(version: "23", displayVersion: "0.23.33")
         XCTAssertEqual(state.snapshot().phase, .downloaded)
+        XCTAssertEqual(state.snapshot().updateStage, "downloaded")
         state.recordExtracting(version: "23", displayVersion: "0.23.33")
         XCTAssertEqual(state.snapshot().phase, .extracting)
+        XCTAssertEqual(state.snapshot().updateStage, "downloaded")
         state.recordReadyToInstall(version: "23", displayVersion: "0.23.33")
         XCTAssertEqual(state.snapshot().phase, .readyToInstall)
+        XCTAssertEqual(state.snapshot().updateStage, "downloaded")
         state.recordInstalling(version: "23", displayVersion: "0.23.33")
         XCTAssertEqual(state.snapshot().phase, .installing)
         XCTAssertEqual(state.snapshot().outcome, .installing)
+        XCTAssertEqual(state.snapshot().updateStage, "installing")
         XCTAssertEqual(state.snapshot().selectedDisplayVersion, "0.23.33")
+    }
+
+    func testActiveSessionPayloadIsNotConcludedAndProvidesRecovery() {
+        let state = SparkleUpdateState()
+        let started = Date(timeIntervalSince1970: 1_000)
+        let now = Date(timeIntervalSince1970: 1_125)
+
+        state.recordUserChoice("install", stage: "not_downloaded")
+        state.recordDownloading(version: "24", displayVersion: "0.24.13")
+        state.recordDownloaded(version: "24", displayVersion: "0.24.13")
+        state.recordExtracting(version: "24", displayVersion: "0.24.13")
+        state.recordReadyToInstall(version: "24", displayVersion: "0.24.13")
+        let payload = state.snapshot().payload(sessionInProgress: true, sessionStartDate: started, now: now)
+
+        XCTAssertEqual(payload["phase"] as? String, "ready_to_install")
+        XCTAssertEqual(payload["outcome"] as? String, "install_chosen")
+        XCTAssertEqual(payload["updateStage"] as? String, "downloaded")
+        XCTAssertEqual(payload["concluded"] as? Bool, false)
+        XCTAssertEqual(payload["sessionAgeSeconds"] as? Int, 125)
+        XCTAssertEqual(payload["recoveryHint"] as? String, "launchctl kickstart -k gui/$(id -u)/com.interceptor.bridge")
+    }
+
+    func testCycleFinishConcludesACheckThatProducedNoDelegateResult() {
+        let state = SparkleUpdateState()
+        let result = SnapshotBox()
+
+        state.beginCheck(timeout: 60) { result.append($0) }
+        state.recordCycleFinished(error: nil)
+
+        let snapshot = try! XCTUnwrap(result.snapshot().first)
+        XCTAssertEqual(snapshot.phase, .idle)
+        XCTAssertEqual(snapshot.outcome, .none)
+        XCTAssertTrue(snapshot.concluded)
+        XCTAssertNotNil(snapshot.cycleFinishedAt)
     }
 
     func testErrorConcludesPendingCheckWithRealMessage() {

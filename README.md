@@ -83,9 +83,13 @@ Two core installers ship per release, plus an optional Safari add-on. Pick the c
 
 Both download from the same [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases) page. Start with **Browser** unless you know you need native macOS commands — you can always upgrade to Full later via `interceptor upgrade --full`.
 
-**Updating:** run `interceptor update`. It waits briefly for Sparkle and reports the selected update version, a no-update reason, or the real error. If the feed is slow, it returns `checking`; `interceptor update status` then shows the latest outcome, selected version, lifecycle phase, feed, and schedule. Full installs also auto-check in the background. When an update is found, an agent can drive Sparkle's prompt like any other window (`interceptor macos read --app interceptor-bridge`, then `interceptor macos act <ref>` on **Install Update**); the final install step always asks for an administrator password, which a person must enter.
+**Updating:** run `interceptor update`. It waits briefly for Sparkle and reports the selected update version, a no-update reason, or the real error. If the feed is slow, it returns `checking`; `interceptor update status` then shows the latest outcome, selected version, lifecycle phase, feed, schedule, live-session age, and `sessionInProgress`. A live session always reports `concluded: false` and includes the exact bridge restart command if recovery is needed. Full installs also auto-check in the background. When an update is found, an agent can drive Sparkle's prompt like any other window (`interceptor macos read --app interceptor-bridge`, then `interceptor macos act <ref>` on **Install Update**); the final install step always asks for an administrator password, which a person must enter.
 
 **Windows (browser-only):** a signed per-user installer (`Interceptor-Browser-<version>-windows-{x64,arm64}.exe`, Windows 11 24H2+) is attached to each [release](https://github.com/Hacker-Valley-Media/Interceptor/releases) — see [docs/windows-install.md](docs/windows-install.md) for the install, silent-install, upgrade, and uninstall contract. Windows extension acquisition is store-based (Chrome Web Store for Chrome/Brave, Edge Add-ons for Edge); the installer never edits browser profiles or force-loads an unpacked extension. Windows developers can also build from source with `scripts/install.ps1` (PowerShell 7, source checkout).
+
+**Linux (browser-only):** release builds produce `Interceptor-Browser-<version>-linux-x64.tar.gz` for baseline x64 CPUs and `Interceptor-Browser-<version>-linux-arm64.tar.gz` for ARM64, plus `SHA256SUMS`. Extract the matching archive, then run `bash scripts/install.sh --browser-only --brave` or `--chrome`. The archive contains the CLI, daemon, extension, native-host template, installer, uninstaller, version metadata, README, and license. Native macOS commands are not included.
+
+**iPhone setup:** `interceptor ios setup [<device>] [--team <id>]` is the supported onboarding route. It requires Xcode signed in to an Apple Developer team, creates a team-scoped bundle ID, validates the signed app and provisioning profile, installs it, and records the actual ID for later launches. The packaged unsigned runner is only a build input. `ios install` will refuse that input and point back to `ios setup`; `ios login` is unavailable and fails before reading a password. After registration, the runner stays connected for the XCUITest session instead of expiring after 30 seconds. Later iOS commands reuse that session and launch a new runner only after the socket closes or the device is disabled.
 
 ### Install steps
 
@@ -255,7 +259,7 @@ The recommended install path for end users is the signed `.pkg` documented in [I
 
 | Mode | What it installs | macOS TCC prompts | When to pick it |
 |---|---|---|---|
-| **`--browser-only`** | CLI + daemon + extension | None | You only want browser control. Smallest footprint, no Screen Recording / Accessibility / Apple Events prompts. Works on macOS and Windows. |
+| **`--browser-only`** | CLI + daemon + extension | None | You only want browser control. Smallest footprint, no Screen Recording / Accessibility / Apple Events prompts. Works on macOS, Windows, and Linux. |
 | **`--full`** | Everything in browser-only **plus** the Swift bridge `.app`, the LaunchAgent, and the macOS subcommands | Screen Recording, Accessibility, Apple Events (per-target-app on first dispatch) | You need `interceptor macos *` (native AX tree, OS-level input, ScreenCaptureKit, Vision/Speech/NLP). macOS 15+. |
 
 If you don't pass either flag, the script prompts. The default in the prompt is `--full` on macOS, `--browser-only` everywhere else.
@@ -444,7 +448,7 @@ interceptor click e5                         # Click element (synthetic; default
 interceptor click e5 --os                    # FALLBACK — OS-level CGEvent click (only when synthetic input is observed to fail)
 interceptor click e5 --at 10,20             # Click at offset within element
 interceptor click --selector "button span" --nth 4   # Click by CSS selector (0-based --nth matches query output; quote selectors with spaces)
-interceptor query "button span"              # Elements matching a CSS selector — each carries a clickable e<ref>, so any verb can act on it
+interceptor query "button span"              # CSS matches with count, returned, truncated, and clickable e<ref> values; at most 20 elements
 interceptor type e3 "hello"                  # Type into element (synthetic; default)
 interceptor type e3 "more" --append          # Append without clearing
 interceptor type "textbox:Search" "query"    # Type using semantic selector (role:name)
@@ -639,6 +643,8 @@ interceptor screenshot --format webp         # png (default), jpeg, or webp
 interceptor screenshot --quality 80          # Encode quality 0-100 (defaults: png 92, jpeg 92, webp 85)
 interceptor screenshot --target-max-long-edge 1568   # Auto-resize at capture (clamps long edge)
 ```
+
+`--save` takes no value and writes an automatically named image in the current directory. A positional path such as `screenshot --save shot.png` is rejected before browser capture or file creation.
 
 When the DOM renderer fails outright on a heavy page (the serialized SVG won't decode), a default whole-page `screenshot` automatically retries via the pixel path so the command still produces an image. The fallback preserves the DOM path's PNG default (no silent JPEG downgrade), only applies to whole-page captures (element/ref/region requests fail honestly instead of cropping wrong), and reports itself in a `fallback` note — including that the pixel path transiently borrowed tab focus and scrolled the page (both restored). `--no-fallback` forbids the retry entirely.
 

@@ -17,12 +17,19 @@ describe("Sparkle update observability contract", () => {
   test("waits for a real conclusion and reports existing sessions truthfully", () => {
     const domain = read("interceptor-bridge/Sources/Domains/UpdateDomain.swift")
     expect(domain).toContain("updateState.beginCheck(timeout: 10)")
+    expect(domain).toContain("updater.checkForUpdatesInBackground()")
+    expect(domain).not.toContain("updaterController.checkForUpdates(nil)")
     expect(domain).toContain("if updater.sessionInProgress")
     expect(domain).toContain('payload["started"] = false')
-    expect(domain).toContain("if updater.canCheckForUpdates")
+    expect(domain).toContain("guard updater.canCheckForUpdates else")
     expect(domain).toContain("selectedDisplayVersion")
     expect(domain).toContain("use `interceptor update status` for the result")
     expect(domain).not.toContain("Sparkle will now show the alert")
+    const activeSessionBranch = domain.slice(
+      domain.indexOf("if updater.sessionInProgress"),
+      domain.indexOf("guard updater.canCheckForUpdates"),
+    )
+    expect(activeSessionBranch).not.toContain("checkForUpdates(nil)")
     expect(domain.indexOf("if updater.sessionInProgress")).toBeLessThan(
       domain.indexOf("guard updater.canCheckForUpdates"),
     )

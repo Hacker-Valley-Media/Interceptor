@@ -7,20 +7,23 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 export async function handleQuery(action: Action): Promise<ActionResult> {
   const selector = action.selector as string
   const els = document.querySelectorAll(selector)
+  const elements = Array.from(els).slice(0, 20).map((el, i) => ({
+    index: i,
+    ref: getOrAssignRef(el),
+    tag: el.tagName.toLowerCase(),
+    text: (el.textContent || "").trim().slice(0, 80),
+    id: el.id || undefined,
+    classes: el.className || undefined
+  }))
   return {
     success: true, data: {
       count: els.length,
+      returned: elements.length,
+      truncated: elements.length < els.length,
       // ref bridges DOM discovery to the ref-side verbs: an element found by
       // selector is directly actionable (click e<N>, type e<N>, …) even on
       // pages whose a11y tree comes back empty and never minted refs.
-      elements: Array.from(els).slice(0, 20).map((el, i) => ({
-        index: i,
-        ref: getOrAssignRef(el),
-        tag: el.tagName.toLowerCase(),
-        text: (el.textContent || "").trim().slice(0, 80),
-        id: el.id || undefined,
-        classes: el.className || undefined
-      }))
+      elements
     }
   }
 }

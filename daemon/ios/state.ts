@@ -4,15 +4,13 @@
  * ~/.interceptor/ios/state.json:
  *
  *   - `aliases`     friendly name → udid (so `--on work` beats a raw udid).
- *   - `installed`   per-udid: when the agent was pushed + when its signing expires.
- *   - `appleId`     self-service: the active Apple-ID account that re-signs
- *                   the runner (team id, free/paid tier, cert/profile refs, expiry).
- *                   The account's **session token is NOT here** — it lives in the
- *                   macOS Keychain (see keychain.ts). Only non-secret metadata here.
+ *   - `installed`   per-udid: when the agent was pushed, its actual bundle id,
+ *                   and when its signing expires.
+ *   - `appleId`     the Xcode team metadata used to build and sign the runner.
  *
- * Previously the agent was operator-pre-signed (no signing state). This adds
- * per-user re-signing with the user's own Apple ID, so we persist the account
- * metadata + per-install expiry to drive the background refresh timer.
+ * Xcode signs each device-specific build with the user's configured developer
+ * team. The actual bundle id must be persisted because every later install,
+ * inventory, and launch step has to address that exact identity.
  *
  * Pure fs/JSON, no Bun/daemon imports beyond node:fs so it stays trivial to test.
  */
@@ -23,11 +21,12 @@ import { dirname, join } from "node:path"
 
 export type IosInstalled = {
   installedAt?: number
+  bundleId?: string
   /** Runner signing expiry (epoch ms): ≤7 days free, ~1 year paid. Drives refresh. */
   expiresAt?: number
 }
 
-/** the active Apple-ID account used to re-sign the runner (non-secret metadata only). */
+/** The Xcode developer-team metadata used to sign the runner. */
 export type IosAppleAccount = {
   /** Apple-ID team id the device auto-registered under (free personal team or paid). */
   teamId: string
@@ -44,7 +43,7 @@ export type IosAppleAccount = {
 export type IosState = {
   aliases: Record<string, string>          // alias -> udid (upper-case)
   installed: Record<string, IosInstalled>  // udid (upper-case) -> info
-  // ponytail: single active Apple-ID account; multi-account is speculative (one `ios login`).
+  // ponytail: one active Xcode team is enough until multi-team setup is requested.
   appleId?: IosAppleAccount
 }
 
@@ -97,10 +96,14 @@ export function resolveUdid(ref: string): string | undefined {
 export function getInstalled(udid: string): IosInstalled | undefined {
   return loadIosState().installed[udid.toUpperCase()]
 }
-export function markInstalled(udid: string, expiresAt?: number): void {
+export function markInstalled(udid: string, expiresAt?: number, bundleId?: string): void {
   const s = loadIosState()
   const prev = s.installed[udid.toUpperCase()]
-  s.installed[udid.toUpperCase()] = { installedAt: Date.now(), expiresAt: expiresAt ?? prev?.expiresAt }
+  s.installed[udid.toUpperCase()] = {
+    installedAt: Date.now(),
+    expiresAt: expiresAt ?? prev?.expiresAt,
+    bundleId: bundleId ?? prev?.bundleId,
+  }
   saveIosState(s)
 }
 export function knownInstalledUdids(): string[] {
