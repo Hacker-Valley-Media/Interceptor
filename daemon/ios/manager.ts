@@ -455,7 +455,7 @@ export class IosManager {
       const due = installsExpiringBy(REFRESH_LEAD_MS)
       if (due.length === 0) return { success: true, data: { note: "nothing to refresh — all installs are current" } }
       const results = [] as Array<{ udid: string; ok: boolean; error?: string }>
-      for (const udid of due) { const r = await this.setup({ udid, team }); results.push({ udid, ok: r.success, error: r.error }) }
+      for (const udid of due) { const r = await this.setup({ ...action, udid, team }); results.push({ udid, ok: r.success, error: r.error }) }
       return { success: results.every((r) => r.ok), data: { refreshed: results } }
     }
     return this.setup({ ...action, team })

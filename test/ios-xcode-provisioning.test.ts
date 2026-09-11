@@ -133,7 +133,7 @@ describe("ios Xcode provisioning helpers", () => {
     expect(manager).toContain("testmanagerd.launchRunner(udid, { bundleId: this.runnerBundleId(udid), env })")
     expect(manager).toContain("}, this.runnerBundleId(udid))")
     expect(manager).toContain('const team = typeof action.team === "string" ? action.team : getAppleAccount()?.teamId')
-    expect(manager).toContain("this.setup({ udid, team })")
+    expect(manager).toContain("this.setup({ ...action, udid, team })")
     expect(manager).toContain("this.setup({ ...action, team })")
   })
 })
