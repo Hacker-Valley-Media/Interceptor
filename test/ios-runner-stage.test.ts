@@ -7,7 +7,7 @@ test("ios login fails before reading a password or contacting the daemon", () =>
   const result = Bun.spawnSync([
     process.execPath,
     resolve("cli/index.ts"),
-    "ios", "login", "--apple-id", "nobody@example.invalid", "--stdin", "--all-surfaces",
+    "ios", "login", "--apple-id", "nobody@example.invalid", "--stdin",
   ], { stdin: Buffer.from("must-not-be-read\n") })
   expect(result.exitCode).toBe(1)
   expect(result.stderr.toString()).toContain("ios login is unavailable")

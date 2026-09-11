@@ -253,6 +253,13 @@ async function main() {
     process.exit(1)
   }
 
+  // Retained only for older clients. Reject before surface detection or daemon
+  // startup so this unsupported path can never prompt for or transport a password.
+  if (cmd === "ios" && filtered[1] === "login") {
+    await runIosCommand(filtered, { jsonMode, contextId: globalContextId })
+    return
+  }
+
   // fail fast (before any daemon spawn) when a surface is not
   // part of this install. Override with --all-surfaces / INTERCEPTOR_ALL_SURFACES.
   // `update` rides the macos surface: Sparkle lives in the bridge, so a mac
