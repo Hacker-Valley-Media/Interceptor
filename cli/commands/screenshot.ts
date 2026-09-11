@@ -1,14 +1,20 @@
 /**
  * cli/commands/screenshot.ts — screenshot, canvas, capture
  */
+import { normalizeArgsSplit } from "../normalize"
 
 type Action = { type: string; [key: string]: unknown }
 
-export function parseScreenshotCommand(filtered: string[]): Action {
+export function parseScreenshotCommand(filtered: string[], positionalCount?: number): Action {
+  const normalized = positionalCount === undefined ? normalizeArgsSplit(filtered) : { argv: filtered, positionalCount }
+  filtered = normalized.argv
   const cmd = filtered[0]
 
   switch (cmd) {
     case "screenshot": {
+      if (normalized.positionalCount > 0) {
+        throw new Error("screenshot does not accept positional arguments; --save takes no value and writes an automatically named image to the current directory.")
+      }
       if (filtered.includes("--background")) {
         const bgAction: Action = { type: "screenshot_background" }
         if (filtered.includes("--format")) bgAction.format = filtered[filtered.indexOf("--format") + 1]

@@ -15,6 +15,9 @@ agent use. No HTTP server, no CocoaHTTPServer, no usbmux port-forward.
 - A single never-ending UI test (`InterceptorRunnerUITests.testRunner`) keeps the
   XCUITest/`testmanagerd` session alive (the same trick WDA uses) while a
   `URLSessionWebSocketTask` connects to the daemon and dispatches verbs.
+- The daemon retains the `xcodebuild` process and WebSocket channel after
+  registration. The runner has no 30-second lease; later verbs reuse it until
+  the socket closes or the device is disabled.
 - **Capability-blind:** this directory contains **source only** — no signing
   identity, team, or provisioning. You sign it with your own Apple Developer team,
   exactly as you would WebDriverAgent.
@@ -41,26 +44,25 @@ xcodegen generate              # writes InterceptorRunner.xcodeproj
 
 ## Build + run
 
-**No-Xcode product path (recommended)** — the daemon uses the local Apple
-toolchain to build/sign the runner for your team, uploads the `.app` over AFC,
-installs/upgrades it with `installation_proxy`, then starts the XCUITest session
-through the userspace CoreDeviceProxy/testmanagerd route. Xcode does not launch
-the test:
+**Supported product path**: configure an Apple Developer team in Xcode, then let
+Interceptor build, validate, install, and launch the device-specific runner:
 
 ```bash
-export INTERCEPTOR_RUNNER_PROJECT="$PWD/InterceptorRunner.xcodeproj"
-export DEVELOPMENT_TEAM=<YOUR_TEAM_ID>     # automatic signing
-interceptor ios enable <UDID> --yes
+interceptor ios setup <UDID> --team <YOUR_TEAM_ID>
 ```
+
+Xcode owns automatic signing, device registration, provisioning, the iOS 17+
+tunnel, and the `test-without-building` session. The installed bundle ID is
+derived from the selected team and recorded for later launches.
 
 The first install signed by a given Apple Development certificate may require
 one on-device trust action before iOS will launch it: unlock the phone and go to
 Settings → General → VPN & Device Management → Developer App → Trust. Interceptor
 cannot bypass that device-local security decision.
 
-**Prebuilt (faster re-enables)** — build once and point the daemon at the build
-products directory. The daemon still owns install/launch and injects the
-WebSocket environment at testmanagerd launch time:
+**Prebuilt development override**: build a signed runner and point the daemon at
+the build products directory. The daemon still owns launch and injects the
+WebSocket environment into the `.xctestrun`:
 
 ```bash
 xcrun xcodebuild build-for-testing \
@@ -71,16 +73,15 @@ export INTERCEPTOR_RUNNER_DIR="/tmp/runner-dd/Build/Products/Debug-iphoneos"
 interceptor ios enable <UDID> --yes
 ```
 
-**Manual diagnostic** — set `INTERCEPTOR_IOS_USE_XCODE=1` to force the legacy
-`xcodebuild test-without-building` path. Use this only to separate Apple
-signing/provisioning issues from Interceptor launch issues; it is not the
-production route.
+**Manual diagnostic**: Xcode's `test-without-building` path is the default.
+Set `INTERCEPTOR_NO_XCODE=1` only to exercise Interceptor's experimental
+userspace CoreDeviceProxy/testmanagerd launcher.
 
 ## No cable
 
 Pair the device over WiFi (Xcode → device → *Connect via network*, or
 `xcrun devicectl`), then unplug. The runner reaches the daemon over the LAN and
-the daemon launches the test over the paired device through CoreDeviceProxy —
+the daemon launches the test over the paired device through Xcode/CoreDevice.
 **the Mac just has to stay on the same network** because it owns the
 `testmanagerd` session for the test's lifetime.
 

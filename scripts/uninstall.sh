@@ -17,6 +17,8 @@
 
 set -euo pipefail
 
+PLATFORM="$(uname -s)"
+
 # ── Parse flags ────────────────────────────────────────────────────────────────
 BRIDGE_ONLY=0
 for arg in "$@"; do
@@ -39,6 +41,7 @@ for arg in "$@"; do
 done
 
 USER_HOME="${USER_HOME_OVERRIDE:-$HOME}"
+CURRENT_USER="${SUDO_USER:-$(id -un)}"
 # Honor sudo: prefer the GUI user's home so we clean per-user files even when
 # uninstall is run as root.
 if [[ -n "${SUDO_USER:-}" && -d "/Users/$SUDO_USER" ]]; then
@@ -51,7 +54,11 @@ PATH_MARKER_END="# <<< interceptor path <<<"
 # Bridge runtime files: the current user's temp dir (Platform.runtimeDir) plus
 # the legacy /tmp paths a pre-0.26 bridge used. Resolve the dir as the real user
 # when this script runs under sudo.
-USER_RUNTIME_DIR="$(sudo -u "${SUDO_USER:-$USER}" /usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || /usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)"
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  USER_RUNTIME_DIR="$(sudo -u "$CURRENT_USER" /usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || /usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)"
+else
+  USER_RUNTIME_DIR="${TMPDIR:-/tmp}"
+fi
 USER_RUNTIME_DIR="${USER_RUNTIME_DIR%/}"
 remove_bridge_runtime_files() {
   rm -f /tmp/interceptor-bridge.sock /tmp/interceptor-bridge.pid /tmp/interceptor-bridge.lock
@@ -67,7 +74,7 @@ if [[ "$BRIDGE_ONLY" == "1" ]]; then
   remove_bridge_runtime_files
 
   echo "==> Removing bridge LaunchAgent..."
-  TARGET_UID="$(id -u "${SUDO_USER:-$USER}" 2>/dev/null || echo "")"
+  TARGET_UID="$(id -u "$CURRENT_USER" 2>/dev/null || echo "")"
   if [[ -n "$TARGET_UID" ]]; then
     launchctl bootout "gui/$TARGET_UID/com.interceptor.bridge" 2>/dev/null || true
   fi
@@ -114,6 +121,8 @@ rm -f "$USER_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts
 rm -f "$USER_HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.interceptor.host.json"
 rm -f "$USER_HOME/Library/Application Support/Google/ChromeForTesting/NativeMessagingHosts/com.interceptor.host.json"
 rm -f "$USER_HOME/Library/Application Support/Chromium/NativeMessagingHosts/com.interceptor.host.json"
+rm -f "$USER_HOME/.config/google-chrome/NativeMessagingHosts/com.interceptor.host.json"
+rm -f "$USER_HOME/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.interceptor.host.json"
 
 # Dev install — clean repo-relative generated dir if present
 if [[ -d "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/daemon/.generated" ]]; then
@@ -127,7 +136,7 @@ for ext_id in gomcpnagjjlhehnkoobkjgnkbleiooed hkjbaciefhhgekldhncknbjkofbpenng;
 done
 
 echo "==> Removing bridge LaunchAgent (both system and per-user paths)..."
-TARGET_UID="$(id -u "${SUDO_USER:-$USER}" 2>/dev/null || echo "")"
+TARGET_UID="$(id -u "$CURRENT_USER" 2>/dev/null || echo "")"
 if [[ -n "$TARGET_UID" ]]; then
   launchctl bootout "gui/$TARGET_UID/com.interceptor.bridge" 2>/dev/null || true
 fi
@@ -146,30 +155,32 @@ fi
 rmdir "$USER_HOME/.local/share/interceptor" 2>/dev/null || true
 rm -f "$USER_HOME/.local/bin/interceptor-bridge"
 
-echo "==> Removing pkg-installed system files (requires sudo to fully clean)..."
-if [[ -e "/Applications/interceptor-bridge.app" ]]; then
-  rm -rf "/Applications/interceptor-bridge.app" 2>/dev/null && \
-    echo "    removed /Applications/interceptor-bridge.app" || \
-    echo "    /Applications/interceptor-bridge.app — re-run with sudo"
-fi
-if [[ -e "/usr/local/bin/interceptor" ]]; then
-  rm -f "/usr/local/bin/interceptor" 2>/dev/null && \
-    echo "    removed /usr/local/bin/interceptor" || \
-    echo "    /usr/local/bin/interceptor — re-run with sudo"
-fi
-if [[ -e "/usr/local/bin/interceptor-bridge" ]]; then
-  rm -f "/usr/local/bin/interceptor-bridge" 2>/dev/null || true
-fi
-if [[ -e "/Library/Application Support/Interceptor" ]]; then
-  rm -rf "/Library/Application Support/Interceptor" 2>/dev/null && \
-    echo "    removed /Library/Application Support/Interceptor" || \
-    echo "    /Library/Application Support/Interceptor — re-run with sudo"
-fi
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  echo "==> Removing pkg-installed system files (requires sudo to fully clean)..."
+  if [[ -e "/Applications/interceptor-bridge.app" ]]; then
+    rm -rf "/Applications/interceptor-bridge.app" 2>/dev/null && \
+      echo "    removed /Applications/interceptor-bridge.app" || \
+      echo "    /Applications/interceptor-bridge.app — re-run with sudo"
+  fi
+  if [[ -e "/usr/local/bin/interceptor" ]]; then
+    rm -f "/usr/local/bin/interceptor" 2>/dev/null && \
+      echo "    removed /usr/local/bin/interceptor" || \
+      echo "    /usr/local/bin/interceptor — re-run with sudo"
+  fi
+  if [[ -e "/usr/local/bin/interceptor-bridge" ]]; then
+    rm -f "/usr/local/bin/interceptor-bridge" 2>/dev/null || true
+  fi
+  if [[ -e "/Library/Application Support/Interceptor" ]]; then
+    rm -rf "/Library/Application Support/Interceptor" 2>/dev/null && \
+      echo "    removed /Library/Application Support/Interceptor" || \
+      echo "    /Library/Application Support/Interceptor — re-run with sudo"
+  fi
 
-# Forget the package receipts so a future reinstall starts clean.
-pkgutil --pkgs 2>/dev/null | grep -E '^com\.interceptor\.' | while read -r p; do
-  pkgutil --forget "$p" >/dev/null 2>&1 || true
-done
+  # Forget the package receipts so a future reinstall starts clean.
+  pkgutil --pkgs 2>/dev/null | grep -E '^com\.interceptor\.' | while read -r p; do
+    pkgutil --forget "$p" >/dev/null 2>&1 || true
+  done
+fi
 
 echo "==> Removing legacy CLI install directory if present..."
 rm -rf "$USER_HOME/.interceptor"

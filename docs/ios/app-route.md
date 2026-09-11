@@ -33,9 +33,9 @@ interceptor ios <verb> --context ios:<udid>
 2. **Pair + trust** the device (`Trust This Computer`).
 3. **Trust the Developer App certificate** after the runner is installed, if iOS asks for it: Settings → General → VPN & Device Management → Developer App → Trust. This is device-side Apple platform behavior; the host cannot bypass it.
 4. **Choose a signing/install path**:
-   - **Xcode-backed self-service path:** `interceptor ios setup [<device>] [--team <TEAM_ID>]` builds the packaged `InterceptorRunner.xcodeproj` with the user's locally configured Xcode account/team (`xcodebuild build-for-testing -allowProvisioningUpdates`), stages the signed Products, installs them over AFC/installation_proxy, and launches through the userspace tunnel/testmanagerd path. Xcode owns Apple-ID auth, 2FA, device registration, cert creation, and profile creation.
-   - **Operator/Xcode launch fallback:** set `INTERCEPTOR_IOS_USE_XCODE=1` only when you specifically want Xcode to own the legacy `test-without-building` launch route. Signing/provisioning still happens during `ios setup`.
-5. **InterceptorRunner** (`ios/InterceptorRunner/`): this surface drives our own runner but ships **source only** — no signing material in the core (capability-blind; enforced by `scripts/audit-capability-blind.sh`). You sign it with your team. Provide it one of three ways:
+   - **Xcode-backed self-service path:** `interceptor ios setup [<device>] [--team <TEAM_ID>]` builds the packaged `InterceptorRunner.xcodeproj` with the user's locally configured Xcode account/team (`xcodebuild build-for-testing -allowProvisioningUpdates`), stages the signed Products, installs them with `devicectl`, and launches with `xcodebuild test-without-building`. Xcode owns Apple-ID auth, 2FA, device registration, certificate creation, profile creation, and the runner test session.
+   - **Userspace launch diagnostic:** set `INTERCEPTOR_NO_XCODE=1` only when testing Interceptor's experimental CoreDeviceProxy/testmanagerd launcher.
+5. **InterceptorRunner** (`ios/InterceptorRunner/`): this surface drives our own runner and ships source plus an unsigned build input, with no signing material in the core (capability-blind; enforced by `scripts/audit-capability-blind.sh`). You sign it with your team. Provide it one of three ways:
    - **Managed (recommended):** run `interceptor ios setup --team <TEAM>`; the manager builds/signs with Xcode, installs via Interceptor, injects the WS URL/token at launch, and the runner dials home.
    - **Prebuilt:** build once (`xcodebuild build-for-testing`), then `export INTERCEPTOR_RUNNER_XCTESTRUN=<…/.xctestrun>` for fast re-enables.
    - **Manual:** launch it yourself with `INTERCEPTOR_WS_URL` / `INTERCEPTOR_WS_TOKEN` (or a shared `INTERCEPTOR_IOS_TOKEN`).
@@ -43,15 +43,17 @@ interceptor ios <verb> --context ios:<udid>
 
 ## Commands (seamless surface)
 
-The agent is **pre-built but unsigned at release time** and bundled in the pkg as
-`/Library/Application Support/Interceptor/ios-runner.tar`. The self-service path signs
-it on the user's Mac, uploads it with AFC/`installation_proxy`, and launches it with
-the userspace CoreDeviceProxy/testmanagerd path. The operator path can still push a
-signed prebuilt with `devicectl`. Verbs **auto-connect** (no `enable`); address a
-phone with `--on <name>` (or it uses your only phone).
+The package carries an unsigned build input at
+`/Library/Application Support/Interceptor/ios-runner.tar` and the runner source
+project. `ios setup` rebuilds and signs the source on the user's Mac, validates
+the resulting identity, installs it with `devicectl`, and launches it with Xcode's
+`test-without-building` path. `ios install` only reinstalls that already-signed
+staged result; it refuses the unsigned package input. Verbs **auto-connect** (no
+`enable`); address a phone with `--on <name>` (or it uses your only phone).
 
 ```
-interceptor ios install [<device>]          # push the agent to a phone (plugged in + unlocked)
+interceptor ios setup [<device>]            # build, sign, install, and launch with Xcode
+interceptor ios install [<device>]          # reinstall the runner previously signed by setup
 interceptor ios devices                      # phones that have the agent (+ names)
 interceptor ios name <device> <alias>        # rename a phone, e.g. "work"
 
@@ -69,10 +71,10 @@ interceptor ios apps    [--on work]
 interceptor ios app     [--on work] launch|activate|terminate <bundleId>
 ```
 
-Release builds the agent: `release.sh` runs `xcodebuild build-for-testing` of
-`ios/InterceptorRunner` (team `INTERCEPTOR_RUNNER_TEAM`, default Hacker Valley) and
-tars the Products. Override with `INTERCEPTOR_RUNNER_PREBUILT=<Products dir>` to ship
-your own IPA build, or `INTERCEPTOR_SKIP_RUNNER=1` to omit it. Legacy/internal:
+Release builds the agent: `release.sh` runs an unsigned `build-for-testing` of
+`ios/InterceptorRunner` and tars the Products as an input for user-owned signing.
+Override with `INTERCEPTOR_RUNNER_PREBUILT=<Products dir>` to provide a prepared
+build, or `INTERCEPTOR_SKIP_RUNNER=1` to omit it. Legacy/internal:
 `enable`/`disable`/`status`/`discover` still exist; `--wda-url` is the deprecated WDA hatch.
 ```
 
@@ -90,11 +92,11 @@ your own IPA build, or `INTERCEPTOR_SKIP_RUNNER=1` to omit it. Legacy/internal:
 
 ## Failure modes (clear errors, never hangs)
 
-- No-Xcode launch uses the daemon's unprivileged CoreDeviceProxy userspace tunnel. The obsolete root `com.interceptor.ios-tunnel` LaunchDaemon is not on the product launch path.
+- `INTERCEPTOR_NO_XCODE=1` uses the daemon's unprivileged CoreDeviceProxy userspace tunnel. The obsolete root `com.interceptor.ios-tunnel` LaunchDaemon is not on either launch path.
 - Developer App certificate not trusted → iOS denies launch before the runner starts; trust it on-device in Settings → General → VPN & Device Management.
-- iOS 17+ Xcode/operator launch still works via `xcodebuild test-without-building` when `INTERCEPTOR_IOS_USE_XCODE=1` is set.
+- iOS 17+ launches use `xcodebuild test-without-building` by default.
 - Runner never connects → "InterceptorRunner did not register within Ns" + guidance (check WiFi pairing / Developer Mode, or set `INTERCEPTOR_RUNNER_PROJECT`).
-- Runner socket drops mid-session → context auto-disabled; re-run `enable`.
+- Runner socket drops mid-session → context auto-disabled; the next drive verb launches it again.
 - Developer Mode off / not paired → `enable` reports exactly what to fix.
 - Stale ref → "ref `eN` is stale — re-read with `interceptor ios tree`."
 - Secure-Enclave gate / locked device → a specific error, not a hang.
@@ -116,7 +118,7 @@ The runner drives the foreground app via **public XCUITest APIs** (`ios/Intercep
    xcrun xcodebuild build-for-testing -project InterceptorRunner.xcodeproj -scheme InterceptorRunner \
      -destination "id=<UDID>" -allowProvisioningUpdates DEVELOPMENT_TEAM=<TEAM> -derivedDataPath /tmp/runner-dd
    ```
-   By default, Interceptor uses its own userspace CoreDeviceProxy tunnel and testmanagerd handshake. Set `INTERCEPTOR_IOS_USE_XCODE=1` only when you want Xcode/CoreDevice to own the RemoteXPC tunnel, DDI, and `test-without-building` launch.
+   By default, Xcode/CoreDevice owns the RemoteXPC tunnel, DDI, and `test-without-building` launch. Set `INTERCEPTOR_NO_XCODE=1` only for userspace-launch diagnostics.
 
 ### No cable
 Pair the device over WiFi (Xcode → *Connect via network*, or `xcrun devicectl`), then unplug. `interceptor ios discover` shows each device's `transport` (USB/Network). The runner reaches the daemon over the LAN; **the Mac just stays on the same network** (it owns the `testmanagerd` session for the test's lifetime). A fully no-Mac, untethered app driving *other* apps is impossible on stock iOS (no third-party automation API)

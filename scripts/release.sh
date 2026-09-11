@@ -392,12 +392,13 @@ run ditto "$REPO_ROOT/ios/InterceptorRunner/project.yml" "$STAGING_DIR/daemon/$D
 run ditto "$REPO_ROOT/ios/InterceptorRunner/README.md" "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/ios/InterceptorRunner/README.md"
 
 # ── iOS agent: pre-built, UNSIGNED XCUITest runner ─────────
-# Build the iPhone agent ONCE per release and bundle it as an opaque tar. Ship it UNSIGNED — each user re-signs it with THEIR OWN Apple ID at
-# `interceptor ios setup` (daemon/ios/signer.ts), so the pkg carries no operator
-# development identity. The tar keeps the iOS binaries away from the macOS notary.
+# Build the iPhone agent once per release and bundle it as an opaque tar. Ship it
+# unsigned as a build input; `interceptor ios setup` rebuilds and signs the
+# packaged source project with the user's Xcode team. Direct install refuses this
+# unsigned artifact. The tar keeps iOS binaries away from the macOS notary.
 # Skip with INTERCEPTOR_SKIP_RUNNER=1; bundle a prebuilt Products dir with
 # INTERCEPTOR_RUNNER_PREBUILT=<dir>. (Operator machines with Xcode can still push
-# the prebuilt via devicectl; the re-sign only kicks in on the self-service path.)
+# a prepared product through the explicit setup path.)
 if [[ "${INTERCEPTOR_SKIP_RUNNER:-0}" != "1" ]]; then
   RUNNER_PRODUCTS="${INTERCEPTOR_RUNNER_PREBUILT:-}"
   if [[ -n "$RUNNER_PRODUCTS" && ! -d "$RUNNER_PRODUCTS" ]]; then

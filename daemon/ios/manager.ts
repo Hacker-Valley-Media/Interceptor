@@ -11,9 +11,9 @@
  * (tree/click/type/…) and the host-side post-processing (tree formatting, ref
  * registry, sips resize) are identical regardless of channel.
  *
- * Bring-up defaults to the no-Xcode stack: userspace CoreDeviceProxy
- * tunnel + testmanagerd. A legacy Xcode launch path remains as an explicit
- * operator fallback. No signing material is embedded (capability-blind).
+ * Bring-up defaults to Xcode's supported `test-without-building` route. The
+ * userspace CoreDeviceProxy + testmanagerd launcher remains an explicit
+ * diagnostic. No signing material is embedded (capability-blind).
  */
 
 import {
@@ -29,16 +29,13 @@ import {
   detectToolchain, listDeviceApps, listPhysicalDevices, listSimulators,
   resizePngToBudget, run, runJson, spawnLongLived, killChild,
   prepareXctestrunWithEnv, stageRunner, findXctestrun, installRunnerApp, isRunnerInstalled,
-  RUNNER_BUNDLE_ID, findRunnerApp, preferNoXcodeIosPath, buildRunnerWithXcode,
+  RUNNER_BUNDLE_ID, preferNoXcodeIosPath, buildRunnerWithXcode,
 } from "./tools"
 import {
   setAlias, aliasForUdid, resolveUdid, markInstalled, knownInstalledUdids,
-  getAppleAccount, setAppleAccount, clearAppleAccount, installsExpiringBy,
+  getInstalled, getAppleAccount, setAppleAccount, clearAppleAccount, installsExpiringBy,
 } from "./state"
-// Self-service install (pure-Bun, no Xcode). These modules carry real
-// codecs + honest on-device gates; imports are inert until the new verbs run.
 import * as keychain from "./keychain"
-import * as signer from "./signer"
 import * as testmanagerd from "./testmanagerd"
 import { helperAvailable, runRemotectl } from "./tunnel"
 import type { RunnerEnv } from "./tunnel"
@@ -97,7 +94,7 @@ export class IosManager {
   }
 
   /**
-   * background refresh. Every 6h, if an Apple-ID account is signed in
+   * background refresh. Every 6h, if an Xcode team is configured
    * and any install is within REFRESH_LEAD_MS of its cert expiry (≤7d free / ~1y
    * paid), re-sign+reinstall+relaunch it. unref'd so it never holds the process.
    */
@@ -211,7 +208,8 @@ export class IosManager {
       case "ios_enable": return this.enable(action)
       case "ios_disable": return this.disable(action)
       case "ios_status": return this.status()
-      // self-service (Apple-ID re-sign, no Xcode)
+      // Xcode is the supported signing route. Login remains as an explicit
+      // early failure so older clients never prompt for a password.
       case "ios_login": return this.login(action)
       case "ios_setup": return this.setup(action)
       case "ios_refresh": return this.refresh(action)
@@ -328,7 +326,7 @@ export class IosManager {
 
   // ── install / devices / name (seamless surface) ──────────────────────────────
 
-  /** Push the pre-built, pre-signed agent to a device (no build/sign/env). */
+  /** Install an already Xcode-signed staged agent, refusing the unsigned release input. */
   private async install(action: { [k: string]: unknown }): Promise<IosResult> {
     const ref = typeof action.device === "string" ? action.device : typeof action.udid === "string" ? action.udid : undefined
     const udid = this.pickDeviceUdid(ref)
@@ -337,9 +335,9 @@ export class IosManager {
     if (!descriptor) return { success: false, error: `device not found — plug the iPhone in, unlock it, and tap "Trust This Computer", then re-run 'interceptor ios install'` }
     if (descriptor.wayIn === "unsupported") return { success: false, error: `'${descriptor.name}' is not ready: ${missingSetup(descriptor)}` }
 
-    const res = await installRunnerApp(udid)
+    const res = await installRunnerApp(udid, getInstalled(udid)?.bundleId, true)
     if (!res.ok) return { success: false, error: res.error }
-    markInstalled(udid)
+    markInstalled(udid, undefined, res.bundleId)
 
     // Bring it up now so the first verb is instant.
     const ensured = await this.ensureRunner(udid)
@@ -360,7 +358,7 @@ export class IosManager {
     const phys = listPhysicalDevices()
     const known = new Set(knownInstalledUdids())
     const out = phys
-      .filter((d) => known.has(d.udid.toUpperCase()) || isRunnerInstalled(d.udid))
+      .filter((d) => known.has(d.udid.toUpperCase()) || isRunnerInstalled(d.udid, this.runnerBundleId(d.udid)))
       .map((d) => ({
         name: d.name,
         alias: aliasForUdid(d.udid),
@@ -396,71 +394,25 @@ export class IosManager {
     return { success: true, data: { alias, udid, note: `named — use it: interceptor ios tree --on ${alias}` } }
   }
 
-  // ── self-service install ───────────────────────────────────────────
-
-  /** Store the Apple-ID session token (Keychain) + account metadata. One-time. */
-  private async login(action: { [k: string]: unknown }): Promise<IosResult> {
-    const appleId = typeof action.appleId === "string" ? action.appleId : undefined
-    const password = typeof action.password === "string" ? action.password : undefined
-    const twoFactor = typeof action.code === "string" ? action.code : undefined
-    if (!appleId || !password) return { success: false, error: "usage: interceptor ios login (prompts for Apple ID + password + 2FA)" }
-    let session: signer.AppleSession
-    try { session = await signer.appleLogin(appleId, password, twoFactor) }
-    catch (err) { return { success: false, error: (err as Error).message } }
-    const stored = await keychain.storeToken(session.token)
-    if (!stored.ok) return { success: false, error: `could not store token in Keychain: ${stored.error}` }
-    setAppleAccount({ teamId: session.teamId, kind: session.kind })
-    return { success: true, data: { teamId: session.teamId, tier: session.kind, note: "signed in — run: interceptor ios setup" } }
+  /** Old state can only refer to the one historical Interceptor bundle id. */
+  private runnerBundleId(udid: string): string {
+    return getInstalled(udid)?.bundleId ?? RUNNER_BUNDLE_ID
   }
 
-  /**
-   * Idempotent per-device self-service: install → (Dev-Mode prompt) → register +
-   * re-sign with the user's Apple ID → reinstall → (Trust prompt) → launch via our
-   * native stack. Surfaces the exact Apple-mandated next step whenever it stops.
-   */
+  // ── self-service install ───────────────────────────────────────────
+
+  private async login(_action: { [k: string]: unknown }): Promise<IosResult> {
+    return { success: false, error: "ios login is unavailable because no-Xcode Apple-ID signing is not implemented. Use: interceptor ios setup [device]" }
+  }
+
+  /** Build, sign, install, and launch through Xcode's configured developer team. */
   private async setup(action: { [k: string]: unknown }): Promise<IosResult> {
     const ref = typeof action.device === "string" ? action.device : typeof action.udid === "string" ? action.udid : undefined
     const udid = this.pickDeviceUdid(ref)
     if (!udid) {
       return { success: false, error: "no device — plug your iPhone in over USB and tap \"Trust This Computer\" (enter the passcode), then re-run." }
     }
-    const xcodeSetup = await this.setupWithXcode(action, udid)
-    if (xcodeSetup.success || !getAppleAccount() || !(await keychain.hasToken())) return xcodeSetup
-
-    const account = getAppleAccount()!
-    // register UDID under the user's team + create a get-task-allow cert/profile.
-    let prov: signer.ProvisionResult
-    try {
-      const token = (await keychain.loadToken())!
-      prov = await signer.provisionForDevice({ token, teamId: account.teamId, kind: account.kind }, udid)
-    } catch (err) { return { success: false, error: (err as Error).message } }
-
-    // re-sign the bundled (unsigned) runner with the user's identity.
-    const staged = stageRunner()
-    if (staged.error || !staged.dir) return { success: false, error: staged.error ?? "the Interceptor agent is not available" }
-    const app = findRunnerApp(staged.dir)
-    if (!app) return { success: false, error: "bundled agent is missing its .app" }
-    try {
-      signer.resignRunnerApp(app, {
-        signingIdentity: prov.signingIdentity,
-        entitlements: { applicationIdentifier: prov.applicationIdentifier, teamId: prov.teamId },
-        profilePath: prov.profilePath,
-      })
-    } catch (err) { return { success: false, error: (err as Error).message } }
-    const installed = await installRunnerApp(udid)
-    if (!installed.ok) return { success: false, error: installed.error ?? "could not install the signed InterceptorRunner" }
-
-    setAppleAccount({ ...account, teamId: prov.teamId, kind: prov.kind, certSha: prov.signingIdentity, profilePath: prov.profilePath, expiresAt: prov.expiresAt })
-    markInstalled(udid, prov.expiresAt)
-
-    // launch via our native (no-Xcode) stack; the runner dials back.
-    const ensured = await this.ensureRunner(udid)
-    const alias = aliasForUdid(udid)
-    return {
-      success: ensured.ok,
-      error: ensured.ok ? undefined : ensured.error,
-      data: ensured.ok ? { udid, tier: prov.kind, expiresAt: prov.expiresAt, note: `ready — drive it: interceptor ios tree --on ${alias ?? udid}` } : undefined,
-    }
+    return this.setupWithXcode(action, udid)
   }
 
   private async setupWithXcode(action: { [k: string]: unknown }, udid: string): Promise<IosResult> {
@@ -473,11 +425,11 @@ export class IosManager {
       return { success: false, error: (err as Error).message }
     }
 
-    const installed = await installRunnerApp(udid)
+    const installed = await installRunnerApp(udid, built.bundleId, true)
     if (!installed.ok) return { success: false, error: installed.error ?? "could not install the Xcode-built InterceptorRunner" }
 
     setAppleAccount({ teamId: built.teamId, kind: built.kind, profilePath: built.profilePath, expiresAt: built.expiresAt })
-    markInstalled(udid, built.expiresAt)
+    markInstalled(udid, built.expiresAt, installed.bundleId ?? built.bundleId)
 
     const ensured = await this.ensureRunner(udid)
     const alias = aliasForUdid(udid)
@@ -540,19 +492,18 @@ export class IosManager {
     return { success: reachable, data: { tunnel, rsdReachable: reachable, note: reachable ? "tunnel up; RSD reachable over utun" : "tunnel up but RSD TCP connect failed" } }
   }
 
-  /** Drop the stored Apple-ID token + account metadata. Always works (no gate). */
+  /** Remove legacy Apple-ID token data and the stored Xcode-team metadata. */
   private async logout(): Promise<IosResult> {
     const del = await keychain.deleteToken()
     clearAppleAccount()
     if (!del.ok) return { success: false, error: `token removed from state, but Keychain delete failed: ${del.error}` }
-    return { success: true, data: { note: "signed out — Apple-ID token removed from the Keychain" } }
+    return { success: true, data: { note: "legacy Apple-ID data and stored Xcode-team metadata removed" } }
   }
 
   /**
    * Launch the runner WITHOUT Xcode: our RemoteXPC tunnel (M3) + DDI (M4) +
    * testmanagerd (M5). Same WS env payload; the runner dials back unchanged.
-   * Default launch route. Set INTERCEPTOR_IOS_USE_XCODE=1 or
-   * INTERCEPTOR_NO_XCODE=0 for the legacy xcodebuild fallback.
+   * Diagnostic launch route. Set INTERCEPTOR_NO_XCODE=1 to exercise it.
    */
   private async launchRunnerNative(
     descriptor: IosDeviceDescriptor,
@@ -570,7 +521,7 @@ export class IosManager {
         // and the testmanagerd DTX handshake. No root helper is on the product path.
         this.deps.emit("ios_tunnel_userspace", { udid })
       }
-      await testmanagerd.launchRunner(udid, { bundleId: RUNNER_BUNDLE_ID, env })
+      await testmanagerd.launchRunner(udid, { bundleId: this.runnerBundleId(udid), env })
       const channel = await this.awaitRunner(udid, token, 120_000)
       return { ok: true, channel, tunnel: "native", dialBack }
     } catch (err) {
@@ -657,7 +608,7 @@ export class IosManager {
   private async launchRunner(
     descriptor: IosDeviceDescriptor, procs: Bun.Subprocess[],
   ): Promise<{ ok: true; channel: RunnerChannel; tunnel: IosTunnelState; dialBack: DialBack } | { ok: false; error: string }> {
-    // no-Xcode path (our tunnel + testmanagerd) by default.
+    // The userspace testmanagerd path is an explicit diagnostic opt-in.
     if (preferNoXcodeIosPath()) return this.launchRunnerNative(descriptor)
 
     const udid = descriptor.udid
@@ -672,7 +623,7 @@ export class IosManager {
     const prepared = prepareXctestrunWithEnv(xctestrun, {
       INTERCEPTOR_WS_URL: wsUrl, INTERCEPTOR_WS_TOKEN: token,
       INTERCEPTOR_UDID: udid, INTERCEPTOR_CONTEXT_ID: descriptor.contextId,
-    })
+    }, this.runnerBundleId(udid))
     if (!prepared) return { ok: false, error: "could not prepare the agent launch descriptor" }
 
     if (descriptor.kind === "simulator") run("/usr/bin/xcrun", ["simctl", "boot", udid])
@@ -705,7 +656,7 @@ export class IosManager {
     const phys = listPhysicalDevices()
     if (phys.length === 1) return phys[0].udid
     const known = new Set(knownInstalledUdids())
-    const installed = phys.filter((d) => known.has(d.udid.toUpperCase()) || isRunnerInstalled(d.udid))
+    const installed = phys.filter((d) => known.has(d.udid.toUpperCase()) || isRunnerInstalled(d.udid, this.runnerBundleId(d.udid)))
     return installed.length === 1 ? installed[0].udid : undefined
   }
 

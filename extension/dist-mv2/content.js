@@ -2656,18 +2656,21 @@ init_ref_registry();
 async function handleQuery(action) {
   const selector = action.selector;
   const els = document.querySelectorAll(selector);
+  const elements = Array.from(els).slice(0, 20).map((el, i) => ({
+    index: i,
+    ref: getOrAssignRef(el),
+    tag: el.tagName.toLowerCase(),
+    text: (el.textContent || "").trim().slice(0, 80),
+    id: el.id || undefined,
+    classes: el.className || undefined
+  }));
   return {
     success: true,
     data: {
       count: els.length,
-      elements: Array.from(els).slice(0, 20).map((el, i) => ({
-        index: i,
-        ref: getOrAssignRef(el),
-        tag: el.tagName.toLowerCase(),
-        text: (el.textContent || "").trim().slice(0, 80),
-        id: el.id || undefined,
-        classes: el.className || undefined
-      }))
+      returned: elements.length,
+      truncated: elements.length < els.length,
+      elements
     }
   };
 }

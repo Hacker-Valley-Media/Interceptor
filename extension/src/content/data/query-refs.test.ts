@@ -15,7 +15,12 @@ afterEach(() => {
   document.body.innerHTML = ""
 })
 
-type QueryData = { count: number; elements: Array<{ index: number; ref: string; tag: string }> }
+type QueryData = {
+  count: number
+  returned: number
+  truncated: boolean
+  elements: Array<{ index: number; ref: string; tag: string }>
+}
 
 describe("handleQuery ref bridge", () => {
   test("every returned element carries a resolvable e<ref>", async () => {
@@ -30,6 +35,8 @@ describe("handleQuery ref bridge", () => {
     expect(res.success).toBe(true)
     const data = res.data as QueryData
     expect(data.count).toBe(3)
+    expect(data.returned).toBe(3)
+    expect(data.truncated).toBe(false)
     for (const el of data.elements) {
       expect(el.ref).toMatch(/^e\d+$/)
       expect(resolveRef(el.ref)?.textContent).toBe(`b${el.index}`)
@@ -55,6 +62,8 @@ describe("handleQuery ref bridge", () => {
     }
     const data = (await handleQuery({ type: "query", selector: "a" })).data as QueryData
     expect(data.count).toBe(25)
+    expect(data.returned).toBe(20)
+    expect(data.truncated).toBe(true)
     expect(data.elements).toHaveLength(20)
     expect(new Set(data.elements.map(e => e.ref)).size).toBe(20)
   })

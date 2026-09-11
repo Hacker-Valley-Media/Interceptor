@@ -341,6 +341,26 @@ build_windows_arch() {
   cp -R extension/dist "$stage/extension"
 }
 
+build_linux_arch() {
+  local arch="$1"
+  local bun_target stage
+  case "$arch" in
+    x64) bun_target="bun-linux-x64-baseline" ;;
+    arm64) bun_target="bun-linux-arm64" ;;
+    *) echo "Unsupported Linux architecture: $arch" >&2; exit 1 ;;
+  esac
+
+  stage="dist/linux/$arch"
+  rm -rf "$stage"
+  mkdir -p "$stage/daemon"
+  echo "Building CLI (Linux $arch, $bun_target)..."
+  bun build cli/index.ts --compile --target="$bun_target" --outfile="$stage/interceptor"
+  echo "Building daemon (Linux $arch, $bun_target)..."
+  bun build daemon/index.ts --compile --target="$bun_target" --outfile="$stage/daemon/interceptor-daemon"
+  cp daemon/com.interceptor.host.json "$stage/daemon/com.interceptor.host.json"
+  chmod 755 "$stage/interceptor" "$stage/daemon/interceptor-daemon"
+}
+
 build_bridge() {
   # Swift-only, macOS-only. Warn-and-continue on CI/linux hosts.
   if ! command -v swift >/dev/null 2>&1; then
@@ -373,6 +393,8 @@ if [[ "$BUILD_ALL" == "1" ]]; then
   build_macos
   build_windows_arch x64
   build_windows_arch arm64
+  build_linux_arch x64
+  build_linux_arch arm64
   build_bridge
 elif [[ "$TARGET" == "host" ]]; then
   build_extension
@@ -392,6 +414,16 @@ elif [[ "$TARGET" == "windows-x64" ]]; then
 elif [[ "$TARGET" == "windows-arm64" ]]; then
   build_extension
   build_windows_arch arm64
+elif [[ "$TARGET" == "linux" ]]; then
+  build_extension
+  build_linux_arch x64
+  build_linux_arch arm64
+elif [[ "$TARGET" == "linux-x64" ]]; then
+  build_extension
+  build_linux_arch x64
+elif [[ "$TARGET" == "linux-arm64" ]]; then
+  build_extension
+  build_linux_arch arm64
 elif [[ "$TARGET" == "windows" ]]; then
   echo "Unsupported target: windows. Use --target=windows-x64 or --target=windows-arm64." >&2
   exit 1
@@ -407,7 +439,7 @@ fi
 # No --entitlements here: entitlement enforcement only applies under the
 # hardened runtime, which ad-hoc signing doesn't enable. Release builds are
 # re-signed (--force) with the real identity + entitlements by release.sh.
-if [[ "$(uname -s)" == "Darwin" && "$TARGET" != windows-* ]] && command -v codesign >/dev/null 2>&1; then
+if [[ "$(uname -s)" == "Darwin" && ( "$BUILD_ALL" == "1" || "$TARGET" == "host" || "$TARGET" == "macos" ) ]] && command -v codesign >/dev/null 2>&1; then
   for b in dist/interceptor daemon/interceptor-daemon dist/interceptor-bridge; do
     if [[ -f "$b" ]]; then
       codesign --remove-signature "$b" 2>/dev/null || true
@@ -435,10 +467,19 @@ if [[ "$BUILD_ALL" == "1" ]]; then
   echo "  macOS Bridge: dist/interceptor-bridge"
   echo "  Windows x64: dist/windows/x64/"
   echo "  Windows ARM64: dist/windows/arm64/"
+  echo "  Linux x64: dist/linux/x64/"
+  echo "  Linux ARM64: dist/linux/arm64/"
 elif [[ "$TARGET" == "windows-x64" ]]; then
   echo "  Windows x64: dist/windows/x64/"
 elif [[ "$TARGET" == "windows-arm64" ]]; then
   echo "  Windows ARM64: dist/windows/arm64/"
+elif [[ "$TARGET" == "linux" ]]; then
+  echo "  Linux x64: dist/linux/x64/"
+  echo "  Linux ARM64: dist/linux/arm64/"
+elif [[ "$TARGET" == "linux-x64" ]]; then
+  echo "  Linux x64: dist/linux/x64/"
+elif [[ "$TARGET" == "linux-arm64" ]]; then
+  echo "  Linux ARM64: dist/linux/arm64/"
 else
   echo "  Extension: extension/dist/"
   echo "  Electron extension: extension/dist-mv2/"

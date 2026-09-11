@@ -10,7 +10,7 @@ const COMMAND_HELP: Record<string, string> = {
     "interceptor update — update Interceptor itself",
     "",
     "  interceptor update             macOS: check now — reports Sparkle's selected version or no-update reason",
-    "  interceptor update status      macOS: check result, selected version, lifecycle phase, feed, and schedule",
+    "  interceptor update status      macOS: consistent lifecycle state, live-session age, recovery hint, feed, and schedule",
     "",
     "Notes:",
     "  - macOS: requires the full install (the updater lives in the bridge app); browser-only",
@@ -141,12 +141,12 @@ const MAP_BROWSER = `BROWSER — a signed-in Chrome/Brave profile, background ta
   Read text  text (visible innerText) · text --markdown (keeps headings/tables) · html <ref> (raw markup)
   Structure  tree (a11y refs) · find "<q>" (current-page text + elements) · state · diff
   Web        websearch "<q>" (configured default provider → managed background tab + page read)
-  Extract    table · links · images · forms · query <css> · exists · count · attr · style      structured JSON
+  Extract    table · links · images · forms · query <css> · exists · count · attr · style      structured JSON; query returns at most 20 plus count/returned/truncated
   Act        act <ref> · click · type · select · focus · hover · drag · dblclick · rightclick · check · keys · scroll
   Navigate   navigate <url> · back · forward · scroll · wait <ms> · wait-stable
   Tabs       tabs · tab new|close|switch · window · frames · session · group (per-agent isolation) · contexts
   Network    net (passive log → HAR/pcapng) · headers · override (rewrite requests) · sse
-  Capture    screenshot [ref] · canvas · ocr · save --out <path> <expr>  (page bytes straight to disk) · eval <js> [--main]
+  Capture    screenshot [--element <ref>] · canvas · ocr · save --out <path> <expr>  (page bytes straight to disk) · eval <js> [--main]
   Data       cookies · storage · history · bookmarks · downloads · clipboard · clear
   Record     monitor (record → replay) · scene (canvas / rich editors) · batch (many actions, one call) · brand`
 
@@ -373,7 +373,7 @@ Capture:
   interceptor screenshot --region X,Y,W,H   Capture page region (rendered + cropped)
   interceptor screenshot --scale 2           Override pixel ratio (e.g. retina from 1x display)
   interceptor screenshot --pixel             Pixel-true compositor capture (legacy captureVisibleTab — requires Chrome focused)
-  interceptor screenshot --save              Save to disk; result has filePath, no dataUrl
+  interceptor screenshot --save              Save one auto-named file in cwd; takes no path value
   interceptor screenshot --format png        Output format: png (default), jpeg, or webp
   interceptor screenshot --quality 80        Encode quality 0-100 (defaults: png 92, jpeg 92, webp 85)
   interceptor screenshot --target-max-long-edge 1568   Clamp output long edge in pixels (auto-resize at capture)
@@ -771,8 +771,9 @@ macOS Bridge (full install only):
   interceptor macos notifications post --title "..." --body "..." [--sound default] [--badge N] [--category <id>]
   interceptor macos notifications categories list|register|clear`
 
-const HELP_IOS = `  iOS — automate your iPhone (pre-built agent, no signing/env):
-  interceptor ios install [<device>]         Push the agent to a phone (plugged in + unlocked)
+const HELP_IOS = `  iOS — automate your iPhone (Xcode-signed device runner):
+  interceptor ios setup [<device>]           Build, sign, install, and launch (Xcode account required)
+  interceptor ios install [<device>]         Reinstall a runner previously signed by setup
   interceptor ios devices                     Phones with the agent (+ names)
   interceptor ios name <device> <alias>       Rename a phone (then use --on <alias>)
   interceptor ios tree|find|inspect [--on <name>]                   On-screen elements (auto-connects)

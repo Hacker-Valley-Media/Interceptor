@@ -8,8 +8,10 @@ import Sparkle
 // Sparkle's automatic scheduled-check cadence, which for an LSUIElement
 // app means the update prompt frequently never surfaces visibly.
 //
-// The `check` verb calls SPUUpdater.checkForUpdates() and waits briefly for
+// The `check` verb starts a background-style check and waits briefly for
 // Sparkle's delegate to report the selected item, no-update result, or error.
+// The user-initiated API is intentionally avoided because its no-update path
+// runs an NSAlert modal loop that blocks this bridge from answering `status`.
 // If the feed takes longer, the command returns a truthful in-progress result
 // and `status` exposes the later callback state.
 final class UpdateDomain: DomainHandler, @unchecked Sendable {
@@ -43,9 +45,6 @@ final class UpdateDomain: DomainHandler, @unchecked Sendable {
                 var payload = Self.statusPayload(updater: updater, snapshot: updateState.snapshot())
                 payload["started"] = false
                 payload["message"] = "an update session is already in progress"
-                if updater.canCheckForUpdates {
-                    updaterController.checkForUpdates(nil)
-                }
                 completion(WireFormat.success(payload))
                 return
             }
@@ -63,7 +62,7 @@ final class UpdateDomain: DomainHandler, @unchecked Sendable {
                     completion(WireFormat.success(payload))
                 }
             }
-            updaterController.checkForUpdates(nil)
+            updater.checkForUpdatesInBackground()
         }
     }
 
@@ -77,7 +76,10 @@ final class UpdateDomain: DomainHandler, @unchecked Sendable {
 
     @MainActor
     private static func statusPayload(updater: SPUUpdater, snapshot: SparkleUpdateSnapshot) -> [String: Any] {
-        var payload = snapshot.payload()
+        var payload = snapshot.payload(
+            sessionInProgress: updater.sessionInProgress,
+            sessionStartDate: updater.lastUpdateCheckDate
+        )
         payload["feed"] = updater.feedURL?.absoluteString ?? "unset"
         payload["automaticChecks"] = updater.automaticallyChecksForUpdates
         payload["checkInterval"] = updater.updateCheckInterval

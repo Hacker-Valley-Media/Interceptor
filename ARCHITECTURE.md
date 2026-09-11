@@ -2,7 +2,7 @@
 
 This document describes the live architecture as of the current monitor, CSP-fallback, native-capture, multi-surface control (CDP / native runtime agent + hook fabric), and capability-blind extension-fabric implementation. It is not a tutorial — it explains *how the pieces fit*, with file references. For user-facing usage see `README.md` / `AGENTS.md`.
 
-**Control surfaces.** Interceptor drives five surfaces, all brokered by the one daemon and addressed by `--context`: (1) the user's real **browser** (MV3 extension); (2) the macOS **bridge** (outside-in native control — AX, input, capture); (3) **CDP** for Electron/Chromium app web contents (`cdp:`/`app:`); (4) the in-process **native runtime agent** (`runtime:`); (5) the **iOS device** surface (`ios:<udid>`) — our own in-tree on-device XCUITest runner (InterceptorRunner) that dials INTO the daemon over WebSocket, launched over a pure-Bun developer channel (usbmux / lockdown / userspace RemoteXPC tunnel + testmanagerd on iOS 17+; no WebDriverAgent, no Xcode required). A **capability-blind extension fabric** lets operators add further surfaces without forking the product. The browser/monitor subsystems below are the oldest and deepest; the surface model and the fabric are documented in the *macOS bridge*, *CDP app control*, *Native Agent*, *iOS device surface*, and *Extension Fabric* subsections under **Other Subsystems**.
+**Control surfaces.** Interceptor drives five surfaces, all brokered by the one daemon and addressed by `--context`: (1) the user's real **browser** (MV3 extension); (2) the macOS **bridge** (outside-in native control — AX, input, capture); (3) **CDP** for Electron/Chromium app web contents (`cdp:`/`app:`); (4) the in-process **native runtime agent** (`runtime:`); (5) the **iOS device** surface (`ios:<udid>`) — our own in-tree on-device XCUITest runner (InterceptorRunner) that dials INTO the daemon over WebSocket. The supported iOS route uses Xcode for signing and `test-without-building` launch; a pure-Bun usbmux/RemoteXPC/testmanagerd path remains diagnostic-only. A **capability-blind extension fabric** lets operators add further surfaces without forking the product. The browser/monitor subsystems below are the oldest and deepest; the surface model and the fabric are documented in the *macOS bridge*, *CDP app control*, *Native Agent*, *iOS device surface*, and *Extension Fabric* subsections under **Other Subsystems**.
 
 ---
 
@@ -281,7 +281,7 @@ Multiple agents can share one browser context without touching each other's tabs
 
 ### Self-update (`interceptor update`)
 
-Top-level front door for updating Interceptor itself. On macOS it is sugar for the retained (undocumented) `macos update check`, a user-initiated `SPUUpdater.checkForUpdates()` via the bridge's `UpdateDomain`. `main.swift` injects one `SparkleUpdateState` into both `UpdateDomain` and `SparkleUpdaterDelegate`: the domain waits up to 10 seconds, while delegate callbacks record the selected item, no-update reason, user choice, download/extraction/install phase, cycle end, and real error. The command therefore returns an observed `update_available`, `up_to_date`, `no_eligible_update`, or `error` result; a slower feed returns `checking` without promising an alert, and `update status` exposes the later result plus Sparkle's schedule fields. The state is intentionally process-local and observational. It does not alter appcast selection, cached installers, or installation policy. On Windows there is no Sparkle: the command skips the surface gate and daemon entirely and prints the signed-installer guidance + Releases link. Browser-only macOS installs get the `upgrade --full` hint (the updater lives in the bridge app). A found update's Sparkle alert is a window the bridge itself owns, so an agent drives it with the ordinary compound verbs (`interceptor macos read --app interceptor-bridge`, `interceptor macos act <ref>`); see the self-targeted marshal below for why that is safe. Every published update is a `package` (guided pkg) install, and Sparkle's installer launcher always requests administrator authorization for that type, so the final step is a user-present password prompt by design. An unattended `update --install` verb is not possible on this feed.
+Top-level front door for updating Interceptor itself. On macOS it is sugar for the retained (undocumented) `macos update check`, which starts `SPUUpdater.checkForUpdatesInBackground()` through the bridge's `UpdateDomain`. The background API avoids Sparkle's user-initiated no-update alert blocking the bridge's main loop. `main.swift` injects one `SparkleUpdateState` into both `UpdateDomain` and `SparkleUpdaterDelegate`: the domain waits up to 10 seconds, while delegate callbacks record the selected item, no-update reason, user choice, download/extraction/install phase, cycle end, and real error. The command therefore returns an observed `update_available`, `up_to_date`, `no_eligible_update`, or `error` result; a slower feed returns `checking` without promising an alert, and `update status` exposes the later result, live-session age, recovery command, and Sparkle schedule fields. A live Sparkle session forces `concluded: false` even if the last delegate snapshot looked terminal. The state is intentionally process-local and observational. It does not alter appcast selection, cached installers, or installation policy. On Windows there is no Sparkle: the command skips the surface gate and daemon entirely and prints the signed-installer guidance + Releases link. Browser-only macOS installs get the `upgrade --full` hint (the updater lives in the bridge app). A found update's Sparkle alert is a window the bridge itself owns, so an agent drives it with the ordinary compound verbs (`interceptor macos read --app interceptor-bridge`, `interceptor macos act <ref>`); see the self-targeted marshal below for why that is safe. Every published update is a `package` (guided pkg) install, and Sparkle's installer launcher always requests administrator authorization for that type, so the final step is a user-present password prompt by design. An unattended `update --install` verb is not possible on this feed.
 
 ### CLI argument contract (`cli/normalize.ts`)
 
@@ -464,19 +464,20 @@ so they can't double-launch and orphan a runner.
 
 Two launch paths, selected by `preferNoXcodeIosPath()`:
 
-- **No-Xcode.** Everything is done in pure Bun with no Xcode,
-  no root helper, and the *end user's own* Apple ID. `daemon/ios/lockdown.ts`
-  speaks the lockdown/pairing protocol over macOS's own `usbmuxd`;
-  `daemon/ios/signer.ts` re-signs the bundled unsigned runner with the user's
-  cert/profile (`keychain.ts`); `daemon/ios/installer.ts` installs it over AFC;
-  `daemon/ios/usertunnel.ts` stands up the userspace CoreDeviceProxy tunnel + RSD
-  + DDI lookup and completes the `testmanagerd` DTX handshake
-  (`daemon/ios/testmanagerd.ts`) to launch the runner. `ddi.ts` mounts the
-  developer disk image. Certs/profiles are created at `interceptor ios setup`;
-  a 6-hour background timer re-signs before free-tier expiry (`state.ts`).
-- **Xcode (operator machines).** `xcodebuild test-without-building` against the
-  bundled `.xctestrun` installs + launches the runner and Xcode owns the iOS 17+
-  tunnel + DDI.
+- **Xcode (default).** `interceptor ios setup` runs `build-for-testing` with the
+  developer team already configured in Xcode, derives a team-scoped bundle ID,
+  validates the signature, entitlements, provisioning team, application ID, and
+  device UDID, then installs that exact app. Later launches use
+  `xcodebuild test-without-building` against the staged `.xctestrun`; Xcode owns
+  the iOS 17+ tunnel, DDI, and testmanager session. The daemon retains the
+  long-lived `xcodebuild` child and registered `RunnerChannel` in the device
+  context. There is no 30-second runner lease: later verbs probe and reuse the
+  existing channel, and launch again only after disconnect or explicit disable.
+- **No-Xcode (diagnostic opt-in).** `INTERCEPTOR_NO_XCODE=1` selects the pure-Bun
+  usbmux/RemoteXPC/testmanagerd stack for development diagnostics. It is not the
+  supported signing or onboarding route. `interceptor ios login` fails before
+  password input, and `ios install` refuses the unsigned release build input.
+  The legacy signer modules remain internal experiments, not a public path.
 
 Either way the runner then dials back into the daemon WS. A legacy `--wda-url`
 HTTP path (`daemon/ios/wda-client.ts`, `usbmux-forward.ts` port-forward — pure
@@ -493,9 +494,11 @@ Routing: an `ios:`-prefixed `contextId` (or an `ios_*` lifecycle/verb action) is
 routed to `iosManager` in both the socket and WebSocket daemon handlers, exactly
 like `cdp:`; `validateContextRouting` gains an `iosContexts` param; `interceptor
 contexts` lists `ios:<udid>` alongside the rest. Capability-blind: the shipped pkg
-carries an **unsigned** runner and **no** signing material — signing is delegated
-at runtime to the user's Apple ID (no-Xcode path) or the operator's Xcode config
-(`scripts/audit-capability-blind.sh` check #4). See `docs/ios/app-route.md`.
+carries an **unsigned** runner and **no** signing material. Xcode rebuilds and
+signs it with the user's configured developer team during setup
+(`scripts/audit-capability-blind.sh` check #4). The actual bundle ID is stored per
+device because install, inventory, and launch must all address the signed identity.
+See `docs/ios/app-route.md`.
 
 **Beyond the runner — sibling lanes on the same `ios:<udid>` context.** These route
 *before* the runner fallback (their action sets in `shared/ios-dev.ts` /
@@ -618,9 +621,9 @@ See `docs/mcp.md`.
 | `extension/dist-safari/background-safari.js` | `extension/src/background-safari.ts` (Bun bundle, target=browser) | Safari MV3 native-relay service worker |
 | `safari/build/Build/Products/Release/InterceptorSafari.app` | `scripts/build-safari.sh` + Xcode project | Safari containing app + embedded appex |
 
-`bash scripts/build.sh` builds the Chromium, Electron, and Safari web bundles plus the CLI, daemon, and macOS bridge when Swift is available. `scripts/build-safari.sh` rebuilds those source bundles by default, runs a `WKWebExtension` background-bootstrap verifier, notarizes and staples the containing app, copies it to a guarded system-volume staging directory, requires Gatekeeper to accept that copy, and feeds those exact bytes to `pkgbuild` before notarizing/stapling the package. The Safari package postinstall moves only identifier-verified legacy `.InterceptorSafari-*.noindex` backup apps out of `/Applications` to recoverable Application Support storage, unregisters them, and registers the installed app; this prevents duplicate appexes with the same identifier. `INTERCEPTOR_SKIP_BASE_BUILD=1` is an advanced/CI escape hatch for an already-verified fresh bundle. Skip-notary builds are named `*-UNNOTARIZED.pkg` so they cannot be confused with installable release artifacts. On macOS older than 15.4 the engine-level verifier is skipped because the hosting API is unavailable. Windows builds skip native macOS artifacts.
+`bash scripts/build.sh` builds the Chromium, Electron, and Safari web bundles plus the CLI, daemon, and macOS bridge when Swift is available. Its explicit Linux targets compile browser-only x64-baseline and ARM64 CLI/daemon payloads without touching macOS signing. `scripts/release-linux.sh` packages those payloads, the extension, install/uninstall scripts, metadata, README, and license into versioned archives with `SHA256SUMS`; `scripts/test-linux-release.sh` verifies install, reported version/mode, and uninstall in matching containers. `scripts/build-safari.sh` rebuilds the source bundles by default, runs a `WKWebExtension` background-bootstrap verifier, notarizes and staples the containing app, copies it to a guarded system-volume staging directory, requires Gatekeeper to accept that copy, and feeds those exact bytes to `pkgbuild` before notarizing/stapling the package. The Safari package postinstall moves only identifier-verified legacy `.InterceptorSafari-*.noindex` backup apps out of `/Applications` to recoverable Application Support storage, unregisters them, and registers the installed app; this prevents duplicate appexes with the same identifier. `INTERCEPTOR_SKIP_BASE_BUILD=1` is an advanced/CI escape hatch for an already-verified fresh bundle. Skip-notary builds are named `*-UNNOTARIZED.pkg` so they cannot be confused with installable release artifacts. On macOS older than 15.4 the engine-level verifier is skipped because the hosting API is unavailable. Windows and Linux builds skip native macOS artifacts.
 
-The root `package.json` version is the release source of truth. `build.sh` copies it into the Chromium, Electron/MV2, and Safari WebExtension manifests; `release.sh` passes it into the Browser/Full package metadata and bridge bundle; the tag-driven Windows workflow uses the same version for both architectures; and `build-safari.sh` passes it to the containing app, appex, and separate Safari installer. The Browser and Full packages do **not** contain `InterceptorSafari.app`: a release that changes shared browser code must publish the separate `Interceptor-Safari-<version>.pkg` alongside them or explicitly declare Safari out of scope.
+The root `package.json` version is the release source of truth. `build.sh` copies it into the Chromium, Electron/MV2, and Safari WebExtension manifests; `release.sh` passes it into the Browser/Full package metadata and bridge bundle; the tag-driven Windows workflow and Linux archive script use the same version for both architectures; and `build-safari.sh` passes it to the containing app, appex, and separate Safari installer. The iOS runner plist is bumped with the release because it is rebuilt from the packaged Xcode project during setup. The Browser and Full packages do **not** contain `InterceptorSafari.app`: a release that changes shared browser code must publish the separate `Interceptor-Safari-<version>.pkg` alongside them or explicitly declare Safari out of scope.
 
 `scripts/build-store-zip.sh` packs the Chromium extension for the Chrome Web Store as `dist/Interceptor-Extension-<version>.zip` with the development `key` removed from the manifest (the store assigns its own id) and fails if any key remains. `build.sh` appends `-dirty` to the recorded commit when the tree has uncommitted changes, so `interceptor --version` on a local build says so.
 

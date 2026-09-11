@@ -464,7 +464,7 @@ async function main() {
   else if (NAV_CMDS.has(cmd))    action = parseNavigationCommand(filtered)
   else if (TAB_CMDS.has(cmd))    action = await parseTabsCommand(filtered)
   else if (NET_CMDS.has(cmd))    action = parseNetworkCommand(filtered)
-  else if (SS_CMDS.has(cmd))     action = parseScreenshotCommand(filtered)
+  else if (SS_CMDS.has(cmd))     action = parseScreenshotCommand(filtered, normalized.positionalCount)
   else if (DATA_CMDS.has(cmd))   action = parseDataCommand(filtered)
   else if (META_CMDS.has(cmd))   action = await parseMetaCommand(filtered, jsonMode, globalContextId)
   else if (EVAL_CMDS.has(cmd))   action = parseEvalCommand(filtered, normalized.positionalCount)

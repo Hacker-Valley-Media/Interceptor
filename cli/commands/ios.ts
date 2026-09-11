@@ -13,7 +13,6 @@ import { sendCommand, type DaemonResponse, type DaemonResult } from "../transpor
 import { runIosWebCommand } from "./ios-web"
 import { runIosSvcCommand } from "./ios-svc"
 import { runIosDevCommand } from "./ios-dev"
-import { readSecretValue } from "../prompt"
 
 /** Device-service introspection subcommands, delegated to ios-svc.ts. */
 const IOS_SVC_SUBCOMMANDS = new Set(["diag", "logs", "fs", "crash", "profiles", "notify", "springboard"])
@@ -98,12 +97,12 @@ Get started (requires Xcode signed in with your Apple ID) —   setup [<device>]
                               • trust the certificate (Settings > General > VPN & Device Management)
   refresh [<device>]        force a re-sign now (also runs on a timer before expiry)
 
-Experimental no-Xcode Apple-services path:
-  login --apple-id <id> [--code <2fa>] [--stdin]   sign in; the password is read at a hidden prompt (or stdin). Token → Keychain. One time.
-  logout                    drop the stored Apple-ID token
+Unsupported compatibility command:
+  login                     fails before password input; use ios setup
+  logout                    remove legacy stored Apple-ID data
 
-Operator path (prebuilt, needs Xcode/devicectl):
-  install [<device>]        push the prebuilt agent to your iPhone (plugged in + unlocked)
+Signed-runner path:
+  install [<device>]        reinstall a runner previously signed by ios setup
   devices                   list iPhones that have the agent
   name <device> <alias>     give a phone a friendly name (e.g. "work")
 
@@ -114,9 +113,9 @@ const FULL_HELP = `interceptor ios — automate your iPhone
 Setup:
   setup [<device>] [--team <id>]             Xcode self-service build/sign + install + launch
   refresh [<device>] [--team <id>]           re-sign now (also automatic before expiry)
-  login --apple-id <id> [--stdin]            experimental no-Xcode Apple-services path (password at a hidden prompt)
-  logout                                     drop the stored Apple-ID token
-  install [<device>]                         push/refresh the prebuilt agent (operator path)
+  login                                      unavailable; fails before password input and points to setup
+  logout                                     remove legacy stored Apple-ID data
+  install [<device>]                         reinstall a runner previously signed by setup
   devices                                    phones with the agent (+ names)
   name <device> <alias>                      rename a phone (use it with --on <alias>)
 
@@ -240,23 +239,10 @@ export async function runIosCommand(
       return
     }
 
-    // ── self-service install (Apple-ID re-sign, no Xcode) ──────────────
+    // Retained for older clients, but fail before touching terminal or stdin.
     case "login": {
-      // issue #244: the Apple ID password comes from a hidden prompt or stdin,
-      // never argv (shell history, ps).
-      const appleId = flagValue(args, "--apple-id") ?? flagValue(args, "--id")
-      if (hasFlag(args, "--password") || hasFlag(args, "--pw")) {
-        console.error("error: never pass the password on argv. Run 'interceptor ios login --apple-id <id>' and type it at the hidden prompt, or pipe it: printf '%s' \"$PW\" | interceptor ios login --apple-id <id> --stdin")
-        process.exit(1)
-      }
-      const code = flagValue(args, "--code")
-      if (!appleId) {
-        console.error("usage: interceptor ios login --apple-id <id> [--code <2fa>] [--stdin]")
-        process.exit(1)
-      }
-      const password = await readSecretValue(`Apple ID password for ${appleId}`, { stdin: hasFlag(args, "--stdin"), confirm: false })
-      emitExit(await send({ type: "ios_login", appleId, password, code }), jsonMode)
-      return
+      console.error("error: ios login is unavailable because no-Xcode Apple-ID signing is not implemented. Use: interceptor ios setup [device]")
+      process.exit(1)
     }
 
     case "setup":
