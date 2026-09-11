@@ -5537,6 +5537,8 @@ var nativeReconnectTimer = null;
 var wsReconnectTimer = null;
 var wsChannel = null;
 var wsReady = false;
+var lastNativeError;
+var safariNativeConnecting = false;
 var wsKeepalive = { keepalivesSinceAck: 0, ackSupported: false };
 var wsKeepAliveTimer = null;
 var keepalivePongTimer = null;
@@ -5551,6 +5553,29 @@ var safariNativeRelayClient = null;
 var WS_KEEPALIVE_MISS_LIMIT = 2;
 var OUTBOUND_RECOVERY_QUEUE_CAP = 50;
 var outboundRecoveryQueue = [];
+function connectionSnapshot() {
+  if (activeTransport !== "none") {
+    return { state: "connected", transport: activeTransport };
+  }
+  const wsConnecting = !!wsChannel && wsChannel.readyState === WebSocketImpl.CONNECTING;
+  if (isConnecting || wsConnecting || safariNativeConnecting)
+    return { state: "connecting" };
+  return { state: "disconnected", ...lastNativeError ? { nativeError: lastNativeError } : {} };
+}
+function nativeErrorMessage(error) {
+  if (error instanceof Error)
+    return error.message;
+  if (typeof error === "string")
+    return error;
+  if (error && typeof error === "object" && typeof error.message === "string") {
+    return error.message;
+  }
+  return;
+}
+function markTransportSucceeded(transport) {
+  activeTransport = transport;
+  lastNativeError = undefined;
+}
 function describeOutboundMessage(msg) {
   const candidate = msg;
   if (candidate && typeof candidate.id === "string") {
@@ -5612,7 +5637,7 @@ function markWsRegistered() {
   wsReady = true;
   clearContextConflictBadge(chrome);
   if (activeTransport !== "native") {
-    activeTransport = "websocket";
+    markTransportSucceeded("websocket");
     wsReconnectDelay = INITIAL_RECONNECT_DELAY_MS;
     isConnecting = false;
     console.log("connection ready via ws channel");
@@ -5782,7 +5807,7 @@ function connectToHost() {
   }
   if (!hasNativeMessaging()) {
     if (isWsOpen())
-      activeTransport = "websocket";
+      markTransportSucceeded("websocket");
     else
       connectWsChannel();
     return;
@@ -5790,9 +5815,18 @@ function connectToHost() {
   if (nativePort || isConnecting)
     return;
   isConnecting = true;
-  const port = chrome.runtime.connectNative("com.interceptor.host");
+  let port;
+  try {
+    port = chrome.runtime.connectNative("com.interceptor.host");
+  } catch (error) {
+    lastNativeError = nativeErrorMessage(error);
+    isConnecting = false;
+    scheduleNativeReconnect();
+    return;
+  }
   const handshakeTimer = setTimeout(() => {
     console.error("native host handshake timeout (10s)");
+    lastNativeError = "Native host handshake timed out.";
     disconnectNativePort(port);
     scheduleNativeReconnect();
   }, 1e4);
@@ -5802,7 +5836,7 @@ function connectToHost() {
       if (pendingHandshakePort === port) {
         clearTimeout(handshakeTimer);
         pendingHandshakePort = null;
-        activeTransport = "native";
+        markTransportSucceeded("native");
         nativeReconnectDelay = INITIAL_RECONNECT_DELAY_MS;
         if (nativeReconnectTimer) {
           clearTimeout(nativeReconnectTimer);
@@ -5827,14 +5861,16 @@ function connectToHost() {
   });
   port.onDisconnect.addListener(() => {
     const disconnectedPort = port;
+    clearTimeout(handshakeTimer);
     isConnecting = false;
     const lastError = chrome.runtime.lastError;
+    lastNativeError = nativeErrorMessage(lastError);
     if (lastError)
       console.error("native host disconnected:", lastError.message);
     console.log("connection_lost", lastError?.message);
     clearNativeStateFor(disconnectedPort);
     if (isWsOpen()) {
-      activeTransport = "websocket";
+      markTransportSucceeded("websocket");
       console.log("native host down but ws channel active, switching to websocket");
       recoverPendingRequestsAfterNativeDisconnect(pendingRequests, (msg) => sendToHost(msg, true, true));
       pendingRequests.clear();
@@ -5849,6 +5885,7 @@ function connectToHost() {
   pendingHandshakePort = port;
   const ping = safeNativePortPing(port);
   if (!ping.posted) {
+    lastNativeError = nativeErrorMessage(ping.error);
     clearTimeout(handshakeTimer);
     clearNativeStateFor(port);
     isConnecting = false;
@@ -5863,8 +5900,11 @@ function handleControlPlaneMessage(rawMessage, transport) {
   if (controlType === "context_conflict") {
     if (transport === "websocket")
       markWsUnregistered();
-    else if (activeTransport === "safari-native")
-      activeTransport = "none";
+    else {
+      safariNativeConnecting = false;
+      if (activeTransport === "safari-native")
+        activeTransport = "none";
+    }
     console.error(`[interceptor] context name conflict: '${msg.contextId}' is already registered. Change the context ID in the extension popup.`);
     setContextConflictBadge(chrome);
     return;
@@ -5873,7 +5913,8 @@ function handleControlPlaneMessage(rawMessage, transport) {
     if (transport === "websocket") {
       markWsRegistered();
     } else {
-      activeTransport = "safari-native";
+      markTransportSucceeded("safari-native");
+      safariNativeConnecting = false;
       clearContextConflictBadge(chrome);
       drainMessageQueue();
       while (outboundRecoveryQueue.length > 0) {
@@ -5909,11 +5950,18 @@ function connectSafariNativeRelayChannel() {
     contextId,
     onMessage: (message) => handleControlPlaneMessage(message, "safari-native"),
     onConnectionChange: (connected) => {
-      if (!connected && activeTransport === "safari-native")
-        activeTransport = "none";
+      if (!connected) {
+        safariNativeConnecting = false;
+        if (activeTransport === "safari-native")
+          activeTransport = "none";
+      }
     },
-    onError: (error) => console.error("Safari native relay:", error.message)
+    onError: (error) => {
+      safariNativeConnecting = false;
+      console.error("Safari native relay:", error.message);
+    }
   });
+  safariNativeConnecting = true;
   safariNativeRelayClient.start();
 }
 function wsStateOnOpen() {
@@ -6060,7 +6108,11 @@ function registerSwKeepaliveListener() {
   if (!onMessage?.addListener)
     return;
   onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type !== "sw_keepalive")
+    if (msg?.type === "interceptor_connection_status") {
+      sendResponse(connectionSnapshot());
+      return false;
+    }
+    if (msg?.type !== "sw_keepalive")
       return false;
     const now = Date.now();
     if (now - lastSwKeepalive < 20000) {

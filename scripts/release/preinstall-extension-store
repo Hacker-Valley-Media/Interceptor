@@ -1,0 +1,26 @@
+#!/bin/bash
+# Mark only a first package install so postinstall can open the Store without
+# making Sparkle-driven upgrades reopen a browser tab.
+
+set -euo pipefail
+
+TARGET_USER="$(stat -f '%Su' /dev/console)"
+if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+  exit 0
+fi
+
+TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
+if [[ -z "$TARGET_UID" ]]; then
+  exit 0
+fi
+
+STATE_DIR="/Library/Application Support/Interceptor"
+MARKER="$STATE_DIR/.open-extension-store-$TARGET_UID"
+if /usr/sbin/pkgutil --pkg-info com.interceptor.daemon.pkg >/dev/null 2>&1; then
+  /bin/rm -f "$MARKER"
+else
+  /usr/bin/install -d -o root -g wheel -m 755 "$STATE_DIR"
+  /usr/bin/install -o root -g wheel -m 600 /dev/null "$MARKER"
+fi
+
+exit 0

@@ -109,7 +109,7 @@ build_extension() {
   bun build extension/src/inject-net.ts --outdir=extension/dist --target=browser
   bun build extension/src/inject-canvas.ts --outdir=extension/dist --target=browser
   bun build extension/src/offscreen.ts --outfile=extension/dist/offscreen.js --target=browser
-  bun build extension/src/popup.ts --outfile=extension/dist/popup.js --target=browser
+  bun build extension/src/popup.ts --outfile=extension/dist/popup.js --target=browser --format=iife
   cp extension/manifest.json extension/dist/
   cp extension/offscreen.html extension/dist/
   cp extension/popup.html extension/dist/
@@ -141,6 +141,7 @@ build_extension_mv2() {
   cp extension/dist/inject-canvas.js extension/dist-mv2/inject-canvas.js
   cp extension/dist/offscreen.html extension/dist-mv2/offscreen.html
   cp extension/dist/popup.html extension/dist-mv2/popup.html
+  cp extension/dist/popup.js extension/dist-mv2/popup.js
   printf '%s\n' 'globalThis.INTERCEPTOR_APP_CONTEXT_ID = "app:electron";' > extension/dist-mv2/electron-config.js
   rm -rf extension/dist-mv2/icons
   cp -R extension/icons extension/dist-mv2/icons

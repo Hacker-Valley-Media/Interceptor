@@ -196,6 +196,17 @@ if [[ -n "$TARGET_UID" && -f "$LAUNCH_AGENT_PATH" ]]; then
   bootstrap_bridge_launchagent "$TARGET_UID" || true
 fi
 
+# A preinstall marker exists only when no Interceptor daemon package receipt
+# preceded this install. Open the approved listing once for that new user;
+# routine pkg and Sparkle upgrades leave the browser alone.
+STORE_MARKER="$INSTALL_ROOT/.open-extension-store-$TARGET_UID"
+if [[ -n "$TARGET_UID" && -f "$STORE_MARKER" ]]; then
+  rm -f "$STORE_MARKER"
+  /bin/launchctl asuser "$TARGET_UID" /usr/bin/sudo -u "$TARGET_USER" \
+    /usr/bin/open "https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed" \
+    >>"$INSTALL_LOG_PATH" 2>&1 || true
+fi
+
 # ── skills-refresh marker ────────────────────────────────────────
 # Written on every install AND every (Sparkle-driven) update. The CLI's
 # rate-limited skills hint uses live filesystem probing; this marker records

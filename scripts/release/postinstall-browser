@@ -72,6 +72,7 @@ if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
 fi
 
 TARGET_HOME="$(dscl . -read /Users/"$TARGET_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
 
 # ── Symlink manifest into Chrome + Brave per-user NMH dirs ────────────────────
 if [[ -n "$TARGET_HOME" && -d "$TARGET_HOME" ]]; then
@@ -83,6 +84,17 @@ if [[ -n "$TARGET_HOME" && -d "$TARGET_HOME" ]]; then
     ln -sfn "$RENDERED_MANIFEST" "$browser_dir/com.interceptor.host.json"
     chown -R "$TARGET_USER" "$browser_dir" 2>/dev/null || true
   done
+fi
+
+# A preinstall marker exists only when no Interceptor daemon package receipt
+# preceded this install. Open the approved listing once for that new user;
+# routine pkg and Sparkle upgrades leave the browser alone.
+STORE_MARKER="$INSTALL_ROOT/.open-extension-store-$TARGET_UID"
+if [[ -n "$TARGET_UID" && -f "$STORE_MARKER" ]]; then
+  rm -f "$STORE_MARKER"
+  /bin/launchctl asuser "$TARGET_UID" /usr/bin/sudo -u "$TARGET_USER" \
+    /usr/bin/open "https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed" \
+    >/dev/null 2>&1 || true
 fi
 
 # ── skills-refresh marker ────────────────────────────────────────

@@ -9,12 +9,12 @@
 # Reads the pkgs from dist/release/Interceptor-{Browser,Full}-<version>.pkg
 # (where <version> comes from package.json, or --version=X.Y.Z).
 #
-# Pipeline (per mode):
-#   1. cp pkg → $SPARKLE_HOST_DIR/public/
-#   2. sign_update → EdDSA signature + length
-#   3. python3 mutates appcast.xml: drop any prior <item> for the same
-#      (version, title) pair (idempotent re-publish), then prepend a new <item>
-#   4. (optional) deploy host via `rwh` if it's on PATH
+# Pipeline:
+#   1. validate docs/release-notes.html against the target and retained feed
+#   2. copy it to release-notes-<version>.html and sign that snapshot once
+#   3. per mode, copy and sign the pkg, then replace its matching appcast item
+#   4. put the same signed sparkle:releaseNotesLink on both mode items
+#   5. optionally deploy the host and tag the release
 #
 # Env overrides (same defaults as release.sh):
 #   INTERCEPTOR_SPARKLE_VERSION       Sparkle tool version (default 2.9.1)
@@ -41,6 +41,7 @@ SPARKLE_TOOLS_DIR="${INTERCEPTOR_SPARKLE_TOOLS_DIR:-$HOME/.cache/interceptor-spa
 SPARKLE_HOST_DIR="${INTERCEPTOR_SPARKLE_HOST_DIR:-$REPO_ROOT/../Interceptor-Updates-Sparkle}"
 DOWNLOAD_URL_PREFIX="${INTERCEPTOR_DOWNLOAD_URL_PREFIX:-https://updates.hackervalley.media/}"
 RELEASE_DIR="$REPO_ROOT/dist/release"
+RELEASE_NOTES_SOURCE="$REPO_ROOT/docs/release-notes.html"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 VERSION=""
@@ -71,7 +72,8 @@ while [[ $i -le $# ]]; do
       echo "Usage: bash scripts/publish-sparkle.sh [MODE] [--version=X.Y.Z] [--no-deploy] [--dry-run]"
       echo ""
       echo "Publishes signed+notarized .pkgs from dist/release/ to the Sparkle"
-      echo "update feed. Requires the .pkgs to already exist — run release.sh first."
+      echo "update feed. Requires the .pkgs and a matching section in"
+      echo "docs/release-notes.html — run release.sh first."
       echo ""
       echo "Modes (mutually exclusive; default publishes both if both pkgs exist):"
       echo "  --browser-only   Publish only Interceptor-Browser-<v>.pkg"
@@ -82,7 +84,7 @@ while [[ $i -le $# ]]; do
       echo "  --version=X.Y.Z  Override version (else read from package.json)"
       echo "  --no-deploy      Update appcast.xml locally; skip the rwh deploy step"
       echo "  --no-tag         Skip creating/pushing the vX.Y.Z release tag"
-      echo "  --dry-run        Print steps without copying / signing / mutating"
+      echo "  --dry-run        Validate notes and print steps without copying / signing / mutating"
       exit 1 ;;
   esac
   i=$((i + 1))
@@ -190,7 +192,93 @@ if (( ! DRY_RUN )); then
   mkdir -p "$HOST_PUBLIC"
 fi
 
-# ── Step 4: Per-mode publish ──────────────────────────────────────────────────
+# ── Step 4: Validate and sign immutable release notes ─────────────────────────
+echo "==> Step 4: Validating cumulative release notes"
+HOST_APPCAST="$HOST_PUBLIC/appcast.xml" \
+RELEASE_NOTES_SOURCE="$RELEASE_NOTES_SOURCE" \
+RELEASE_NOTES_TARGET="$VERSION" \
+python3 - <<'PY'
+import os, re, sys
+from collections import Counter
+from html.parser import HTMLParser
+from xml.etree import ElementTree as ET
+
+class ReleaseSections(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.stack = []
+        self.versions = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "section" and self.stack and self.stack[-1] == "main":
+            version = dict(attrs).get("data-sparkle-version")
+            if version is not None:
+                self.versions.append(version)
+        self.stack.append(tag)
+
+    def handle_endtag(self, tag):
+        if tag in self.stack:
+            index = len(self.stack) - 1 - self.stack[::-1].index(tag)
+            del self.stack[index:]
+
+source = os.environ["RELEASE_NOTES_SOURCE"]
+target = os.environ["RELEASE_NOTES_TARGET"]
+appcast = os.environ["HOST_APPCAST"]
+
+if not os.path.isfile(source):
+    sys.exit(f"ERROR: cumulative release notes missing at {source}")
+
+parser = ReleaseSections()
+parser.feed(open(source, encoding="utf-8").read())
+versions = parser.versions
+invalid = [v for v in versions if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", v)]
+if invalid:
+    sys.exit(f"ERROR: invalid data-sparkle-version value(s): {', '.join(invalid)}")
+
+duplicates = sorted(v for v, count in Counter(versions).items() if count > 1)
+if duplicates:
+    sys.exit(f"ERROR: duplicate release-note version section(s): {', '.join(duplicates)}")
+if target not in versions:
+    sys.exit(f"ERROR: release notes have no section for target version {target}")
+
+version_key = lambda v: tuple(int(part) for part in v.split("."))
+if versions != sorted(versions, key=version_key, reverse=True):
+    sys.exit("ERROR: release-note sections must be ordered newest first")
+
+retained = set()
+if os.path.isfile(appcast):
+    SP = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+    for item in ET.parse(appcast).getroot().findall("./channel/item"):
+        node = item.find(f"{SP}shortVersionString")
+        if node is not None and node.text:
+            retained.add(node.text.strip())
+missing = sorted(retained - set(versions), key=version_key, reverse=True)
+if missing:
+    sys.exit(f"ERROR: release notes omit retained appcast version(s): {', '.join(missing)}")
+
+print(f"    release notes valid: {len(versions)} unique versions; target {target}; {len(retained)} retained")
+PY
+
+RELEASE_NOTES_BASENAME="release-notes-${VERSION}.html"
+RELEASE_NOTES_SNAPSHOT="$HOST_PUBLIC/$RELEASE_NOTES_BASENAME"
+RELEASE_NOTES_SIG_LINE=""
+if (( DRY_RUN )); then
+  echo "    DRY: verify or create immutable $RELEASE_NOTES_SNAPSHOT"
+  echo "    DRY: sign_update $RELEASE_NOTES_BASENAME once for all mode items"
+else
+  if [[ -e "$RELEASE_NOTES_SNAPSHOT" ]]; then
+    if ! cmp -s "$RELEASE_NOTES_SOURCE" "$RELEASE_NOTES_SNAPSHOT"; then
+      echo "ERROR: immutable release-note snapshot differs for version $VERSION" >&2
+      exit 1
+    fi
+  else
+    cp "$RELEASE_NOTES_SOURCE" "$RELEASE_NOTES_SNAPSHOT"
+  fi
+  RELEASE_NOTES_SIG_LINE="$("$SPARKLE_TOOLS_DIR/bin/sign_update" "$RELEASE_NOTES_SNAPSHOT" 2>&1 | tail -1)"
+  echo "    $RELEASE_NOTES_SIG_LINE"
+fi
+
+# ── Step 5: Per-mode publish ──────────────────────────────────────────────────
 # For each pkg: copy, sign_update, mutate appcast.xml. Uses inline Python to
 # rewrite appcast.xml so the operation is idempotent — re-publishing the same
 # (version, title) replaces the prior <item> instead of duplicating it.
@@ -259,6 +347,8 @@ publish_to_sparkle() {
   PKG_TITLE="$title" \
   PKG_MIN_SYS_VER="$min_sys_ver" \
   PKG_MODE="$mode" \
+  RELEASE_NOTES_URL="${DOWNLOAD_URL_PREFIX}${RELEASE_NOTES_BASENAME}" \
+  RELEASE_NOTES_SIG_LINE="$RELEASE_NOTES_SIG_LINE" \
   python3 - <<'PY'
 import os, re, sys
 from datetime import datetime, timezone
@@ -274,6 +364,8 @@ sig_line = os.environ["PKG_SIG_LINE"].strip()
 title = os.environ["PKG_TITLE"]
 min_sys_ver = os.environ["PKG_MIN_SYS_VER"]
 mode = os.environ["PKG_MODE"]
+release_notes_url = os.environ["RELEASE_NOTES_URL"]
+release_notes_sig_line = os.environ["RELEASE_NOTES_SIG_LINE"].strip()
 
 # sign_update output line looks like:
 #   sparkle:edSignature="..." length="..."
@@ -282,6 +374,11 @@ if not m:
     print(f"ERROR: could not parse sign_update output: {sig_line}", file=sys.stderr)
     sys.exit(1)
 ed_sig, length = m.group(1), m.group(2)
+notes_match = re.search(r'sparkle:edSignature="([^"]+)"\s+length="([0-9]+)"', release_notes_sig_line)
+if not notes_match:
+    print(f"ERROR: could not parse release-note sign_update output: {release_notes_sig_line}", file=sys.stderr)
+    sys.exit(1)
+notes_sig, notes_length = notes_match.group(1), notes_match.group(2)
 
 if os.path.exists(path):
     tree = ET.parse(path)
@@ -316,6 +413,10 @@ ET.SubElement(item, f"{SP}shortVersionString").text = version
 ET.SubElement(item, f"{SP}minimumSystemVersion").text = min_sys_ver
 ET.SubElement(item, f"{SP}installationType").text = "package"
 ET.SubElement(item, f"{SP}channel").text = mode
+ET.SubElement(item, f"{SP}releaseNotesLink", {
+    f"{SP}edSignature": notes_sig,
+    "length": notes_length,
+}).text = release_notes_url
 ET.SubElement(item, "enclosure", {
     "url": url,
     f"{SP}edSignature": ed_sig,
@@ -333,12 +434,12 @@ print(f"    appcast.xml updated for {title}")
 PY
 }
 
-echo "==> Step 4: Per-mode publish"
+echo "==> Step 5: Per-mode publish"
 (( PUBLISH_BROWSER )) && publish_to_sparkle "browser-only" "$SIGNED_BROWSER_PKG"
 (( PUBLISH_FULL    )) && publish_to_sparkle "full"         "$SIGNED_FULL_PKG"
 
-# ── Step 5: Deploy host (optional) ────────────────────────────────────────────
-echo "==> Step 5: Deploying update host"
+# ── Step 6: Deploy host (optional) ────────────────────────────────────────────
+echo "==> Step 6: Deploying update host"
 if (( ! DEPLOY )); then
   echo "    --no-deploy passed; appcast.xml updated locally, deploy skipped."
   echo "    To deploy manually, push $HOST_PUBLIC/ to your update host."
@@ -352,12 +453,12 @@ else
   echo "    WARN: rwh CLI not on PATH — push $HOST_PUBLIC manually to deploy." >&2
 fi
 
-# ── Step 6: Tag the release ───────────────────────────────────────────────────
+# ── Step 7: Tag the release ───────────────────────────────────────────────────
 # The Windows installer lane (windows-installer.yml) builds ONLY on a pushed
 # vX.Y.Z tag whose version equals package.json. Tagging here — at the moment a
 # macOS version goes public — is what keeps macOS and Windows on the same
 # version. 0.22.36/0.22.37 shipped untagged, so that lane never fired for them.
-echo "==> Step 6: Tagging release v${VERSION}"
+echo "==> Step 7: Tagging release v${VERSION}"
 if (( ! TAG )); then
   echo "    --no-tag passed; skipping. The Windows release lane will NOT fire for ${VERSION}."
 elif (( DRY_RUN )); then
@@ -387,6 +488,7 @@ fi
 echo "================================================================"
 echo "Sparkle publish complete:"
 echo "  feed:   ${DOWNLOAD_URL_PREFIX}appcast.xml"
+echo "  notes:  ${DOWNLOAD_URL_PREFIX}${RELEASE_NOTES_BASENAME}"
 (( PUBLISH_BROWSER )) && echo "  browser: ${DOWNLOAD_URL_PREFIX}Interceptor-Browser-${VERSION}.pkg"
 (( PUBLISH_FULL    )) && echo "  full:    ${DOWNLOAD_URL_PREFIX}Interceptor-Full-${VERSION}.pkg"
 if (( DRY_RUN )); then
