@@ -13,11 +13,12 @@ describe("describeEvalMain", () => {
     expect(s.hint).toContain("chrome://extensions/?id=abcdefghijklmnopabcdefghijklmnop")
     expect(s.hint).toContain("Allow User Scripts")
   })
-  test("an API the browser does not expose is not a toggle problem", () => {
+  test("a missing chrome.userScripts namespace is the toggle-off state, so the toggle hint applies", () => {
+    // Chrome removes the namespace entirely while Allow User Scripts is off;
+    // `api_present: false` is what a working Chrome reports in that state.
     const s = describeEvalMain({ userScripts: { manifest_permission: true, api_present: false, enabled: false } })
     expect(s.available).toBe(false)
-    expect(s.hint).not.toContain("Allow User Scripts")
-    expect(s.hint).toContain("not available in this browser")
+    expect(s.hint).toContain("Allow User Scripts")
   })
   test("no userScripts block means an older extension copy", () => {
     expect(describeEvalMain({}).hint).toContain("older extension copy")
