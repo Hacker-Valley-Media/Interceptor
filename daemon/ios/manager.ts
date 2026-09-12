@@ -716,7 +716,8 @@ export class IosManager {
     const app = findRunnerApp(staged.dir)
     if (!app) return { ok: false, error: "the bundled agent is missing its .app — reinstall Interceptor" }
     // Validate the signature BEFORE spawning. An unsigned or stale staged runner
-    // (a package upgrade restages the unsigned bundled build over the signed one)
+    // (a package upgrade used to restage the unsigned bundled build over the
+    // signed one; a bundled runner that was never set up still is unsigned)
     // makes xcodebuild exit within seconds; without this check that death only
     // surfaced two minutes later as a "did not register" network timeout.
     if (descriptor.kind !== "simulator") {

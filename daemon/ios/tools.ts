@@ -228,6 +228,8 @@ export function runnerProductBundleId(teamId: string): string {
 
 const SUPPORT_DIR = "/Library/Application Support/Interceptor"
 const RUNNER_STAGE_DIR = join(homedir(), ".interceptor", "ios", "runner")
+/** Present in the stage dir when `ios setup` built and signed its contents (kept across bundled-artifact changes). */
+const SETUP_BUILT_MARKER = ".setup-built"
 const RUNNER_XCODE_DERIVED_ROOT = join(homedir(), ".interceptor", "ios", "xcode-derived")
 const RUNNER_SUPPORT_PROJECT = join(SUPPORT_DIR, "ios", "InterceptorRunner", "InterceptorRunner.xcodeproj")
 const RUNNER_LOCAL_PROJECT = join(process.cwd(), "ios", "InterceptorRunner", "InterceptorRunner.xcodeproj")
@@ -504,10 +506,11 @@ export function buildRunnerWithXcode(udid: string, opts: XcodeRunnerBuildOptions
   try {
     rmSync(RUNNER_STAGE_DIR, { recursive: true, force: true })
     cpSync(products, RUNNER_STAGE_DIR, { recursive: true })
-    // Record the bundled baseline, not the signed output's contents. Both
-    // install and launch restage: retain these prepared products until that
-    // baseline changes, just as we retain a locally re-signed bundled runner.
+    // Record the bundled baseline, not the signed output's contents, and mark
+    // the stage as setup-built so a later bundled-artifact change (a package
+    // upgrade) does not restage the unsigned build over this signed one.
     writeFileSync(join(RUNNER_STAGE_DIR, ".source-sha256"), runnerArtifactFingerprint(resolveRunnerArtifact()) + "\n", { mode: 0o600 })
+    writeFileSync(join(RUNNER_STAGE_DIR, SETUP_BUILT_MARKER), new Date().toISOString() + "\n", { mode: 0o600 })
   } catch (err) {
     throw new Error(`could not stage the Xcode-built runner: ${(err as Error).message}`)
   }
@@ -547,8 +550,14 @@ export function stageRunner(): { dir?: string; error?: string } {
     const fingerprint = runnerArtifactFingerprint(art)
     let stagedFingerprint = ""
     try { stagedFingerprint = readFileSync(join(dest, ".source-sha256"), "utf-8").trim() } catch {}
-    if (findXctestrun(dest) && findRunnerApp(dest)
-      && stagedFingerprint === fingerprint) return { dir: dest }
+    if (findXctestrun(dest) && findRunnerApp(dest)) {
+      if (stagedFingerprint === fingerprint) return { dir: dest }
+      // A runner that `ios setup` built and signed outlives changes to the
+      // bundled (unsigned) artifact: restaging that build here replaced a
+      // working signed runner with one iOS rejects, and every package upgrade
+      // then needed a fresh `ios setup`. `ios refresh` rebuilds on demand.
+      if (existsSync(join(dest, SETUP_BUILT_MARKER))) return { dir: dest }
+    }
     if (!art.dir && !art.tar) {
       return { error: "the Interceptor iPhone agent is not bundled — reinstall Interceptor (the pkg ships it under /Library/Application Support/Interceptor)" }
     }
