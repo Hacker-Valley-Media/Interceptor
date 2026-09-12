@@ -28,7 +28,8 @@ import {
 import {
   detectToolchain, listDeviceApps, listPhysicalDevices, listSimulators,
   resizePngToBudget, run, runJson, spawnLongLived, killChild,
-  prepareXctestrunWithEnv, stageRunner, findXctestrun, installRunnerApp, isRunnerInstalled,
+  prepareXctestrunWithEnv, stageRunner, findXctestrun, findRunnerApp, inspectRunnerIdentity,
+  installRunnerApp, isRunnerInstalled,
   RUNNER_BUNDLE_ID, preferNoXcodeIosPath, buildRunnerWithXcode,
 } from "./tools"
 import {
@@ -63,7 +64,28 @@ type IosDeviceContext = {
   signingExpiresAt?: number
   /** The dial-back the live runner was launched with; status reports this, not a fresh resolution. */
   dialBack?: DialBack
+  /** Per-session registration token the live runner dialed in with (re-dials must match). */
+  token?: string
+  /** Set while the runner's socket is closed but its re-dial may still arrive (see handleRunnerClose). */
+  grace?: RunnerGrace
 }
+
+/** A closed runner socket being held open for the runner's own re-dial. */
+type RunnerGrace = {
+  token: string
+  timer: ReturnType<typeof setTimeout>
+  /** Resolves true when the runner re-registered, false when the window lapsed or its process died. */
+  settled: Promise<boolean>
+  resolve: (rebound: boolean) => void
+}
+
+/**
+ * How long a closed runner socket is held before the session is torn down. The
+ * on-device runner re-dials up to five times, one second apart, with the same
+ * token; killing xcodebuild on the first close frame forced a fresh XCTest
+ * launch (and its on-device authorization sheet) for every transient drop.
+ */
+export const RUNNER_RECONNECT_GRACE_MS = 10_000
 
 /** A pending `enable` waiting for its InterceptorRunner to dial back in. */
 type PendingRunner = {
@@ -85,6 +107,10 @@ export class IosManager {
   private ensuring = new Map<string, Promise<{ ok: boolean; error?: string; contextId?: string }>>()
   /** Live runner sockets → their channel + udid (for response/close routing). */
   private runnerByWs = new Map<RunnerSocket, { udid: string; channel: RunnerChannel }>()
+  /** How long a launch waits for the runner to dial in. Tests shorten it. */
+  private registerTimeoutMs = 120_000
+  /** How long a closed runner socket is held for its re-dial. Tests shorten it. */
+  private reconnectGraceMs = RUNNER_RECONNECT_GRACE_MS
 
   private refreshTimer?: ReturnType<typeof setInterval>
 
@@ -137,7 +163,20 @@ export class IosManager {
     // resolve to the same pending entry that awaitRunner registered.
     const key = iosUdidSlug(udid)
     const pending = this.pendingRunners.get(key)
-    if (!pending) return { ok: false, error: `no pending 'ios enable' for udid ${udid}` }
+    if (!pending) {
+      // A live session whose socket just closed: the runner re-dials with the
+      // same token inside the grace window. Rebind its channel instead of
+      // rejecting it as "no pending enable" and letting the session die.
+      const ctx = this.contexts.get(iosContextId(udid))
+      if (ctx?.grace && ctx.channel instanceof RunnerChannel) {
+        if (msg.token !== ctx.grace.token) return { ok: false, error: "ios runner token mismatch" }
+        ctx.channel.rebind(ws)
+        this.runnerByWs.set(ws, { udid, channel: ctx.channel })
+        this.settleGrace(ctx, true)
+        return { ok: true, contextId: ctx.descriptor.contextId }
+      }
+      return { ok: false, error: `no pending 'ios enable' for udid ${udid}` }
+    }
     // A pending runner always carries a per-session token; reject any mismatch
     // outright (a runner dials in over a routable LAN IP, so this is the gate).
     if (msg.token !== pending.token) return { ok: false, error: "ios runner token mismatch" }
@@ -149,6 +188,17 @@ export class IosManager {
     return { ok: true, contextId: iosContextId(udid) }
   }
 
+  /** Fail a launch that is still waiting for its runner (the launch process died). */
+  private failPendingRunner(udid: string, err: Error): boolean {
+    const key = iosUdidSlug(udid)
+    const pending = this.pendingRunners.get(key)
+    if (!pending) return false
+    clearTimeout(pending.timer)
+    this.pendingRunners.delete(key)
+    pending.reject(err)
+    return true
+  }
+
   /** Route a runner's `{ id, result }` reply to its channel. Returns true if handled. */
   handleRunnerMessage(ws: RunnerSocket, msg: { id?: string; result?: RunnerResult }): boolean {
     const rec = this.runnerByWs.get(ws)
@@ -157,19 +207,48 @@ export class IosManager {
     return true
   }
 
-  /** A runner socket closed: tear down its channel and drop the backing context. */
+  /**
+   * A runner socket closed. Hold the session for RUNNER_RECONNECT_GRACE_MS so the
+   * runner's own re-dial (same token) can rebind; only a lapsed window or a dead
+   * launch process tears the context down. In-flight ops are failed at once —
+   * their replies died with the socket.
+   */
   handleRunnerClose(ws: RunnerSocket): void {
     const rec = this.runnerByWs.get(ws)
     if (!rec) return
     this.runnerByWs.delete(ws)
-    rec.channel.teardown()
     const ctx = this.contexts.get(iosContextId(rec.udid))
-    if (ctx && ctx.channel === rec.channel) {
-      for (const p of ctx.procs) killChild(p)
-      this.contexts.delete(ctx.descriptor.contextId)
-      testmanagerd.closeRunner(rec.udid)
-      this.deps.emit("ios_disabled", { contextId: ctx.descriptor.contextId, udid: rec.udid, reason: "runner disconnected" })
+    if (!ctx || ctx.channel !== rec.channel) { rec.channel.teardown(); return }
+    if (ctx.grace) return
+    if (!ctx.token || !(ctx.channel instanceof RunnerChannel)) {
+      this.dropContext(ctx, "runner disconnected")
+      return
     }
+    ctx.channel.failInflight("ios runner disconnected (waiting for it to re-dial)")
+    let resolve!: (rebound: boolean) => void
+    const settled = new Promise<boolean>((r) => { resolve = r })
+    const timer = setTimeout(() => this.settleGrace(ctx, false), this.reconnectGraceMs)
+    ctx.grace = { token: ctx.token, timer, settled, resolve }
+    this.deps.emit("ios_reconnecting", { contextId: ctx.descriptor.contextId, udid: rec.udid, graceMs: this.reconnectGraceMs })
+  }
+
+  /** End a grace window: keep the session (rebound) or run the old immediate teardown. */
+  private settleGrace(ctx: IosDeviceContext, rebound: boolean): void {
+    const grace = ctx.grace
+    if (!grace) return
+    clearTimeout(grace.timer)
+    ctx.grace = undefined
+    if (!rebound) this.dropContext(ctx, "runner disconnected")
+    grace.resolve(rebound)
+  }
+
+  /** The pre-grace teardown: kill the launch process, forget the context, announce it. */
+  private dropContext(ctx: IosDeviceContext, reason: string): void {
+    if (ctx.channel instanceof RunnerChannel) { try { ctx.channel.teardown() } catch {} }
+    for (const p of ctx.procs) killChild(p)
+    if (this.contexts.get(ctx.descriptor.contextId) === ctx) this.contexts.delete(ctx.descriptor.contextId)
+    testmanagerd.closeRunner(ctx.descriptor.udid)
+    this.deps.emit("ios_disabled", { contextId: ctx.descriptor.contextId, udid: ctx.descriptor.udid, reason })
   }
 
   private awaitRunner(udid: string, token: string, timeoutMs: number): Promise<RunnerChannel> {
@@ -226,6 +305,17 @@ export class IosManager {
     const canonical = this.canonicalContextId(contextId)
     if (!canonical) return { success: false, error: this.noDeviceHint() }
     let ctx = this.contexts.get(canonical)
+    if (ctx?.grace) {
+      // The runner's socket just closed. Give its re-dial the grace window
+      // instead of sending on a dead socket (60 s op timeout) or launching a
+      // second XCTest session on top of a live one.
+      if (action.type === "ios_unlock") { await ctx.grace.settled; ctx = this.contexts.get(canonical) }
+      else {
+        const ensured = await this.ensureRunner(udidFromContextId(canonical)!)
+        if (!ensured.ok) return { success: false, error: ensured.error }
+        ctx = this.contexts.get(canonical)
+      }
+    }
     if (!ctx && action.type === "ios_unlock") {
       return { success: false, error: "ios unlock requires a connected resident runner. It cannot launch a runner on a locked phone. Unlock the phone once, run 'interceptor ios tree' to connect, then retry unlock or --probe while the runner remains resident." }
     }
@@ -508,7 +598,7 @@ export class IosManager {
    */
   private async launchRunnerNative(
     descriptor: IosDeviceDescriptor,
-  ): Promise<{ ok: true; channel: RunnerChannel; tunnel: IosTunnelState; dialBack: DialBack } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; channel: RunnerChannel; tunnel: IosTunnelState; dialBack: DialBack; token: string } | { ok: false; error: string }> {
     const udid = descriptor.udid
     const token = crypto.randomUUID()
     const dialBack = await this.resolveDialBack(descriptor.kind, udid)
@@ -523,8 +613,8 @@ export class IosManager {
         this.deps.emit("ios_tunnel_userspace", { udid })
       }
       await testmanagerd.launchRunner(udid, { bundleId: this.runnerBundleId(udid), env })
-      const channel = await this.awaitRunner(udid, token, 120_000)
-      return { ok: true, channel, tunnel: "native", dialBack }
+      const channel = await this.awaitRunner(udid, token, this.registerTimeoutMs)
+      return { ok: true, channel, tunnel: "native", dialBack, token }
     } catch (err) {
       return { ok: false, error: registrationFailure(err as Error, dialBack) }
     }
@@ -573,7 +663,10 @@ export class IosManager {
 
   private async ensureRunnerInner(udid: string, contextId: string): Promise<{ ok: boolean; error?: string; contextId?: string }> {
     const existing = this.contexts.get(contextId)
-    if (existing) {
+    if (existing?.grace) {
+      // Let the runner's own re-dial win before launching a second session.
+      if (await existing.grace.settled) return { ok: true, contextId }
+    } else if (existing) {
       try { await existing.channel.status(); return { ok: true, contextId } }
       catch { await this.teardownContext(existing); this.contexts.delete(contextId) }
     }
@@ -595,6 +688,7 @@ export class IosManager {
     const ctx: IosDeviceContext = {
       descriptor, channel: brought.channel, registry: new IosRefRegistry(),
       wdaPort: 0, tunnel: brought.tunnel, procs, registeredAt: Date.now(), dialBack: brought.dialBack,
+      token: brought.token,
     }
     this.contexts.set(contextId, ctx)
     this.deps.emit("ios_enabled", { contextId, udid, kind: descriptor.kind, transport: "runner" })
@@ -608,7 +702,7 @@ export class IosManager {
    */
   private async launchRunner(
     descriptor: IosDeviceDescriptor, procs: Bun.Subprocess[],
-  ): Promise<{ ok: true; channel: RunnerChannel; tunnel: IosTunnelState; dialBack: DialBack } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; channel: RunnerChannel; tunnel: IosTunnelState; dialBack: DialBack; token: string } | { ok: false; error: string }> {
     // The userspace testmanagerd path is an explicit diagnostic opt-in.
     if (preferNoXcodeIosPath()) return this.launchRunnerNative(descriptor)
 
@@ -619,6 +713,16 @@ export class IosManager {
 
     const staged = stageRunner()
     if (staged.error || !staged.dir) return { ok: false, error: staged.error ?? "the Interceptor agent is not available" }
+    const app = findRunnerApp(staged.dir)
+    if (!app) return { ok: false, error: "the bundled agent is missing its .app — reinstall Interceptor" }
+    // Validate the signature BEFORE spawning. An unsigned or stale staged runner
+    // (a package upgrade restages the unsigned bundled build over the signed one)
+    // makes xcodebuild exit within seconds; without this check that death only
+    // surfaced two minutes later as a "did not register" network timeout.
+    if (descriptor.kind !== "simulator") {
+      try { inspectRunnerIdentity(app, { expectedBundleId: this.runnerBundleId(udid), udid }) }
+      catch (err) { return { ok: false, error: (err as Error).message } }
+    }
     const xctestrun = findXctestrun(staged.dir)
     if (!xctestrun) return { ok: false, error: "the bundled agent is missing its launch descriptor (.xctestrun) — reinstall Interceptor" }
     const prepared = prepareXctestrunWithEnv(xctestrun, {
@@ -629,14 +733,36 @@ export class IosManager {
 
     if (descriptor.kind === "simulator") run("/usr/bin/xcrun", ["simctl", "boot", udid])
     const destination = descriptor.kind === "simulator" ? `platform=iOS Simulator,id=${udid}` : `id=${udid}`
-    procs.push(spawnLongLived("/usr/bin/xcrun", ["xcodebuild", "test-without-building", "-xctestrun", prepared, "-destination", destination]))
+    const proc = spawnLongLived("/usr/bin/xcrun", ["xcodebuild", "test-without-building", "-xctestrun", prepared, "-destination", destination], undefined, { stderr: "pipe" })
+    procs.push(proc)
+    this.watchLaunchProcess(udid, proc)
 
     try {
-      const channel = await this.awaitRunner(udid, token, 120_000)
-      return { ok: true, channel, tunnel: descriptor.needsTunnel ? "xcode" : "none", dialBack }
+      const channel = await this.awaitRunner(udid, token, this.registerTimeoutMs)
+      return { ok: true, channel, tunnel: descriptor.needsTunnel ? "xcode" : "none", dialBack, token }
     } catch (err) {
       return { ok: false, error: registrationFailure(err as Error, dialBack) }
     }
+  }
+
+  /**
+   * Report a launch process that dies. Before registration: fail the waiting
+   * launch with the exit code and stderr tail (xcodebuild's real reason) instead
+   * of the registration timeout. During a reconnect grace window: the runner is
+   * gone for good, so end the window without waiting for it to lapse.
+   */
+  private watchLaunchProcess(udid: string, proc: Bun.Subprocess): void {
+    const stderr = proc.stderr
+    const tail: Promise<string> = stderr && typeof stderr !== "number"
+      ? new Response(stderr as ReadableStream).text().then((t) => t.trim().split("\n").slice(-6).join("\n")).catch(() => "")
+      : Promise.resolve("")
+    void proc.exited.then(async (code) => {
+      const detail = await tail
+      const err = new Error(`xcodebuild exited with code ${code} before the runner registered${detail ? `:\n${detail}` : ""}`)
+      if (this.failPendingRunner(udid, err)) return
+      const ctx = this.contexts.get(iosContextId(udid))
+      if (ctx?.grace && ctx.procs.includes(proc)) this.settleGrace(ctx, false)
+    }).catch(() => {})
   }
 
   // ── device-ref resolution helpers ────────────────────────────────────────────
@@ -693,6 +819,8 @@ export class IosManager {
   }
 
   private async teardownContext(ctx: IosDeviceContext): Promise<void> {
+    // An explicit teardown ends any reconnect window without a second announcement.
+    if (ctx.grace) { const g = ctx.grace; ctx.grace = undefined; clearTimeout(g.timer); g.resolve(false) }
     try { await ctx.channel.deleteSession() } catch {}
     // Drop any runner socket mapping for this context.
     for (const [ws, rec] of this.runnerByWs) {
@@ -719,7 +847,7 @@ export class IosManager {
         productVersion: ctx.descriptor.productVersion,
         wdaPort: ctx.wdaPort,
         tunnel: ctx.tunnel,
-        connection: "connected",
+        connection: ctx.grace ? "connecting" : "connected",
         signingExpiresAt: ctx.signingExpiresAt,
         registeredAt: ctx.registeredAt,
         dialBack: dial.url,

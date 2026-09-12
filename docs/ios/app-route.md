@@ -29,6 +29,8 @@ interceptor ios <verb> --context ios:<udid>
 
 ## Setup (one time)
 
+> **The XCTest authorization sheet is entered on the phone, by a person.** The first XCUITest launch after a reboot (and any later re-authorization) shows *"Enter iPhone Passcode for XCTest — Enable UI Automation"*. It blocks the runner itself, so no Interceptor verb can type into it, and every Mac-side route (AccessibilityAudit, Accessibility Inspector, Switch Control, iPhone Mirroring, re-signed Apple tools) was tried live on 2026-09-11 and could not enter a digit: the sheet's accessibility actions report unsupported and the private entitlements Apple's tools use do not survive re-signing. Agents must stop and ask for the tap (or a paired hardware keyboard). After approval, restart the daemon and retry.
+
 1. **Developer Mode** on the device: Settings → Privacy & Security → Developer Mode → on, restart, confirm with passcode. (Required for any dev-signed/test app; a paid Apple license does **not** waive it.)
 2. **Pair + trust** the device (`Trust This Computer`).
 3. **Trust the Developer App certificate** after the runner is installed, if iOS asks for it: Settings → General → VPN & Device Management → Developer App → Trust. This is device-side Apple platform behavior; the host cannot bypass it.

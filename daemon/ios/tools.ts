@@ -77,13 +77,18 @@ export function runJson<T = unknown>(cmd: string, args: string[], opts: { timeou
  * Bun.spawn. The caller tracks the handle and kills it on teardown. stdout/stderr
  * are ignored so the child never blocks on a full pipe buffer.
  */
-export function spawnLongLived(cmd: string, args: string[], env?: Record<string, string>): Bun.Subprocess {
+export function spawnLongLived(
+  cmd: string, args: string[], env?: Record<string, string>,
+  opts: { stderr?: "ignore" | "pipe" } = {},
+): Bun.Subprocess {
   return Bun.spawn([cmd, ...args], {
     stdin: "ignore",
     stdout: "ignore",
-    stderr: "ignore",
+    // "pipe" lets a launcher report WHY a child died (xcodebuild's signing error)
+    // instead of surfacing the death as a later, unrelated timeout.
+    stderr: opts.stderr ?? "ignore",
     env: env ? { ...process.env, ...env } : undefined,
-  })
+  }) as Bun.Subprocess
 }
 
 /** Kill a tracked child process best-effort. */
