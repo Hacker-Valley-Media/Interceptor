@@ -51,7 +51,7 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
   writeFileSync(join(app, "Fixture"), "v1")
   const modulePath = resolve("daemon/ios/tools.ts")
   const script = `
-    import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+    import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
     import * as os from "node:os";
     import { mock } from "bun:test";
     import { join } from "node:path";
@@ -115,8 +115,15 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
     if (undated.ok || !undated.error?.includes("no valid expiration date")) throw new Error("undated profile reached device install");
     if (stageRunner().error || readFileSync(staged(), "utf8") !== "xcode-signed") throw new Error("launch replaced prepared runner");
     if (readFileSync(built.xctestrunPath, "utf8") !== "xcode-launch") throw new Error("launch descriptor replaced");
+    // A bundled-artifact change (package upgrade) no longer replaces the
+    // setup-built signed runner: launch keeps it, and only a rebuild
+    // (ios setup / refresh) restages on the newer bundle.
     writeFileSync(join(source, "Debug-iphoneos", "Fixture-Runner.app", "Fixture"), "v3");
-    if (stageRunner().error || readFileSync(staged(), "utf8") !== "v3") throw new Error("stale source was retained");
+    if (stageRunner().error || readFileSync(staged(), "utf8") !== "xcode-signed") throw new Error("upgrade replaced the setup-built runner");
+    if (!existsSync(join(${JSON.stringify(join(root, "home", ".interceptor", "ios", "runner"))}, ".setup-built"))) throw new Error("setup did not mark its stage");
+    expiration = new Date(Date.now() + 86_400_000).toISOString();
+    const rebuilt = buildRunnerWithXcode("fixture", { teamId: "FIXTURE", projectPath: source, derivedDataPath: derived });
+    if (readFileSync(staged(), "utf8") !== "xcode-signed" || rebuilt.bundleId !== built.bundleId) throw new Error("rebuild did not restage");
   `
   const child = Bun.spawn([process.execPath, "-e", script], {
     env: { ...process.env, INTERCEPTOR_IOS_USE_XCODE: "1", INTERCEPTOR_RUNNER_DIR: source },
@@ -125,6 +132,6 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
   const code = await child.exited
   const stderr = await new Response(child.stderr).text()
   expect(code, stderr).toBe(0)
-  expect(readFileSync(join(root, "home", ".interceptor", "ios", "runner", "Debug-iphoneos", "Fixture-Runner.app", "Fixture"), "utf8")).toBe("v3")
+  expect(readFileSync(join(root, "home", ".interceptor", "ios", "runner", "Debug-iphoneos", "Fixture-Runner.app", "Fixture"), "utf8")).toBe("xcode-signed")
   rmSync(root, { recursive: true, force: true })
 })

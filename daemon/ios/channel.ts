@@ -89,13 +89,23 @@ export class RunnerChannel implements IosDeviceChannel {
     else p.reject(new Error(result?.error || "ios runner op failed"))
   }
 
-  /** Reject all in-flight ops (runner disconnected / context torn down). */
-  teardown(): void {
+  /** Reject every in-flight op (their replies died with the socket) but keep the channel usable. */
+  failInflight(reason = "ios runner disconnected"): void {
     for (const p of this.pending.values()) {
       clearTimeout(p.timer)
-      p.reject(new Error("ios runner disconnected"))
+      p.reject(new Error(reason))
     }
     this.pending.clear()
+  }
+
+  /** Point future ops at the socket a re-dialing runner registered on (same runner, same token). */
+  rebind(ws: RunnerSocket): void {
+    this.ws = ws
+  }
+
+  /** Reject all in-flight ops (runner disconnected / context torn down). */
+  teardown(): void {
+    this.failInflight()
     try { this.ws.close?.() } catch {}
   }
 

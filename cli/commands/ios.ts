@@ -10,6 +10,7 @@
  */
 
 import { sendCommand, type DaemonResponse, type DaemonResult } from "../transport"
+import { helpForCommand } from "../help"
 import { runIosWebCommand } from "./ios-web"
 import { runIosSvcCommand } from "./ios-svc"
 import { runIosDevCommand } from "./ios-dev"
@@ -171,9 +172,14 @@ Troubleshooting — when things aren't working, try these IN ORDER:
   2b. Runner verbs time out with 'timeout requesting channel …XCTestManager_IDEInterface'
      but Instruments (proc/top/shot) works — the FIRST XCUITest launch after a
      reboot pops an on-device dialog: "Enter iPhone Passcode for XCTest — Enable
-     UI Automation". iOS gates the runner until you enter your passcode on it.
-     Approve it, then restart the daemon (so it drops the stale testmanagerd
-     session) and retry a verb.
+     UI Automation". iOS gates the runner until the passcode is entered ON THE
+     PHONE. This sheet has no software input path: the runner is the process it
+     blocks, 'ios unlock'/'keys --secret' need that runner, AccessibilityAudit and
+     Accessibility Inspector can read it but every action on it is unsupported,
+     Switch Control cannot target a digit, and iPhone Mirroring does not forward
+     keystrokes to it. Agents: STOP and ask for a tap on the phone (or a paired
+     hardware keyboard). Then restart the daemon (so it drops the stale
+     testmanagerd session) and retry a verb.
   3. Verbs time out / Instruments (proc, top, shot) return nothing — the Developer
      Disk Image unmounts every boot. Re-mount it:
        'xcrun devicectl device info details --device <udid>'   (brings back
@@ -206,6 +212,15 @@ export async function runIosCommand(
     const dev = await send({ type: "ios_devices" })
     const list = (dev.success && dev.data && typeof dev.data === "object") ? (dev.data as { devices?: unknown[] }).devices : undefined
     console.log(Array.isArray(list) && list.length > 0 ? FULL_HELP : SETUP_HELP)
+    return
+  }
+
+  // `interceptor ios <sub> --help` / `-h`: the top-level CLI routes every
+  // `ios … --help` here expecting help, so answer it BEFORE any lane is
+  // delegated or any daemon request is sent. Without this, `ios setup --help`
+  // performed a full build/sign/install. `web` keeps its own help page.
+  if (sub !== "web" && args.slice(2).some((a) => a === "--help" || a === "-h")) {
+    console.log(helpForCommand("ios", sub) ?? FULL_HELP)
     return
   }
 

@@ -473,7 +473,19 @@ Two launch paths, selected by `preferNoXcodeIosPath()`:
   the iOS 17+ tunnel, DDI, and testmanager session. The daemon retains the
   long-lived `xcodebuild` child and registered `RunnerChannel` in the device
   context. There is no 30-second runner lease: later verbs probe and reuse the
-  existing channel, and launch again only after disconnect or explicit disable.
+  existing channel. Before spawning, `launchRunner` runs `inspectRunnerIdentity`
+  on the staged app and returns its error (naming `ios setup`) without launching;
+  `watchLaunchProcess` then races the child's `exited` promise against runner
+  registration, so an early `xcodebuild` exit fails the launch with its exit code
+  and stderr tail instead of the registration timeout. A closed runner socket
+  starts a reconnect grace (`RUNNER_RECONNECT_GRACE_MS`, 10 s): in-flight ops fail
+  at once, the context stays registered as `connecting`, and a re-dial carrying
+  the same session token rebinds the existing `RunnerChannel` (`rebind`); the
+  old immediate teardown runs only when the window lapses or the launch process
+  dies. `stageRunner` keeps a stage that carries the `.setup-built` marker
+  (written by `ios setup`) across bundled-artifact changes, so a package upgrade
+  no longer replaces a signed runner with the unsigned build input; `ios refresh`
+  rebuilds on demand.
 - **No-Xcode (diagnostic opt-in).** `INTERCEPTOR_NO_XCODE=1` selects the pure-Bun
   usbmux/RemoteXPC/testmanagerd stack for development diagnostics. It is not the
   supported signing or onboarding route. `interceptor ios login` fails before
