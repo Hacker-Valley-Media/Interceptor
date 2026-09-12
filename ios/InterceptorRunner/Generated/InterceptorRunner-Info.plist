@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.26.5</string>
+	<string>0.26.6</string>
 	<key>CFBundleVersion</key>
-	<string>0.26.5</string>
+	<string>0.26.6</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>InterceptorRunner connects to the Interceptor daemon on this Mac to receive local automation commands.</string>
 	<key>NSAppTransportSecurity</key>

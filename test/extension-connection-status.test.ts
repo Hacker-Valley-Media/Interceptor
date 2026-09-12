@@ -41,7 +41,7 @@ function installChrome(options: { port?: FakePort; safariReply?: unknown } = {})
   const addListener = () => {}
   const runtime: Record<string, any> = {
     id: "gomcpnagjjlhehnkoobkjgnkbleiooed",
-    getManifest: () => ({ version: "0.26.5" }),
+    getManifest: () => ({ version: "0.26.6" }),
     onMessage: { addListener: (listener: RuntimeListener) => listeners.push(listener) },
   }
   if (options.port) runtime.connectNative = () => options.port
