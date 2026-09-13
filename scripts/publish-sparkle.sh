@@ -274,7 +274,7 @@ else
   else
     cp "$RELEASE_NOTES_SOURCE" "$RELEASE_NOTES_SNAPSHOT"
   fi
-  RELEASE_NOTES_SIG_LINE="$("$SPARKLE_TOOLS_DIR/bin/sign_update" "$RELEASE_NOTES_SNAPSHOT" 2>&1 | tail -1)"
+  RELEASE_NOTES_SIG_LINE="$("$SPARKLE_TOOLS_DIR/bin/sign_update" "$RELEASE_NOTES_SNAPSHOT" --disable-signing-warning 2>&1 | tail -1)"
   echo "    $RELEASE_NOTES_SIG_LINE"
 fi
 
@@ -374,7 +374,7 @@ if not m:
     print(f"ERROR: could not parse sign_update output: {sig_line}", file=sys.stderr)
     sys.exit(1)
 ed_sig, length = m.group(1), m.group(2)
-notes_match = re.search(r'sparkle:edSignature="([^"]+)"\s+length="([0-9]+)"', release_notes_sig_line)
+notes_match = re.search(r'sparkle:edSignature="([^"]+)"\s+sparkle:length="([0-9]+)"', release_notes_sig_line)
 if not notes_match:
     print(f"ERROR: could not parse release-note sign_update output: {release_notes_sig_line}", file=sys.stderr)
     sys.exit(1)
@@ -387,7 +387,6 @@ if os.path.exists(path):
 else:
     root = ET.Element("rss", {
         "version": "2.0",
-        "xmlns:sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle",
     })
     channel = ET.SubElement(root, "channel")
     ET.SubElement(channel, "title").text = "Interceptor"
@@ -415,7 +414,7 @@ ET.SubElement(item, f"{SP}installationType").text = "package"
 ET.SubElement(item, f"{SP}channel").text = mode
 ET.SubElement(item, f"{SP}releaseNotesLink", {
     f"{SP}edSignature": notes_sig,
-    "length": notes_length,
+    f"{SP}length": notes_length,
 }).text = release_notes_url
 ET.SubElement(item, "enclosure", {
     "url": url,

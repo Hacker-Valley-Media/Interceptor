@@ -518,6 +518,7 @@ async function main() {
       if (action.ref !== undefined) assemble.ref = action.ref
       if (action.index !== undefined) assemble.index = action.index
       if (action.dropzone) assemble.dropzone = true
+      if (action.picker) assemble.picker = true
       const finalResult = unwrapResult(await send(assemble))
       console.log(formatResult(finalResult, jsonMode))
     } catch (err) {
