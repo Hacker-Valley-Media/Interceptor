@@ -229,8 +229,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>$INTERCEPTOR_SPARKLE_FEED_URL</string>
     <key>SUPublicEDKey</key>
     <string>$INTERCEPTOR_SPARKLE_PUBLIC_KEY</string>
-    <key>SUEnableInstallerLauncherService</key>
-    <true/>
+    <!-- This host is not sandboxed; Sparkle launches its installer directly. -->
     <key>SUEnableAutomaticChecks</key>
     <true/>
     <key>SUScheduledCheckInterval</key>

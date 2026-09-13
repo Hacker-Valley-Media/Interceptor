@@ -35,7 +35,7 @@ describe("Sparkle update observability contract", () => {
     )
   })
 
-  test("observes Sparkle results without changing channel or relaunch policy", () => {
+  test("observes Sparkle results and preserves the channel without vetoing installation", () => {
     const delegate = read("interceptor-bridge/Sources/SparkleUserDriverDelegate.swift")
     for (const callback of [
       "didFindValidUpdate",
@@ -50,8 +50,7 @@ describe("Sparkle update observability contract", () => {
       "didFinishUpdateCycleFor",
     ]) expect(delegate).toContain(callback)
     expect(delegate).toContain('return ["full"]')
-    expect(delegate).toContain("func updaterShouldRelaunchApplication")
-    expect(delegate).toContain("return false")
+    expect(delegate).not.toContain("func updaterShouldRelaunchApplication")
     expect(delegate).not.toContain("shouldProceedWithUpdate")
     expect(delegate).not.toContain("willInstallUpdateOnQuit")
   })

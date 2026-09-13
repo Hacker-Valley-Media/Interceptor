@@ -97,6 +97,9 @@ enum Platform {
     }
 
     static let bridgeLockPath = runtimeDir + "/interceptor-bridge.lock"
+    // Held until process exit, independently of the short startup/cleanup
+    // lock. Never unlink this file while a bridge could still hold it.
+    static let bridgeInstanceLockPath = runtimeDir + "/interceptor-bridge-instance.lock"
 
     /// Advisory `flock` guarding the pid-file + socket-path lifecycle. Returns
     /// the held descriptor, or nil if the lock could not be taken in time.

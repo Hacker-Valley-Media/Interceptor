@@ -2,7 +2,7 @@
 author: agent
 generated_by: codex (Maestro)
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-09-12
 status: final
 reviewed: false
 source: daemon/ios/manager.ts; resident-runner unlock contract
@@ -58,5 +58,5 @@ paired and the runner is installed (`interceptor ios devices` lists it).
 - **"Enter iPhone Passcode for XCTest — Enable UI Automation" on the phone.** This
   is a human gate, not a bug to route around. The runner is the process it blocks,
   and every Mac-side path (AccessibilityAudit, Accessibility Inspector, Switch
-  Control, iPhone Mirroring, re-signed Apple tools) cannot enter a digit. Report the sheet, ask for the passcode to be tapped
+  Control, iPhone Mirroring) cannot enter a digit. Report the sheet, ask for the passcode to be tapped
   on the phone (or typed by a paired hardware keyboard), restart the daemon, retry.

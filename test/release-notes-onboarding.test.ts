@@ -33,12 +33,12 @@ function visibleVersions(document: Document): string[] {
 
 describe("cumulative Sparkle release notes", () => {
   test("one-version-behind shows only the target release", () => {
-    expect(visibleVersions(releaseDocument("0.26.4"))).toEqual(["0.26.6"])
+    expect(visibleVersions(releaseDocument("0.26.6"))).toEqual(["1.0.1"])
   })
 
   test("five-versions-behind shows exactly the five newer releases", () => {
-    expect(visibleVersions(releaseDocument("0.24.13"))).toEqual([
-      "0.26.6", "0.26.4", "0.26.2", "0.26.1", "0.25.0",
+    expect(visibleVersions(releaseDocument("0.25.0"))).toEqual([
+      "1.0.1", "0.26.6", "0.26.4", "0.26.2", "0.26.1",
     ])
   })
 
@@ -102,7 +102,7 @@ function makePublishFixture(versions: string[], retainedVersion = "1.0.0"): Publ
   writeExecutable(join(fakeBin, "xcrun"), "#!/bin/sh\nexit 0\n")
   writeExecutable(join(fakeBin, "pkgutil"), "#!/bin/sh\nif [ \"$1\" = \"--expand-full\" ]; then mkdir -p \"$3/Interceptor-Bridge.pkg/Payload/Applications/interceptor-bridge.app/Contents\"; : > \"$3/Interceptor-Bridge.pkg/Payload/Applications/interceptor-bridge.app/Contents/Info.plist\"; fi\nexit 0\n")
   writeExecutable(join(fakeBin, "plutil"), "#!/bin/sh\necho 13.0\n")
-  writeExecutable(join(tools, "bin/sign_update"), "#!/bin/sh\nprintf '%s\\n' \"$(basename \"$1\")\" >> \"$SIGN_LOG\"\nsize=$(wc -c < \"$1\" | tr -d ' ')\nprintf 'sparkle:edSignature=\"sig-%s\" length=\"%s\"\\n' \"$(basename \"$1\")\" \"$size\"\n")
+  writeExecutable(join(tools, "bin/sign_update"), "#!/bin/sh\nprintf '%s\\n' \"$(basename \"$1\")\" >> \"$SIGN_LOG\"\nsize=$(wc -c < \"$1\" | tr -d ' ')\nlength=length\ncase \"$1\" in *.html) length=sparkle:length ;; esac\nprintf 'sparkle:edSignature=\"sig-%s\" %s=\"%s\"\\n' \"$(basename \"$1\")\" \"$length\" \"$size\"\n")
 
   const addPackages = (version: string): void => {
     for (const mode of ["Browser", "Full"]) writeFileSync(join(root, `dist/release/Interceptor-${mode}-${version}.pkg`), `${mode}-${version}`)
@@ -131,6 +131,17 @@ function makePublishFixture(versions: string[], retainedVersion = "1.0.0"): Publ
 const output = (result: ReturnType<typeof spawnSync>): string => `${result.stdout ?? ""}${result.stderr ?? ""}`
 
 describe("Sparkle release-note publisher", () => {
+  test("creates a new feed with one Sparkle namespace and can publish it again", () => {
+    const fixture = makePublishFixture(["2.0.0", "1.0.0"])
+    const feedPath = join(fixture.host, "public/appcast.xml")
+    rmSync(feedPath)
+    const first = fixture.run("2.0.0")
+    expect(first.status, output(first)).toBe(0)
+    expect(readFileSync(feedPath, "utf8").match(/xmlns:sparkle=/g)).toHaveLength(1)
+    const second = fixture.run("2.0.0")
+    expect(second.status, output(second)).toBe(0)
+  })
+
   test("rejects a missing target-version section", () => {
     const fixture = makePublishFixture(["1.0.0"])
     writeFileSync(join(fixture.root, "dist/release/Interceptor-Browser-2.0.0.pkg"), "browser")
@@ -173,7 +184,7 @@ describe("Sparkle release-note publisher", () => {
       "https://updates.example.test/release-notes-2.0.0.html",
       "https://updates.example.test/release-notes-2.0.0.html",
     ])
-    expect(noteLinks.every((match) => match[0].includes("sparkle:edSignature=") && match[0].includes("length="))).toBe(true)
+    expect(noteLinks.every((match) => match[0].includes("sparkle:edSignature=") && match[0].includes("sparkle:length="))).toBe(true)
     const signCalls = readFileSync(fixture.signLog, "utf8").trim().split("\n")
     expect(signCalls.filter((name) => name === "release-notes-2.0.0.html")).toHaveLength(1)
 

@@ -3,8 +3,13 @@ import Network
 import AppKit
 import Sparkle
 
+// Keep this descriptor open for the process lifetime. A Sparkle relaunch or
+// direct launch must not overwrite the supervised bridge's PID or socket.
+guard let bridgeInstanceLockFD = Platform.acquireLifecycleLock(path: Platform.bridgeInstanceLockPath, timeout: 0) else {
+    Platform.log("another bridge owns the instance lock, or the lock is unavailable; exiting")
+    exit(1)
+}
 Platform.log("interceptor-bridge starting")
-Platform.cleanupSocket()
 // Lifecycle lock: held from pid publication through the socket bind (released
 // after `transport.start()` below) so an exiting older instance's cleanup can
 // never interleave with this instance taking ownership of the files.

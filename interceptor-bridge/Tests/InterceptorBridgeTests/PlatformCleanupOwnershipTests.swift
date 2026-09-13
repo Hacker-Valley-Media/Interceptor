@@ -63,4 +63,24 @@ final class PlatformCleanupOwnershipTests: XCTestCase {
         XCTAssertTrue(Platform.ownsBridgeFiles(pidPath: pid, selfPid: 4242))
         XCTAssertFalse(Platform.ownsBridgeFiles(pidPath: pid, selfPid: 4243))
     }
+
+    func testInstanceLockExcludesCompetitorsAcrossRuntimeCleanup() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let instance = dir + "/instance.lock"
+        let holder = try XCTUnwrap(Platform.acquireLifecycleLock(path: instance, timeout: 0))
+        let sock = dir + "/bridge.sock", pid = dir + "/bridge.pid"
+        FileManager.default.createFile(atPath: sock, contents: Data())
+        try "\(ProcessInfo.processInfo.processIdentifier)\n".write(toFile: pid, atomically: true, encoding: .utf8)
+
+        XCTAssertNotEqual(fcntl(holder, F_GETFD) & FD_CLOEXEC, 0, "child executables must not inherit ownership")
+        XCTAssertNil(Platform.acquireLifecycleLock(path: instance, timeout: 0))
+        Platform.cleanup(socketPath: sock, pidPath: pid, lockPath: dir + "/lifecycle.lock")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sock))
+        XCTAssertNil(Platform.acquireLifecycleLock(path: instance, timeout: 0), "runtime cleanup must not release process ownership")
+
+        Platform.releaseLifecycleLock(holder)
+        let successor = try XCTUnwrap(Platform.acquireLifecycleLock(path: instance, timeout: 0))
+        Platform.releaseLifecycleLock(successor)
+    }
 }

@@ -17,7 +17,8 @@ import AppKit
 // returns .terminateNow gets the bridge out of the way so Sparkle can
 // replace the bundle, and the launchagent (`KeepAlive.SuccessfulExit =
 // false`) won't immediately respawn the OLD binary during the install
-// window — Sparkle's own progress agent relaunches the new bundle.
+// window. Package postinstall starts the LaunchAgent-owned bridge; the
+// process-lifetime lock rejects any extra launch from Sparkle's progress agent.
 final class BridgeAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

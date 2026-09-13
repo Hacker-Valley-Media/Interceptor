@@ -98,6 +98,7 @@ xcodebuild -project "$PROJ" -scheme InterceptorSafari -configuration Release \
   "OTHER_CFLAGS=\"-ffile-prefix-map=$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" \"-fdebug-prefix-map=$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" \"-ffile-compilation-dir=$PUBLIC_SOURCE_ROOT/safari/InterceptorSafari\"" \
   "OTHER_SWIFT_FLAGS=-file-prefix-map \"$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" -debug-prefix-map \"$REPO_ROOT=$PUBLIC_SOURCE_ROOT\" -file-compilation-dir \"$PUBLIC_SOURCE_ROOT/safari/InterceptorSafari\"" \
   "MARKETING_VERSION=$VER" \
+  "CURRENT_PROJECT_VERSION=$VER" \
   MACOSX_DEPLOYMENT_TARGET=14.0 "OTHER_CODE_SIGN_FLAGS=--timestamp" \
   PROVISIONING_PROFILE_SPECIFIER="" -allowProvisioningUpdates \
   clean build

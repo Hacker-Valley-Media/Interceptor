@@ -3,6 +3,19 @@ import Sparkle
 @testable import interceptor_bridge
 
 final class SparkleUpdateStateTests: XCTestCase {
+    func testUpdaterDelegateAllowsInstallationAndRelaunch() async {
+        let allowed = await MainActor.run {
+            let delegate: SPUUpdaterDelegate = SparkleUpdaterDelegate(updateState: SparkleUpdateState())
+            let controller = SPUStandardUpdaterController(
+                startingUpdater: false, updaterDelegate: delegate, userDriverDelegate: nil
+            )
+            return delegate.updaterShouldRelaunchApplication?(controller.updater) ?? true
+        }
+        // Sparkle 2.9.1 uses this optional callback as mayUpdateAndRestart;
+        // returning false aborts the installation before the quit request.
+        XCTAssertTrue(allowed)
+    }
+
     private final class SnapshotBox: @unchecked Sendable {
         private let lock = NSLock()
         private var values: [SparkleUpdateSnapshot] = []
