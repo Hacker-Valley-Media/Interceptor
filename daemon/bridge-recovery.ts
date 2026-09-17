@@ -1,3 +1,5 @@
+import { missingGuiSessionLines, type BridgeLaunchOpts } from "../shared/gui-session"
+
 const BRIDGE_LABEL = "com.interceptor.bridge"
 const APPLICATIONS_BRIDGE_BUNDLE = "/Applications/interceptor-bridge.app"
 const SYSTEM_LAUNCH_AGENT_PATH = `/Library/LaunchAgents/${BRIDGE_LABEL}.plist`
@@ -112,9 +114,12 @@ export function getBridgeRecoveryLayout(opts: {
 export function getBridgeRecoveryActions(
   layout: BridgeRecoveryLayout,
   exists: ExistsFn,
-  opts: { launchAgentLoaded?: boolean } = {},
+  opts: BridgeLaunchOpts = {},
 ): BridgeRecoveryAction[] {
   const actions: BridgeRecoveryAction[] = []
+  // No GUI session, no gui/<uid> domain: nothing here can start a bridge that
+  // reaches the window server, so do not bootstrap, kickstart, or open.
+  if (opts.guiSession === "absent") return actions
 
   if (layout.launchAgentInstalled) {
     // Supervised starters only. An `open -gj <bundle>` here launches a bridge
@@ -176,10 +181,13 @@ export function getBridgeRecoveryActions(
 
 export function formatBridgeUnavailableError(
   layout: BridgeRecoveryLayout,
-  opts: { launchAgentLoaded?: boolean } = {},
+  opts: BridgeLaunchOpts = {},
 ): string {
   if (layout.mode === "browser-only") {
     return "Interceptor macOS control requires a full install. Run `interceptor upgrade --full`."
+  }
+  if (opts.guiSession === "absent") {
+    return `Interceptor bridge is not reachable: ${missingGuiSessionLines(opts).join(" ")}`
   }
   if (layout.mode === "full-install") {
     // Plist file on disk but never bootstrapped into launchd: kickstart will

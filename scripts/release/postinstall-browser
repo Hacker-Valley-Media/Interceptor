@@ -14,41 +14,29 @@ INSTALL_ROOT="/Library/Application Support/Interceptor"
 RENDERED_MANIFEST="$INSTALL_ROOT/com.interceptor.host.json"
 DAEMON_PID_PATH="/tmp/interceptor.pid"
 DAEMON_SOCKET_PATH="/tmp/interceptor.sock"
+DAEMON_LOCK_PATH="/tmp/interceptor.lock"
 
 refresh_interceptor_daemon() {
+  # Every account's daemon (standalone singleton and Chrome-spawned native
+  # hosts alike) runs the binary this pkg just replaced, and since 1.0.3 each
+  # account owns its runtime files and port pair, so stop all of them: root
+  # can, and each account's next CLI call or browser reconnect cold-starts the
+  # new binary on that account's own port. Stopping only the installing user's
+  # daemon left the other accounts on the old inode holding the old ports.
   local pid=""
-  local command_line=""
+  for pid in $(pgrep -x interceptor-daemon 2>/dev/null || true); do
+    kill "$pid" 2>/dev/null || true
+  done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -x interceptor-daemon >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+  pkill -KILL -x interceptor-daemon 2>/dev/null || true
 
-  if [[ -f "$DAEMON_PID_PATH" ]]; then
-    pid="$(head -n 1 "$DAEMON_PID_PATH" 2>/dev/null | tr -d '[:space:]')"
-    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-      command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-      if [[ "$command_line" == *"interceptor-daemon"* ]]; then
-        kill "$pid" 2>/dev/null || true
-        for _ in 1 2 3 4 5 6 7 8 9 10; do
-          kill -0 "$pid" 2>/dev/null || break
-          sleep 0.1
-        done
-        if kill -0 "$pid" 2>/dev/null; then
-          command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-          if [[ "$command_line" == *"interceptor-daemon"* ]]; then
-            kill -KILL "$pid" 2>/dev/null || true
-          fi
-        fi
-      fi
-    fi
-  fi
-
-  # The pid file and socket describe a live process. Removing them while that
-  # process is still running (a daemon this script chose not to stop, or one
-  # the kill did not reach) strands every CLI command on "daemon failed to
-  # start": the next spawn loses the port to the survivor. Only a dead pid
-  # leaves files that are safe to remove.
-  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-    echo "interceptor: daemon pid $pid is still running; leaving its runtime files in place" >&2
-    return
-  fi
-  rm -f "$DAEMON_PID_PATH" "$DAEMON_SOCKET_PATH" 2>/dev/null || true
+  # Releases before 1.0.3 kept these under /tmp for every account; the
+  # per-user files are rebuilt by each account's next daemon (a stale pid is
+  # cleared at bootstrap and a leftover socket path is unlinked before listen).
+  rm -f "$DAEMON_PID_PATH" "$DAEMON_SOCKET_PATH" "$DAEMON_LOCK_PATH" 2>/dev/null || true
 }
 
 # The browser daemon is a long-lived user process. Stop only that daemon after

@@ -113,7 +113,8 @@ pkill -f "interceptor-daemon" 2>/dev/null || true
 pkill -f "interceptor-bridge" 2>/dev/null || true
 
 echo "==> Removing runtime files..."
-rm -f /tmp/interceptor.sock /tmp/interceptor.pid
+rm -f /tmp/interceptor.sock /tmp/interceptor.pid /tmp/interceptor.lock
+rm -f "$USER_RUNTIME_DIR"/interceptor.sock "$USER_RUNTIME_DIR"/interceptor.pid "$USER_RUNTIME_DIR"/interceptor.lock
 remove_bridge_runtime_files
 
 echo "==> Removing native messaging manifests..."

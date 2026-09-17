@@ -4,10 +4,10 @@
  */
 
 import { existsSync, readFileSync } from "node:fs"
+import { EVENTS_PATH } from "../../shared/platform"
 
 type Action = { type: string; [key: string]: unknown }
 
-const EVENTS_PATH = "/tmp/interceptor-events.jsonl"
 
 export function parsePowerCommand(filtered: string[]): Action {
   const cmd = filtered[0]

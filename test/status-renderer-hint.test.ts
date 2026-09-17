@@ -89,4 +89,36 @@ describe("computeBridgeHint", () => {
     expect(hint.join("\n")).toContain("/Library/LaunchAgents/com.interceptor.bridge.plist")
     expect(hint.join("\n")).not.toContain("null")
   })
+
+  test("account without a GUI login — names the missing gui/<uid> domain and the screen owner, never the bootstrap recipe", () => {
+    const hint = computeBridgeHint({
+      bridge: false,
+      mode: "full",
+      launchAgentInstalled: true,
+      launchAgentLoaded: false,
+      launchAgentPath: "/Library/LaunchAgents/com.interceptor.bridge.plist",
+      guiSession: "absent",
+      consoleUser: "bob",
+      user: "alice",
+      uid: 501,
+    })
+    expect(hint).toHaveLength(2)
+    expect(hint[0]).toContain("alice (uid 501) has no GUI login")
+    expect(hint[0]).toContain("The screen belongs to bob")
+    expect(hint[1]).toContain("Run the CLI as the user logged in at the screen")
+    expect(hint.join("\n")).not.toContain("launchctl bootstrap")
+    expect(hint.join("\n")).not.toContain("postinstall")
+  })
+
+  test("GUI session present keeps the bootstrap hint for an unloaded plist", () => {
+    const hint = computeBridgeHint({
+      bridge: false,
+      mode: "full",
+      launchAgentInstalled: true,
+      launchAgentLoaded: false,
+      launchAgentPath: "/Library/LaunchAgents/com.interceptor.bridge.plist",
+      guiSession: "present",
+    })
+    expect(hint.join("\n")).toContain("launchctl bootstrap")
+  })
 })

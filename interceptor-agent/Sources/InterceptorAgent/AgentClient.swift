@@ -106,7 +106,7 @@ final class InterceptorAgent: NSObject, URLSessionWebSocketDelegate, @unchecked 
     }
 
     private func connect() {
-        let port = ProcessInfo.processInfo.environment["INTERCEPTOR_WS_PORT"] ?? "19222"
+        let port = interceptorWsPort()
         guard let url = URL(string: "ws://127.0.0.1:\(port)") else { return }
         let cfg = URLSessionConfiguration.ephemeral
         cfg.waitsForConnectivity = false
@@ -296,4 +296,13 @@ final class InterceptorAgent: NSObject, URLSessionWebSocketDelegate, @unchecked 
         }
         return names.sorted()
     }
+}
+
+/// The daemon's WebSocket port for this OS user: the bridge hands it over in
+/// INTERCEPTOR_WS_PORT; without it, the same arithmetic as
+/// shared/platform.ts derivePorts (uid 501 keeps 19222, uid 504 gets 19228).
+func interceptorWsPort(uid: uid_t = getuid(), env: [String: String] = ProcessInfo.processInfo.environment) -> String {
+    if let raw = env["INTERCEPTOR_WS_PORT"], Int(raw) != nil { return raw }
+    let slot = ((Int(uid) - 501) % 500 + 500) % 500
+    return String(19222 + 2 * slot)
 }

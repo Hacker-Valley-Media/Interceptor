@@ -219,7 +219,7 @@ const manifest = {
   // loopback endpoints explicit for diagnostic/fallback probes. The selected
   // production path is the containing appex native relay.
   content_security_policy: {
-    extension_pages: "script-src '"'"'self'"'"'; object-src '"'"'self'"'"'; connect-src ws://localhost:19222 ws://127.0.0.1:19222"
+    extension_pages: "script-src '"'"'self'"'"'; object-src '"'"'self'"'"'; connect-src ws://127.0.0.1:* ws://localhost:*"
   },
   action: {
     default_title: "Interceptor",

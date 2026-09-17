@@ -9,19 +9,27 @@
  * confstr(_CS_DARWIN_USER_TEMP_DIR) for the uid; every launchd-spawned user
  * process carries the same path in $TMPDIR, and `getconf` answers when the
  * environment is bare (a cron or ssh shell). Both sides must agree, so this is
- * the only place the TypeScript side derives it.
+ * the only place the TypeScript side derives it. The daemon's runtime files
+ * (shared/platform.ts) resolve through the same `userTempDir`.
  */
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 
-export function userRuntimeDir(env: Record<string, string | undefined> = process.env): string {
-  let dir = env.INTERCEPTOR_BRIDGE_RUNTIME_DIR || env.TMPDIR
-  if (!dir && process.platform === "darwin") {
+/** The current user's temporary directory: $TMPDIR, else the OS answer, else /tmp. */
+export function userTempDir(env: Record<string, string | undefined> = process.env, platform: string = process.platform): string {
+  let dir = env.TMPDIR
+  if (!dir && platform === "darwin") {
     try {
       dir = spawnSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim()
     } catch {}
   }
+  if (!dir && platform === "linux") dir = env.XDG_RUNTIME_DIR
   return (dir || "/tmp").replace(/\/+$/, "")
+}
+
+export function userRuntimeDir(env: Record<string, string | undefined> = process.env): string {
+  const override = env.INTERCEPTOR_BRIDGE_RUNTIME_DIR
+  return override ? override.replace(/\/+$/, "") : userTempDir(env)
 }
 
 export const BRIDGE_RUNTIME_FILES = [

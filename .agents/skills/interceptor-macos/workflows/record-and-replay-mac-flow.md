@@ -78,7 +78,7 @@ Check with `interceptor macos trust` before starting a long session.
 
 ## Sessions on disk
 
-Sessions persist NDJSON to `${INTERCEPTOR_MONITOR_SESSIONS_DIR:-/tmp/interceptor-monitor-sessions}/<sid>/` and auto-stop after 24h with 100 MiB rotation. If you see runaway counts in `monitor status`, stop the orphan.
+Sessions persist NDJSON to `${INTERCEPTOR_MONITOR_SESSIONS_DIR:-$TMPDIR/interceptor-monitor-sessions}/<sid>/` and auto-stop after 24h with 100 MiB rotation. If you see runaway counts in `monitor status`, stop the orphan.
 
 ## Pitfalls
 

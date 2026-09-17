@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { accessSync, constants, existsSync } from "node:fs"
 import { readLockFile, type LockFileData } from "../../daemon/lifecycle"
 import { IPC_PORT, LOCK_PATH, WS_PORT } from "../../shared/platform"
 import { sendCommand } from "../transport"
@@ -106,6 +106,13 @@ async function waitForStopped(lock: LockFileData, timeoutMs: number): Promise<vo
 export async function stopDaemon(options: DaemonStopOptions): Promise<DaemonStopResult> {
   if (!existsSync(LOCK_PATH)) {
     return { stopped: true, alreadyStopped: true, pid: null, reason: options.reason }
+  }
+  try {
+    accessSync(LOCK_PATH, constants.R_OK)
+  } catch (err) {
+    if ((err as { code?: string }).code === "EACCES" || (err as { code?: string }).code === "EPERM") {
+      throw new Error("daemon lock file belongs to another user; that account (or the installer) has to stop its daemon")
+    }
   }
   const lock = readLockFile(LOCK_PATH)
   if (!lock) throw new Error("daemon lock file is malformed")

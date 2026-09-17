@@ -210,3 +210,29 @@ describe("bridge disconnect fails in-flight requests (issue #222)", () => {
     expect(msg).not.toContain("TCC")
   })
 })
+
+describe("no GUI login (ssh session or service account)", () => {
+  const systemLaunchAgent = "/Library/LaunchAgents/com.interceptor.bridge.plist"
+  const applicationsBundle = "/Applications/interceptor-bridge.app"
+  const exists = existsFor([systemLaunchAgent, applicationsBundle])
+  const layout = getBridgeRecoveryLayout({ exists, home, importMetaUrl: daemonImportMetaUrl, uid })
+  const state = { launchAgentLoaded: false, guiSession: "absent" as const, consoleUser: "bob", user: "alice", uid: 501 }
+
+  test("the ladder does nothing: there is no gui/<uid> domain to bootstrap into", () => {
+    expect(getBridgeRecoveryActions(layout, exists, state)).toEqual([])
+  })
+
+  test("the error names the account, the missing domain, and who owns the screen, not the postinstall", () => {
+    const error = formatBridgeUnavailableError(layout, state)
+    expect(error).toStartWith("Interceptor bridge is not reachable: alice (uid 501) has no GUI login")
+    expect(error).toContain("gui/501")
+    expect(error).toContain("The screen belongs to bob")
+    expect(error).not.toContain("launchctl bootstrap")
+    expect(error).not.toContain("postinstall")
+  })
+
+  test("browser-only mode still wins: no bridge to reach at all", () => {
+    const browserOnly = getBridgeRecoveryLayout({ exists: () => false, home, importMetaUrl: daemonImportMetaUrl, uid })
+    expect(formatBridgeUnavailableError(browserOnly, state)).toContain("interceptor upgrade --full")
+  })
+})

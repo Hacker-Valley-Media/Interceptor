@@ -7,6 +7,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs"
+import { EVENTS_PATH } from "../../shared/platform"
 import { parseElementTarget } from "../parse"
 import {
   readStatusSnapshot,
@@ -165,7 +166,7 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false, con
     }
 
     case "events": {
-      const eventsPath = "/tmp/interceptor-events.jsonl"
+      const eventsPath = EVENTS_PATH
       if (!existsSync(eventsPath)) {
         console.log("no events yet")
         return null

@@ -183,7 +183,7 @@ final class NativeDomain: DomainHandler, @unchecked Sendable {
             "INTERCEPTOR_NATIVE_APPNAME": appName,
             "INTERCEPTOR_AGENT_SLICE": slice,
             "INTERCEPTOR_NATIVE_WAYIN": wayIn,
-            "INTERCEPTOR_WS_PORT": ProcessInfo.processInfo.environment["INTERCEPTOR_WS_PORT"] ?? "19222",
+            "INTERCEPTOR_WS_PORT": String(Platform.wsPort),
             // Capture-on-launch: the native surface exists to capture, so flip the
             // record flag + install the URLSession swizzle before the app's first
             // request (the swizzle is class-level so there's no race, but this also
