@@ -26,6 +26,18 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.3">
+    <h2>Interceptor 1.0.3</h2>
+    <time datetime="2026-09-17">September 17, 2026</time>
+    <ul>
+      <li>Each logged-in macOS account now runs its own Interceptor daemon. The socket, pid, lock, log, and event files live in that account's own temporary directory, and each account listens on its own loopback port pair derived from its user id. The primary account keeps ports 19221 and 19222.</li>
+      <li>The browser extension learns its account's port from the native host, so two accounts signed in at once no longer share one daemon.</li>
+      <li>The daemon binds 127.0.0.1 only.</li>
+      <li>When a port is held by another account's daemon, the CLI now says so and names the remedy instead of reporting missing runtime files.</li>
+      <li>Installing an update stops every account's daemon, so one install unblocks the whole Mac.</li>
+      <li>When the CLI runs as an account that is not logged in at the screen (over SSH, for example), Interceptor now says so and names the account that owns the screen, instead of suggesting a LaunchAgent bootstrap that cannot work.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="1.0.1">
     <h2>Interceptor 1.0.1</h2>
     <time datetime="2026-09-13">September 13, 2026</time>

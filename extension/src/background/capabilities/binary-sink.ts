@@ -1,5 +1,6 @@
 import { IK_SINK_TT_POLICY, SINK_TT_POLICY_NAME } from "../../inject-keys"
 import { runWithCspStripBypass } from "./evaluate"
+import { wsEndpoint } from "../ws-endpoint"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -263,7 +264,7 @@ function wait(ms: number): Promise<void> {
 }
 
 function connectSinkSocket(): Promise<SinkSocket> {
-  const WS_URL = "ws://localhost:19222"
+  const WS_URL = wsEndpoint()
   const MAGIC = new Uint8Array([0x49, 0x42, 0x53, 0x31]) // IBS1
   const encoder = new TextEncoder()
   const sinkId = crypto.randomUUID()

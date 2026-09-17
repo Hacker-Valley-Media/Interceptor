@@ -22,6 +22,7 @@ import { claimContextId, describeContexts, recordExtensionIdentity, type Context
 import { extensionIdFromOrigin, installTypeLabel } from "../shared/extension-identity"
 import { bridgePidPath, bridgeSocketPath } from "../shared/bridge-paths"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
+import { consoleUser, currentUserName, probeGuiSession, type BridgeLaunchOpts } from "../shared/gui-session"
 import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
 import { captureSpinSample, spinWatchdogStep, SPIN_EXIT_TICKS, type SpinWatchdogState } from "./spin-watchdog"
 import { cleanupOwnedRuntimeFiles, clearDaemonRuntimeFiles, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, parseDaemonPidFile, readLockFile, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
@@ -115,6 +116,22 @@ function isLaunchAgentBootstrapped(): boolean {
   }
 }
 
+// What the bridge hint and the recovery ladder need to know about this
+// account's launchd state. An ssh session or a service account has no
+// gui/<uid> domain, so no bootstrap can help; the honest answer names the
+// account and who owns the screen (shared/gui-session.ts).
+function bridgeLaunchState(): BridgeLaunchOpts {
+  const uid = typeof process.getuid === "function" ? process.getuid() : null
+  const guiSession = uid === null ? "unknown" : probeGuiSession(uid)
+  return {
+    launchAgentLoaded: isLaunchAgentBootstrapped(),
+    guiSession,
+    consoleUser: guiSession === "absent" ? consoleUser() : null,
+    user: currentUserName(),
+    uid,
+  }
+}
+
 async function waitForBridgeSocket(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -129,7 +146,12 @@ async function spawnBridge(): Promise<boolean> {
   bridgeSpawnAttempted = true
   try {
     const layout = readBridgeRecoveryLayout()
-    const actions = getBridgeRecoveryActions(layout, existsSync, { launchAgentLoaded: isLaunchAgentBootstrapped() })
+    const state = bridgeLaunchState()
+    if (state.guiSession === "absent") {
+      log(`bridge not started: ${state.user ?? "this account"} (uid ${state.uid}) has no GUI login on this Mac${state.consoleUser ? ` (the screen belongs to ${state.consoleUser})` : ""}`)
+      return false
+    }
+    const actions = getBridgeRecoveryActions(layout, existsSync, state)
     if (actions.length === 0) {
       log("bridge binary not found — cannot auto-spawn")
       return false
@@ -330,7 +352,7 @@ function routeToBridge(id: string, action: Record<string, unknown>, socket: { wr
     } else {
       socketWriteFramed(socket, JSON.stringify({
         id,
-        result: { success: false, error: formatBridgeUnavailableError(readBridgeRecoveryLayout(), { launchAgentLoaded: isLaunchAgentBootstrapped() }) },
+        result: { success: false, error: formatBridgeUnavailableError(readBridgeRecoveryLayout(), bridgeLaunchState()) },
       }))
     }
   })
@@ -374,7 +396,7 @@ function bridgeCall(action: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT
     if (bridgeSocket) dispatch()
     else connectBridge().then((ok) => {
       if (ok && bridgeSocket) dispatch()
-      else fail(formatBridgeUnavailableError(readBridgeRecoveryLayout(), { launchAgentLoaded: isLaunchAgentBootstrapped() }))
+      else fail(formatBridgeUnavailableError(readBridgeRecoveryLayout(), bridgeLaunchState()))
     })
   })
 }
@@ -1151,7 +1173,7 @@ if (singletonGate.action === "exit") {
   log(`ws port ${WS_PORT} already held by another daemon — ${singletonGate.reason}${wsBindError ? ` (${wsBindError.message})` : ""}`)
   process.exit(singletonGate.exitCode)
 }
-log(`ws server listening on port ${WS_PORT}`)
+log(`ws server listening on 127.0.0.1:${WS_PORT}`)
 ownsRuntimeFiles = true
 
 // Write lock file — metadata record of this instance, read by `interceptor
@@ -1263,7 +1285,9 @@ function processStdinBuffer() {
 function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: unknown }) {
   if (msg.type === "ping") {
     log("received ping, sending pong")
-    sendNativeMessage({ type: "pong" })
+    // The native host runs as the browsing user, so its pong is how the
+    // extension learns this user's WebSocket port (shared/platform.ts derivePorts).
+    sendNativeMessage({ type: "pong", wsPort: WS_PORT })
     emitEvent("keepalive_ping")
     return
   }
@@ -1899,8 +1923,11 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
             // relay-slot routing state (a superseded slot starved pongs and
             // forced endless 15s-timeout reconnects).
             if (isRelayPing(request)) {
-              log("received ping (relay), sending pong to origin")
-              socketWriteFramed(socket, JSON.stringify({ type: "pong" }))
+              // The pong carries this user's WebSocket port on both paths (the
+              // relay here, the in-process host in handleNativeMessage): it is
+              // how the extension learns which per-user daemon it belongs to.
+              log(`received ping (relay), sending pong to origin (wsPort ${WS_PORT})`)
+              socketWriteFramed(socket, JSON.stringify({ type: "pong", wsPort: WS_PORT }))
               emitEvent("keepalive_ping")
               continue
             }
@@ -2156,6 +2183,9 @@ function healRuntimeFiles(reason: string): string[] {
 
 function startWsServer(): ReturnType<typeof Bun.serve> {
   return Bun.serve<undefined>({
+    // Loopback only: the port pair is per OS user now, and Bun.serve binds
+    // 0.0.0.0 by default (issue #274 reported the LAN exposure).
+    hostname: "127.0.0.1",
     port: WS_PORT,
     fetch(req, server) {
       if (server.upgrade(req, {})) return

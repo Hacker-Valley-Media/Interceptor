@@ -98,6 +98,8 @@ describe("relay supersede wiring (daemon integration)", () => {
     // A proves the link works: ping → pong on A.
     relayA.socket.write(frameMessage(JSON.stringify({ type: "ping" })))
     expect(await waitFor(() => relayA.messages.some(m => m.type === "pong"))).toBe(true)
+    // The pong names the singleton's per-user WebSocket port (the test pins it via env).
+    expect((relayA.messages.find(m => m.type === "pong") as { wsPort?: number }).wsPort).toBe(19322)
 
     // Relay B supersedes A (extension reconnect / second browser).
     const relayB = await connectRelay()

@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process"
 import { IS_WIN, SOCKET_PATH, PID_PATH, transportLabel } from "../../shared/platform"
 import { bridgePidPathForDetection, bridgeSocketPathForDetection } from "../../shared/bridge-paths"
 import { skillsStatusSummary } from "../commands/skills"
+import { consoleUser, currentUserName, missingGuiSessionLines, probeGuiSession, type GuiSession } from "../../shared/gui-session"
 
 export type StatusSnapshot = {
   mode: "browser-only" | "full" | "unknown"
@@ -29,6 +30,11 @@ export type StatusSnapshot = {
   // i.e. the plist isn't just on disk, it's actually bootstrapped into the
   // user's GUI domain. Distinguishes "needs kickstart" from "needs bootstrap".
   launchAgentLoaded: boolean
+  // This account's launchd GUI domain (gui/<uid>): "absent" over ssh or for a
+  // service account, which is why the bridge cannot run and why no bootstrap
+  // would help. `consoleUser` then names who owns the screen.
+  guiSession?: GuiSession
+  consoleUser?: string | null
   // #52 browser-config block — populated only on macOS in verbose mode
   browser?: {
     configured: ("chrome" | "brave")[]   // browsers with NMH manifest installed
@@ -165,6 +171,8 @@ export function readStatusSnapshot(): StatusSnapshot {
   const launchAgentLoaded = launchAgentInstalled && process.getuid
     ? isLaunchAgentLoaded(process.getuid())
     : false
+  const guiSession: GuiSession = !IS_WIN && process.getuid ? probeGuiSession(process.getuid()) : "unknown"
+  const consoleOwner = guiSession === "absent" ? consoleUser() : null
   const bridgeSockExists = !IS_WIN && existsSync(BRIDGE_SOCK_PATH)
   let bridgePid: number | null = null
   let bridgeAlive = false
@@ -213,6 +221,8 @@ export function readStatusSnapshot(): StatusSnapshot {
     launchAgentInstalled,
     launchAgentPath,
     launchAgentLoaded,
+    guiSession,
+    consoleUser: consoleOwner,
     skills,
   }
 }
@@ -229,8 +239,16 @@ export function computeBridgeHint(input: {
   launchAgentInstalled: boolean
   launchAgentLoaded: boolean
   launchAgentPath: string | null
+  guiSession?: GuiSession
+  consoleUser?: string | null
+  user?: string | null
+  uid?: number | null
 }): string[] {
   if (input.bridge) return []
+  if (input.guiSession === "absent") {
+    const [cause, remedy] = missingGuiSessionLines(input)
+    return [`  hint: ${cause}`, `        ${remedy}`]
+  }
   if (input.mode === "unknown") {
     // Bridge alive but plist file missing — handled by the caller already
     // (mode === "unknown" implies bridge is alive). Defensive default.
@@ -380,6 +398,10 @@ export function formatStatus(snap: StatusSnapshot, opts: { verbose?: boolean }):
       launchAgentInstalled: snap.launchAgentInstalled,
       launchAgentLoaded: snap.launchAgentLoaded,
       launchAgentPath: snap.launchAgentPath,
+      guiSession: snap.guiSession,
+      consoleUser: snap.consoleUser,
+      user: currentUserName(),
+      uid: typeof process.getuid === "function" ? process.getuid() : null,
     })) {
       lines.push(line)
     }
@@ -486,6 +508,8 @@ export function snapshotToJson(snap: StatusSnapshot): Record<string, unknown> {
     launchAgentInstalled: snap.launchAgentInstalled,
     launchAgentPath: snap.launchAgentPath,
     launchAgentLoaded: snap.launchAgentLoaded,
+    guiSession: snap.guiSession,
+    consoleUser: snap.consoleUser,
   }
   if (snap.browser) base.browser = snap.browser
   if (snap.extension) base.extension = snap.extension

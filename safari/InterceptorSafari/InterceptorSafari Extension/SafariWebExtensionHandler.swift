@@ -52,7 +52,9 @@ private actor SafariDaemonRelay {
         if socket != nil, contextIdentifier == contextId { return }
         resetConnection()
 
-        guard let url = URL(string: "ws://127.0.0.1:19222") else {
+        // Per-user daemon port (shared/platform.ts derivePorts): uid 501 keeps 19222.
+        let slot = ((Int(getuid()) - 501) % 500 + 500) % 500
+        guard let url = URL(string: "ws://127.0.0.1:\(19222 + 2 * slot)") else {
             throw RelayError.invalidURL
         }
         let task = session.webSocketTask(with: url)

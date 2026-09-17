@@ -3005,6 +3005,33 @@ async function handleEvaluateActions(action, tabId) {
   }
 }
 
+// extension/src/background/ws-endpoint.ts
+var DEFAULT_WS_PORT = 19222;
+var wsPort = DEFAULT_WS_PORT;
+var listeners = new Set;
+function wsEndpoint() {
+  return `ws://127.0.0.1:${wsPort}`;
+}
+function adoptWsPort(port) {
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535 || port === wsPort)
+    return false;
+  wsPort = port;
+  try {
+    chrome.storage?.session?.set({ wsPort: port });
+  } catch {}
+  for (const fn of listeners)
+    fn(port);
+  return true;
+}
+function onWsPortChange(fn) {
+  listeners.add(fn);
+}
+function restoreWsPort() {
+  try {
+    chrome.storage?.session?.get("wsPort").then((v) => adoptWsPort(v?.wsPort)).catch(() => {});
+  } catch {}
+}
+
 // extension/src/background/capabilities/binary-sink.ts
 var DEFAULT_CHUNK_SIZE = 1024 * 1024;
 async function executeNormalize(tabId, world, code) {
@@ -3203,7 +3230,7 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function connectSinkSocket() {
-  const WS_URL = "ws://localhost:19222";
+  const WS_URL = wsEndpoint();
   const MAGIC = new Uint8Array([73, 66, 83, 49]);
   const encoder = new TextEncoder;
   const sinkId = crypto.randomUUID();
@@ -5544,7 +5571,11 @@ var wsKeepAliveTimer = null;
 var keepalivePongTimer = null;
 var pendingHandshakePort = null;
 var lastNativeActivityAt = 0;
-var WS_URL = "ws://localhost:19222";
+onWsPortChange(() => {
+  if (wsChannel)
+    closeWsForReconnect(wsChannel);
+});
+restoreWsPort();
 var configuredContextId = null;
 var forceWebSocketTransport = false;
 var WebSocketImpl = globalThis.WebSocket;
@@ -5833,6 +5864,7 @@ function connectToHost() {
   port.onMessage.addListener((msg) => {
     if (msg.type === "pong") {
       lastNativeActivityAt = Date.now();
+      adoptWsPort(msg.wsPort);
       if (pendingHandshakePort === port) {
         clearTimeout(handshakeTimer);
         pendingHandshakePort = null;
@@ -6033,7 +6065,7 @@ function connectWsChannel() {
   if (wsChannel && (wsChannel.readyState === WebSocketImpl.OPEN || wsChannel.readyState === WebSocketImpl.CONNECTING))
     return;
   try {
-    const ws = new WebSocketImpl(WS_URL);
+    const ws = new WebSocketImpl(wsEndpoint());
     wsChannel = ws;
     ws.onopen = async () => {
       if (wsChannel !== ws) {

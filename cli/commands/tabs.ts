@@ -6,6 +6,7 @@
 
 import { unlinkSync } from "node:fs"
 import { writeFileSync } from "node:fs"
+import { TEMP } from "../../shared/platform"
 import { buildTabCreateAction } from "./compound"
 
 type Action = { type: string; [key: string]: unknown }
@@ -196,7 +197,7 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
       return { type: "frames_list" }
 
     case "session": {
-      const sessionPath = "/tmp/interceptor-session.pid"
+      const sessionPath = `${TEMP}/interceptor-session.pid`
       if (filtered[1] === "start") {
         writeFileSync(sessionPath, `${process.pid}\n${Date.now()}`)
         console.log(`session started (pid: ${process.pid})`)
