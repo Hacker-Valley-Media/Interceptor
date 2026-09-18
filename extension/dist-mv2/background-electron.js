@@ -1996,7 +1996,11 @@ async function handleCanvasActions(action, tabId) {
 }
 
 // extension/src/background/tab-lifecycle.ts
-var DEFAULT_TAB_LIFECYCLE = { reuse: true, idleCloseMinutes: 10 };
+var DEFAULT_TAB_LIFECYCLE = {
+  reuse: true,
+  idleCloseMinutes: 10,
+  closeGroupWhenDone: false
+};
 var STORAGE_KEY = "tabLifecycle";
 var GROUP_LAST_SEEN_PREFIX = "groupLastSeen:";
 function normalizeTabLifecycle(raw) {
@@ -2006,7 +2010,8 @@ function normalizeTabLifecycle(raw) {
   if (typeof obj.idleCloseMinutes === "number" && Number.isFinite(obj.idleCloseMinutes)) {
     idle = Math.max(0, Math.round(obj.idleCloseMinutes));
   }
-  return { reuse, idleCloseMinutes: idle };
+  const closeGroupWhenDone = typeof obj.closeGroupWhenDone === "boolean" ? obj.closeGroupWhenDone : DEFAULT_TAB_LIFECYCLE.closeGroupWhenDone;
+  return { reuse, idleCloseMinutes: idle, closeGroupWhenDone };
 }
 function policyMayDecideReuse(action) {
   return action.reuse === undefined && action.reusePolicy === true && typeof action.group === "string" && action.group.length > 0;
