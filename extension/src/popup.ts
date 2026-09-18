@@ -173,10 +173,23 @@ if (hasTabGroups) {
     showStatus("Tab group label saved.")
   })
 
+  /** True when an admin policy supplies `tabLifecycle` (it beats anything saved here). */
+  const managedPolicyPresent = async (): Promise<boolean> => {
+    try {
+      const managed = (chrome.storage as typeof chrome.storage & { managed?: chrome.storage.StorageArea }).managed
+      if (typeof managed?.get !== "function") return false
+      const stored = (await managed.get("tabLifecycle")) as Record<string, unknown>
+      const raw = stored?.tabLifecycle
+      return raw !== undefined && raw !== null
+    } catch {
+      return false
+    }
+  }
+
   // --- tab lifecycle policy ---
   // This popup is the ONLY writer for the `tabLifecycle` key. Same dynamic-injection
   // gating as the brand block above: no tabGroups API (MV2 Electron) → no controls.
-  const DEFAULT_LIFECYCLE = { reuse: true, idleCloseMinutes: 10 }
+  const DEFAULT_LIFECYCLE = { reuse: true, idleCloseMinutes: 10, closeGroupWhenDone: false }
 
   const lcWrap = document.createElement("div")
   lcWrap.style.marginTop = "14px"
@@ -210,6 +223,25 @@ if (hasTabGroups) {
   idleRow.appendChild(document.createTextNode("min (0 = never)"))
   lcWrap.appendChild(idleRow)
 
+  // Full-purge toggle. Off by default: it deliberately drops every guard the
+  // ordinary sweep applies, so it is the user's call, never an implied one.
+  const purgeRow = document.createElement("label")
+  purgeRow.style.cssText = "display:flex;align-items:flex-start;gap:6px;font-weight:400;margin-top:6px;"
+  const purgeCheck = document.createElement("input")
+  purgeCheck.id = "lcPurge"
+  purgeCheck.type = "checkbox"
+  purgeCheck.style.cssText = "width:auto;margin-top:2px;"
+  purgeCheck.checked = DEFAULT_LIFECYCLE.closeGroupWhenDone
+  purgeRow.appendChild(purgeCheck)
+  purgeRow.appendChild(document.createTextNode("Delete the whole group when idle"))
+  lcWrap.appendChild(purgeRow)
+
+  const purgeHint = document.createElement("div")
+  purgeHint.style.cssText = "margin-top:4px;font-size:11px;color:#888;line-height:1.35;"
+  purgeHint.textContent =
+    "Closes every tab in an idle Interceptor group — including pinned, playing, active and unsaved-form tabs — so the group disappears from the tab strip. Needs an idle window above 0."
+  lcWrap.appendChild(purgeHint)
+
   const lcRow = document.createElement("div")
   lcRow.className = "row"
   const lcSave = document.createElement("button")
@@ -222,17 +254,35 @@ if (hasTabGroups) {
   statusEl.parentElement?.insertBefore(lcWrap, statusEl)
 
   void chrome.storage.local.get("tabLifecycle").then((stored) => {
-    const lc = (stored as { tabLifecycle?: { reuse?: unknown; idleCloseMinutes?: unknown } }).tabLifecycle
+    const lc = (stored as {
+      tabLifecycle?: { reuse?: unknown; idleCloseMinutes?: unknown; closeGroupWhenDone?: unknown }
+    }).tabLifecycle
     if (lc && typeof lc.reuse === "boolean") reuseCheck.checked = lc.reuse
     if (lc && typeof lc.idleCloseMinutes === "number" && Number.isFinite(lc.idleCloseMinutes)) {
       idleInput.value = String(Math.max(0, Math.round(lc.idleCloseMinutes)))
     }
+    if (lc && typeof lc.closeGroupWhenDone === "boolean") purgeCheck.checked = lc.closeGroupWhenDone
   })
 
   lcSave.addEventListener("click", async () => {
     const idle = Math.max(0, Math.round(Number(idleInput.value)))
     if (!Number.isFinite(idle)) { showStatus("Idle minutes must be a number."); return }
-    await chrome.storage.local.set({ tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle } })
-    showStatus("Tab lifecycle saved.")
+    // Idle is the only "done" signal the extension has, so a 0 idle window with
+    // the purge on would save a setting that can never fire. Refuse loudly
+    // instead of storing a dead toggle.
+    if (purgeCheck.checked && idle === 0) {
+      showStatus("Set an idle window above 0 to delete groups.", 3000)
+      return
+    }
+    await chrome.storage.local.set({
+      tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle, closeGroupWhenDone: purgeCheck.checked },
+    })
+    // `managed` outranks `local` in the resolver, so an enterprise policy makes
+    // every control here inert. Say so instead of letting the save look applied.
+    if (await managedPolicyPresent()) {
+      showStatus("Saved locally, but a managed policy overrides it.", 4000)
+      return
+    }
+    showStatus(purgeCheck.checked ? `Saved — groups deleted after ${idle}m idle.` : "Tab lifecycle saved.")
   })
 }
