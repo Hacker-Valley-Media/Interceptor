@@ -4,12 +4,14 @@ import {
   resolveTabLifecycle,
   policyMayDecideReuse,
   selectSweepCandidates,
+  planGroupPurge,
   boundedDirtyInspection,
   DEFAULT_TAB_LIFECYCLE,
   type SweepTab,
 } from "../extension/src/background/tab-lifecycle"
 import { buildTabCreateAction } from "../cli/commands/compound"
 import { parseTabsCommand } from "../cli/commands/tabs"
+import { formatStatus, type StatusSnapshot } from "../cli/lib/status-renderer"
 
 // Tab-lifecycle unit tests. The sweep/normalize/precedence units are pure
 // or storage-only, so no browser is needed; the live behaviors (beforeunload
@@ -28,8 +30,8 @@ describe("normalizeTabLifecycle (T1)", () => {
   })
 
   test("partial objects keep per-field defaults", () => {
-    expect(normalizeTabLifecycle({ reuse: false })).toEqual({ reuse: false, idleCloseMinutes: 10 })
-    expect(normalizeTabLifecycle({ idleCloseMinutes: 0 })).toEqual({ reuse: true, idleCloseMinutes: 0 })
+    expect(normalizeTabLifecycle({ reuse: false })).toEqual({ reuse: false, idleCloseMinutes: 10, closeGroupWhenDone: false })
+    expect(normalizeTabLifecycle({ idleCloseMinutes: 0 })).toEqual({ reuse: true, idleCloseMinutes: 0, closeGroupWhenDone: false })
   })
 
   test("out-of-range and non-numeric idle values are clamped or defaulted", () => {
@@ -43,6 +45,27 @@ describe("normalizeTabLifecycle (T1)", () => {
   test("non-boolean reuse falls back to default true", () => {
     expect(normalizeTabLifecycle({ reuse: "yes" }).reuse).toBe(true)
     expect(normalizeTabLifecycle({ reuse: 0 }).reuse).toBe(true)
+  })
+})
+
+// ── T1b: closeGroupWhenDone is opt-in and boolean-only ───────────────────────
+
+describe("closeGroupWhenDone normalization (T1b)", () => {
+  test("defaults off so an upgrade never starts deleting groups on its own", () => {
+    expect(DEFAULT_TAB_LIFECYCLE.closeGroupWhenDone).toBe(false)
+    expect(normalizeTabLifecycle({}).closeGroupWhenDone).toBe(false)
+    expect(normalizeTabLifecycle({ idleCloseMinutes: 3 }).closeGroupWhenDone).toBe(false)
+  })
+
+  test("an explicit true survives normalization", () => {
+    expect(normalizeTabLifecycle({ closeGroupWhenDone: true })).toEqual({
+      reuse: true, idleCloseMinutes: 10, closeGroupWhenDone: true,
+    })
+  })
+
+  test("non-boolean values fall back to off rather than truthiness", () => {
+    expect(normalizeTabLifecycle({ closeGroupWhenDone: "yes" }).closeGroupWhenDone).toBe(false)
+    expect(normalizeTabLifecycle({ closeGroupWhenDone: 1 }).closeGroupWhenDone).toBe(false)
   })
 })
 
@@ -71,7 +94,7 @@ describe("resolveTabLifecycle precedence (T2)", () => {
     })
     const { policy, source } = await resolveTabLifecycle()
     expect(source).toBe("managed")
-    expect(policy).toEqual({ reuse: false, idleCloseMinutes: 99 })
+    expect(policy).toEqual({ reuse: false, idleCloseMinutes: 99, closeGroupWhenDone: false })
   })
 
   test("local used when managed has no key", async () => {
@@ -81,7 +104,7 @@ describe("resolveTabLifecycle precedence (T2)", () => {
     })
     const { policy, source } = await resolveTabLifecycle()
     expect(source).toBe("local")
-    expect(policy).toEqual({ reuse: false, idleCloseMinutes: 30 })
+    expect(policy).toEqual({ reuse: false, idleCloseMinutes: 30, closeGroupWhenDone: false })
   })
 
   test("default when neither area has the key", async () => {
@@ -101,7 +124,7 @@ describe("resolveTabLifecycle precedence (T2)", () => {
     })
     const { policy, source } = await resolveTabLifecycle()
     expect(source).toBe("local")
-    expect(policy).toEqual({ reuse: true, idleCloseMinutes: 5 })
+    expect(policy).toEqual({ reuse: true, idleCloseMinutes: 5, closeGroupWhenDone: false })
   })
 
   test("managed area entirely absent falls through to local", async () => {
@@ -175,6 +198,41 @@ describe("selectSweepCandidates guards (T3)", () => {
   test("unknown window count never triggers G5 (treated as not-last)", () => {
     const tabs = [mkTab({ id: 1, windowId: 42 })]
     expect(selectSweepCandidates(tabs, ctx([]))).toEqual([1])
+  })
+})
+
+// ── T3a: purge mode drops every guard but keeps the browser alive ───────────
+
+describe("planGroupPurge (T3a)", () => {
+  test("closes every tab in the group — active, pinned and audible included", () => {
+    const tabs = [
+      mkTab({ id: 1, active: true }),
+      mkTab({ id: 2, pinned: true }),
+      mkTab({ id: 3, audible: true }),
+    ]
+    // Same shape the guarded sweep would refuse entirely.
+    expect(selectSweepCandidates(tabs, ctx([[1, 3]], 1))).toEqual([])
+    expect(planGroupPurge(tabs, 20).closeIds.sort()).toEqual([1, 2, 3])
+  })
+
+  test("no survivor tab while other tabs remain in the profile", () => {
+    const tabs = [mkTab({ id: 1 }), mkTab({ id: 2 })]
+    expect(planGroupPurge(tabs, 5).needsSurvivorTab).toBe(false)
+  })
+
+  test("a group that IS the whole profile gets a survivor tab (closing it all quits the browser)", () => {
+    const tabs = [mkTab({ id: 1 }), mkTab({ id: 2 })]
+    expect(planGroupPurge(tabs, 2).needsSurvivorTab).toBe(true)
+  })
+
+  test("a stale-high profile count still triggers the survivor tab when it undercounts", () => {
+    // remaining can only be stale-HIGH mid-tick; an equal count is the boundary.
+    expect(planGroupPurge([mkTab({ id: 1 })], 1).needsSurvivorTab).toBe(true)
+    expect(planGroupPurge([mkTab({ id: 1 })], 2).needsSurvivorTab).toBe(false)
+  })
+
+  test("an empty group closes nothing and needs no survivor", () => {
+    expect(planGroupPurge([], 0)).toEqual({ closeIds: [], needsSurvivorTab: false })
   })
 })
 
@@ -254,5 +312,39 @@ describe("reuse gating (T4)", () => {
     // explicit decisions always win
     expect(policyMayDecideReuse({ reuse: true, reusePolicy: true, group: "ai7" })).toBe(false)
     expect(policyMayDecideReuse({ reuse: false, reusePolicy: true, group: "ai7" })).toBe(false)
+  })
+})
+
+// ── T5: `status --verbose` names the purge so the operator can see it is armed ─
+
+describe("status rendering of the lifecycle policy (T5)", () => {
+  const snap = (tabLifecycle: StatusSnapshot["tabLifecycle"]): StatusSnapshot =>
+    ({
+      mode: "browser-only",
+      daemon: false,
+      transport: "unix:/tmp/interceptor.sock",
+      bridge: false,
+      tabLifecycle,
+    } as unknown as StatusSnapshot)
+
+  test("guarded sweep renders as 'close idle groups after'", () => {
+    const out = formatStatus(snap({ reuse: true, idleCloseMinutes: 10, source: "default" }), { verbose: true })
+    expect(out).toContain("close idle groups after 10m")
+  })
+
+  test("purge renders as 'delete whole groups after'", () => {
+    const out = formatStatus(
+      snap({ reuse: true, idleCloseMinutes: 2, closeGroupWhenDone: true, source: "local" }),
+      { verbose: true }
+    )
+    expect(out).toContain("delete whole groups after 2m")
+  })
+
+  test("idle-close off reads the same either way", () => {
+    const out = formatStatus(
+      snap({ reuse: true, idleCloseMinutes: 0, closeGroupWhenDone: true, source: "local" }),
+      { verbose: true }
+    )
+    expect(out).toContain("idle-close off")
   })
 })
