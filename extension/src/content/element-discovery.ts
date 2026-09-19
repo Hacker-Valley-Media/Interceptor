@@ -1,6 +1,7 @@
 import { getOrAssignRef, refMetadata, pruneStaleRefs } from "./ref-registry"
 import { getEffectiveRole, getAccessibleName } from "./a11y-tree"
 import { getRelevantAttrs, buildSelector, hasOwnPointerCursor } from "./element-tree"
+import { safeValue } from "./sensitive"
 
 export interface IndexedElement {
   index: number
@@ -111,7 +112,7 @@ export function getInteractiveElements(): IndexedElement[] {
       const text = getAccessibleName(el)
       const attrs = getRelevantAttrs(el)
 
-      refMetadata.set(refId, { role: getEffectiveRole(el, style), name: text, tag, value: ((el as HTMLInputElement).value || "").slice(0, 40) })
+      refMetadata.set(refId, { role: getEffectiveRole(el, style), name: text, tag, value: safeValue(el).slice(0, 40) })
 
       results.push({ index: idx, refId, element: el, selector, tag, text, attrs })
     }

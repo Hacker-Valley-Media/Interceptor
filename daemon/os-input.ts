@@ -288,22 +288,24 @@ export async function osType(text: string): Promise<{ success: boolean; error?: 
 
         const down = createKeyboardEvent(keyCode, true)
         if (!down) continue
-        if (flags) setEventFlags(down, flags)
+        // Explicit zero prevents inherited HID modifiers from changing the text.
+        setEventFlags(down, flags)
         postEvent(down)
         releaseEvent(down)
 
         await sleep(3)
 
         const up = createKeyboardEvent(keyCode, false)
-        if (up) { if (flags) setEventFlags(up, flags); postEvent(up); releaseEvent(up) }
+        if (up) { setEventFlags(up, flags); postEvent(up); releaseEvent(up) }
 
         if (needsShift) {
           const shiftUp = createKeyboardEvent(56, false)
-          if (shiftUp) { postEvent(shiftUp); releaseEvent(shiftUp) }
+          if (shiftUp) { setEventFlags(shiftUp, 0); postEvent(shiftUp); releaseEvent(shiftUp) }
         }
       } else {
         const down = createKeyboardEvent(0, true)
         if (!down) continue
+        setEventFlags(down, 0)
         // PR #83:encode the full UTF-16 code-unit sequence of the
         // iterated grapheme. `for…of` yields one code point per iteration,
         // which is 1 UTF-16 code unit for BMP characters and 2 (surrogate
@@ -322,6 +324,7 @@ export async function osType(text: string): Promise<{ success: boolean; error?: 
 
         const up = createKeyboardEvent(0, false)
         if (up) {
+          setEventFlags(up, 0)
           sym.CGEventKeyboardSetUnicodeString(up, encoded.length, encoded)
           postEvent(up)
           releaseEvent(up)

@@ -1,3 +1,4 @@
+import { safeText, safeHtml } from "../sensitive"
 import { resolveElement } from "../input-simulation"
 import { renderMarkdown } from "./markdown-extract"
 
@@ -29,10 +30,10 @@ export async function handleExtractText(action: Action): Promise<ActionResult> {
       const label = String(action.ref ?? action.index ?? "unknown")
       return { success: false, error: `stale element [${label}] — run interceptor state to refresh` }
     }
-    const raw = (el.textContent || "").trim()
+    const raw = safeText(el).trim()
     return { success: true, data: withTruncationMarker(raw, Math.min(maxChars, ELEMENT_MAX_CHARS)) }
   }
-  return { success: true, data: withTruncationMarker(document.body.innerText, maxChars) }
+  return { success: true, data: withTruncationMarker(safeText(document.body, true), maxChars) }
 }
 
 export async function handleExtractMarkdown(action: Action): Promise<ActionResult> {
@@ -60,7 +61,7 @@ export async function handleExtractHtml(action: Action): Promise<ActionResult> {
       const label = String(action.ref ?? action.index ?? "unknown")
       return { success: false, error: `stale element [${label}] — run interceptor state to refresh` }
     }
-    return { success: true, data: withTruncationMarker(el.outerHTML, Math.min(maxChars, ELEMENT_MAX_CHARS)) }
+    return { success: true, data: withTruncationMarker(safeHtml(el), Math.min(maxChars, ELEMENT_MAX_CHARS)) }
   }
-  return { success: true, data: withTruncationMarker(document.documentElement.outerHTML, maxChars) }
+  return { success: true, data: withTruncationMarker(safeHtml(document.documentElement), maxChars) }
 }

@@ -1,14 +1,31 @@
 import { resolveElement, staleElementError } from "../input-simulation"
 import { getOrAssignRef } from "../ref-registry"
 import { getEffectiveRole, getAccessibleName } from "../a11y-tree"
+import { markSensitive } from "../sensitive"
+import { getShadowRoot } from "../element-discovery"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
 
 export async function handleFocus(action: Action): Promise<ActionResult> {
-  const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
+  const el = (action.focused === true && action.sensitive === true
+    ? document.activeElement
+    : resolveElement(action.index as number | undefined, action.ref as string | undefined)) as HTMLElement | null
   if (!el) return staleElementError(action, "focused")
+  if (action.sensitive === true) {
+    if (el === document.body || el === document.documentElement) return { success: false, error: "no focused credential field" }
+    markSensitive(el)
+  }
   el.focus()
+  if (action.sensitive === true) {
+    let active = document.activeElement
+    let focused = active === el
+    while (active && getShadowRoot(active)?.activeElement) {
+      active = getShadowRoot(active)!.activeElement
+      focused ||= active === el
+    }
+    if (!focused) return { success: false, error: "credential target did not receive focus; nothing typed" }
+  }
   return { success: true }
 }
 

@@ -111,8 +111,12 @@ export async function handleOsInputActions(
     case "os_type": {
       const fg = await requireForegroundTab(tabId)
       if (!fg.ok) return fg.result
-      if (action.index !== undefined || action.ref) {
-        await sendToContentScript(tabId, { type: "focus", index: action.index, ref: action.ref })
+      if (action.index !== undefined || action.ref || action.sensitive === true) {
+        const focused = await sendToContentScript(tabId, {
+          type: "focus", index: action.index, ref: action.ref,
+          sensitive: action.sensitive, focused: action.index === undefined && !action.ref
+        }) as ActionResult
+        if (!focused.success) return focused
         await new Promise(r => setTimeout(r, 50))
       }
       return { success: true, data: { method: "os_event", text: action.text } }

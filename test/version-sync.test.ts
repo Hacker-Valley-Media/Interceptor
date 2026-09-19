@@ -24,6 +24,14 @@ describe("version sync", () => {
     expect(electronManifest.version).toBe(pkg.version)
   })
 
+  test("Safari app and extension versions match package.json#version", () => {
+    const project = readFileSync(resolve(import.meta.dir, "../safari/InterceptorSafari/InterceptorSafari.xcodeproj/project.pbxproj"), "utf8")
+    for (const key of ["MARKETING_VERSION", "CURRENT_PROJECT_VERSION"]) {
+      const versions = [...project.matchAll(new RegExp(`${key} = ([^;]+);`, "g"))].map(match => match[1])
+      expect(versions).toEqual(Array(4).fill(pkg.version))
+    }
+  })
+
   test("iOS runner version matches package.json#version", () => {
     expect(plistValue("CFBundleShortVersionString")).toBe(pkg.version)
     expect(plistValue("CFBundleVersion")).toBe(pkg.version)
