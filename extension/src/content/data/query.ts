@@ -1,3 +1,4 @@
+import { isSensitive, safeHtml, safeText, SECURE_MASK } from "../sensitive"
 import { resolveElement } from "../input-simulation"
 import { getOrAssignRef } from "../ref-registry"
 
@@ -11,7 +12,7 @@ export async function handleQuery(action: Action): Promise<ActionResult> {
     index: i,
     ref: getOrAssignRef(el),
     tag: el.tagName.toLowerCase(),
-    text: (el.textContent || "").trim().slice(0, 80),
+    text: safeText(el).trim().slice(0, 80),
     id: el.id || undefined,
     classes: el.className || undefined
   }))
@@ -34,8 +35,8 @@ export async function handleQueryOne(action: Action): Promise<ActionResult> {
   return {
     success: true, data: {
       tag: el.tagName.toLowerCase(),
-      text: (el.textContent || "").trim().slice(0, 200),
-      html: el.outerHTML.slice(0, 500),
+      text: safeText(el).trim().slice(0, 200),
+      html: safeHtml(el).slice(0, 500),
       id: el.id || undefined,
       rect: el.getBoundingClientRect()
     }
@@ -60,7 +61,7 @@ export async function handleTableData(action: Action): Promise<ActionResult> {
   const rows: string[][] = []
   table.querySelectorAll("tr").forEach(tr => {
     const cells: string[] = []
-    tr.querySelectorAll("td, th").forEach(cell => cells.push((cell.textContent || "").trim()))
+    tr.querySelectorAll("td, th").forEach(cell => cells.push(safeText(cell).trim()))
     rows.push(cells)
   })
   return { success: true, data: rows }
@@ -70,7 +71,8 @@ export async function handleAttrGet(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
   if (!el) return { success: false, error: "element not found" }
   const name = action.name as string
-  return { success: true, data: el.getAttribute(name) }
+  const value = el.getAttribute(name)
+  return { success: true, data: name.toLowerCase() === "value" && value && isSensitive(el) ? SECURE_MASK : value }
 }
 
 export async function handleAttrSet(action: Action): Promise<ActionResult> {

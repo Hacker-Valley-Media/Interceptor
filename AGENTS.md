@@ -112,6 +112,11 @@ The historical reflex of "site checks `isTrusted` → use `--os`" is no longer c
 
 Deep mechanic notes (the `userActivation` override + `__interceptor_trust` marker, canvas-rendered editor input, blob export capture): [`.agents/skills/interceptor-browser/references/rich-editors.md`](.agents/skills/interceptor-browser/references/rich-editors.md).
 
+## Browser field safety
+
+- Native `select`, `type`, and `act <ref> <value>` accept an exact option value or unique exact label. Invalid, ambiguous, disabled, and custom-widget targets return failure. Read after a selection to verify application state.
+- Tree, forms, text/HTML, query, and snapshot reads mask password inputs and credential-marked controls. Scene reads can still expose field values. Eval, screenshots, network/storage capture, and page-created credential copies are outside this masking boundary.
+
 ## File Uploads (browser)
 
 `interceptor upload <ref> <path>` attaches a local file to any web upload area — no OS dialog, no CDP. It covers `<input type=file>`, drag-and-drop dropzones, and File System Access pickers (`--picker`). Files up to 100 MB work: files past the single-frame limit are chunked and reassembled automatically; a larger file is refused up front with the cap in the error. The result reports the `method` used and a `verified` flag.
