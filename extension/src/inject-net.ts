@@ -1,4 +1,5 @@
 import { K_BEACON, K_BROADCAST, K_NET, K_TT_POLICY, K_WS, TT_NET_POLICY_NAME, TT_POLICY_NAME } from "./inject-keys"
+import { shouldPreserveNativeFetch } from "./preserve-native-fetch"
 
 if ((window as any)[K_NET]) {
   // already patched — skip
@@ -534,7 +535,10 @@ if ((window as any)[K_NET]) {
     })
   }, originalFetch)
 
-  window.fetch = patchedFetch
+  // Sites that inspect native fetch identity (Upwork's auth bootstrap) fall
+  // back to an iframe fetch gated on requestAnimationFrame, which stalls in
+  // hidden tabs. Keep the original fetch there; XHR capture still applies.
+  if (!shouldPreserveNativeFetch(location.hostname)) window.fetch = patchedFetch
 
   const XHR = XMLHttpRequest.prototype
 
