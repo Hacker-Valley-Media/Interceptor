@@ -2389,15 +2389,16 @@ init_a11y_tree();
 init_sensitive();
 init_element_discovery();
 async function handleFocus(action) {
-  const el = action.focused === true && action.sensitive === true ? document.activeElement : resolveElement(action.index, action.ref);
+  const focusedSensitive = action.focused === true && action.sensitive === true;
+  const el = focusedSensitive ? document.activeElement : resolveElement(action.index, action.ref);
   if (!el)
     return staleElementError(action, "focused");
   if (action.sensitive === true) {
     if (el === document.body || el === document.documentElement)
       return { success: false, error: "no focused credential field" };
-    markSensitive(el);
   }
-  el.focus();
+  if (!focusedSensitive)
+    el.focus();
   if (action.sensitive === true) {
     let active = document.activeElement;
     let focused = active === el;
@@ -2407,6 +2408,7 @@ async function handleFocus(action) {
     }
     if (!focused)
       return { success: false, error: "credential target did not receive focus; nothing typed" };
+    markSensitive(focusedSensitive ? active : el);
   }
   return { success: true };
 }
