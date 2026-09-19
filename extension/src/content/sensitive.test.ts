@@ -112,3 +112,40 @@ test("trusted credential focus marks its actual target and fails on a stale ref"
   expect((await handleFocus({ type: "focus", ref, sensitive: true })).success).toBe(false)
   expect((await handleFocus({ type: "focus", focused: true, sensitive: true })).success).toBe(false)
 })
+
+test("failed credential focus leaves an ordinary field unmarked", async () => {
+  fixture()
+  const plain = document.querySelector<HTMLInputElement>("#plain")!
+  plain.disabled = true
+  expect((await handleFocus({ type: "focus", ref: getOrAssignRef(plain), sensitive: true })).success).toBe(false)
+  expect(isSensitive(plain)).toBe(false)
+  expect(safeValue(plain)).toBe("ordinary")
+})
+
+test("focused credential delivery preserves the deepest shadow input and marks only it", async () => {
+  // Other suites mock getShadowRoot as null; use real shadow behavior in isolation.
+  const child = Bun.spawn([process.execPath, "-e", `
+    import assert from "node:assert/strict";
+    import { GlobalRegistrator } from "@happy-dom/global-registrator";
+    GlobalRegistrator.register();
+    const { handleFocus } = await import("./extension/src/content/actions/focus.ts");
+    const { isSensitive, safeValue, SECURE_MASK } = await import("./extension/src/content/sensitive.ts");
+    const host = document.createElement("div");
+    host.tabIndex = 0;
+    document.body.append(host);
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = '<div tabindex="0"></div><input value="ordinary-sibling">';
+    const nested = shadow.querySelector("div").attachShadow({ mode: "open" });
+    nested.innerHTML = '<input value="credential-canary">';
+    const input = nested.querySelector("input");
+    input.focus();
+    assert.equal(document.activeElement, host);
+    assert.equal((await handleFocus({ type: "focus", focused: true, sensitive: true })).success, true);
+    assert.equal(nested.activeElement, input);
+    assert.equal(safeValue(input), SECURE_MASK);
+    assert.equal(isSensitive(host), false);
+    assert.equal(safeValue(shadow.querySelector("input")), "ordinary-sibling");
+  `], { cwd: new URL("../../..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe" })
+  const error = await new Response(child.stderr).text()
+  expect(await child.exited, error).toBe(0)
+})

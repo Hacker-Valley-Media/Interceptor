@@ -728,7 +728,7 @@ macOS Bridge (full install only):
   interceptor macos auth status|confirm|invalidate|domain-state                   (LocalAuthentication)
   interceptor macos auth confirm "<reason>" [--policy biometry|any|biometry-or-watch] [--reuse <seconds>]
 
-  Secret vault (keychain-backed; values never on argv, in logs, or in results):
+  Secret vault (keychain-backed; values stay off argv; output masking depends on the command):
   interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <s>]
                                              Opens the native box (secure field + confirm). Default gate: none (unattended).
   interceptor macos secret set <name> --stdin [same flags]   Headless: value from stdin (hidden TTY prompt without --stdin)
