@@ -1,4 +1,5 @@
 import { isVisible } from "../element-discovery"
+import { isSensitive, safeText, SECURE_MASK } from "../sensitive"
 
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "META", "LINK", "TITLE"])
 const BLOCK_TAGS = new Set(["P", "DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "MAIN", "ASIDE", "NAV", "FORM", "FIELDSET", "DETAILS", "SUMMARY", "FIGURE", "FIGCAPTION", "ADDRESS", "DD", "DT", "DL"])
@@ -22,6 +23,7 @@ function walkNode(node: Node): string {
 
   if (SKIP_TAGS.has(tag)) return ""
   if (!isVisible(el) && tag !== "BODY") return ""
+  if (isSensitive(el)) return el.textContent ? SECURE_MASK : ""
 
   switch (tag) {
     case "H1": case "H2": case "H3": case "H4": case "H5": case "H6": {
@@ -56,8 +58,8 @@ function walkNode(node: Node): string {
       return c ? `*${c}*` : ""
     }
     case "CODE": {
-      if (el.closest("pre")) return el.textContent || ""
-      const c = (el.textContent || "").trim()
+      if (el.closest("pre")) return safeText(el)
+      const c = safeText(el).trim()
       return c ? `\`${c}\`` : ""
     }
     case "A": {
@@ -86,13 +88,14 @@ function walkNode(node: Node): string {
 }
 
 function inlineChildren(el: Element): string {
+  if (isSensitive(el)) return el.textContent ? SECURE_MASK : ""
   let out = ""
   for (const child of el.childNodes) out += walkNode(child)
   return out.replace(/\s+/g, " ").trim()
 }
 
 function renderPre(el: Element): string {
-  const code = (el.textContent || "").replace(/^\n+|\n+$/g, "")
+  const code = safeText(el).replace(/^\n+|\n+$/g, "")
   if (!code) return ""
   const codeEl = el.querySelector("code")
   const lang = codeEl?.className.match(/language-(\S+)/)?.[1] || ""
@@ -126,6 +129,7 @@ function renderList(el: Element, kind: "ul" | "ol", indent: number): string {
 function renderListItem(el: Element, kind: "ul" | "ol", index: number, indent: number): string {
   const pad = "  ".repeat(indent)
   const bullet = kind === "ul" ? "-" : `${index}.`
+  if (isSensitive(el)) return el.textContent ? `${pad}${bullet} ${SECURE_MASK}` : ""
   let mainLine = ""
   const nested: string[] = []
   for (const child of el.childNodes) {

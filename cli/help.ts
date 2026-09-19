@@ -328,12 +328,12 @@ Actions:
   interceptor type <index|ref> <text>        Type into element (clears first)
   interceptor type <index|ref> <text> --append  Type without clearing
   interceptor type "role:name" <text>        Type using semantic selector (e.g. "button:Submit")
-  interceptor type <index|ref> --secret <name>   Type a vault secret by name (value resolved in the daemon, never shown)
+  interceptor type <index|ref> --secret <name>   Type a vault secret by name (resolved in daemon; tree/forms reads mask it)
   interceptor type <index|ref> --browser-login <host> [--user] [--browser <key>]   Fill a saved login from any installed Chromium browser (password, or username with --user)
   interceptor browser creds list [--host <host>] [--browser <key>]   List saved logins across installed Chromium browsers (host + username + browser; no passwords)
   interceptor browser creds status               List installed Chromium browsers and the profiles that hold a Login Data store
   interceptor click "text:<query>"            Click first element whose textContent matches (e.g. "text:Save")
-  interceptor select <index|ref> <value>     Select dropdown option
+  interceptor select <index|ref> <value>     Select native option by exact value or unique label; rejects invalid/disabled choices
   interceptor focus <index|ref>              Focus element
   interceptor hover <index|ref>              Hover over element
   interceptor hover <index> --from X,Y      Hover with mouse path
@@ -728,7 +728,7 @@ macOS Bridge (full install only):
   interceptor macos auth status|confirm|invalidate|domain-state                   (LocalAuthentication)
   interceptor macos auth confirm "<reason>" [--policy biometry|any|biometry-or-watch] [--reuse <seconds>]
 
-  Secret vault (keychain-backed; values never on argv, in logs, or in results):
+  Secret vault (keychain-backed; values stay off argv; output masking depends on the command):
   interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <s>]
                                              Opens the native box (secure field + confirm). Default gate: none (unattended).
   interceptor macos secret set <name> --stdin [same flags]   Headless: value from stdin (hidden TTY prompt without --stdin)

@@ -4,6 +4,7 @@ import { isVisible } from "./element-discovery"
 import { getEffectiveRole, getAccessibleName } from "./a11y-tree"
 import { scrollIntoViewIfNeeded, dispatchClickSequence } from "./input-simulation"
 import { handleInputText, handleCheck } from "./actions/type"
+import { isSensitive, safeText } from "./sensitive"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
@@ -118,7 +119,7 @@ export function findAccessibleElements(rawQuery: string, rawRole: string, limit 
       if (id?.includes(query)) score += 50
       const placeholder = el.getAttribute("placeholder")?.toLowerCase()
       if (placeholder?.includes(query)) score += 40
-      const value = ((el as HTMLInputElement).value || "").toLowerCase()
+      const value = isSensitive(el) ? "" : ((el as HTMLInputElement).value || "").toLowerCase()
       if (value.includes(query)) score += 30
     }
 
@@ -143,7 +144,7 @@ export async function handleFindElement(action: Action): Promise<ActionResult> {
   const data: Record<string, unknown> = { query, mode }
 
   if (mode !== "elements") {
-    data.text = findRenderedText(document.body?.innerText || "", query, limit)
+    data.text = findRenderedText(document.body ? safeText(document.body, true) : "", query, limit)
   }
   if (mode !== "text") {
     data.elements = findAccessibleElements(query, role, limit)
@@ -170,7 +171,7 @@ export async function handleFindAndType(action: Action): Promise<ActionResult> {
   const match = findBestMatch(action.name as string | undefined, action.role as string | undefined, action.text as string | undefined)
   if (!match) return { success: false, error: "no matching element found (score < 30)" }
   const typeResult = await handleInputText({ type: "input_text", ref: match.refId, text: action.inputText as string, clear: action.clear, sensitive: action.sensitive })
-  return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: typeResult } }
+  return { ...typeResult, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: typeResult } }
 }
 
 export async function handleFindAndCheck(action: Action): Promise<ActionResult> {

@@ -371,6 +371,12 @@ interceptor inspect                           # Tree + text + network log + head
 
 The legacy individual commands (`interceptor tab new`, `interceptor tree`, `interceptor click`, etc.) still work, but the compound commands above are preferred — they reduce round-trips and agent deliberation time.
 
+## Browser form behavior
+
+Native dropdowns accept an exact option value or one exact label: `interceptor select e12 "California"`. Native `type` and `act <ref> <value>` use the same validation. Invalid, ambiguous, disabled, and non-native selections fail without clearing the current choice. A multiple select replaces its selection with one option. Read afterward to verify application state; use click/read for custom dropdowns and refs for `check`.
+
+Tree, forms, text/HTML, query, and snapshot reads mask password inputs and credential-marked fields, including those reads through MCP. Scene reads can still expose field values. This is field masking, not protection against eval, screenshots, network/storage capture, or credentials copied elsewhere by a page.
+
 ## Core Concepts
 
 **Element Refs** — `interceptor tree` returns elements with refs like `e1`, `e5`, `e23`. Use these to click, type, hover. A ref stays valid while its element is still in the DOM (scrolling and layout flicker do not invalidate it); navigation, a rerender that recreates the node, or removal does. A ref whose element left the DOM fails as `stale element [eN] … nothing was clicked`; it is never re-bound to another element with the same label, so run `read` again for fresh refs (`find "<name>"` is the verb for search).
@@ -1302,7 +1308,7 @@ See [`docs/native/document.md`](docs/native/document.md) for PDFKit / DataDetect
 
 #### Secret vault (keychain-backed credentials, delivered by name)
 
-Passwords and passcodes never travel as literal text. Store them once, then reference them by name on any surface; the daemon resolves the value after logging the action (name only), checks the secret's target allowlist against the real target, and hands it to exactly one delivery leg. The value never appears on argv, in the daemon log, the events file, monitor artifacts, MCP results, or `interceptor diagnose`.
+Store credentials once and reference them by name. The daemon logs the action by name, checks the secret's target allowlist, and resolves the value for delivery without putting it on argv. The monitor masks credential fields. Subsequent browser reads follow the masking boundary described under Browser form behavior; credentials are not scrubbed from every possible command result.
 
 ```bash
 interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <s>]

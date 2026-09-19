@@ -1,3 +1,4 @@
+import { safeText } from "./sensitive"
 import { isVisible, isInteractive, INTERACTIVE_TAGS, INTERACTIVE_ROLES, getShadowRoot } from "./element-discovery"
 import { getOrAssignRef } from "./ref-registry"
 import { getRelevantAttrs, getStyleBundle } from "./element-tree"
@@ -131,7 +132,7 @@ export function getAccessibleName(el: Element): string {
   const title = el.getAttribute("title")
   if (title && title.trim()) return title.trim()
 
-  return (el.textContent || "").trim().slice(0, 80)
+  return safeText(el).trim().slice(0, 80)
 }
 
 // Convert `getRelevantAttrs` output like `type="submit" href="/x"` into compact
