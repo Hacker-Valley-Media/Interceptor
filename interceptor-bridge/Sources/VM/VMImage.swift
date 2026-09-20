@@ -81,6 +81,7 @@ public struct VMImage: Sendable {
         guard imageSpec == "latest" else {
             throw VMImageError.unsupportedKind("macos image must be a .ipsw path or 'latest'")
         }
+        #if arch(arm64)
         let restoreImage: VZMacOSRestoreImage
         do {
             restoreImage = try await VZMacOSRestoreImage.latestSupported
@@ -106,10 +107,15 @@ public struct VMImage: Sendable {
             throw VMImageError.downloadFailed("move IPSW into place: \(error.localizedDescription)")
         }
         return localURL
+        #else
+        // VZMacOSRestoreImage is Apple-silicon-only in the SDK.
+        throw VMImageError.downloadFailed("'latest' macOS restore image requires an Apple silicon host")
+        #endif
     }
 
     /// `mostFeaturefulSupportedConfiguration` for a given IPSW. Used by
     /// `MacRuntime` to pick the hardware model + minimum CPU/memory.
+    #if arch(arm64)
     public static func loadRestoreImage(at url: URL) async throws -> VZMacOSRestoreImage {
         do {
             return try await VZMacOSRestoreImage.image(from: url)
@@ -117,6 +123,7 @@ public struct VMImage: Sendable {
             throw VMImageError.missingFile("VZMacOSRestoreImage.image(from: \(url.path)): \(error.localizedDescription)")
         }
     }
+    #endif
 #endif
 
     /// Resolve an OCI image reference to a local cached path. Linux runtime.

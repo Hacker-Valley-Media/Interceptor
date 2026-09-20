@@ -76,12 +76,18 @@ public struct VMSnapshot: Sendable {
 
         if mode != .diskOnly {
             let saveURL = bundle.snapshotFile(tag: tag)
+            #if arch(arm64)
             do {
                 try await vm.saveMachineStateTo(url: saveURL)
                 hasPaused = true
             } catch {
                 throw VMSnapshotError.ioFailure("saveMachineStateTo: \(error.localizedDescription)")
             }
+            #else
+            // VZVirtualMachine save/restore of machine state is declared only for Apple silicon in the SDK.
+            _ = saveURL
+            throw VMSnapshotError.notSupported("paused-state snapshots require Apple silicon; use diskOnly on Intel")
+            #endif
         }
 
         if mode != .pausedStateOnly {
@@ -148,11 +154,16 @@ public struct VMSnapshot: Sendable {
 
         if !diskOnly && manifest.hasPausedState {
             let saveURL = bundle.snapshotFile(tag: tag)
+            #if arch(arm64)
             do {
                 try await vm.restoreMachineStateFrom(url: saveURL)
             } catch {
                 throw VMSnapshotError.ioFailure("restoreMachineStateFrom: \(error.localizedDescription)")
             }
+            #else
+            _ = saveURL
+            throw VMSnapshotError.notSupported("paused-state restore requires Apple silicon; use diskOnly on Intel")
+            #endif
         }
 
         return manifest
@@ -169,12 +180,17 @@ public struct VMSnapshot: Sendable {
             throw VMSnapshotError.missing("snapshot '\(tag)' has no paused machine state")
         }
         let saveURL = bundle.snapshotFile(tag: tag)
+        #if arch(arm64)
         do {
             try await vm.restoreMachineStateFrom(url: saveURL)
         } catch {
             throw VMSnapshotError.ioFailure("restoreMachineStateFrom: \(error.localizedDescription)")
         }
         return manifest
+        #else
+        _ = saveURL
+        throw VMSnapshotError.notSupported("paused-state restore requires Apple silicon; use diskOnly on Intel")
+        #endif
     }
 #endif
 
