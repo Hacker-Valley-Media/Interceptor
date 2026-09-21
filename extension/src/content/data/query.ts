@@ -1,14 +1,15 @@
 import { isSensitive, safeHtml, safeText, SECURE_MASK } from "../sensitive"
 import { resolveElement } from "../input-simulation"
 import { getOrAssignRef } from "../ref-registry"
+import { queryAllDeep, queryOneDeep } from "../deep-query"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
 
 export async function handleQuery(action: Action): Promise<ActionResult> {
   const selector = action.selector as string
-  const els = document.querySelectorAll(selector)
-  const elements = Array.from(els).slice(0, 20).map((el, i) => ({
+  const els = queryAllDeep(selector)
+  const elements = els.slice(0, 20).map((el, i) => ({
     index: i,
     ref: getOrAssignRef(el),
     tag: el.tagName.toLowerCase(),
@@ -30,7 +31,7 @@ export async function handleQuery(action: Action): Promise<ActionResult> {
 }
 
 export async function handleQueryOne(action: Action): Promise<ActionResult> {
-  const el = document.querySelector(action.selector as string)
+  const el = queryOneDeep(action.selector as string)
   if (!el) return { success: false, error: `no element matching: ${action.selector}` }
   return {
     success: true, data: {
@@ -44,12 +45,12 @@ export async function handleQueryOne(action: Action): Promise<ActionResult> {
 }
 
 export async function handleExists(action: Action): Promise<ActionResult> {
-  const el = document.querySelector(action.selector as string)
+  const el = queryOneDeep(action.selector as string)
   return { success: true, data: !!el }
 }
 
 export async function handleCount(action: Action): Promise<ActionResult> {
-  const els = document.querySelectorAll(action.selector as string)
+  const els = queryAllDeep(action.selector as string)
   return { success: true, data: els.length }
 }
 
