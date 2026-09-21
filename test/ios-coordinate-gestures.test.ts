@@ -139,6 +139,13 @@ describe("ios gesture argument parsing", () => {
     expect(bad.code).toBe(1)
     expect(bad.stderr).toContain("seconds")
   })
+
+  test("drag refuses a hold longer than the gesture deadline can report", () => {
+    expect(buildIosDragAction(["ios", "drag", "10,20", "10,20", "--duration", "55"]).duration).toBe(55)
+    const tooLong = exits(() => buildIosDragAction(["ios", "drag", "10,20", "10,20", "--duration", "61"]))
+    expect(tooLong.code).toBe(1)
+    expect(tooLong.stderr).toContain("at most 55")
+  })
 })
 
 describe("ios gesture transport deadline", () => {

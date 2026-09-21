@@ -46,7 +46,7 @@ function positionalsExcept(args: string[], start: number, valueFlags: string[]):
   return out
 }
 
-/** `ios scroll [<ref> | --x N --y N] --dir <d>`: half a coordinate pair is an error, not a swipe from the center. */
+/** `ios scroll [<ref> | --x N --y N] [--dir <d>]`: half a coordinate pair is an error, not a swipe from the center. */
 export function buildIosScrollAction(args: string[]): Action {
   const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
   const x = numFlag(args, "--x"), y = numFlag(args, "--y")
@@ -55,6 +55,8 @@ export function buildIosScrollAction(args: string[]): Action {
   }
   return { type: "ios_scroll", ref, x, y, dir: flagValue(args, "--dir") ?? "down" }
 }
+
+export const MAX_IOS_DRAG_DURATION_S = 55
 
 /** `ios drag <from> <to> [--duration s]`: each end is a ref or "x,y"; the same point twice is a long press. */
 export function buildIosDragAction(args: string[]): Action {
@@ -67,6 +69,11 @@ export function buildIosDragAction(args: string[]): Action {
   const duration = raw === undefined ? undefined : Number(raw)
   if (duration !== undefined && !(Number.isFinite(duration) && duration >= 0)) {
     console.error("error: ios drag --duration takes seconds, for example 0.6 or 2"); process.exit(1)
+  }
+  // The CLI, the daemon, and the runner channel all stop waiting at 60 s. A longer hold could
+  // still land after the caller was told it timed out, so refuse it before anything is sent.
+  if (duration !== undefined && duration > MAX_IOS_DRAG_DURATION_S) {
+    console.error(`error: ios drag --duration is at most ${MAX_IOS_DRAG_DURATION_S} seconds (the gesture deadline is 60 s)`); process.exit(1)
   }
   return { type: "ios_drag", from, to, duration }
 }
@@ -153,8 +160,8 @@ Drive a phone (add --on <name>, or it uses your only phone):
   type    <ref> "text" | --secret <name>     focus + type (a vault secret by name never shows the value)
   keys    "text" | --secret <name>           type into the focused field
   unlock  --secret <name> | --probe          lock screen: wake, swipe up, type the passcode (runner must be resident)
-  scroll  [<ref> | --x N --y N] --dir up|down|left|right
-                                             swipe from a ref, a point, or (bare) the screen center
+  scroll  [<ref> | --x N --y N] [--dir up|down|left|right]
+                                             swipe from a ref, a point, or (bare) the screen center; --dir defaults to down
   drag    <from> <to> [--duration s]         each end is a ref or x,y (120,330); the same point twice is a long press
   press   home|lock|volume-up|volume-down    hardware button
   screenshot                                 capture the screen
