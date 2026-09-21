@@ -38,8 +38,26 @@ export function redactSensitiveText(text: string, root: Element): string {
   return text
 }
 
+// `innerText` is layout-dependent, and Chrome does not run layout for a tab
+// that has never been foregrounded. In a background tab — the default for
+// `interceptor open`, and the only state a container ever has — `innerText`
+// returns "" for a body that is full of text, so `text`, `find` and `state`
+// all reported an empty page while `textContent` held every word. `??` did not
+// catch this: the value is an empty string, not null.
+//
+// Falling back only when the rendered read came back blank keeps `innerText`'s
+// advantages (it honours display:none and collapses whitespace the way a reader
+// sees it) everywhere they are actually available, and degrades to raw text
+// only where the alternative is nothing at all.
+function renderedText(el: Element): string {
+  const rendered = (el as HTMLElement).innerText
+  if (rendered && rendered.trim()) return rendered
+  const raw = el.textContent ?? ""
+  return raw.trim() ? raw : rendered ?? raw
+}
+
 export function safeText(el: Element, rendered = false): string {
-  const text = rendered ? (el as HTMLElement).innerText ?? el.textContent ?? "" : el.textContent || ""
+  const text = rendered ? renderedText(el) : el.textContent || ""
   if (isSensitive(el)) return text ? SECURE_MASK : ""
   return redactSensitiveText(text, el)
 }
