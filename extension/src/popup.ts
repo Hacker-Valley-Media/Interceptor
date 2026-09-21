@@ -226,7 +226,7 @@ if (hasTabGroups) {
   const purgeHint = document.createElement("div")
   purgeHint.style.cssText = "margin-top:4px;font-size:11px;color:#888;line-height:1.35;"
   purgeHint.textContent =
-    "Closes every tab in an idle Interceptor group, including pinned and unsaved-form tabs, so the group disappears from the tab strip. Waits while you are looking at one of its tabs or one is playing sound. Needs an idle window above 0."
+    "Closes every tab in an idle Interceptor group, including tabs with unsaved form input and a window's last tab, so the group disappears from the tab strip. Waits while you are looking at one of its tabs or one is playing sound. Needs an idle window above 0."
   lcWrap.appendChild(purgeHint)
 
   const lcRow = document.createElement("div")

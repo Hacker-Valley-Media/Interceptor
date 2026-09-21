@@ -16,8 +16,10 @@
  *   closeGroupWhenDone
  *                    Opt-in. Turns the guarded sweep into a FULL PURGE: when a
  *                    managed group goes idle, every tab in it is removed and the
- *                    group disappears from the tab strip — no active/pinned/audible/
- *                    last-tab/dirty-form exceptions. It exists because the guarded
+ *                    group disappears from the tab strip: no last-tab or dirty-form
+ *                    exceptions, and an active tab goes too unless a person is on it
+ *                    (a pinned tab is never in a group: Chrome ungroups it when it is
+ *                    pinned, so G3 has nothing to guard). It exists because the guarded
  *                    sweep routinely leaves a group standing forever: an agent that
  *                    typed into any form makes its tab permanently "dirty" (and an
  *                    all-dirty pass re-stamps the idle clock), and the last tab of
@@ -192,9 +194,9 @@ export function selectSweepCandidates(tabs: SweepTab[], ctx: SweepContext): numb
 
 /**
  * Full-purge plan for `closeGroupWhenDone`: every tab in the idle group goes.
- * The guards are deliberately absent — an opt-in "delete the group when the
- * session is done" that still spares the active/pinned/audible/last tab does
- * not delete the group, which is the complaint this option answers.
+ * The last-tab and dirty-form guards are deliberately absent: an opt-in "delete
+ * the group when the session is done" that still spares those tabs does not
+ * delete the group, which is the complaint this option answers.
  *
  * The one thing it will not do is take the browser down with the group.
  * `chrome.tabs.remove` of a window's last tab closes that window, and on
