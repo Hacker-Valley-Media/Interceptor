@@ -30,7 +30,12 @@ interceptor macos vision text                      # OCR — read printed text i
 interceptor macos vision faces                     # Face detection (bounding boxes + landmarks)
 interceptor macos vision hands                     # Hand pose (21-joint model)
 interceptor macos vision bodies                    # Body pose
+interceptor macos vision classify                  # Scene and object labels with confidence
+interceptor macos vision saliency                  # Regions that draw attention
+interceptor macos vision text --image shot.png     # Any verb over a saved image file instead of a window
 ```
+
+`--app <name>` picks a window; without it the frontmost window is used. `--image <path>` replaces the window with a file: nothing is captured, no app has to be open, a relative path resolves from your working directory, and an EXIF rotation tag is applied first. It is how an iPhone screen is read from the Mac (`interceptor ios screenshot`, then `vision text --image <path>`). `--image` and `--app` cannot be combined.
 
 Use vision when text or pixel-region content is needed and the AX tree is opaque (rendered HTML in a WKWebView, image-only documents, video frames).
 

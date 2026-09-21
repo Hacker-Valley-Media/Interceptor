@@ -29,6 +29,8 @@ Omit `--on <name>` when only one phone is set up — it's used by default. Set a
 
 Treat `eN` refs as short-lived. The UI changes between calls; **re-read with `interceptor ios tree` before acting**. Refs carry frames and resolve to coordinates, so a tap is deterministic even if the underlying element handle went stale.
 
+Apps with no usable tree (games, canvases): `click`, `drag`, and `scroll` also take screen points, `drag X,Y X,Y --duration 2` is a long press, and `interceptor macos vision text --image <screenshot>` reads the screen. The recipe and the box-to-point conversion are in the [command catalog](references/command-catalog.md).
+
 ## The Model
 
 - **The device dials in.** Ordinary runner verbs auto-launch on an unlocked phone and connect back over the network. The daemon hands the runner a VPN (Tailscale) address when the Mac has one, because iOS silently denies a backgrounded runner's LAN connection until the user has granted it Local Network access (Settings › Privacy & Security › Local Network), and a VPN address is exempt from that check; `interceptor ios status` shows the address as `dialBack` / `dialBackVia`. Put the phone on the same VPN, or grant that switch once and LAN dial-back works too. Unlock and its probe require an already connected resident runner and do not auto-launch.

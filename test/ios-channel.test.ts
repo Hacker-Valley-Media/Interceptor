@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { RunnerChannel } from "../daemon/ios/channel"
+import { parseIosPoint } from "../daemon/ios/manager"
 import { IosRefRegistry, formatWdaTree, frameCenter, type WdaSourceNode } from "../daemon/ios/tree"
 
 // Locks the InterceptorRunner WS protocol: the manager sends
@@ -13,6 +14,11 @@ function fakeSocket() {
 }
 
 describe("RunnerChannel WS protocol", () => {
+  test("coordinate drags accept x,y points without mistaking refs for points", () => {
+    expect(parseIosPoint("120.5,330")).toEqual({ x: 120.5, y: 330 })
+    expect(parseIosPoint("e12")).toBeUndefined()
+  })
+
   test("tap sends an op frame with coordinates and resolves on success", async () => {
     const { sent, ws } = fakeSocket()
     const ch = new RunnerChannel(ws)

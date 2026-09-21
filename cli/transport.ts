@@ -43,6 +43,15 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   ios_app: 60_000,
   ios_type: 60_000,
   ios_screenshot: 60_000,
+  // Runner gestures wait for the app to settle, and a long press holds for its
+  // whole --duration: at the generic 15 s a 16 s hold that had landed came back
+  // as "outcome unknown". Only these; the device-service lanes (top, proc, web)
+  // fail by timing out, and a dead lane must keep reporting fast.
+  ios_click: 60_000,
+  ios_keys: 60_000,
+  ios_press: 60_000,
+  ios_scroll: 60_000,
+  ios_drag: 60_000,
   ios_setup: 600_000,
   ios_refresh: 600_000,
   ios_enable: 120_000,
