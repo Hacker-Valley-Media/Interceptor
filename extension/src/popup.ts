@@ -171,7 +171,12 @@ if (hasTabGroups) {
     }).catch(() => undefined)
   }
   const lockAsManaged = (container: HTMLElement, controls: Array<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>) => {
-    for (const el of controls) el.disabled = true
+    for (const el of controls) {
+      el.disabled = true
+      // The Save buttons carry an inline background, so a disabled one still looks live.
+      el.style.opacity = "0.45"
+      el.style.cursor = "not-allowed"
+    }
     const note = document.createElement("div")
     note.className = "managedNote"
     note.style.cssText = "margin-top:4px;font-size:11px;color:#b25000;line-height:1.35;"

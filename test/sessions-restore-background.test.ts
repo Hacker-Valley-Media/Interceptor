@@ -89,7 +89,7 @@ describe("sessions restore is background-first", () => {
     const data = result.data as { method: string; tabs: Array<{ group: string; reused: boolean }>; note: string }
     expect(data.method).toBe("reopen")
     expect(data.tabs).toHaveLength(1)
-    expect(data.tabs[0]).toMatchObject({ group: "lane1", reused: false })
+    expect(data.tabs[0]).toMatchObject({ group: "lane1", reused: false, url: "https://a.example/" })
     expect(data.note).toContain("--activate")
   })
 

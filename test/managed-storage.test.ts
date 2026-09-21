@@ -82,6 +82,7 @@ describe("popup under a managed policy", () => {
     const p = await openPopup({ tabLifecycle: { reuse: false, idleCloseMinutes: 3, closeGroupWhenDone: true } }, "managed")
     expect([p.reuse.checked, p.idle.value, p.purge.checked]).toEqual([false, "3", true])
     expect([p.reuse.disabled, p.idle.disabled, p.purge.disabled, p.save.disabled]).toEqual([true, true, true, true])
+    expect(p.save.style.opacity).toBe("0.45")
     expect(p.brandSave.disabled).toBe(false)
     expect(p.notes).toBe(1)
   })

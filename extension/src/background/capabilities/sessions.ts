@@ -46,7 +46,8 @@ export async function handleSessionActions(
         const created = await handleTabActions(
           { type: "tab_create", url, reuse: false, group, groupColor: action.groupColor }, 0)
         if (!created.success) return created
-        reopened.push(created.data)
+        // A tab created in the background has no committed url yet; report the one asked for.
+        reopened.push({ ...(created.data as Record<string, unknown>), url })
       }
       recordGroupActivity(group ?? "")
       return {
