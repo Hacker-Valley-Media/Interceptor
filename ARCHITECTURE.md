@@ -362,7 +362,7 @@ CLI↔daemon IPC and the daemon↔extension channels use length-prefixed frames 
 - AX tree + CGEvent input (`AccessibilityDomain`, `InputDomain`, `AppsDomain`, `MenuDomain`)
 - ScreenCaptureKit (`CaptureDomain`, `StreamDomain`, `DisplayDomain`)
 - AVFoundation + speech + sound classification (`SpeechDomain`, `SoundDomain`, `AudioDomain`)
-- Vision + NLP + on-device LLM (`VisionDomain`, `NLPDomain`, `IntelligenceDomain`)
+- Vision + NLP + on-device LLM (`VisionDomain`, `NLPDomain`, `IntelligenceDomain`). Every Vision verb draws its image from one `acquireImage`: a live stream frame, a window capture, or, with `--image <path>`, a saved file. The CLI sends an absolute path because the bridge's working directory is `/`. The file source decodes with ImageIO and bakes the EXIF orientation into the pixels (ImageIO does not apply it on decode), so a rotated phone capture is recognized upright, and no ScreenCaptureKit or CGS call is made. ImageIO reports every failure as nil, so `imageFailureMessage` works out whether the path is unreachable, a directory, unreadable, or not an image; `failed to capture screen` is reserved for a capture.
 - File watch / notifications / clipboard (`FilesDomain`, `NotificationsDomain`, `ClipboardDomain`)
 - Sensitive content + log query + container + URL fetch (`SensitiveDomain`, `LogDomain`, `ContainerDomain`, `NetDomain`)
 - Native macOS monitor (`MonitorDomain`) — same JSON event schema as browser monitor
@@ -510,9 +510,21 @@ Bun, no `go-ios`/`pymobiledevice3`) remains only as a deprecated escape hatch.
 The runner's element-tree snapshot is parsed into a ref-registered tree
 (`daemon/ios/tree.ts`) mirroring the macOS AX output; **refs carry frames so
 actuation is a deterministic coordinate tap** (robust against handle staleness).
+`drag` and `scroll` take the same screen points directly for apps with no usable
+tree. Each drag end resolves on its own (`x,y` is a point, anything else is a ref),
+and a drag between one point and itself with `--duration` is the long press: the
+runner's `press(forDuration:thenDragTo:)` already took raw coordinates, so this is
+host-side only. `scroll` swipes from the screen center only when no origin was
+named; a ref that does not resolve or half of `--x`/`--y` is an error and no
+gesture is sent.
 Screenshots are VLM-budget resized via `sips -Z` (no new dependency). iOS
-XCUITest AX ops are slow, so `ios_*` actions get an elevated request timeout
-(`daemon/index.ts`, `cli/transport.ts`).
+XCUITest AX ops are slow, so the daemon gives every `ios_*` action 60 s
+(`daemon/index.ts`). The CLI deadline is per action (`ACTION_TIMEOUT_OVERRIDES_MS`
+in `cli/transport.ts`), not a blanket rule: the runner verbs, including the
+gestures (`ios_click`, `ios_keys`, `ios_press`, `ios_scroll`, `ios_drag`), wait
+60 s so a long press can hold for its whole `--duration`, while the
+device-service lanes keep short entries because they report a dead lane by
+timing out and that deadline is also their failure latency.
 
 Routing: an `ios:`-prefixed `contextId` (or an `ios_*` lifecycle/verb action) is
 routed to `iosManager` in both the socket and WebSocket daemon handlers, exactly

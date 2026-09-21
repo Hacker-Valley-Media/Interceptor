@@ -157,7 +157,7 @@ const MAP_MACOS = `MACOS — native apps via the accessibility tree, background-
   Capture    macos screenshot (occluded/minimized windows too) · capture · stream · display
   Scripts    macos script run --jxa|--jsc|--script · intent dispatch (Apple Events, no foregrounding)
   System     macos clipboard · notifications · files · fs read|write|search · url · log query
-  Media/AI   macos vision (OCR any window) · listen (speech-to-text) · nlp · ai prompt · audio · sounds
+  Media/AI   macos vision (OCR any window or image file) · listen (speech-to-text) · nlp · ai prompt · audio · sounds
   Docs/data  macos pdf · detect · translate · thumbnail · calendar · reminders · contacts · photos · location · music · maps · share
   Electron   macos cdp discover|connect|app attach     drive an Electron/Chromium app's web contents
   Runtime    macos runtime enable|tree|read|eval|mutate     in-process control of a running native app
@@ -658,7 +658,7 @@ macOS Bridge (full install only):
   interceptor macos vad status|start|stop
   interceptor macos sounds status|start|stop [--filter <pat>]
   interceptor macos audio output|input start|stop [--app <name>] [--save]
-  interceptor macos vision text|faces|hands|bodies [--app <name>]
+  interceptor macos vision text|faces|hands|bodies|classify|saliency [--app <name> | --image <path>]
   interceptor macos nlp entities|language|sentiment|tokens "<text>"
   interceptor macos nlp similar "<word1>" "<word2>"
   interceptor macos ai status|prompt "<prompt>"

@@ -156,7 +156,7 @@ These commands inspect Finder without activating it. Use returned element refere
 | Area | Capabilities |
 |---|---|
 | App control | Accessibility trees, text and values, clicks, typing, keyboard input, scrolling, dragging, menus, app lifecycle, and window placement. |
-| Capture and perception | Covered/minimized-window screenshots, screen streaming, OCR and vision, system/microphone audio, speech recognition, sound classification, and language analysis. |
+| Capture and perception | Covered/minimized-window screenshots, screen streaming, OCR and vision over a window or a saved image file (including an iPhone screenshot), system/microphone audio, speech recognition, sound classification, and language analysis. |
 | Files and system work | Spotlight search, file reads/writes/watchers, clipboard, URL fetching, OS logs, AppleScript/JXA, JavaScriptCore scripts, and Apple Events. |
 | Documents | PDF text, forms, annotations, merge/split operations, data detection, translation, and thumbnails. |
 | Personal apps | Calendar, reminders, contacts, photos, location, music, maps, sharing, and notifications through the corresponding system frameworks and permissions. |
@@ -183,7 +183,7 @@ interceptor ios tree
 
 | Area | Capabilities |
 |---|---|
-| App interaction | Ref-tagged element trees, find/inspect, taps, text, scrolling, dragging, hardware buttons, screenshots, and app launch/activate/terminate. |
+| App interaction | Ref-tagged element trees, find/inspect, taps, text, scrolling, dragging, long presses, hardware buttons, screenshots, and app launch/activate/terminate. Taps, drags, and swipes also take screen coordinates, for games and canvas apps with no element tree. |
 | On-device scripts | `ios eval` runs JavaScript inside the runner, combining UI reads, decisions, and actions in one request. |
 | Developer telemetry | Process lists, CPU/memory and GPU sampling, app launch with arguments, and location simulation through supported device services. |
 | Web content | `ios web` inspects exposed Safari and WKWebView targets: page structure, JavaScript, console, and network activity. |
