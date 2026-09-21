@@ -1,15 +1,11 @@
 var __defProp = Object.defineProperty;
-var __returnValue = (v) => v;
-function __exportSetter(name, newValue) {
-  this[name] = __returnValue.bind(null, newValue);
-}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: __exportSetter.bind(all, name)
+      set: (newValue) => all[name] = () => newValue
     });
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
@@ -43,8 +39,15 @@ function redactSensitiveText(text, root) {
   }
   return text;
 }
+function renderedText(el) {
+  const rendered = el.innerText;
+  if (rendered && rendered.trim())
+    return rendered;
+  const raw = el.textContent ?? "";
+  return raw.trim() ? raw : rendered ?? raw;
+}
 function safeText(el, rendered = false) {
-  const text = rendered ? el.innerText ?? el.textContent ?? "" : el.textContent || "";
+  const text = rendered ? renderedText(el) : el.textContent || "";
   if (isSensitive(el))
     return text ? SECURE_MASK : "";
   return redactSensitiveText(text, el);
@@ -574,9 +577,9 @@ var init_a11y_tree = __esm(() => {
 // extension/src/content/snapshot-diff.ts
 var exports_snapshot_diff = {};
 __export(exports_snapshot_diff, {
-  cacheSnapshot: () => cacheSnapshot,
+  lastSnapshot: () => lastSnapshot,
   computeSnapshotDiff: () => computeSnapshotDiff,
-  lastSnapshot: () => lastSnapshot
+  cacheSnapshot: () => cacheSnapshot
 });
 function cacheSnapshot() {
   const entries = [];
@@ -721,6 +724,25 @@ function getKeyCode(key) {
     return `Key${key.toUpperCase()}`;
   return KEY_CODES[key] || `Key${key.toUpperCase()}`;
 }
+function getLegacyKeyCode(key) {
+  const named = LEGACY_KEY_CODES[key];
+  if (named !== undefined)
+    return named;
+  if (key.length !== 1)
+    return 0;
+  return key.toUpperCase().charCodeAt(0);
+}
+function withLegacyCodes(event, keyCode, charCode) {
+  for (const [name, value] of [["keyCode", keyCode], ["which", keyCode], ["charCode", charCode]]) {
+    try {
+      Object.defineProperty(event, name, { get: () => value, configurable: true });
+    } catch {}
+  }
+  return event;
+}
+function producesKeypress(key) {
+  return key === "Enter" || key === "Space" || key.length === 1;
+}
 function dispatchKeySequence(target, combo) {
   const parts = combo.split("+");
   const key = parts[parts.length - 1];
@@ -731,10 +753,15 @@ function dispatchKeySequence(target, combo) {
     metaKey: parts.includes("Meta")
   };
   const code = getKeyCode(key);
-  const keyOpts = { key, code, bubbles: true, cancelable: true, ...modifiers };
-  target.dispatchEvent(new KeyboardEvent("keydown", keyOpts));
-  target.dispatchEvent(new KeyboardEvent("keypress", keyOpts));
-  target.dispatchEvent(new KeyboardEvent("keyup", keyOpts));
+  const legacy = getLegacyKeyCode(key);
+  const base = { key, code, bubbles: true, cancelable: true, ...modifiers };
+  const fire = (type, keyCode, charCode) => target.dispatchEvent(withLegacyCodes(new KeyboardEvent(type, { ...base, keyCode, charCode, which: charCode || keyCode }), keyCode, charCode));
+  const notCancelled = fire("keydown", legacy, 0);
+  if (notCancelled && producesKeypress(key)) {
+    const charCode = key === "Enter" ? 13 : key === "Space" ? 32 : key.charCodeAt(0);
+    fire("keypress", charCode, charCode);
+  }
+  fire("keyup", legacy, 0);
 }
 function waitForMutation(timeoutMs) {
   return new Promise((resolve) => {
@@ -807,7 +834,7 @@ function waitForDomStable(debounceMs = 200, timeoutMs = 5000) {
     }, debounceMs);
   });
 }
-var KEY_CODES;
+var KEY_CODES, LEGACY_KEY_CODES;
 var init_input_simulation = __esm(() => {
   init_ref_registry();
   init_element_discovery();
@@ -840,24 +867,57 @@ var init_input_simulation = __esm(() => {
     F11: "F11",
     F12: "F12"
   };
+  LEGACY_KEY_CODES = {
+    Backspace: 8,
+    Tab: 9,
+    Enter: 13,
+    Shift: 16,
+    Control: 17,
+    Alt: 18,
+    Escape: 27,
+    Space: 32,
+    " ": 32,
+    PageUp: 33,
+    PageDown: 34,
+    End: 35,
+    Home: 36,
+    ArrowLeft: 37,
+    ArrowUp: 38,
+    ArrowRight: 39,
+    ArrowDown: 40,
+    Delete: 46,
+    Meta: 91,
+    F1: 112,
+    F2: 113,
+    F3: 114,
+    F4: 115,
+    F5: 116,
+    F6: 117,
+    F7: 118,
+    F8: 119,
+    F9: 120,
+    F10: 121,
+    F11: 122,
+    F12: 123
+  };
 });
 
 // extension/src/content/scene/ops.ts
 var exports_ops = {};
 __export(exports_ops, {
-  boundingBox: () => boundingBox,
-  clickAtViewport: () => clickAtViewport,
-  clickElementCenter: () => clickElementCenter,
-  dblclickElementCenter: () => dblclickElementCenter,
-  dispatchKeysIn: () => dispatchKeysIn,
-  findAncestorScale: () => findAncestorScale,
-  findElementById: () => findElementById,
-  focusIframeTextbox: () => focusIframeTextbox,
-  isVisibleRect: () => isVisibleRect,
-  parseDocCoord: () => parseDocCoord,
-  parseScale: () => parseScale,
+  scrollElementIntoView: () => scrollElementIntoView,
   parseTranslate: () => parseTranslate,
-  scrollElementIntoView: () => scrollElementIntoView
+  parseScale: () => parseScale,
+  parseDocCoord: () => parseDocCoord,
+  isVisibleRect: () => isVisibleRect,
+  focusIframeTextbox: () => focusIframeTextbox,
+  findElementById: () => findElementById,
+  findAncestorScale: () => findAncestorScale,
+  dispatchKeysIn: () => dispatchKeysIn,
+  dblclickElementCenter: () => dblclickElementCenter,
+  clickElementCenter: () => clickElementCenter,
+  clickAtViewport: () => clickAtViewport,
+  boundingBox: () => boundingBox
 });
 function boundingBox(el) {
   const r = el.getBoundingClientRect();
@@ -1802,6 +1862,73 @@ init_input_simulation();
 // extension/src/content/actions/click.ts
 init_input_simulation();
 init_ref_registry();
+
+// extension/src/content/deep-query.ts
+init_element_discovery();
+var MAX_ROOTS = 2000;
+function collectRoots(root = document) {
+  const roots = [root];
+  for (let i = 0;i < roots.length && roots.length < MAX_ROOTS; i++) {
+    const current = roots[i];
+    let hosts;
+    try {
+      hosts = Array.from(current.querySelectorAll("*"));
+    } catch {
+      continue;
+    }
+    for (const host of hosts) {
+      const shadow = getShadowRoot(host);
+      if (shadow) {
+        roots.push(shadow);
+        if (roots.length >= MAX_ROOTS)
+          break;
+      }
+    }
+  }
+  return roots;
+}
+function queryAllDeep(selector, root = document) {
+  const direct = Array.from(root.querySelectorAll(selector));
+  const roots = collectRoots(root);
+  if (roots.length === 1)
+    return direct;
+  const seen = new Set(direct);
+  const out = [...direct];
+  for (let i = 1;i < roots.length; i++) {
+    let matches;
+    try {
+      matches = Array.from(roots[i].querySelectorAll(selector));
+    } catch {
+      continue;
+    }
+    for (const el of matches) {
+      if (seen.has(el))
+        continue;
+      seen.add(el);
+      out.push(el);
+    }
+  }
+  return out;
+}
+function queryOneDeep(selector, root = document) {
+  const direct = root.querySelector(selector);
+  if (direct)
+    return direct;
+  const roots = collectRoots(root);
+  for (let i = 1;i < roots.length; i++) {
+    let match;
+    try {
+      match = roots[i].querySelector(selector);
+    } catch {
+      continue;
+    }
+    if (match)
+      return match;
+  }
+  return null;
+}
+
+// extension/src/content/actions/click.ts
 init_a11y_tree();
 async function handleClick(action) {
   const el = resolveElement(action.index, action.ref);
@@ -1823,7 +1950,7 @@ async function handleClickSelector(action) {
     return { success: false, error: "click_selector: no selector given" };
   let matches;
   try {
-    matches = document.querySelectorAll(selector);
+    matches = queryAllDeep(selector);
   } catch {
     return { success: false, error: `click_selector: invalid CSS selector ${JSON.stringify(selector)}` };
   }
@@ -2767,8 +2894,8 @@ init_input_simulation();
 init_ref_registry();
 async function handleQuery(action) {
   const selector = action.selector;
-  const els = document.querySelectorAll(selector);
-  const elements = Array.from(els).slice(0, 20).map((el, i) => ({
+  const els = queryAllDeep(selector);
+  const elements = els.slice(0, 20).map((el, i) => ({
     index: i,
     ref: getOrAssignRef(el),
     tag: el.tagName.toLowerCase(),
@@ -2787,7 +2914,7 @@ async function handleQuery(action) {
   };
 }
 async function handleQueryOne(action) {
-  const el = document.querySelector(action.selector);
+  const el = queryOneDeep(action.selector);
   if (!el)
     return { success: false, error: `no element matching: ${action.selector}` };
   return {
@@ -2802,11 +2929,11 @@ async function handleQueryOne(action) {
   };
 }
 async function handleExists(action) {
-  const el = document.querySelector(action.selector);
+  const el = queryOneDeep(action.selector);
   return { success: true, data: !!el };
 }
 async function handleCount(action) {
-  const els = document.querySelectorAll(action.selector);
+  const els = queryAllDeep(action.selector);
   return { success: true, data: els.length };
 }
 async function handleTableData(action) {
@@ -3127,13 +3254,13 @@ init_element_discovery();
 init_a11y_tree();
 init_input_simulation();
 init_sensitive();
-function findRenderedText(renderedText, rawQuery, limit = 10, contextChars = 80) {
+function findRenderedText(renderedText2, rawQuery, limit = 10, contextChars = 80) {
   const query = rawQuery.trim();
   const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 10;
   const matches = [];
   let total = 0;
   if (query.length > 0) {
-    const haystack = renderedText.toLowerCase();
+    const haystack = renderedText2.toLowerCase();
     const needle = query.toLowerCase();
     let from = 0;
     while (from <= haystack.length - needle.length) {
@@ -3144,14 +3271,14 @@ function findRenderedText(renderedText, rawQuery, limit = 10, contextChars = 80)
       total++;
       if (matches.length < boundedLimit) {
         const snippetStart = Math.max(0, start - contextChars);
-        const snippetEnd = Math.min(renderedText.length, end + contextChars);
+        const snippetEnd = Math.min(renderedText2.length, end + contextChars);
         const prefix = snippetStart > 0 ? "…" : "";
-        const suffix = snippetEnd < renderedText.length ? "…" : "";
+        const suffix = snippetEnd < renderedText2.length ? "…" : "";
         matches.push({
           start,
           end,
-          matchedText: renderedText.slice(start, end),
-          snippet: `${prefix}${renderedText.slice(snippetStart, snippetEnd).replace(/\s+/g, " ").trim()}${suffix}`
+          matchedText: renderedText2.slice(start, end),
+          snippet: `${prefix}${renderedText2.slice(snippetStart, snippetEnd).replace(/\s+/g, " ").trim()}${suffix}`
         });
       }
       from = end;
@@ -3161,7 +3288,7 @@ function findRenderedText(renderedText, rawQuery, limit = 10, contextChars = 80)
     total,
     returned: matches.length,
     truncated: total > matches.length,
-    scannedCharacters: renderedText.length,
+    scannedCharacters: renderedText2.length,
     scanTruncated: false,
     matches
   };

@@ -2965,6 +2965,7 @@ async function runWithCspStripBypass(tabId, world, run) {
   if (retried.success) {
     return {
       ...retried,
+      warning: "page CSP refused MAIN-world eval, so the tab was reloaded with its CSP header stripped — any in-page state (open conversations, unsaved form input, in-memory app state) was discarded. Re-run with 'interceptor eval --no-reload' to get the CSP error instead of a reloaded tab.",
       data: {
         value: retried.data,
         cspBypassApplied: true,
@@ -2975,6 +2976,7 @@ async function runWithCspStripBypass(tabId, world, run) {
   return {
     success: false,
     error: retried.error || first.error || "MAIN-world eval failed after CSP bypass retry",
+    warning: "the tab was reloaded to strip its CSP header and the retry still failed, so in-page state was discarded for nothing. Use 'interceptor eval --no-reload' on pages whose state matters.",
     data: {
       originalError: first.error,
       cspBypassApplied: true
