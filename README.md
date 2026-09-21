@@ -126,7 +126,7 @@ The MCP server exposes browser, macOS, iOS, read, local, and raw tools, plus dis
 - **Files and exports:** upload local files to inputs, drop zones, and supported file pickers. Save page-produced `Blob`, buffer, or `blob:` URL bytes directly to disk with `save`, including native exports from supported web apps.
 - **Capture and browser data:** screenshots, OCR, canvas inspection, cookies, storage, history, bookmarks, downloads, and session management.
 - **Multiple tasks:** select a browser profile with `--context`, a tab with `--tab`, and a task's managed tabs with `--group`. Use a distinct group for each concurrent worker.
-- **Tab cleanup:** managed tab groups that no command has touched for 10 minutes are closed automatically, keeping tabs with unsaved form input. The extension popup changes the idle time and can delete the whole idle group instead (off by default). Administrators can set both through managed browser policy. `interceptor sessions restore <id>` reopens a closed page in the background.
+- **Tab cleanup:** when no command has touched a managed tab group for 10 minutes, Interceptor closes its idle tabs. It keeps the tab you are looking at, audible tabs, tabs with unsaved form input, and a window's last tab, so the group itself can remain. The extension popup changes the idle time and can delete the whole idle group instead (off by default). Administrators can set both through managed browser policy. `interceptor sessions restore <id>` reopens a closed page in the background.
 
 ```bash
 interceptor open "https://example.com" --group browser-task
