@@ -180,12 +180,34 @@
     brandRow.appendChild(brandSave);
     wrap.appendChild(brandRow);
     statusEl.parentElement?.insertBefore(wrap, statusEl);
-    chrome.storage.local.get("brandTabGroup").then((stored) => {
-      const b = stored.brandTabGroup;
+    const managedGet = (key) => {
+      const area = chrome.storage.managed;
+      if (!area)
+        return Promise.resolve(undefined);
+      return area.get(key).then((v) => {
+        const raw = v[key];
+        return raw && typeof raw === "object" ? raw : undefined;
+      }).catch(() => {
+        return;
+      });
+    };
+    const lockAsManaged = (container, controls) => {
+      for (const el of controls)
+        el.disabled = true;
+      const note = document.createElement("div");
+      note.className = "managedNote";
+      note.style.cssText = "margin-top:4px;font-size:11px;color:#b25000;line-height:1.35;";
+      note.textContent = "Managed by your organization. Changes here have no effect.";
+      container.appendChild(note);
+    };
+    Promise.all([chrome.storage.local.get("brandTabGroup"), managedGet("brandTabGroup")]).then(([stored, managed]) => {
+      const b = managed ?? stored.brandTabGroup;
       if (b && typeof b.title === "string")
         titleInput.value = b.title;
       if (b && typeof b.color === "string" && COLORS.includes(b.color))
         colorSelect.value = b.color;
+      if (managed)
+        lockAsManaged(wrap, [titleInput, colorSelect, brandSave]);
     });
     brandSave.addEventListener("click", async () => {
       const title = titleInput.value.trim();
@@ -248,8 +270,8 @@
     lcRow.appendChild(lcSave);
     lcWrap.appendChild(lcRow);
     statusEl.parentElement?.insertBefore(lcWrap, statusEl);
-    chrome.storage.local.get("tabLifecycle").then((stored) => {
-      const lc = stored.tabLifecycle;
+    Promise.all([chrome.storage.local.get("tabLifecycle"), managedGet("tabLifecycle")]).then(([stored, managed]) => {
+      const lc = managed ?? stored.tabLifecycle;
       if (lc && typeof lc.reuse === "boolean")
         reuseCheck.checked = lc.reuse;
       if (lc && typeof lc.idleCloseMinutes === "number" && Number.isFinite(lc.idleCloseMinutes)) {
@@ -257,6 +279,8 @@
       }
       if (lc && typeof lc.closeGroupWhenDone === "boolean")
         purgeCheck.checked = lc.closeGroupWhenDone;
+      if (managed)
+        lockAsManaged(lcWrap, [reuseCheck, idleInput, purgeCheck, lcSave]);
     });
     lcSave.addEventListener("click", async () => {
       const idle = Math.max(0, Math.round(Number(idleInput.value)));
