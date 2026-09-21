@@ -36,7 +36,7 @@
  * accessors, and registerTabLifecycle() is called ONLY from the MV3 background.ts entry.
  */
 
-import { hasTabGroupApi, ensureInterceptorGroup, hydrateNamedGroups, namedGroups } from "./tab-group"
+import { hasTabGroupApi, ensureInterceptorGroup, hydrateNamedGroups, namedGroups, readoptNamedGroups } from "./tab-group"
 
 export type TabLifecycle = { reuse: boolean; idleCloseMinutes: number; closeGroupWhenDone: boolean }
 export type TabLifecycleSource = "managed" | "local" | "default"
@@ -332,6 +332,9 @@ export async function runTabLifecycleSweep(now = Date.now()): Promise<void> {
   const groups: Array<{ label: string; groupId: number }> = []
   const defaultGid = await ensureInterceptorGroup()
   if (defaultGid !== -1) groups.push({ label: "", groupId: defaultGid })
+  // A group that changed id (moved to another window, re-created by the
+  // browser's own restore) is otherwise invisible here until `group list` runs.
+  await readoptNamedGroups()
   for (const [label, gid] of namedGroups) groups.push({ label, groupId: gid })
   if (groups.length === 0) return
 

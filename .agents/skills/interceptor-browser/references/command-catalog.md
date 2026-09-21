@@ -280,6 +280,16 @@ Chrome/Brave profiles auto-generate stable UUIDs on first run (stored in `chrome
 
 Primary use cases: multiple Chrome profiles logged in to different accounts, or Chrome/Brave and Safari connected to the same daemon simultaneously.
 
+## Recently closed tabs
+
+```bash
+interceptor sessions [max]                          # Recently closed tabs and windows, newest first, with sessionIds
+interceptor sessions restore <id>                   # Reopen the page(s) as background tabs in your group; your active tab does not change
+interceptor sessions restore <id> --activate        # The browser's own restore: keeps history and form state, brings the tab to the front
+```
+
+The default gives up back/forward history and form state, and the entry stays in the list. An id is required: the no-argument form would reopen whatever closed most recently, which may be the user's own window. This is the undo for a tab the idle sweep closed.
+
 ## Capabilities + Reload
 
 ```bash

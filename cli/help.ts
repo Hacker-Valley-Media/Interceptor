@@ -300,7 +300,8 @@ Page meta and data (one call each):
   interceptor notify <title> <message...>    Post a browser notification
   interceptor events [--tail] [--since <ms>] Daemon event log (request timings, timeouts)
   interceptor sessions [max]                 Recently closed tabs / windows (chrome.sessions)
-  interceptor sessions restore <id>          Restore a closed session entry
+  interceptor sessions restore <id>          Reopen a closed tab/window in the background, in your group
+  interceptor sessions restore <id> --activate   Browser's own restore (keeps history; brings the tab to the front)
   interceptor session start|end              Mark a CLI session (advisory; enables batch hints)
   interceptor history "<query>" [max]        Search browser history
   interceptor history delete <url>           Remove a history entry

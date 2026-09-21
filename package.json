@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "./scripts/build.sh",
-    "typecheck": "bunx tsc -p tsconfig.host.json && bunx tsc -p tsconfig.extension.json && bunx tsc -p tsconfig.json",
+    "typecheck": "bun x tsc -p tsconfig.host.json && bun x tsc -p tsconfig.extension.json && bun x tsc -p tsconfig.json",
     "test": "bun test",
     "audit:capability-blind": "bash scripts/audit-capability-blind.sh",
     "daemon": "bun run daemon/index.ts",

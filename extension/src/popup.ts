@@ -160,10 +160,30 @@ if (hasTabGroups) {
 
   statusEl.parentElement?.insertBefore(wrap, statusEl)
 
-  void chrome.storage.local.get("brandTabGroup").then((stored) => {
-    const b = (stored as { brandTabGroup?: { title?: unknown; color?: unknown } }).brandTabGroup
+  // A managed policy outranks this popup (managed > local), so show what is in
+  // force and lock the controls instead of saving a value that would lose.
+  const managedGet = (key: string): Promise<Record<string, unknown> | undefined> => {
+    const area = (chrome.storage as unknown as { managed?: chrome.storage.StorageArea }).managed
+    if (!area) return Promise.resolve(undefined)
+    return area.get(key).then((v) => {
+      const raw = (v as Record<string, unknown>)[key]
+      return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined
+    }).catch(() => undefined)
+  }
+  const lockAsManaged = (container: HTMLElement, controls: Array<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>) => {
+    for (const el of controls) el.disabled = true
+    const note = document.createElement("div")
+    note.className = "managedNote"
+    note.style.cssText = "margin-top:4px;font-size:11px;color:#b25000;line-height:1.35;"
+    note.textContent = "Managed by your organization. Changes here have no effect."
+    container.appendChild(note)
+  }
+
+  void Promise.all([chrome.storage.local.get("brandTabGroup"), managedGet("brandTabGroup")]).then(([stored, managed]) => {
+    const b = managed ?? (stored as { brandTabGroup?: { title?: unknown; color?: unknown } }).brandTabGroup
     if (b && typeof b.title === "string") titleInput.value = b.title
     if (b && typeof b.color === "string" && COLORS.includes(b.color)) colorSelect.value = b.color
+    if (managed) lockAsManaged(wrap, [titleInput, colorSelect, brandSave])
   })
 
   brandSave.addEventListener("click", async () => {
@@ -240,15 +260,15 @@ if (hasTabGroups) {
 
   statusEl.parentElement?.insertBefore(lcWrap, statusEl)
 
-  void chrome.storage.local.get("tabLifecycle").then((stored) => {
-    const lc = (stored as {
-      tabLifecycle?: { reuse?: unknown; idleCloseMinutes?: unknown; closeGroupWhenDone?: unknown }
-    }).tabLifecycle
+  void Promise.all([chrome.storage.local.get("tabLifecycle"), managedGet("tabLifecycle")]).then(([stored, managed]) => {
+    const lc: { reuse?: unknown; idleCloseMinutes?: unknown; closeGroupWhenDone?: unknown } | undefined =
+      managed ?? (stored as { tabLifecycle?: Record<string, unknown> }).tabLifecycle
     if (lc && typeof lc.reuse === "boolean") reuseCheck.checked = lc.reuse
     if (lc && typeof lc.idleCloseMinutes === "number" && Number.isFinite(lc.idleCloseMinutes)) {
       idleInput.value = String(Math.max(0, Math.round(lc.idleCloseMinutes)))
     }
     if (lc && typeof lc.closeGroupWhenDone === "boolean") purgeCheck.checked = lc.closeGroupWhenDone
+    if (managed) lockAsManaged(lcWrap, [reuseCheck, idleInput, purgeCheck, lcSave])
   })
 
   lcSave.addEventListener("click", async () => {

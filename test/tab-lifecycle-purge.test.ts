@@ -30,6 +30,7 @@ function installChrome(opts: {
   focused?: boolean // is the browser's window 1 the OS-focused window? default: no
   countRejects?: boolean // the normal-window count query fails
   createRejects?: boolean // the survivor tab cannot be created
+  liveGroups?: Array<{ id: number; title: string; windowId: number }> // what the tab strip really holds
 }) {
   const calls: Calls = { removed: [], createArgs: [], queries: [], sessionRemoved: [], sessionSet: [], scripted: 0 }
   const session: Record<string, unknown> = { [STAMP_KEY]: NOW - 5 * 60_000 }
@@ -42,7 +43,7 @@ function installChrome(opts: {
 
   ;(globalThis as { chrome: unknown }).chrome = {
     tabGroups: {
-      query: async () => [],
+      query: async () => opts.liveGroups ?? [],
       get: async (id: number) => (id === GROUP_ID ? { id, windowId: 1 } : Promise.reject(new Error("no group"))),
     },
     tabs: {
@@ -185,5 +186,40 @@ describe("closeGroupWhenDone sweep", () => {
     // all-dirty pass is what re-stamps the idle clock.
     expect(calls.scripted).toBe(1)
     expect(calls.sessionSet.some((s) => STAMP_KEY in s)).toBe(true)
+  })
+})
+
+// A group whose id changed (moved to another window, re-created by the browser's
+// own restore, restored after a restart) has no registry entry: tabGroups.onRemoved
+// dropped it. The sweep has to find it again by title or it lives forever.
+describe("the sweep re-adopts a group the registry lost", () => {
+  let originalChrome: unknown
+
+  beforeEach(() => {
+    originalChrome = (globalThis as { chrome?: unknown }).chrome
+    namedGroups.clear()
+  })
+  afterEach(() => {
+    namedGroups.clear()
+    ;(globalThis as { chrome?: unknown }).chrome = originalChrome as typeof chrome
+  })
+
+  const LIVE = [{ id: GROUP_ID, title: `interceptor-${LABEL}`, windowId: 1 }]
+
+  test("an idle group known only by its title is swept", async () => {
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12, liveGroups: LIVE })
+    await runTabLifecycleSweep(NOW)
+    expect(namedGroups.get(LABEL)).toBe(GROUP_ID)
+    expect(calls.removed).toEqual([[1, 2, 3]])
+  })
+
+  test("a title that is not a valid label, and a user's own group, are left alone", async () => {
+    const calls = installChrome({
+      policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12,
+      liveGroups: [{ id: GROUP_ID, title: "interceptor-has spaces", windowId: 1 }, { id: 8, title: "Shopping", windowId: 1 }],
+    })
+    await runTabLifecycleSweep(NOW)
+    expect(namedGroups.size).toBe(0)
+    expect(calls.removed).toEqual([])
   })
 })

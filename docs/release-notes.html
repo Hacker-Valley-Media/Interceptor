@@ -33,6 +33,9 @@
       <li>New popup setting under Tab lifecycle: Delete the whole group when idle. It is off by default. When it is on, an Interceptor tab group that no command has touched for the idle window is removed completely, including tabs with unsaved form input and a window's last tab, so finished agent groups stop piling up in the tab strip.</li>
       <li>The delete waits while you are looking at one of the group's tabs or one of them is playing sound, and it never empties the browser: when the group is everything that is open, a blank tab is created first.</li>
       <li><code>interceptor status --verbose</code> shows which mode is armed.</li>
+      <li><code>interceptor sessions restore &lt;id&gt;</code> now reopens the closed page as a background tab in your group, so it no longer changes the tab you are looking at. Add <code>--activate</code> for the browser's own restore, which keeps history and brings the tab to the front.</li>
+      <li>The idle sweep finds Interceptor groups again after they are moved to another window or restored by the browser, so they no longer linger until someone runs <code>group list</code>.</li>
+      <li>Administrators can set the tab lifecycle policy and the tab group label through managed browser policy. The popup shows managed values read-only.</li>
       <li>Dropdown commands now select an existing enabled option by exact value or unique label, and report an error instead of clearing the current choice.</li>
       <li>Tree, forms, text, HTML, query, find, and diff reads mask password fields and fields filled from the secret vault. Trusted native typing sets its modifier flags on every key event, so mixed-case text arrives as typed.</li>
     </ul>
