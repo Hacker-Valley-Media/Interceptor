@@ -5,24 +5,34 @@ import { namedGroups } from "../extension/src/background/tab-group"
 // Sweep-level tests for `closeGroupWhenDone`. The guard math is covered pure in
 // tab-lifecycle.test.ts; what these pin down is the wiring the pure functions
 // cannot see: that purge mode reaches chrome.tabs.remove with the WHOLE group
-// (no dirty-state veto, no guard veto), that it mints a survivor tab only when
-// the group is the entire profile, and that it drops the group's idle stamp.
+// (no dirty-state veto, no guard veto), that it mints a survivor tab when the
+// group is the entire profile OR the count is unreadable, that it waits while a
+// person is present without re-stamping, and that it drops the group's stamp.
 
 const GROUP_ID = 7
 const LABEL = "lane1"
+const STAMP_KEY = `groupLastSeen:${LABEL}`
 const NOW = 1_700_000_000_000
 
 type Calls = {
   removed: number[][]
-  created: number
+  createArgs: Record<string, unknown>[]
+  queries: Record<string, unknown>[]
   sessionRemoved: string[]
   sessionSet: Record<string, unknown>[]
   scripted: number
 }
 
-function installChrome(opts: { policy: Record<string, unknown>; groupTabs: unknown[]; profileTabs: number }) {
-  const calls: Calls = { removed: [], created: 0, sessionRemoved: [], sessionSet: [], scripted: 0 }
-  const session: Record<string, unknown> = { [`groupLastSeen:${LABEL}`]: NOW - 5 * 60_000 }
+function installChrome(opts: {
+  policy: Record<string, unknown>
+  groupTabs: unknown[]
+  profileTabs: number
+  focused?: boolean // is the browser's window 1 the OS-focused window? default: no
+  countRejects?: boolean // the normal-window count query fails
+  createRejects?: boolean // the survivor tab cannot be created
+}) {
+  const calls: Calls = { removed: [], createArgs: [], queries: [], sessionRemoved: [], sessionSet: [], scripted: 0 }
+  const session: Record<string, unknown> = { [STAMP_KEY]: NOW - 5 * 60_000 }
   const pick = (store: Record<string, unknown>, key: unknown): Record<string, unknown> => {
     if (typeof key !== "string") return { ...store }
     return key in store ? { [key]: store[key] } : {}
@@ -36,12 +46,22 @@ function installChrome(opts: { policy: Record<string, unknown>; groupTabs: unkno
       get: async (id: number) => (id === GROUP_ID ? { id, windowId: 1 } : Promise.reject(new Error("no group"))),
     },
     tabs: {
-      query: async (q: { groupId?: number } = {}) => (q.groupId === GROUP_ID ? opts.groupTabs : allTabs()),
+      query: async (q: { groupId?: number; windowType?: string } = {}) => {
+        calls.queries.push(q)
+        if (q.groupId === GROUP_ID) return opts.groupTabs
+        if (q.windowType === "normal" && opts.countRejects) throw new Error("tabs.query failed")
+        return allTabs()
+      },
       remove: async (ids: number[]) => { calls.removed.push(ids) },
-      create: async () => { calls.created += 1; return { id: 9999 } },
+      create: async (props: Record<string, unknown>) => {
+        calls.createArgs.push(props)
+        if (opts.createRejects) throw new Error("tabs.create failed")
+        return { id: 9999 }
+      },
     },
-    windows: { getLastFocused: async () => ({ id: 1, focused: true }) },
+    windows: { getLastFocused: async () => ({ id: 1, focused: opts.focused === true }) },
     scripting: {
+      // Every page reads as dirty, so the guarded sweep keeps whatever G2-G5 let through.
       executeScript: async () => { calls.scripted += 1; return [{ result: true }] },
     },
     storage: {
@@ -63,13 +83,18 @@ function installChrome(opts: { policy: Record<string, unknown>; groupTabs: unkno
   return calls
 }
 
-// Every tab here would be vetoed by the guarded sweep: active in the focused
-// window, pinned, and audible.
-const GUARDED_TABS = [
+const PURGE = { reuse: true, idleCloseMinutes: 1, closeGroupWhenDone: true }
+
+// Every tab here survives the guarded sweep: the active tab (focus unknown
+// protects it), the pinned tab, and a plain tab whose page reads as dirty.
+const STUCK_TABS = [
   { id: 1, windowId: 1, active: true, pinned: false, audible: false, url: "https://a.example" },
   { id: 2, windowId: 1, active: false, pinned: true, audible: false, url: "https://b.example" },
-  { id: 3, windowId: 1, active: false, pinned: false, audible: true, url: "https://c.example" },
+  { id: 3, windowId: 1, active: false, pinned: false, audible: false, url: "https://c.example" },
 ]
+
+const stampTouched = (calls: Calls) =>
+  calls.sessionRemoved.includes(STAMP_KEY) || calls.sessionSet.some((s) => STAMP_KEY in s)
 
 describe("closeGroupWhenDone sweep", () => {
   let originalChrome: unknown
@@ -84,47 +109,81 @@ describe("closeGroupWhenDone sweep", () => {
   })
 
   test("deletes the whole idle group and never consults the dirty-state check", async () => {
-    const calls = installChrome({
-      policy: { reuse: true, idleCloseMinutes: 1, closeGroupWhenDone: true },
-      groupTabs: GUARDED_TABS,
-      profileTabs: 12,
-    })
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12 })
     await runTabLifecycleSweep(NOW)
     expect(calls.removed).toEqual([[1, 2, 3]])
     expect(calls.scripted).toBe(0)
-    expect(calls.created).toBe(0)
+    expect(calls.createArgs).toEqual([])
   })
 
   test("drops the group's idle stamp instead of re-stamping it", async () => {
-    const calls = installChrome({
-      policy: { reuse: true, idleCloseMinutes: 1, closeGroupWhenDone: true },
-      groupTabs: GUARDED_TABS,
-      profileTabs: 12,
-    })
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12 })
     await runTabLifecycleSweep(NOW)
-    expect(calls.sessionRemoved).toContain(`groupLastSeen:${LABEL}`)
-    expect(calls.sessionSet.some((s) => `groupLastSeen:${LABEL}` in s)).toBe(false)
+    expect(calls.sessionRemoved).toContain(STAMP_KEY)
+    expect(calls.sessionSet.some((s) => STAMP_KEY in s)).toBe(false)
   })
 
-  test("mints a survivor tab when the group is the entire profile", async () => {
-    const calls = installChrome({
-      policy: { reuse: true, idleCloseMinutes: 1, closeGroupWhenDone: true },
-      groupTabs: GUARDED_TABS,
-      profileTabs: 3,
-    })
+  test("mints a survivor tab, in the group's own window, when the group is the entire profile", async () => {
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 3 })
     await runTabLifecycleSweep(NOW)
-    expect(calls.created).toBe(1)
+    expect(calls.createArgs).toEqual([{ windowId: 1, active: false }])
     expect(calls.removed).toEqual([[1, 2, 3]])
+  })
+
+  test("counts tabs in normal windows only", async () => {
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12 })
+    await runTabLifecycleSweep(NOW)
+    expect(calls.queries).toContainEqual({ windowType: "normal" })
+  })
+
+  test("an unreadable tab count still mints the survivor before removing anything", async () => {
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12, countRejects: true })
+    await runTabLifecycleSweep(NOW)
+    expect(calls.createArgs).toHaveLength(1)
+    expect(calls.removed).toEqual([[1, 2, 3]])
+  })
+
+  test("a survivor that cannot be created skips the group: nothing removed, stamp untouched", async () => {
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 3, createRejects: true })
+    await runTabLifecycleSweep(NOW)
+    expect(calls.createArgs).toHaveLength(1)
+    expect(calls.removed).toEqual([])
+    expect(stampTouched(calls)).toBe(false)
+  })
+
+  test("waits while the person is looking at one of the group's tabs, without re-stamping", async () => {
+    const calls = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12, focused: true })
+    await runTabLifecycleSweep(NOW)
+    expect(calls.removed).toEqual([])
+    expect(calls.createArgs).toEqual([])
+    expect(stampTouched(calls)).toBe(false)
+
+    // Focus moves to another app: the very next tick deletes the group.
+    const later = installChrome({ policy: PURGE, groupTabs: STUCK_TABS, profileTabs: 12, focused: false })
+    await runTabLifecycleSweep(NOW + 60_000)
+    expect(later.removed).toEqual([[1, 2, 3]])
+  })
+
+  test("waits while a tab in the group is playing sound, without re-stamping", async () => {
+    const playing = STUCK_TABS.map((t) => (t.id === 3 ? { ...t, audible: true } : t))
+    const calls = installChrome({ policy: PURGE, groupTabs: playing, profileTabs: 12 })
+    await runTabLifecycleSweep(NOW)
+    expect(calls.removed).toEqual([])
+    expect(stampTouched(calls)).toBe(false)
   })
 
   test("off by default: the same idle group survives under the guarded sweep", async () => {
     const calls = installChrome({
       policy: { reuse: true, idleCloseMinutes: 1 },
-      groupTabs: GUARDED_TABS,
+      groupTabs: STUCK_TABS,
       profileTabs: 12,
     })
     await runTabLifecycleSweep(NOW)
     expect(calls.removed).toEqual([])
-    expect(calls.created).toBe(0)
+    expect(calls.createArgs).toEqual([])
+    // The one G2-G5 candidate (tab 3) was screened and kept as dirty, and that
+    // all-dirty pass is what re-stamps the idle clock.
+    expect(calls.scripted).toBe(1)
+    expect(calls.sessionSet.some((s) => STAMP_KEY in s)).toBe(true)
   })
 })

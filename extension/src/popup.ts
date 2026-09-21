@@ -173,19 +173,6 @@ if (hasTabGroups) {
     showStatus("Tab group label saved.")
   })
 
-  /** True when an admin policy supplies `tabLifecycle` (it beats anything saved here). */
-  const managedPolicyPresent = async (): Promise<boolean> => {
-    try {
-      const managed = (chrome.storage as typeof chrome.storage & { managed?: chrome.storage.StorageArea }).managed
-      if (typeof managed?.get !== "function") return false
-      const stored = (await managed.get("tabLifecycle")) as Record<string, unknown>
-      const raw = stored?.tabLifecycle
-      return raw !== undefined && raw !== null
-    } catch {
-      return false
-    }
-  }
-
   // --- tab lifecycle policy ---
   // This popup is the ONLY writer for the `tabLifecycle` key. Same dynamic-injection
   // gating as the brand block above: no tabGroups API (MV2 Electron) → no controls.
@@ -239,7 +226,7 @@ if (hasTabGroups) {
   const purgeHint = document.createElement("div")
   purgeHint.style.cssText = "margin-top:4px;font-size:11px;color:#888;line-height:1.35;"
   purgeHint.textContent =
-    "Closes every tab in an idle Interceptor group — including pinned, playing, active and unsaved-form tabs — so the group disappears from the tab strip. Needs an idle window above 0."
+    "Closes every tab in an idle Interceptor group, including pinned and unsaved-form tabs, so the group disappears from the tab strip. Waits while you are looking at one of its tabs or one is playing sound. Needs an idle window above 0."
   lcWrap.appendChild(purgeHint)
 
   const lcRow = document.createElement("div")
@@ -277,12 +264,6 @@ if (hasTabGroups) {
     await chrome.storage.local.set({
       tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle, closeGroupWhenDone: purgeCheck.checked },
     })
-    // `managed` outranks `local` in the resolver, so an enterprise policy makes
-    // every control here inert. Say so instead of letting the save look applied.
-    if (await managedPolicyPresent()) {
-      showStatus("Saved locally, but a managed policy overrides it.", 4000)
-      return
-    }
-    showStatus(purgeCheck.checked ? `Saved — groups deleted after ${idle}m idle.` : "Tab lifecycle saved.")
+    showStatus(purgeCheck.checked ? `Saved. Groups are deleted after ${idle}m idle.` : "Tab lifecycle saved.")
   })
 }

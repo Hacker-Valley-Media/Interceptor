@@ -26,6 +26,18 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.6">
+    <h2>Interceptor 1.0.6</h2>
+    <time datetime="2026-09-21">September 21, 2026</time>
+    <ul>
+      <li>New popup setting under Tab lifecycle: Delete the whole group when idle. It is off by default. When it is on, an Interceptor tab group that no command has touched for the idle window is removed completely, including pinned tabs, tabs with unsaved form input, and a window's last tab, so finished agent groups stop piling up in the tab strip.</li>
+      <li>The delete waits while you are looking at one of the group's tabs or one of them is playing sound, and it never empties the browser: when the group is everything that is open, a blank tab is created first.</li>
+      <li><code>interceptor status --verbose</code> shows which mode is armed.</li>
+      <li>Dropdown commands now select an existing enabled option by exact value or unique label, and report an error instead of clearing the current choice.</li>
+      <li>Tree, forms, text, HTML, query, find, and diff reads mask password fields and fields filled from the secret vault. Trusted native typing sets its modifier flags on every key event, so mixed-case text arrives as typed.</li>
+    </ul>
+  </section>
+
   <section data-sparkle-version="1.0.3">
     <h2>Interceptor 1.0.3</h2>
     <time datetime="2026-09-17">September 17, 2026</time>

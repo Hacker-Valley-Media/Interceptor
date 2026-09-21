@@ -204,15 +204,39 @@ describe("selectSweepCandidates guards (T3)", () => {
 // ── T3a: purge mode drops every guard but keeps the browser alive ───────────
 
 describe("planGroupPurge (T3a)", () => {
-  test("closes every tab in the group — active, pinned and audible included", () => {
+  test("closes tabs the guarded sweep refuses: active (focus unknown), pinned, last in window", () => {
     const tabs = [
       mkTab({ id: 1, active: true }),
       mkTab({ id: 2, pinned: true }),
-      mkTab({ id: 3, audible: true }),
     ]
-    // Same shape the guarded sweep would refuse entirely.
-    expect(selectSweepCandidates(tabs, ctx([[1, 3]], 1))).toEqual([])
-    expect(planGroupPurge(tabs, 20).closeIds.sort()).toEqual([1, 2, 3])
+    // Same shape the guarded sweep would refuse entirely (unknown focus
+    // protects every active tab; pinned is never swept).
+    expect(selectSweepCandidates(tabs, ctx([[1, 2]], null))).toEqual([])
+    const plan = planGroupPurge(tabs, 20, null)
+    expect(plan.closeIds.sort()).toEqual([1, 2])
+    expect(plan.deferred).toBe(false)
+  })
+
+  test("waits while the group holds the OS-focused window's active tab", () => {
+    const tabs = [mkTab({ id: 1, active: true, windowId: 7 }), mkTab({ id: 2, windowId: 7 })]
+    expect(planGroupPurge(tabs, 20, 7)).toEqual({ closeIds: [], needsSurvivorTab: false, deferred: true })
+    // The active tab of some OTHER window is not the person's current tab.
+    expect(planGroupPurge(tabs, 20, 8).deferred).toBe(false)
+    // Browser not frontmost (focus unknown): the overnight-run case still purges.
+    expect(planGroupPurge(tabs, 20, null).closeIds.sort()).toEqual([1, 2])
+  })
+
+  test("waits while any tab in the group is audible, focused or not", () => {
+    const tabs = [mkTab({ id: 1 }), mkTab({ id: 2, audible: true })]
+    expect(planGroupPurge(tabs, 20, null)).toEqual({ closeIds: [], needsSurvivorTab: false, deferred: true })
+  })
+
+  test("a deferred group never asks for a survivor tab", () => {
+    expect(planGroupPurge([mkTab({ id: 1, audible: true })], 1, null).needsSurvivorTab).toBe(false)
+  })
+
+  test("an unreadable tab count (0) always asks for the survivor", () => {
+    expect(planGroupPurge([mkTab({ id: 1 }), mkTab({ id: 2 })], 0).needsSurvivorTab).toBe(true)
   })
 
   test("no survivor tab while other tabs remain in the profile", () => {
@@ -232,7 +256,7 @@ describe("planGroupPurge (T3a)", () => {
   })
 
   test("an empty group closes nothing and needs no survivor", () => {
-    expect(planGroupPurge([], 0)).toEqual({ closeIds: [], needsSurvivorTab: false })
+    expect(planGroupPurge([], 0)).toEqual({ closeIds: [], needsSurvivorTab: false, deferred: false })
   })
 })
 

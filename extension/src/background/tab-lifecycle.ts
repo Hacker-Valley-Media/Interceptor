@@ -19,10 +19,14 @@
  *                    group disappears from the tab strip — no active/pinned/audible/
  *                    last-tab/dirty-form exceptions. It exists because the guarded
  *                    sweep routinely leaves a group standing forever: an agent that
- *                    typed into any form makes its tab permanently "dirty", and each
- *                    vetoed pass re-stamps the group's idle clock. Off by default;
+ *                    typed into any form makes its tab permanently "dirty" (and an
+ *                    all-dirty pass re-stamps the idle clock), and the last tab of
+ *                    a dedicated Interceptor window is never closed. Off by default;
  *                    requires idleCloseMinutes > 0 (idle is the only "done" signal
- *                    the extension has — the CLI is one process per command).
+ *                    the extension has: the CLI is one process per command).
+ *                    "Idle" means no CLI command, not no person, so the purge WAITS
+ *                    (no re-stamp, re-checked next tick) while the group holds the
+ *                    OS-focused window's active tab or an audible tab.
  *
  * This module is module-load SIDE-EFFECT-FREE. It is transitively bundled into the MV2
  * `background-electron.js` (via capabilities/tabs.ts), so it must NOT touch `chrome.*`
@@ -196,15 +200,26 @@ export function selectSweepCandidates(tabs: SweepTab[], ctx: SweepContext): numb
  * `chrome.tabs.remove` of a window's last tab closes that window, and on
  * Windows/Linux closing the last window quits the browser (taking the service
  * worker, the daemon connection, and every other agent lane with it). So when
- * the purge would close every tab in the PROFILE, a blank survivor tab is
- * created first — ungrouped, so the group still disappears completely.
+ * the purge would close every tab in the profile's NORMAL windows (groups only
+ * live there; popup/app/DevTools tabs are not a usable browser window), a blank
+ * survivor tab is created first, ungrouped, so the group still disappears.
+ *
+ * And it waits for a person. The idle stamp only sees CLI commands, so someone
+ * who took over an agent tab (login, captcha, watching a render, listening to a
+ * result) looks idle. `deferred` is true while the group holds the active tab of
+ * the OS-focused window or an audible tab; the caller skips the group WITHOUT
+ * re-stamping, so it is deleted on the first tick where neither holds. Unknown
+ * focus (browser not frontmost: the overnight-run case) does not defer.
  */
 export function planGroupPurge(
   tabs: SweepTab[],
-  remainingTabsInProfile: number
-): { closeIds: number[]; needsSurvivorTab: boolean } {
-  const closeIds = tabs.map((t) => t.id)
-  return { closeIds, needsSurvivorTab: closeIds.length > 0 && closeIds.length >= remainingTabsInProfile }
+  remainingNormalTabs: number,
+  focusedWindowId: number | null = null
+): { closeIds: number[]; needsSurvivorTab: boolean; deferred: boolean } {
+  const deferred = tabs.some((t) =>
+    t.audible || (t.active && focusedWindowId !== null && t.windowId === focusedWindowId))
+  const closeIds = deferred ? [] : tabs.map((t) => t.id)
+  return { closeIds, needsSurvivorTab: closeIds.length > 0 && closeIds.length >= remainingNormalTabs, deferred }
 }
 
 // --- G9: dirty-form guard -----------------------------------------------------
@@ -365,12 +380,19 @@ export async function runTabLifecycleSweep(now = Date.now()): Promise<void> {
       // Re-read the profile tab count per purge: an earlier group in this same
       // tick may already have closed tabs, and a stale-high count is exactly the
       // case where the survivor tab would be skipped and the browser could quit.
-      const remaining = await chrome.tabs.query({}).then((t) => t.length).catch(() => Number.POSITIVE_INFINITY)
-      const plan = planGroupPurge(sweepTabs, remaining)
+      // An unreadable count is treated as 0 for the same reason: assume the purge
+      // empties the profile and mint the survivor.
+      const remaining = await chrome.tabs.query({ windowType: "normal" }).then((t) => t.length).catch(() => 0)
+      const plan = planGroupPurge(sweepTabs, remaining, focusedWindowId)
+      if (plan.deferred) {
+        console.log(`tab-lifecycle purge: '${label || "(default)"}' is in use (focused or playing sound), re-checking next tick`)
+        continue
+      }
       closeIds = plan.closeIds
       if (plan.needsSurvivorTab) {
         try {
-          await chrome.tabs.create({ active: false })
+          // In the group's own window, so that window is the one that survives.
+          await chrome.tabs.create({ windowId: sweepTabs[0]?.windowId, active: false })
         } catch (err) {
           console.warn("tab-lifecycle purge: survivor tab failed, skipping group to keep the browser alive:", err)
           continue
