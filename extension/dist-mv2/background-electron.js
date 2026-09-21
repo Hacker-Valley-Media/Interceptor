@@ -2651,7 +2651,7 @@ async function handleSessionActions(action, _tabId) {
         const created = await handleTabActions({ type: "tab_create", url, reuse: false, group, groupColor: action.groupColor }, 0);
         if (!created.success)
           return created;
-        reopened.push(created.data);
+        reopened.push({ ...created.data, url });
       }
       recordGroupActivity(group ?? "");
       return {

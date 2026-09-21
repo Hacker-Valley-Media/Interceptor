@@ -192,8 +192,11 @@
       });
     };
     const lockAsManaged = (container, controls) => {
-      for (const el of controls)
+      for (const el of controls) {
         el.disabled = true;
+        el.style.opacity = "0.45";
+        el.style.cursor = "not-allowed";
+      }
       const note = document.createElement("div");
       note.className = "managedNote";
       note.style.cssText = "margin-top:4px;font-size:11px;color:#b25000;line-height:1.35;";
