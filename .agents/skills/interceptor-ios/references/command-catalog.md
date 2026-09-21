@@ -30,12 +30,27 @@ phone is set up. Phones auto-connect on the first drive verb.
 | `interceptor ios keys "text"` | Type into whatever is already focused (append). |
 | `interceptor ios type <ref> --secret <name>` / `ios keys --secret <name>` | Type a vault secret (passcode) by name; the daemon resolves it and the runner falls back to SpringBoard when a system passcode sheet owns the keyboard. Register once: `interceptor macos secret register ios-passcode --target ios`. |
 | `interceptor ios unlock --secret <name>` / `ios unlock --probe` | Lock screen: wake, swipe up, type the passcode into SpringBoard's passcode field, wait for unlock. Needs the runner resident (it cannot start on a locked phone). `--probe` reports lock state + whether the passcode field appeared, without typing. |
-| `interceptor ios scroll [<ref>] --dir up\|down\|left\|right` | Scroll the view (or the element at `<ref>`). |
-| `interceptor ios drag <from> <to> [--duration s]` | Drag between two element refs (frame center to frame center). |
+| `interceptor ios scroll [<ref> \| --x N --y N] --dir up\|down\|left\|right` | Swipe 250 points from the ref's center, from a screen point, or (bare) from the screen center. A ref that no longer resolves, or `--x` without `--y`, is an error: no gesture is sent. |
+| `interceptor ios drag <from> <to> [--duration s]` | Drag between two ends; each is a ref (frame center) or a screen point written `x,y` (`120,330`), and the two kinds can be mixed. `--duration` is the press time in seconds before the move (default 0.6, fractions allowed). |
+| `interceptor ios drag 200,400 200,400 --duration 2` | Long press: the same point twice. Use it for context menus and press-and-hold controls. A surface that never settles after the press (the Home Screen's icon menu) can make the verb time out even though the press landed: `tree` shows the menu, so read before retrying. |
 | `interceptor ios press home\|lock\|volume-up\|volume-down` | Hardware button. `lock` locks the phone (avoid mid-flow — it blocks launches). |
 | `interceptor ios screenshot` | Capture the screen; saved as a VLM-budget-resized JPG. |
 | `interceptor ios apps` | Installed apps on the phone (bundle id, name, version). |
 | `interceptor ios app launch\|activate\|terminate <bundleId>` | App lifecycle by bundle id (e.g. `com.apple.Preferences`). |
+
+### Apps with no element tree (games, canvases)
+
+Coordinates are screen points, the same space as the frames in `ios tree` (the root element's frame is the screen size). When the tree is empty or useless, read the screen with the Mac's Vision framework and act by coordinate:
+
+```bash
+interceptor ios screenshot --on phone                               # prints the saved path
+interceptor macos vision text --image <that path>                   # regions: text plus a normalized box
+interceptor ios click --x 196 --y 412 --on phone                    # tap
+interceptor ios drag 196,412 196,412 --duration 2 --on phone        # long press
+interceptor ios scroll --x 196 --y 600 --dir down --on phone        # swipe from a point
+```
+
+Vision boxes are normalized 0 to 1 with the origin at the bottom left, so for a screen `W` by `H` points the center of a region is `x = (box.x + box.width / 2) * W` and `y = (1 - box.y - box.height / 2) * H`.
 
 ## Runner-free lanes (Instruments / DTX / telemetry)
 

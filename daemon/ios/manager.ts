@@ -45,6 +45,14 @@ import net from "node:net"
 
 export type IosResult = { success: boolean; error?: string; data?: unknown }
 
+export function parseIosPoint(value: unknown): { x: number; y: number } | undefined {
+  if (typeof value !== "string") return undefined
+  const match = value.match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/)
+  if (!match) return undefined
+  const x = Number(match[1]), y = Number(match[2])
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined
+}
+
 /** Re-sign this far ahead of expiry so a phone never goes stale. */
 const REFRESH_LEAD_MS = 24 * 60 * 60 * 1000 // 1 day
 type ManagerDeps = {
@@ -966,8 +974,12 @@ export class IosManager {
 
   private async verbScroll(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
     const dir = typeof action.dir === "string" ? action.dir.toLowerCase() : "down"
-    const pt = this.resolvePoint(ctx, action)
-    const center = "error" in pt ? await this.screenCenter(ctx) : pt
+    // Only a scroll that named no origin starts from the screen center. A stale
+    // ref or half a coordinate pair is an error, not a swipe somewhere else.
+    const namedOrigin = action.ref !== undefined || action.x !== undefined || action.y !== undefined
+    const pt = namedOrigin ? this.resolvePoint(ctx, action) : await this.screenCenter(ctx)
+    if ("error" in pt) return { success: false, error: `ios scroll ${pt.error}` }
+    const center = pt
     const delta = 250
     let toX = center.x, toY = center.y
     if (dir === "down") toY = center.y - delta
@@ -975,17 +987,25 @@ export class IosManager {
     else if (dir === "left") toX = center.x + delta
     else if (dir === "right") toX = center.x - delta
     await ctx.channel.drag(center.x, center.y, toX, toY, 0.4)
-    return { success: true, data: { scrolled: dir } }
+    return { success: true, data: { scrolled: dir, from: center } }
+  }
+
+  /** A drag endpoint: "x,y" is a screen point, anything else is a ref from the last tree. */
+  private resolveEndpoint(ctx: IosDeviceContext, value: string): { x: number; y: number } | undefined {
+    const point = parseIosPoint(value)
+    if (point) return point
+    const el = ctx.registry.resolve(value)
+    return el ? frameCenter(el) : undefined
   }
 
   private async verbDrag(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
-    const fromRef = typeof action.from === "string" ? action.from : undefined
-    const toRef = typeof action.to === "string" ? action.to : undefined
-    if (!fromRef || !toRef) return { success: false, error: "ios drag requires <from> and <to> refs" }
-    const a = ctx.registry.resolve(fromRef)
-    const b = ctx.registry.resolve(toRef)
-    if (!a || !b) return { success: false, error: "stale ref in drag — re-read with 'interceptor ios tree'" }
-    const pa = frameCenter(a), pb = frameCenter(b)
+    const from = typeof action.from === "string" ? action.from : undefined
+    const to = typeof action.to === "string" ? action.to : undefined
+    if (!from || !to) return { success: false, error: "ios drag requires <from> and <to>: each a ref or an x,y coordinate" }
+    const pa = this.resolveEndpoint(ctx, from)
+    const pb = this.resolveEndpoint(ctx, to)
+    const bad = !pa ? from : !pb ? to : undefined
+    if (!pa || !pb) return { success: false, error: `ios drag: '${bad}' is not an x,y coordinate or a live ref; re-read with 'interceptor ios tree'` }
     await ctx.channel.drag(pa.x, pa.y, pb.x, pb.y, typeof action.duration === "number" ? action.duration : 0.6)
     return { success: true, data: { from: pa, to: pb } }
   }
