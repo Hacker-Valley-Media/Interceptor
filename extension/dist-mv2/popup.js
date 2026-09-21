@@ -196,7 +196,7 @@
       await chrome.storage.local.set({ brandTabGroup: { title, color: colorSelect.value } });
       showStatus("Tab group label saved.");
     });
-    const DEFAULT_LIFECYCLE = { reuse: true, idleCloseMinutes: 10 };
+    const DEFAULT_LIFECYCLE = { reuse: true, idleCloseMinutes: 10, closeGroupWhenDone: false };
     const lcWrap = document.createElement("div");
     lcWrap.style.marginTop = "14px";
     const lcLabel = document.createElement("label");
@@ -225,6 +225,20 @@
     idleRow.appendChild(idleInput);
     idleRow.appendChild(document.createTextNode("min (0 = never)"));
     lcWrap.appendChild(idleRow);
+    const purgeRow = document.createElement("label");
+    purgeRow.style.cssText = "display:flex;align-items:flex-start;gap:6px;font-weight:400;margin-top:6px;";
+    const purgeCheck = document.createElement("input");
+    purgeCheck.id = "lcPurge";
+    purgeCheck.type = "checkbox";
+    purgeCheck.style.cssText = "width:auto;margin-top:2px;";
+    purgeCheck.checked = DEFAULT_LIFECYCLE.closeGroupWhenDone;
+    purgeRow.appendChild(purgeCheck);
+    purgeRow.appendChild(document.createTextNode("Delete the whole group when idle"));
+    lcWrap.appendChild(purgeRow);
+    const purgeHint = document.createElement("div");
+    purgeHint.style.cssText = "margin-top:4px;font-size:11px;color:#888;line-height:1.35;";
+    purgeHint.textContent = "Closes every tab in an idle Interceptor group, including pinned and unsaved-form tabs, so the group disappears from the tab strip. Waits while you are looking at one of its tabs or one is playing sound. Needs an idle window above 0.";
+    lcWrap.appendChild(purgeHint);
     const lcRow = document.createElement("div");
     lcRow.className = "row";
     const lcSave = document.createElement("button");
@@ -241,6 +255,8 @@
       if (lc && typeof lc.idleCloseMinutes === "number" && Number.isFinite(lc.idleCloseMinutes)) {
         idleInput.value = String(Math.max(0, Math.round(lc.idleCloseMinutes)));
       }
+      if (lc && typeof lc.closeGroupWhenDone === "boolean")
+        purgeCheck.checked = lc.closeGroupWhenDone;
     });
     lcSave.addEventListener("click", async () => {
       const idle = Math.max(0, Math.round(Number(idleInput.value)));
@@ -248,8 +264,14 @@
         showStatus("Idle minutes must be a number.");
         return;
       }
-      await chrome.storage.local.set({ tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle } });
-      showStatus("Tab lifecycle saved.");
+      if (purgeCheck.checked && idle === 0) {
+        showStatus("Set an idle window above 0 to delete groups.", 3000);
+        return;
+      }
+      await chrome.storage.local.set({
+        tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle, closeGroupWhenDone: purgeCheck.checked }
+      });
+      showStatus(purgeCheck.checked ? `Saved. Groups are deleted after ${idle}m idle.` : "Tab lifecycle saved.");
     });
   }
 })();
