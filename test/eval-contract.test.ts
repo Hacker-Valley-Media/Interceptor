@@ -154,3 +154,51 @@ test("userScripts eval never evaluates the code twice", async () => {
   expect((globalThis as any).__ikCount).toBe(1)
   delete (globalThis as any).__ikCount
 })
+
+test("--no-reload reaches the extension as noCspReload, and is absent otherwise", () => {
+  const withFlag = normalizeArgsSplit(buildFilteredArgs(["eval", "--main", "--no-reload", "1+1"]))
+  expect(parseEvalCommand(withFlag.argv, withFlag.positionalCount))
+    .toEqual({ type: "evaluate", code: "1+1", world: "MAIN", noCspReload: true })
+
+  // Absent, not `false`: the extension branches on `=== true`, and an explicit
+  // false would be indistinguishable from the historical action shape for any
+  // caller diffing it.
+  const without = normalizeArgsSplit(buildFilteredArgs(["eval", "--main", "1+1"]))
+  expect(parseEvalCommand(without.argv, without.positionalCount))
+    .toEqual({ type: "evaluate", code: "1+1", world: "MAIN" })
+})
+
+test("--no-reload is an accepted eval flag, not an unknown one", () => {
+  expect(() => normalizeArgsSplit(["eval", "1+1", "--no-reload"])).not.toThrow()
+})
+
+test("a CSP recovery that reloads the tab warns that page state was discarded", async () => {
+  let reloaded = false
+  // waitForTabLoad listens on tabs.onUpdated and then probes the content script
+  // over tabs.sendMessage; drive both straight to "ready" so the test exercises
+  // the bypass result shape rather than the 15s load timeout.
+  globalThis.chrome = {
+    scripting: { executeScript: async () => [{ frameId: 0, result: reloaded ? { success: true, data: "ok" } : { success: false, error: "TrustedScript required" } }] },
+    declarativeNetRequest: { updateSessionRules: async () => {} },
+    runtime: { lastError: undefined },
+    tabs: {
+      reload: async () => { reloaded = true },
+      // callback-style, as content-bridge calls it
+      sendMessage: (_id: number, _msg: unknown, _opts: unknown, cb: (r: unknown) => void) => { cb({ success: true, data: { stable: true } }) },
+      onUpdated: {
+        addListener: (fn: (id: number, info: { status: string }) => void) => { queueMicrotask(() => fn(42, { status: "complete" })) },
+        removeListener() {},
+      },
+    },
+  } as any
+
+  const result = await runWithCspStripBypass(42, "MAIN", async (_t, w) => {
+    const [first] = await (globalThis.chrome as any).scripting.executeScript({ world: w })
+    return first.result
+  })
+  expect(result.success).toBe(true)
+  // The reload is irreversible and the caller has to hear about it from the
+  // result itself, not by knowing to inspect data.cspBypassApplied.
+  expect(result.warning).toContain("--no-reload")
+  expect((result.data as any).cspBypassApplied).toBe(true)
+})

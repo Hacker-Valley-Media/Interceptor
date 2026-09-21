@@ -1,7 +1,7 @@
 import { IK_TT_POLICY, TT_POLICY_NAME } from "../../inject-keys"
 import { waitForTabLoad } from "../content-bridge"
 
-type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; tabId?: number }
 
 const CSP_BYPASS_RULE_ID_BASE = 910_000
 
@@ -247,6 +247,13 @@ export async function runWithCspStripBypass(
   if (retried.success) {
     return {
       ...retried,
+      // The reload already happened and whatever the page held is gone. Say so
+      // in `warning`, which the CLI prints, rather than only in `data.
+      // cspBypassApplied`, which a caller has to already suspect to look for.
+      // The distinction matters on stateful pages: an open chat conversation or
+      // a half-filled form does not survive this, and the caller's next read
+      // sees a plausible-looking fresh page rather than an error.
+      warning: "page CSP refused MAIN-world eval, so the tab was reloaded with its CSP header stripped — any in-page state (open conversations, unsaved form input, in-memory app state) was discarded. Re-run with 'interceptor eval --no-reload' to get the CSP error instead of a reloaded tab.",
       data: {
         value: retried.data,
         cspBypassApplied: true,
@@ -258,6 +265,7 @@ export async function runWithCspStripBypass(
   return {
     success: false,
     error: retried.error || first.error || "MAIN-world eval failed after CSP bypass retry",
+    warning: "the tab was reloaded to strip its CSP header and the retry still failed, so in-page state was discarded for nothing. Use 'interceptor eval --no-reload' on pages whose state matters.",
     data: {
       originalError: first.error,
       cspBypassApplied: true
