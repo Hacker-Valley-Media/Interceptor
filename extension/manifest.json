@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Interceptor",
-  "version": "1.0.5",
+  "version": "1.0.7",
   "minimum_chrome_version": "116",
   "description": "Browser side of the Interceptor CLI: lets your local AI agent read, act on, and inspect pages in your own signed-in browser.",
   "icons": {
@@ -11,6 +11,9 @@
     "128": "icons/icon128.png"
   },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyljKQEzlPuYlL05dFD0YK65p/SqJuG+Juszv94MIwmGEspBcPN+cim4kA0VJWwkRT1Be5xWV3h2zm0Gs5p1jefg5DxccLfqEZ9ODKNySCm8Z59d1bmbLGl8GBKKm1F3Cq6Go7Mhn8BSyNxBxZhRhvMrLfLl3pCEKeRB/I5lbmaJkh09hTlpbW25j/MTvxwpPkm0WwTby4Qjiy2VbhQaLrTOtzDMEq823pS6xaRGGTbA7BrnccPmP9jex/I+xjJuia0936jaOO5yKujBZwHDlURKsc9CRMaaIhGIKstPsfw7qZzq4SRTah7cVZKmwNKC9aHP6ZHNdhn42Hhh3oN7DqwIDAQAB",
+  "storage": {
+    "managed_schema": "managed-schema.json"
+  },
   "permissions": [
     "activeTab",
     "scripting",

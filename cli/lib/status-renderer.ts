@@ -57,6 +57,7 @@ export type StatusSnapshot = {
   tabLifecycle?: {
     reuse: boolean
     idleCloseMinutes: number
+    closeGroupWhenDone?: boolean
     source: string
   }
   // skills-adoption block — pack presence + per-runtime link counts
@@ -464,7 +465,8 @@ export function formatStatus(snap: StatusSnapshot, opts: { verbose?: boolean }):
   // tab-lifecycle policy — verbose-only when extension reachable
   if (snap.tabLifecycle) {
     const lc = snap.tabLifecycle
-    const idle = lc.idleCloseMinutes > 0 ? `close idle groups after ${lc.idleCloseMinutes}m` : "idle-close off"
+    const action = lc.closeGroupWhenDone ? "delete whole groups after" : "close idle groups after"
+    const idle = lc.idleCloseMinutes > 0 ? `${action} ${lc.idleCloseMinutes}m` : "idle-close off"
     lines.push(`tab lifecycle: reuse ${lc.reuse ? "on (named groups)" : "off"} · ${idle} (source: ${lc.source})`)
   }
 

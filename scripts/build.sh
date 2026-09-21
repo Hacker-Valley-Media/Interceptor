@@ -111,6 +111,8 @@ build_extension() {
   bun build extension/src/offscreen.ts --outfile=extension/dist/offscreen.js --target=browser
   bun build extension/src/popup.ts --outfile=extension/dist/popup.js --target=browser --format=iife
   cp extension/manifest.json extension/dist/
+  # The manifest names this file; a missing or invalid schema stops Chrome from loading the extension.
+  cp extension/managed-schema.json extension/dist/
   cp extension/offscreen.html extension/dist/
   cp extension/popup.html extension/dist/
   rm -rf extension/dist/icons

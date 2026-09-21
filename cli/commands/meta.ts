@@ -282,7 +282,9 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false, con
           console.error("error: sessions restore requires a <sessionId> — run 'interceptor sessions' to list recently closed tabs/windows. (No-arg restore is disabled: it reopens whatever closed most recently, which may be the user's own window.)")
           process.exit(1)
         }
-        return { type: "session_restore", sessionId }
+        // Default reopens in the background; --activate asks for the browser's own
+        // restore, which brings the restored tab to the front.
+        return { type: "session_restore", sessionId, ...(filtered.includes("--activate") ? { active: true } : {}) }
       } else {
         const max = filtered.slice(1).find(a => !a.startsWith("-"))
         return { type: "session_list", maxResults: max ? parseInt(max) : 10 }
