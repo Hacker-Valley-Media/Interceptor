@@ -1,6 +1,7 @@
 import { getAccessibleName, getEffectiveRole } from "../a11y-tree"
 import { getShadowRoot, isVisible, walkWithShadow } from "../element-discovery"
 import { boundingBox, clickAtViewport } from "./ops"
+import { isSensitive, safeValue, SECURE_MASK } from "../sensitive"
 import type {
   SceneObject,
   SceneObjectType,
@@ -77,17 +78,20 @@ function isHiddenProxyInput(el: Element): boolean {
   return hiddenAttr === "true" || (role === "application" && inputMode === "none")
 }
 
+/** Password and credential-marked surfaces read as the mask, the same policy as `read` and `forms`. */
+function maskSensitiveText(el: Element, text: string): string {
+  return text && isSensitive(el) ? SECURE_MASK : text
+}
+
 function readElementText(el: Element): string {
   if (!isHtmlElement(el)) return ""
-  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-    return ((el as HTMLInputElement | HTMLTextAreaElement).value || "").toString()
-  }
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return safeValue(el)
   if (el.isContentEditable || el.getAttribute("contenteditable") === "true") {
-    return (el.textContent || "").toString()
+    return maskSensitiveText(el, (el.textContent || "").toString())
   }
   const role = el.getAttribute("role")
   if (role === "textbox" || role === "combobox" || role === "searchbox") {
-    return (el.textContent || "").toString()
+    return maskSensitiveText(el, (el.textContent || "").toString())
   }
   return (getAccessibleName(el) || el.getAttribute("aria-label") || el.textContent || "").toString()
 }
@@ -367,10 +371,9 @@ export function findFocusedWritableSurface(): WritableSurface | null {
 export function readFocusedWritableText(): SceneText | null {
   const surface = findFocusedWritableSurface()
   if (!surface) return null
-  return {
-    text: surface.text,
-    length: surface.text.length
-  }
+  // The surface keeps the raw value so an append lands after the real text; only reads are masked.
+  const text = maskSensitiveText(surface.element, surface.text)
+  return { text, length: text.length }
 }
 
 function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, text: string): boolean {
@@ -449,7 +452,7 @@ export function selectedAdaptiveScene(): SceneSelection {
       has: true,
       id,
       label,
-      text: writable.text.slice(0, 200),
+      text: maskSensitiveText(writable.element, writable.text).slice(0, 200),
       extras: {
         kind: writable.kind,
         writable: true,
