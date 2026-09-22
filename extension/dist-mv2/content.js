@@ -1,11 +1,15 @@
 var __defProp = Object.defineProperty;
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: (newValue) => all[name] = () => newValue
+      set: __exportSetter.bind(all, name)
     });
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
@@ -39,12 +43,33 @@ function redactSensitiveText(text, root) {
   }
   return text;
 }
+function hiddenByStyle(el) {
+  const style = getComputedStyle(el);
+  return style.display === "none" || style.visibility === "hidden";
+}
+function walkRenderedText(root) {
+  const parts = [];
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE)
+      return;
+    const el = node;
+    if (NON_RENDERED_TAGS.has(el.tagName) || hiddenByStyle(el))
+      return;
+    for (const child of Array.from(el.childNodes))
+      walk(child);
+  };
+  walk(root);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
 function renderedText(el) {
   const rendered = el.innerText;
   if (rendered && rendered.trim())
     return rendered;
-  const raw = el.textContent ?? "";
-  return raw.trim() ? raw : rendered ?? raw;
+  return walkRenderedText(el);
 }
 function safeText(el, rendered = false) {
   const text = rendered ? renderedText(el) : el.textContent || "";
@@ -67,10 +92,11 @@ function safeHtml(el) {
   }
   return clone.outerHTML;
 }
-var globals, sensitiveElements, SECURE_MASK = "***SECURE***";
+var globals, sensitiveElements, SECURE_MASK = "***SECURE***", NON_RENDERED_TAGS;
 var init_sensitive = __esm(() => {
   globals = globalThis;
   sensitiveElements = globals.__interceptor_sensitiveElements ??= new WeakSet;
+  NON_RENDERED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
 });
 
 // extension/src/content/ref-registry.ts
@@ -577,9 +603,9 @@ var init_a11y_tree = __esm(() => {
 // extension/src/content/snapshot-diff.ts
 var exports_snapshot_diff = {};
 __export(exports_snapshot_diff, {
-  lastSnapshot: () => lastSnapshot,
+  cacheSnapshot: () => cacheSnapshot,
   computeSnapshotDiff: () => computeSnapshotDiff,
-  cacheSnapshot: () => cacheSnapshot
+  lastSnapshot: () => lastSnapshot
 });
 function cacheSnapshot() {
   const entries = [];
@@ -647,6 +673,73 @@ var init_snapshot_diff = __esm(() => {
   lastSnapshot = [];
 });
 
+// extension/src/content/deep-query.ts
+function collectRoots(root = document) {
+  const roots = [root];
+  for (let i = 0;i < roots.length && roots.length < MAX_ROOTS; i++) {
+    const current = roots[i];
+    let hosts;
+    try {
+      hosts = Array.from(current.querySelectorAll("*"));
+    } catch {
+      continue;
+    }
+    for (const host of hosts) {
+      const shadow = getShadowRoot(host);
+      if (shadow) {
+        roots.push(shadow);
+        if (roots.length >= MAX_ROOTS)
+          break;
+      }
+    }
+  }
+  return roots;
+}
+function queryAllDeep(selector, root = document) {
+  const direct = Array.from(root.querySelectorAll(selector));
+  const roots = collectRoots(root);
+  if (roots.length === 1)
+    return direct;
+  const seen = new Set(direct);
+  const out = [...direct];
+  for (let i = 1;i < roots.length; i++) {
+    let matches;
+    try {
+      matches = Array.from(roots[i].querySelectorAll(selector));
+    } catch {
+      continue;
+    }
+    for (const el of matches) {
+      if (seen.has(el))
+        continue;
+      seen.add(el);
+      out.push(el);
+    }
+  }
+  return out;
+}
+function queryOneDeep(selector, root = document) {
+  const direct = root.querySelector(selector);
+  if (direct)
+    return direct;
+  const roots = collectRoots(root);
+  for (let i = 1;i < roots.length; i++) {
+    let match;
+    try {
+      match = roots[i].querySelector(selector);
+    } catch {
+      continue;
+    }
+    if (match)
+      return match;
+  }
+  return null;
+}
+var MAX_ROOTS = 2000;
+var init_deep_query = __esm(() => {
+  init_element_discovery();
+});
+
 // extension/src/content/input-simulation.ts
 function staleElementError(action, verb) {
   const label = String(action.ref ?? action.index ?? "unknown");
@@ -671,6 +764,12 @@ function resolveElement(indexOrRef, ref) {
   if (!isVisible(el))
     return null;
   return el;
+}
+function resolveElementOrSelector(action) {
+  const el = resolveElement(action.index, action.ref);
+  if (el)
+    return el;
+  return action.selector ? queryOneDeep(String(action.selector)) : null;
 }
 function scrollIntoViewIfNeeded(el) {
   const rect = el.getBoundingClientRect();
@@ -745,13 +844,14 @@ function producesKeypress(key) {
 }
 function dispatchKeySequence(target, combo) {
   const parts = combo.split("+");
-  const key = parts[parts.length - 1];
   const modifiers = {
     ctrlKey: parts.includes("Control"),
     shiftKey: parts.includes("Shift"),
     altKey: parts.includes("Alt"),
     metaKey: parts.includes("Meta")
   };
+  const raw = parts[parts.length - 1];
+  const key = modifiers.shiftKey && /^[a-z]$/.test(raw) ? raw.toUpperCase() : raw;
   const code = getKeyCode(key);
   const legacy = getLegacyKeyCode(key);
   const base = { key, code, bubbles: true, cancelable: true, ...modifiers };
@@ -785,24 +885,30 @@ function waitForMutation(timeoutMs) {
 }
 function waitForElement(selector, timeout) {
   return new Promise((resolve) => {
-    const existing = document.querySelector(selector);
+    const existing = queryOneDeep(selector);
     if (existing) {
       resolve(existing);
       return;
     }
-    const timer = setTimeout(() => {
+    let done = false;
+    const finish = (el) => {
+      if (done)
+        return;
+      done = true;
+      clearTimeout(timer);
+      clearInterval(poll);
       observer.disconnect();
-      resolve(null);
-    }, timeout);
-    const observer = new MutationObserver(() => {
-      const el = document.querySelector(selector);
-      if (el) {
-        clearTimeout(timer);
-        observer.disconnect();
-        resolve(el);
-      }
-    });
+      resolve(el);
+    };
+    const check = () => {
+      const el = queryOneDeep(selector);
+      if (el)
+        finish(el);
+    };
+    const timer = setTimeout(() => finish(null), timeout);
+    const observer = new MutationObserver(check);
     observer.observe(document.body, { childList: true, subtree: true });
+    const poll = setInterval(check, 250);
   });
 }
 function waitForDomStable(debounceMs = 200, timeoutMs = 5000) {
@@ -839,6 +945,7 @@ var init_input_simulation = __esm(() => {
   init_ref_registry();
   init_element_discovery();
   init_element_discovery();
+  init_deep_query();
   KEY_CODES = {
     Enter: "Enter",
     Tab: "Tab",
@@ -905,19 +1012,19 @@ var init_input_simulation = __esm(() => {
 // extension/src/content/scene/ops.ts
 var exports_ops = {};
 __export(exports_ops, {
-  scrollElementIntoView: () => scrollElementIntoView,
-  parseTranslate: () => parseTranslate,
-  parseScale: () => parseScale,
-  parseDocCoord: () => parseDocCoord,
-  isVisibleRect: () => isVisibleRect,
-  focusIframeTextbox: () => focusIframeTextbox,
-  findElementById: () => findElementById,
-  findAncestorScale: () => findAncestorScale,
-  dispatchKeysIn: () => dispatchKeysIn,
-  dblclickElementCenter: () => dblclickElementCenter,
-  clickElementCenter: () => clickElementCenter,
+  boundingBox: () => boundingBox,
   clickAtViewport: () => clickAtViewport,
-  boundingBox: () => boundingBox
+  clickElementCenter: () => clickElementCenter,
+  dblclickElementCenter: () => dblclickElementCenter,
+  dispatchKeysIn: () => dispatchKeysIn,
+  findAncestorScale: () => findAncestorScale,
+  findElementById: () => findElementById,
+  focusIframeTextbox: () => focusIframeTextbox,
+  isVisibleRect: () => isVisibleRect,
+  parseDocCoord: () => parseDocCoord,
+  parseScale: () => parseScale,
+  parseTranslate: () => parseTranslate,
+  scrollElementIntoView: () => scrollElementIntoView
 });
 function boundingBox(el) {
   const r = el.getBoundingClientRect();
@@ -1862,73 +1969,7 @@ init_input_simulation();
 // extension/src/content/actions/click.ts
 init_input_simulation();
 init_ref_registry();
-
-// extension/src/content/deep-query.ts
-init_element_discovery();
-var MAX_ROOTS = 2000;
-function collectRoots(root = document) {
-  const roots = [root];
-  for (let i = 0;i < roots.length && roots.length < MAX_ROOTS; i++) {
-    const current = roots[i];
-    let hosts;
-    try {
-      hosts = Array.from(current.querySelectorAll("*"));
-    } catch {
-      continue;
-    }
-    for (const host of hosts) {
-      const shadow = getShadowRoot(host);
-      if (shadow) {
-        roots.push(shadow);
-        if (roots.length >= MAX_ROOTS)
-          break;
-      }
-    }
-  }
-  return roots;
-}
-function queryAllDeep(selector, root = document) {
-  const direct = Array.from(root.querySelectorAll(selector));
-  const roots = collectRoots(root);
-  if (roots.length === 1)
-    return direct;
-  const seen = new Set(direct);
-  const out = [...direct];
-  for (let i = 1;i < roots.length; i++) {
-    let matches;
-    try {
-      matches = Array.from(roots[i].querySelectorAll(selector));
-    } catch {
-      continue;
-    }
-    for (const el of matches) {
-      if (seen.has(el))
-        continue;
-      seen.add(el);
-      out.push(el);
-    }
-  }
-  return out;
-}
-function queryOneDeep(selector, root = document) {
-  const direct = root.querySelector(selector);
-  if (direct)
-    return direct;
-  const roots = collectRoots(root);
-  for (let i = 1;i < roots.length; i++) {
-    let match;
-    try {
-      match = roots[i].querySelector(selector);
-    } catch {
-      continue;
-    }
-    if (match)
-      return match;
-  }
-  return null;
-}
-
-// extension/src/content/actions/click.ts
+init_deep_query();
 init_a11y_tree();
 async function handleClick(action) {
   const el = resolveElement(action.index, action.ref);
@@ -2892,6 +2933,7 @@ async function handleExtractHtml(action) {
 init_sensitive();
 init_input_simulation();
 init_ref_registry();
+init_deep_query();
 async function handleQuery(action) {
   const selector = action.selector;
   const els = queryAllDeep(selector);
@@ -2937,7 +2979,7 @@ async function handleCount(action) {
   return { success: true, data: els.length };
 }
 async function handleTableData(action) {
-  const table = action.index !== undefined ? resolveElement(action.index, action.ref) : document.querySelector(action.selector || "table");
+  const table = action.index !== undefined ? resolveElement(action.index, action.ref) : queryOneDeep(String(action.selector || "table"));
   if (!table)
     return { success: false, error: "table not found" };
   const rows = [];
@@ -2949,7 +2991,7 @@ async function handleTableData(action) {
   return { success: true, data: rows };
 }
 async function handleAttrGet(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   const name = action.name;
@@ -2957,14 +2999,14 @@ async function handleAttrGet(action) {
   return { success: true, data: name.toLowerCase() === "value" && value && isSensitive(el) ? SECURE_MASK : value };
 }
 async function handleAttrSet(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   el.setAttribute(action.name, action.value);
   return { success: true };
 }
 async function handleStyleGet(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   const computed = getComputedStyle(el);
@@ -3105,7 +3147,7 @@ init_input_simulation();
 init_element_discovery();
 init_a11y_tree();
 async function handleRect(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   const r = el.getBoundingClientRect();
@@ -4699,6 +4741,7 @@ async function handleCanvasAction(action) {
 
 // extension/src/content/dom-screenshot.ts
 init_input_simulation();
+init_deep_query();
 var TRANSPARENT_1PX = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==";
 var SKIP_TAGS2 = new Set(["script", "noscript", "style", "link", "meta", "template", "iframe", "object", "embed"]);
 function extractUrls(cssValue) {
@@ -4887,7 +4930,7 @@ function resolveTarget(action) {
       if (!action.selector) {
         return { node: null, error: "selector mode requires selector string" };
       }
-      const el = document.querySelector(action.selector);
+      const el = queryOneDeep(action.selector);
       if (!el)
         return { node: null, error: `selector not found: ${action.selector}` };
       if (!(el instanceof HTMLElement)) {

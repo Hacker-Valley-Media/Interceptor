@@ -3007,7 +3007,7 @@ async function runWithCspStripBypass(tabId, world, run) {
   if (retried.success) {
     return {
       ...retried,
-      warning: "page CSP refused MAIN-world eval, so the tab was reloaded with its CSP header stripped — any in-page state (open conversations, unsaved form input, in-memory app state) was discarded. Re-run with 'interceptor eval --no-reload' to get the CSP error instead of a reloaded tab.",
+      warning: "page CSP refused MAIN-world eval, so the tab was reloaded with its CSP header stripped, and any in-page state (open conversations, unsaved form input, in-memory app state) was discarded. Re-run with 'interceptor eval --no-reload' to get the CSP error instead of a reloaded tab.",
       data: {
         value: retried.data,
         cspBypassApplied: true,
@@ -3194,7 +3194,7 @@ async function prepareByteSource(tabId, code, world) {
   if (!descriptor || typeof descriptor !== "object" || typeof descriptor.url !== "string") {
     return { success: false, error: "byte source normalization returned no blob URL" };
   }
-  return { success: true, data: descriptor };
+  return { success: true, data: descriptor, ...evalResult.warning ? { warning: evalResult.warning } : {} };
 }
 async function cleanupByteSource(tabId, source, world) {
   if (!source.created)
@@ -3422,7 +3422,8 @@ async function handleBinarySinkActions(action, tabId) {
     return prepared;
   const source = prepared.data;
   try {
-    return await streamByteSource(tabId, source, out, chunkSize);
+    const result = await streamByteSource(tabId, source, out, chunkSize);
+    return prepared.warning ? { ...result, warning: prepared.warning } : result;
   } finally {
     await cleanupByteSource(tabId, source, world);
   }
