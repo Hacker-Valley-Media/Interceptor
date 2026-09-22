@@ -165,8 +165,8 @@ const MAP_MACOS = `MACOS — native apps via the accessibility tree, background-
 
 const MAP_IOS = `iOS — automate a physical iPhone over WiFi (on-device XCUITest runner, no cable once paired):
   Drive      ios tree · find · inspect       on-screen elements + refs (auto-connects on first verb)
-  Input      ios click · type · keys · scroll · drag · press       trusted XCUITest input
-  Apps       ios screenshot · apps · app launch|activate|terminate · devices · name
+  Input      ios click · type · keys · scroll · drag · press · gesture   trusted XCUITest input (gesture = multi-touch)
+  Apps       ios screenshot · stream · frame · apps · app launch|activate|terminate · devices · name
   Setup      ios install | login | setup     one-time: put the InterceptorRunner on the phone
   Connection model (read this before you panic about 'connected: false'):
     • Phone must be owned, unlocked, in Developer Mode, and WiFi-paired to this Mac.
@@ -780,6 +780,9 @@ const HELP_IOS = `  iOS — automate your iPhone (Xcode-signed device runner):
   interceptor ios name <device> <alias>       Rename a phone (then use --on <alias>)
   interceptor ios tree|find|inspect [--on <name>]                   On-screen elements (auto-connects)
   interceptor ios click|type|keys|scroll|drag|press [--on <name>]   Trusted XCUITest input
+  interceptor ios gesture <finger> [<finger>...] [--hold ms]        Multi-touch: x,y[@ms][>x,y@ms...] per finger
+  interceptor ios stream start|stop|status [--fps N] [--out <path>] Continuous JPEG frames from the phone
+  interceptor ios frame [--out <path>]                              Save the newest streamed frame
   interceptor ios type <ref> --secret <name> | keys --secret <name> | unlock --secret <name>   Vault-backed passcode entry
   interceptor ios screenshot | apps | app launch|activate|terminate <id> [--on <name>]
   Run 'interceptor ios help' for the full iOS surface.`

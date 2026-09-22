@@ -40,6 +40,10 @@ export const IOS_RUNNER_OPS = {
   eval: "eval",
   // issue #244: lock-screen passcode entry (wake, swipe up, type into SpringBoard).
   unlock: "unlock",
+  /** Multi-touch: one XCSynthesizedEventRecord with one pointer path per finger. */
+  gesture: "gesture",
+  /** JPEG frame push loop (start|stop|status); frames arrive as binary WS messages. */
+  stream: "stream",
 } as const
 export type IosRunnerOp = (typeof IOS_RUNNER_OPS)[keyof typeof IOS_RUNNER_OPS]
 
@@ -76,6 +80,7 @@ export const IOS_VERB_TYPES = new Set<string>([
   "ios_tree", "ios_find", "ios_inspect", "ios_click", "ios_type", "ios_keys",
   "ios_scroll", "ios_drag", "ios_press", "ios_screenshot", "ios_apps", "ios_app",
   "ios_fgdebug", "ios_eval", "ios_unlock",
+  "ios_gesture", "ios_stream", "ios_frame",
 ])
 
 /**

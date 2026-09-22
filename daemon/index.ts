@@ -2206,8 +2206,12 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         log(`ws client connected`)
       },
       message(ws, raw) {
-        if (typeof raw !== "string" && handleBinarySinkFrame(ws, Buffer.from(raw))) {
-          return
+        if (typeof raw !== "string") {
+          const bytes = Buffer.from(raw)
+          // A registered iOS runner sends binary frames only for its JPEG stream;
+          // they never carry the binary-sink header, so route them by socket first.
+          if (iosManager.isRunnerSocket(ws as any)) { iosManager.handleRunnerFrame(ws as any, bytes); return }
+          if (handleBinarySinkFrame(ws, bytes)) return
         }
         const rawStr = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8")
         log(`ws recv: ${rawStr.slice(0, 300)}`)

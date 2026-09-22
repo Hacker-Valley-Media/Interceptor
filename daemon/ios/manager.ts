@@ -21,7 +21,7 @@ import {
   type IosDeviceDescriptor, type IosDeviceState, type IosTunnelState, type IosDeviceKind,
 } from "../../shared/ios-device"
 import { WdaClient } from "./wda-client"
-import { RunnerChannel, type IosDeviceChannel, type RunnerSocket, type RunnerResult } from "./channel"
+import { RunnerChannel, type IosDeviceChannel, type RunnerSocket, type RunnerResult, type GestureFinger } from "./channel"
 import {
   IosRefRegistry, formatWdaTree, findInTree, frameCenter, type WdaSourceNode,
 } from "./tree"
@@ -42,8 +42,82 @@ import { helperAvailable, runRemotectl } from "./tunnel"
 import type { RunnerEnv } from "./tunnel"
 import { resolveRunnerDialBack, runnerDialHint, type DialBack } from "./ws-host"
 import net from "node:net"
+import { renameSync, writeFileSync } from "node:fs"
+import { isAbsolute } from "node:path"
 
 export type IosResult = { success: boolean; error?: string; data?: unknown }
+
+/** Daemon-side state of a running (or last) frame stream for one device. */
+export type StreamState = {
+  running: boolean
+  startedAt: number
+  fps: number
+  scale: number
+  quality: number
+  outPath?: string
+  frames: number
+  seq: number
+  lastAt: number
+  last?: Buffer
+  bytes: number
+  width: number
+  height: number
+  writeErrors: number
+  lastWriteError?: string
+  /** Arrival times of the most recent frames, for the received-fps estimate. */
+  arrivals: number[]
+}
+
+export const MAX_GESTURE_FINGERS = 10
+export const MAX_GESTURE_MS = 55_000
+
+/**
+ * Check a gesture request before it reaches the runner. Returns the error text,
+ * or undefined when `fingers` is 1 to 10 arrays of finite {x, y, t} samples with
+ * t non-negative, non-decreasing within a finger, and at most 55,000 ms.
+ */
+export function validateGestureFingers(fingers: unknown): string | undefined {
+  if (!Array.isArray(fingers) || fingers.length === 0) return "ios gesture requires at least one finger"
+  if (fingers.length > MAX_GESTURE_FINGERS) return `ios gesture takes at most ${MAX_GESTURE_FINGERS} fingers`
+  for (let f = 0; f < fingers.length; f++) {
+    const samples = fingers[f]
+    if (!Array.isArray(samples) || samples.length === 0) return `ios gesture: finger ${f + 1} has no samples`
+    let last = -1
+    for (const s of samples) {
+      const { x, y, t } = (s ?? {}) as { x?: unknown; y?: unknown; t?: unknown }
+      if (![x, y, t].every((v) => typeof v === "number" && Number.isFinite(v))) return `ios gesture: finger ${f + 1} has a sample without numeric x, y, t`
+      if ((t as number) < 0) return `ios gesture: finger ${f + 1} has a negative time offset`
+      if ((t as number) < last) return `ios gesture: finger ${f + 1} time offsets must not decrease`
+      last = t as number
+    }
+    if (last > MAX_GESTURE_MS) return `ios gesture: the last offset is at most ${MAX_GESTURE_MS} ms (the gesture deadline is 60 s)`
+  }
+  return undefined
+}
+
+/** Width and height from a JPEG's start-of-frame marker; undefined when it is not a JPEG. */
+export function jpegSize(buf: Buffer): { width: number; height: number } | undefined {
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return undefined
+  let pos = 2
+  while (pos + 9 < buf.length) {
+    if (buf[pos] !== 0xff) { pos++; continue }
+    const marker = buf[pos + 1]
+    if (marker === 0xff) { pos++; continue }
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { height: buf.readUInt16BE(pos + 5), width: buf.readUInt16BE(pos + 7) }
+    }
+    pos += 2 + buf.readUInt16BE(pos + 2)
+  }
+  return undefined
+}
+
+/** Write `data` to `path` so a concurrent reader sees the old file or the new one, never a partial one. */
+export function writeFileAtomic(path: string, data: Buffer): void {
+  const tmp = `${path}.${process.pid}.tmp`
+  writeFileSync(tmp, data)
+  renameSync(tmp, path)
+}
+
 
 export function parseIosPoint(value: unknown): { x: number; y: number } | undefined {
   if (typeof value !== "string") return undefined
@@ -76,6 +150,8 @@ type IosDeviceContext = {
   token?: string
   /** Set while the runner's socket is closed but its re-dial may still arrive (see handleRunnerClose). */
   grace?: RunnerGrace
+  /** Frame stream state; kept after stop so the last frame stays readable. */
+  stream?: StreamState
 }
 
 /** A closed runner socket being held open for the runner's own re-dial. */
@@ -216,6 +292,36 @@ export class IosManager {
   }
 
   /**
+   * A binary message from a registered runner is one JPEG frame of the stream.
+   * Only the newest frame is kept; with `--out` it is also written atomically so
+   * a reader never sees a partial file. Frames that arrive with no stream state
+   * (after stop, or from a runner that never started one) are dropped.
+   */
+  handleRunnerFrame(ws: RunnerSocket, frame: Buffer): boolean {
+    const rec = this.runnerByWs.get(ws)
+    if (!rec) return false
+    const st = this.contexts.get(iosContextId(rec.udid))?.stream
+    // A frame captured before `stop` reached the runner can land after it; the
+    // daemon's count must not move once the caller has been told it stopped.
+    if (!st || !st.running) return true
+    const now = Date.now()
+    st.seq += 1
+    st.frames += 1
+    st.lastAt = now
+    st.last = frame
+    st.bytes = frame.length
+    const size = jpegSize(frame)
+    if (size) { st.width = size.width; st.height = size.height }
+    st.arrivals.push(now)
+    if (st.arrivals.length > 60) st.arrivals.shift()
+    if (st.outPath) {
+      try { writeFileAtomic(st.outPath, frame) }
+      catch (err) { st.writeErrors += 1; st.lastWriteError = (err as Error).message }
+    }
+    return true
+  }
+
+  /**
    * A runner socket closed. Hold the session for RUNNER_RECONNECT_GRACE_MS so the
    * runner's own re-dial (same token) can rebind; only a lapsed window or a dead
    * launch process tears the context down. In-flight ops are failed at once —
@@ -348,6 +454,9 @@ export class IosManager {
         case "ios_press": return await this.verbPress(ctx, action)
         case "ios_unlock": return await this.verbUnlock(ctx, action)
         case "ios_screenshot": return await this.verbScreenshot(ctx, action)
+        case "ios_stream": return await this.verbStream(ctx, action)
+        case "ios_frame": return this.verbFrame(ctx, action)
+        case "ios_gesture": return await this.verbGesture(ctx, action)
         case "ios_apps": return this.verbApps(ctx)
         case "ios_app": return await this.verbApp(ctx, action)
         case "ios_fgdebug":
@@ -1032,6 +1141,75 @@ export class IosManager {
     const maxLongEdge = Number(action.targetMaxLongEdge) > 0 ? Number(action.targetMaxLongEdge) : 1568
     const { dataUrl, format } = resizePngToBudget(b64, maxLongEdge)
     return { success: true, data: { dataUrl, format } }
+  }
+
+  // ── frame stream + multi-touch (runner-only) ─────────────────────────────────
+
+  private streamSummary(st: StreamState | undefined) {
+    if (!st) return { running: false, frames: 0 }
+    const now = Date.now()
+    const window = st.arrivals.filter((t) => now - t <= 3000)
+    const span = window.length > 1 ? (window[window.length - 1] - window[0]) / 1000 : 0
+    return {
+      running: st.running, frames: st.frames, lastSeq: st.seq,
+      ageMs: st.lastAt ? now - st.lastAt : undefined,
+      receivedFps: span > 0 ? Math.round(((window.length - 1) / span) * 10) / 10 : 0,
+      bytes: st.bytes, width: st.width, height: st.height,
+      // `outPath`, not `out`: the MCP formatter treats an `out` key as a saved artifact
+      // and would return the frame image in place of these numbers.
+      outPath: st.outPath, writeErrors: st.writeErrors, lastWriteError: st.lastWriteError,
+      fps: st.fps, scale: st.scale, quality: st.quality,
+    }
+  }
+
+  private async verbStream(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
+    if (!(ctx.channel instanceof RunnerChannel)) return { success: false, error: "ios stream is runner-only" }
+    const op = typeof action.op === "string" ? action.op : "status"
+    if (op === "start") {
+      const fps = action.fps === undefined ? 10 : Number(action.fps)
+      const scale = action.scale === undefined ? 0.5 : Number(action.scale)
+      const quality = action.quality === undefined ? 0.3 : Number(action.quality)
+      if (!(fps >= 1 && fps <= 30)) return { success: false, error: "ios stream --fps must be 1 to 30" }
+      if (!(scale >= 0.1 && scale <= 1)) return { success: false, error: "ios stream --scale must be 0.1 to 1.0" }
+      if (!(quality >= 0.05 && quality <= 1)) return { success: false, error: "ios stream --quality must be 0.05 to 1.0" }
+      const outPath = typeof action.out === "string" && action.out ? action.out : undefined
+      if (outPath && !isAbsolute(outPath)) return { success: false, error: "ios stream --out must be an absolute path" }
+      const runner = await ctx.channel.stream("start", { fps, scale, quality })
+      ctx.stream = {
+        running: true, startedAt: Date.now(), fps, scale, quality, outPath,
+        frames: 0, seq: ctx.stream?.seq ?? 0, lastAt: 0, bytes: 0, width: 0, height: 0, writeErrors: 0, arrivals: [],
+      }
+      return { success: true, data: { started: true, ...this.streamSummary(ctx.stream), runner } }
+    }
+    if (op === "stop") {
+      const runner = await ctx.channel.stream("stop")
+      if (ctx.stream) ctx.stream.running = false
+      return { success: true, data: { stopped: true, ...this.streamSummary(ctx.stream), runner } }
+    }
+    if (op === "status") {
+      const runner = ctx.stream?.running ? await ctx.channel.stream("status") : undefined
+      return { success: true, data: { ...this.streamSummary(ctx.stream), runner } }
+    }
+    return { success: false, error: `unknown stream op '${op}' (start|stop|status)` }
+  }
+
+  /** The newest frame the stream delivered, written to `out`. No device round trip. */
+  private verbFrame(ctx: IosDeviceContext, action: { [k: string]: unknown }): IosResult {
+    const st = ctx.stream
+    if (!st?.last) return { success: false, error: "no frame received yet: run 'interceptor ios stream start' first" }
+    const out = typeof action.out === "string" ? action.out : ""
+    if (!out || !isAbsolute(out)) return { success: false, error: "ios frame needs an absolute --out path" }
+    try { writeFileAtomic(out, st.last) }
+    catch (err) { return { success: false, error: `ios frame: could not write ${out}: ${(err as Error).message}` } }
+    return { success: true, data: { path: out, seq: st.seq, ageMs: Date.now() - st.lastAt, bytes: st.bytes, width: st.width, height: st.height, running: st.running } }
+  }
+
+  private async verbGesture(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
+    if (!(ctx.channel instanceof RunnerChannel)) return { success: false, error: "ios gesture is runner-only" }
+    const problem = validateGestureFingers(action.fingers)
+    if (problem) return { success: false, error: problem }
+    const data = await ctx.channel.gesture(action.fingers as GestureFinger[])
+    return { success: true, data: (data && typeof data === "object") ? data as Record<string, unknown> : { fingers: (action.fingers as unknown[]).length } }
   }
 
   private verbApps(ctx: IosDeviceContext): IosResult {

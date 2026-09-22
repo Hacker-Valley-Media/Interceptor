@@ -26,6 +26,15 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.13">
+    <h2>Interceptor 1.0.13</h2>
+    <time datetime="2026-09-22">September 22, 2026</time>
+    <ul>
+      <li><code>interceptor ios stream start</code> has the phone push small JPEG frames continuously over Wi-Fi, no cable and no Screen Mirroring. With <code>--out &lt;path&gt;</code> the newest frame is rewritten atomically in that file, so a loop reads one path whenever it wants a look. <code>ios stream status</code> reports frames received, the age of the newest, and what the phone spent capturing and encoding; <code>ios frame</code> saves the newest frame on demand.</li>
+      <li><code>interceptor ios gesture</code> presses with up to ten fingers at once, each on its own timeline: <code>"380,700@0&gt;380,700@600" "120,650@100&gt;120,650@300"</code> holds one point for 600 ms while another is tapped from 100 to 300 ms. Coordinates are the same screen points <code>click</code> and <code>drag</code> use. Run <code>interceptor ios refresh</code> once so the runner on the phone picks up both verbs.</li>
+    </ul>
+  </section>
+
   <section data-sparkle-version="1.0.11">
     <h2>Interceptor 1.0.11</h2>
     <time datetime="2026-09-22">September 22, 2026</time>

@@ -64,7 +64,7 @@ Full contract + verb inventory + worked examples + pitfalls: [`.agents/skills/in
 | Native apps, OS dialogs, browser chrome (URL bar, menus), occluded/minimized windows, cross-app routing | `interceptor-macos` |
 | **Electron / Chromium desktop apps** (Slack, VS Code, Descript, …): read DOM, run JS, capture network, screenshot *inside the app's web content* | `interceptor macos cdp` / `interceptor macos cdp app` |
 | **Native app runtime internals** (AppKit/SwiftUI): read the live view/object graph, run selectors, **rewrite rendered text**, intercept/redirect — via an injected in-process agent (no Frida, no SIP-off) | `interceptor macos runtime` |
-| Owned, unlocked, Developer-Mode **iPhone**: drive apps (AX tree, taps, text), screenshots, process/telemetry, GPS sim, on-device JS brain (`ios eval`), WebKit inspection (`ios web`) | `interceptor-ios` (run `interceptor ios`) |
+| Owned, unlocked, Developer-Mode **iPhone**: drive apps (AX tree, taps, text, multi-touch `ios gesture`), screenshots and a live frame stream (`ios stream`), process/telemetry, GPS sim, on-device JS brain (`ios eval`), WebKit inspection (`ios web`) | `interceptor-ios` (run `interceptor ios`) |
 | Deep web research: investigate a topic across many sources (planner loop, source ledger, verification) | `interceptor-research` (run `interceptor research`) |
 | User said "open in Brave / Mail / X" (any specific named app) | `interceptor-macos` (Apple Events) |
 | Visual overlays / HUDs above all apps | `interceptor-macos` (overlay via NSPanel above compositor) |
