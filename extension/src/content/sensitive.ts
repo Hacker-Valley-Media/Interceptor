@@ -38,22 +38,45 @@ export function redactSensitiveText(text: string, root: Element): string {
   return text
 }
 
-// `innerText` is layout-dependent, and Chrome does not run layout for a tab
-// that has never been foregrounded. In a background tab — the default for
-// `interceptor open`, and the only state a container ever has — `innerText`
-// returns "" for a body that is full of text, so `text`, `find` and `state`
-// all reported an empty page while `textContent` held every word. `??` did not
-// catch this: the value is an empty string, not null.
+// `innerText` is layout-dependent, and a tab that has never been rendered
+// (a container's only state) can answer "" for a body full of text, so
+// `text`, `find`, and `state` reported an empty page. `??` did not catch this:
+// the value is an empty string, not null.
 //
-// Falling back only when the rendered read came back blank keeps `innerText`'s
-// advantages (it honours display:none and collapses whitespace the way a reader
-// sees it) everywhere they are actually available, and degrades to raw text
-// only where the alternative is nothing at all.
+// The fallback is not raw `textContent`, which would hand back stylesheet
+// rules, script source, and hidden text that no reader sees. It walks text
+// nodes the way a renderer would show them: non-rendered tags are skipped,
+// elements hidden by computed style are skipped, and whitespace is collapsed.
+// `innerText` still wins whenever it has content, so nothing changes where
+// layout exists.
+const NON_RENDERED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"])
+
+function hiddenByStyle(el: Element): boolean {
+  const style = getComputedStyle(el)
+  return style.display === "none" || style.visibility === "hidden"
+}
+
+/** Text nodes in document order, minus what a renderer would not show. */
+export function walkRenderedText(root: Element): string {
+  const parts: string[] = []
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) { parts.push(node.textContent ?? ""); return }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const el = node as Element
+    if (NON_RENDERED_TAGS.has(el.tagName) || hiddenByStyle(el)) return
+    for (const child of Array.from(el.childNodes)) walk(child)
+  }
+  walk(root)
+  // ponytail: one collapse rule for every element; per-element white-space
+  // handling (pre, nowrap) only matters if this fallback ever runs on a
+  // page where innerText also works, and it cannot.
+  return parts.join(" ").replace(/\s+/g, " ").trim()
+}
+
 function renderedText(el: Element): string {
   const rendered = (el as HTMLElement).innerText
   if (rendered && rendered.trim()) return rendered
-  const raw = el.textContent ?? ""
-  return raw.trim() ? raw : rendered ?? raw
+  return walkRenderedText(el)
 }
 
 export function safeText(el: Element, rendered = false): string {

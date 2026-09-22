@@ -71,3 +71,39 @@ describe("safeText on a background tab", () => {
     expect(safeText(el, true)).toBe("real content")
   })
 })
+
+describe("safeText fallback skips what a renderer would not show", () => {
+  test("stylesheet rules, script source, noscript and template content stay out", async () => {
+    const { safeText } = await import("./sensitive")
+    document.body.innerHTML = `<style>.x{color:red}</style><script>window.__init = "token-abc"</script><noscript>enable js</noscript><template><span>tpl</span></template><p>Visible paragraph</p>`
+    throttleRendering(document.body)
+    expect(safeText(document.body, true)).toBe("Visible paragraph")
+  })
+
+  test("elements hidden by computed display or visibility stay out", async () => {
+    const { safeText } = await import("./sensitive")
+    document.head.innerHTML = `<style>.h{visibility:hidden}</style>`
+    document.body.innerHTML = `<nav style="display:none">Hidden menu</nav><p class="h">Hidden note</p><p>Shown</p>`
+    throttleRendering(document.body)
+    expect(safeText(document.body, true)).toBe("Shown")
+    document.head.innerHTML = ""
+  })
+
+  test("whitespace across nodes collapses to single spaces", async () => {
+    const { safeText } = await import("./sensitive")
+    document.body.innerHTML = `<div>\n  <span>one</span>\n  <span>two</span>\n</div>\n<p>three</p>`
+    throttleRendering(document.body)
+    expect(safeText(document.body, true)).toBe("one two three")
+  })
+
+  test("a password field's text-backed value is still masked on the fallback path", async () => {
+    const { safeText, SECURE_MASK, markSensitive } = await import("./sensitive")
+    document.body.innerHTML = `<div id="cred">CANARY-secret</div><p>public</p>`
+    markSensitive(document.getElementById("cred")!)
+    throttleRendering(document.body)
+    const out = safeText(document.body, true)
+    expect(out).not.toContain("CANARY-secret")
+    expect(out).toContain(SECURE_MASK)
+    expect(out).toContain("public")
+  })
+})
