@@ -8,6 +8,7 @@
     "extension/src/**/*.ts"
   ],
   "exclude": [
-    "extension/src/**/*.test.ts"
+    "extension/src/**/*.test.ts",
+    "extension/src/**/*.check.ts"
   ]
 }
