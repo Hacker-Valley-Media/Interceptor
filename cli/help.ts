@@ -384,6 +384,7 @@ Capture:
   interceptor ocr --element N                OCR an element by ref
   interceptor eval <code>                    Run JS in isolated world
   interceptor eval <code> --main             Run JS in page context
+  interceptor eval <code> --main --no-reload Never reload the tab to beat page CSP
     --frame <id>                             Target exactly that frame; missing frames fail
     Isolated eval may require Allow User Scripts. MAIN CSP recovery discloses a tab reload, which can discard unsaved page state.
   interceptor save --out <path> <expr>       Stream page bytes (Blob/ArrayBuffer/blob: URL) to disk; no downloads/CDP — see 'save --help'

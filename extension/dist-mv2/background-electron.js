@@ -526,6 +526,7 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
     function listener(updatedTabId, changeInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
         clearTimeout(hardTimer);
+        clearTimeout(stage1Timer);
         chrome.tabs.onUpdated.removeListener(listener);
         const remaining = Math.max(timeoutMs - (Date.now() - start), 2000);
         probeContentReady(tabId, remaining).then((ready) => {
@@ -533,8 +534,7 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
         });
       }
     }
-    chrome.tabs.onUpdated.addListener(listener);
-    setTimeout(async () => {
+    const stage1Timer = setTimeout(async () => {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (tab && tab.status === "complete") {
         chrome.tabs.onUpdated.removeListener(listener);
@@ -544,6 +544,7 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
         resolve({ ready, elapsed: Date.now() - start });
       }
     }, stage1Timeout);
+    chrome.tabs.onUpdated.addListener(listener);
   });
 }
 async function probeContentReady(tabId, timeoutMs) {
@@ -3007,6 +3008,7 @@ async function runWithCspStripBypass(tabId, world, run) {
   if (retried.success) {
     return {
       ...retried,
+      warning: "page CSP refused MAIN-world eval, so the tab was reloaded with its CSP header stripped, and any in-page state (open conversations, unsaved form input, in-memory app state) was discarded. Re-run with 'interceptor eval --no-reload' to get the CSP error instead of a reloaded tab.",
       data: {
         value: retried.data,
         cspBypassApplied: true,
@@ -3017,6 +3019,7 @@ async function runWithCspStripBypass(tabId, world, run) {
   return {
     success: false,
     error: retried.error || first.error || "MAIN-world eval failed after CSP bypass retry",
+    warning: "the tab was reloaded to strip its CSP header and the retry still failed, so in-page state was discarded for nothing. Use 'interceptor eval --no-reload' on pages whose state matters.",
     data: {
       originalError: first.error,
       cspBypassApplied: true
@@ -3192,7 +3195,7 @@ async function prepareByteSource(tabId, code, world) {
   if (!descriptor || typeof descriptor !== "object" || typeof descriptor.url !== "string") {
     return { success: false, error: "byte source normalization returned no blob URL" };
   }
-  return { success: true, data: descriptor };
+  return { success: true, data: descriptor, ...evalResult.warning ? { warning: evalResult.warning } : {} };
 }
 async function cleanupByteSource(tabId, source, world) {
   if (!source.created)
@@ -3420,7 +3423,8 @@ async function handleBinarySinkActions(action, tabId) {
     return prepared;
   const source = prepared.data;
   try {
-    return await streamByteSource(tabId, source, out, chunkSize);
+    const result = await streamByteSource(tabId, source, out, chunkSize);
+    return prepared.warning ? { ...result, warning: prepared.warning } : result;
   } finally {
     await cleanupByteSource(tabId, source, world);
   }

@@ -1,6 +1,7 @@
 import { resolveRef } from "./ref-registry"
 import { isVisible } from "./element-discovery"
 import { selectorMap } from "./element-discovery"
+import { queryOneDeep } from "./deep-query"
 
 export type StaleElementResult = { success: false; error: string; delivered: false }
 
@@ -29,6 +30,13 @@ export function resolveElement(indexOrRef: number | undefined, ref?: string): El
   if (!el) return null
   if (!isVisible(el)) return null
   return el
+}
+
+/** Ref or index first; otherwise a shadow-piercing CSS selector. */
+export function resolveElementOrSelector(action: { [key: string]: unknown }): Element | null {
+  const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
+  if (el) return el
+  return action.selector ? queryOneDeep(String(action.selector)) : null
 }
 
 export function scrollIntoViewIfNeeded(el: Element) {
@@ -103,22 +111,103 @@ function getKeyCode(key: string): string {
   return KEY_CODES[key] || `Key${key.toUpperCase()}`
 }
 
+// Legacy `keyCode` numbers, by `key` name. Deprecated, but a large amount of
+// shipped widget code still branches on them — `if (e.keyCode === 13) send()`
+// is the canonical chat composer, and several live ones (socialintents and
+// Ada among them) test *only* keyCode. A KeyboardEvent constructed without one
+// reports `keyCode: 0`, so pressing Enter in such a composer typed nothing and
+// sent nothing, with no error anywhere: the key was delivered and the handler
+// declined it.
+const LEGACY_KEY_CODES: Record<string, number> = {
+  Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18,
+  Escape: 27, Space: 32, " ": 32,
+  PageUp: 33, PageDown: 34, End: 35, Home: 36,
+  ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+  Delete: 46, Meta: 91,
+  F1: 112, F2: 113, F3: 114, F4: 115, F5: 116, F6: 117,
+  F7: 118, F8: 119, F9: 120, F10: 121, F11: 122, F12: 123,
+}
+
+export function getLegacyKeyCode(key: string): number {
+  const named = LEGACY_KEY_CODES[key]
+  if (named !== undefined) return named
+  if (key.length !== 1) return 0
+  // US-layout approximation, the same one Puppeteer/Selenium ship: letters and
+  // digits are exact, punctuation is layout-dependent and cannot be exact from
+  // a `key` name alone. Handlers that branch on punctuation keyCodes are rare;
+  // handlers that branch on Enter are everywhere.
+  return key.toUpperCase().charCodeAt(0)
+}
+
+// Belt-and-braces for same-world listeners only.
+//
+// The init dictionary is what actually reaches the page — see `fire()` below.
+// This own-property shadowing is kept for engines whose KeyboardEventInit does
+// not carry the legacy members, where it is the only thing that fills them in.
+// It CANNOT be the primary mechanism: a content script and the page share the
+// DOM but not JS object identity, so when the event crosses into the page Blink
+// builds a fresh wrapper from the C++ event and an own property defined here
+// does not come with it. Same reason `click.ts` relays through
+// `__interceptor_click` to re-fire in the MAIN world rather than tagging its
+// events here.
+function withLegacyCodes(event: KeyboardEvent, keyCode: number, charCode: number): KeyboardEvent {
+  for (const [name, value] of [["keyCode", keyCode], ["which", keyCode], ["charCode", charCode]] as const) {
+    try { Object.defineProperty(event, name, { get: () => value, configurable: true }) } catch { /* non-configurable in this engine; the init-dict value stands */ }
+  }
+  return event
+}
+
+// Real browsers fire `keypress` only for keys that produce a character, plus
+// Enter — never for Tab, Escape, or the arrows. Firing it for everything is a
+// fingerprintable artifact on exactly the sites that care, and can double-
+// handle a key on widgets listening to both keydown and keypress.
+function producesKeypress(key: string): boolean {
+  return key === "Enter" || key === "Space" || key.length === 1
+}
+
 export function dispatchKeySequence(target: Element, combo: string) {
   const parts = combo.split("+")
-  const key = parts[parts.length - 1]
   const modifiers = {
     ctrlKey: parts.includes("Control"),
     shiftKey: parts.includes("Shift"),
     altKey: parts.includes("Alt"),
     metaKey: parts.includes("Meta")
   }
+  const raw = parts[parts.length - 1]
+  // Shift with one lowercase letter is that letter's uppercase form, as a
+  // keyboard sends it: key "A", keypress charCode 65. Every other key is
+  // passed as written (shifted punctuation and digits depend on the layout).
+  const key = modifiers.shiftKey && /^[a-z]$/.test(raw) ? raw.toUpperCase() : raw
 
   const code = getKeyCode(key)
-  const keyOpts = { key, code, bubbles: true, cancelable: true, ...modifiers }
+  const legacy = getLegacyKeyCode(key)
+  const base = { key, code, bubbles: true, cancelable: true, ...modifiers }
 
-  target.dispatchEvent(new KeyboardEvent("keydown", keyOpts))
-  target.dispatchEvent(new KeyboardEvent("keypress", keyOpts))
-  target.dispatchEvent(new KeyboardEvent("keyup", keyOpts))
+  // The legacy members go in the INIT DICTIONARY, which is the only route that
+  // reaches the page. `keyCode`/`charCode` are KeyboardEventInit members and
+  // `which` is a UIEventInit member (the UI Events "legacy key and character"
+  // extensions); Blink stores them on the C++ event, so they survive into the
+  // wrapper a MAIN-world listener receives. Verified in Chrome 153:
+  // `new KeyboardEvent("keydown", {keyCode: 13}).keyCode === 13`.
+  const fire = (type: string, keyCode: number, charCode: number): boolean =>
+    target.dispatchEvent(withLegacyCodes(
+      // `which` mirrors charCode on keypress and keyCode elsewhere, as in Blink.
+      new KeyboardEvent(type, { ...base, keyCode, charCode, which: charCode || keyCode }),
+      keyCode, charCode,
+    ))
+
+  // A page that calls preventDefault() on keydown suppresses the keypress in a
+  // real browser. Honour that rather than delivering a keypress the page just
+  // refused.
+  const notCancelled = fire("keydown", legacy, 0)
+  if (notCancelled && producesKeypress(key)) {
+    // charCode carries the character for keypress, and is 13 for Enter. Blink
+    // reports keyCode === charCode on keypress, unlike keydown/keyup where
+    // keyCode is the virtual key ('a' is 65 down, 97 on keypress).
+    const charCode = key === "Enter" ? 13 : key === "Space" ? 32 : key.charCodeAt(0)
+    fire("keypress", charCode, charCode)
+  }
+  fire("keyup", legacy, 0)
 }
 
 export function waitForMutation(timeoutMs: number): Promise<boolean> {
@@ -144,24 +233,29 @@ export function waitForMutation(timeoutMs: number): Promise<boolean> {
 
 export function waitForElement(selector: string, timeout: number): Promise<Element | null> {
   return new Promise((resolve) => {
-    const existing = document.querySelector(selector)
+    const existing = queryOneDeep(selector)
     if (existing) { resolve(existing); return }
 
-    const timer = setTimeout(() => {
+    let done = false
+    const finish = (el: Element | null) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      clearInterval(poll)
       observer.disconnect()
-      resolve(null)
-    }, timeout)
+      resolve(el)
+    }
+    const check = () => {
+      const el = queryOneDeep(selector)
+      if (el) finish(el)
+    }
 
-    const observer = new MutationObserver(() => {
-      const el = document.querySelector(selector)
-      if (el) {
-        clearTimeout(timer)
-        observer.disconnect()
-        resolve(el)
-      }
-    })
-
+    const timer = setTimeout(() => finish(null), timeout)
+    const observer = new MutationObserver(check)
     observer.observe(document.body, { childList: true, subtree: true })
+    // A light-DOM observer never reports mutations inside a shadow tree, so an
+    // element rendered later inside an existing shadow root needs the poll.
+    const poll = setInterval(check, 250)
   })
 }
 

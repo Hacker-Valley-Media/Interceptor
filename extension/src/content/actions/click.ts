@@ -1,5 +1,6 @@
 import { resolveElement, scrollIntoViewIfNeeded, dispatchClickSequence, waitForMutation, staleElementError } from "../input-simulation"
 import { getOrAssignRef } from "../ref-registry"
+import { queryAllDeep } from "../deep-query"
 import { getEffectiveRole, getAccessibleName } from "../a11y-tree"
 
 type Action = { type: string; [key: string]: unknown }
@@ -41,9 +42,14 @@ export async function handleClick(action: Action): Promise<ActionResult> {
 export async function handleClickSelector(action: Action): Promise<ActionResult> {
   const selector = String(action.selector ?? "")
   if (!selector) return { success: false, error: "click_selector: no selector given" }
-  let matches: NodeListOf<Element>
+  let matches: Element[]
   try {
-    matches = document.querySelectorAll(selector)
+    // Shadow-piercing: a launcher button inside a web component's shadow root
+    // is invisible to document.querySelectorAll, so the click silently found
+    // nothing on exactly the widgets most worth clicking. Light-DOM matches
+    // still come first, so `nth` keeps its meaning on pages without shadow
+    // hosts. See ../deep-query.
+    matches = queryAllDeep(selector)
   } catch {
     return { success: false, error: `click_selector: invalid CSS selector ${JSON.stringify(selector)}` }
   }

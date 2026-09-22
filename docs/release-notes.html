@@ -26,6 +26,17 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.11">
+    <h2>Interceptor 1.0.11</h2>
+    <time datetime="2026-09-22">September 22, 2026</time>
+    <ul>
+      <li>CSS-selector commands now find elements inside web components. <code>query</code>, <code>exists</code>, <code>count</code>, <code>click --selector</code>, <code>wait</code>, <code>table</code>, <code>attr</code>, <code>style</code>, <code>rect</code>, and <code>screenshot --selector</code> reach open and closed shadow roots. Light-DOM matches still come first, so <code>--nth</code> keeps its meaning on ordinary pages.</li>
+      <li>Simulated key presses carry the legacy <code>keyCode</code>, <code>which</code>, and <code>charCode</code> numbers, so a chat composer that sends on <code>keyCode === 13</code> sends when Interceptor presses Enter. <code>keypress</code> fires only for character keys, a cancelled keydown suppresses it, and <code>Shift+a</code> arrives as <code>A</code>.</li>
+      <li>Page text reads (<code>text</code>, <code>find</code>, <code>state</code>) no longer report an empty page in a tab the browser has never rendered. The fallback shows what a reader would see and leaves out stylesheet rules, script source, and hidden text.</li>
+      <li><code>interceptor eval --main --no-reload</code> refuses the reload that recovers from a strict page CSP and returns the CSP error instead, for pages whose state matters. When that reload does happen, <code>eval</code> and <code>save</code> print a warning, on success and on failure.</li>
+    </ul>
+  </section>
+
   <section data-sparkle-version="1.0.9">
     <h2>Interceptor 1.0.9</h2>
     <time datetime="2026-09-21">September 21, 2026</time>
