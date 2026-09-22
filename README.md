@@ -183,7 +183,7 @@ interceptor ios tree
 
 | Area | Capabilities |
 |---|---|
-| App interaction | Ref-tagged element trees, find/inspect, taps, text, scrolling, dragging, long presses, hardware buttons, screenshots, and app launch/activate/terminate. Taps, drags, and swipes also take screen coordinates, for games and canvas apps with no element tree. |
+| App interaction | Ref-tagged element trees, find/inspect, taps, text, scrolling, dragging, long presses, multi-finger gestures, hardware buttons, screenshots, a continuous frame stream over Wi-Fi, and app launch/activate/terminate. Taps, drags, swipes, and gestures also take screen coordinates, for games and canvas apps with no element tree. |
 | On-device scripts | `ios eval` runs JavaScript inside the runner, combining UI reads, decisions, and actions in one request. |
 | Developer telemetry | Process lists, CPU/memory and GPU sampling, app launch with arguments, and location simulation through supported device services. |
 | Web content | `ios web` inspects exposed Safari and WKWebView targets: page structure, JavaScript, console, and network activity. |

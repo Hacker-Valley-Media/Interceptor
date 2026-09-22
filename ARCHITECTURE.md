@@ -522,7 +522,32 @@ and a drag between one point and itself with `--duration` is the long press: the
 runner's `press(forDuration:thenDragTo:)` already took raw coordinates, so this is
 host-side only. `scroll` swipes from the screen center only when no origin was
 named; a ref that does not resolve or half of `--x`/`--y` is an error and no
-gesture is sent.
+gesture is sent. Two more runner ops serve apps that need more than one finger
+and more than one look per second. `gesture` builds one private
+`XCSynthesizedEventRecord` with one `XCPointerEventPath` per finger (press at the
+first sample, `moveToPoint:atOffset:` for the rest, `liftUpAtOffset:` at the last),
+maps each sample from the app's coordinate space into portrait screen space: a
+wider-than-tall `XCUIApplication.frame` means landscape, and the app's private
+`interfaceOrientation` picks the landscape side (3: camera cutout on the left,
+4: right; 3 when the accessor is missing). Both agreed with the real layout every
+time they were checked (a landscape game, Safari upright, Safari on its side).
+The record delivers in portrait screen space whatever orientation it is built
+with (proven on a landscape game). It sets the target pid when a private
+accessor exists and dispatches through the record's own `synthesizeWithError:`;
+every selector is resolved by name and a missing one returns an error naming it
+(`ObjCSupport.m`, `ICSynthesizeGesture`). The daemon validates the request first
+(`validateGestureFingers`: 1 to 10 fingers, non-decreasing offsets, at most 55 s)
+so a bad one never reaches the runner. `stream` runs a capture loop on a
+background queue in the runner (`FrameStreamer`; capture and JPEG encode live in
+`ICCaptureScreenJPEG` because the Xcode 26 SDK isolates `XCUIScreen` to the main
+actor) and pushes each downscaled JPEG as a **binary** WebSocket message on the
+same dial-in socket, at most three sends in flight. The daemon routes a binary
+message from a registered runner socket to `IosManager.handleRunnerFrame` before
+the binary-sink check (`daemon/index.ts`), keeps only the newest frame per device,
+stamps seq and arrival time, reads the size from the JPEG header, and rewrites
+`--out` atomically (temp file plus rename) so a reader never sees a partial file.
+`ios frame` serves that newest frame with no device round trip.
+
 Screenshots are VLM-budget resized via `sips -Z` (no new dependency). iOS
 XCUITest AX ops are slow, so the daemon gives every `ios_*` action 60 s
 (`daemon/index.ts`). The CLI deadline is per action (`ACTION_TIMEOUT_OVERRIDES_MS`
@@ -641,9 +666,9 @@ extension. `release.sh` (Step 6.5) asserts the `.pkg` ships no extension bundle.
 
 `interceptor mcp serve` exposes the entire CLI surface over the Model Context Protocol (stdio) as a thin adapter over the same binary — it re-implements no verb. Every tool call shells back out to `interceptor <verb>` via `Bun.spawn` (`cli/mcp/adapter.ts`), inheriting arg parsing, compound fan-out, per-session `--group` isolation, daemon auto-spawn, and result formatting. The server ships inside the `interceptor` binary (no separate sidecar); `interceptor mcp` is dispatched from `cli/index.ts`.
 
-- **Tools (`cli/mcp/server.ts`):** six routers — `interceptor_browser/macos/ios/read/local/raw` — whose verb menus are generated from the binary's own manifest (`COMMAND_SPECS`) plus maintained macOS/iOS lists. Sub-verbs and flags ride in a raw `args` array; the long tail is discoverable through `interceptor://manifest`, `interceptor://help/{macos,ios,verb}`, and `interceptor://extensions` resources.
+- **Tools (`cli/mcp/server.ts`):** six routers — `interceptor_browser/macos/ios/read/local/raw` — whose verb menus are generated from the binary's own manifest (`COMMAND_SPECS`) plus maintained macOS/iOS lists (a new `macos` or `ios` verb is added to its list by hand, or the tool refuses it). Sub-verbs and flags ride in a raw `args` array; the long tail is discoverable through `interceptor://manifest`, `interceptor://help/{macos,ios,verb}`, and `interceptor://extensions` resources.
 - **Safety (`cli/mcp/tiers.ts`):** a (surface, verb, sub-verb) → tier classifier (read / mutate / destructive / arbitrary-exec) with fail-safe family floors — an unknown `vm`/`runtime`/`app` sub-verb defaults to its highest tier. The `INTERCEPTOR_MCP_ALLOW` operator allowlist is the only boundary: read+mutate run by default, destructive+exec fail closed until the operator opts in, and a model-set `confirm` is only a secondary speed-bump.
-- **Inbound fencing (`cli/mcp/output.ts`):** content-bearing output (page text, trees, file/network reads) is wrapped as untrusted data before it reaches the client model. Output also maps to MCP text / `structuredContent` / image / resource-link blocks.
+- **Inbound fencing (`cli/mcp/output.ts`):** content-bearing output (page text, trees, file/network reads) is wrapped as untrusted data before it reaches the client model. Output also maps to MCP text / `structuredContent` / image / resource-link blocks. A result whose JSON carries a `filePath`, `path`, or `out` key is taken as a saved artifact and returned as an image or resource link in place of the JSON, so a verb reserves those keys for files it wrote (`ios stream status` reports its target as `outPath` for that reason).
 - **Install (`cli/mcp/install.ts`):** `interceptor mcp install` auto-detects and configures Claude Code, Codex, Gemini CLI, Cursor, and Claude Desktop with idempotent JSON / Codex-TOML merges, self-locating via `process.execPath`.
 
 See `docs/mcp.md`.

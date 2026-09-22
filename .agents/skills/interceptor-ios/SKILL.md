@@ -1,6 +1,6 @@
 ---
 name: interceptor-ios
-description: "Drive any installed app on an owned, unlocked, Developer-Mode iPhone via interceptor ios *: ref-tagged element trees, deterministic coordinate taps (click), reliable text entry (type/keys), scroll, drag, hardware buttons (press), screenshots, installed-app listing, and app launch/activate/terminate. The phone runs an on-device XCUITest runner (InterceptorRunner) that dials into the daemon over WiFi — no cable once paired, no WebDriverAgent. Address a phone with --on <name> or ios:<udid>; phones auto-connect on the first verb. Use for iPhone app automation. Not for the iOS Simulator UI of a Mac app, and not for content inside a browser tab (use interceptor-browser) or a macOS app (use interceptor-macos)."
+description: "Drive any installed app on an owned, unlocked, Developer-Mode iPhone via interceptor ios *: ref-tagged element trees, deterministic coordinate taps (click), reliable text entry (type/keys), scroll, drag, multi-touch gestures (gesture), hardware buttons (press), screenshots, a continuous JPEG frame stream (stream/frame), installed-app listing, and app launch/activate/terminate. The phone runs an on-device XCUITest runner (InterceptorRunner) that dials into the daemon over WiFi — no cable once paired, no WebDriverAgent. Address a phone with --on <name> or ios:<udid>; phones auto-connect on the first verb. Use for iPhone app automation. Not for the iOS Simulator UI of a Mac app, and not for content inside a browser tab (use interceptor-browser) or a macOS app (use interceptor-macos)."
 metadata:
   short-description: Drive apps on a real iPhone via the interceptor CLI; device dials in over WiFi
 ---
@@ -29,7 +29,7 @@ Omit `--on <name>` when only one phone is set up — it's used by default. Set a
 
 Treat `eN` refs as short-lived. The UI changes between calls; **re-read with `interceptor ios tree` before acting**. Refs carry frames and resolve to coordinates, so a tap is deterministic even if the underlying element handle went stale.
 
-Apps with no usable tree (games, canvases): `click`, `drag`, and `scroll` also take screen points, `drag X,Y X,Y --duration 2` is a long press, and `interceptor macos vision text --image <screenshot>` reads the screen. The recipe and the box-to-point conversion are in the [command catalog](references/command-catalog.md).
+Apps with no usable tree (games, canvases): `click`, `drag`, and `scroll` also take screen points, `drag X,Y X,Y --duration 2` is a long press, and `interceptor macos vision text --image <screenshot>` reads the screen. For a loop that needs a fresh look every few hundred milliseconds, `ios stream start --out <path>` has the runner push JPEG frames over Wi-Fi and rewrite that one file, and `ios gesture` presses with several fingers at once (a held pedal plus a tapped arrow). The recipes and the box-to-point conversion are in the [command catalog](references/command-catalog.md).
 
 ## The Model
 
