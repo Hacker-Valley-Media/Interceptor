@@ -253,7 +253,7 @@ export async function runWithCspStripBypass(
       // The distinction matters on stateful pages: an open chat conversation or
       // a half-filled form does not survive this, and the caller's next read
       // sees a plausible-looking fresh page rather than an error.
-      warning: "page CSP refused MAIN-world eval, so the tab was reloaded with its CSP header stripped — any in-page state (open conversations, unsaved form input, in-memory app state) was discarded. Re-run with 'interceptor eval --no-reload' to get the CSP error instead of a reloaded tab.",
+      warning: "page CSP refused MAIN-world eval, so the tab was reloaded with its CSP header stripped, and any in-page state (open conversations, unsaved form input, in-memory app state) was discarded. Re-run with 'interceptor eval --no-reload' to get the CSP error instead of a reloaded tab.",
       data: {
         value: retried.data,
         cspBypassApplied: true,

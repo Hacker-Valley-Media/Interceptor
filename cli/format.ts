@@ -117,7 +117,9 @@ export function formatResult(result: { success: boolean; error?: string; data?: 
 
   if (!result.success) {
     const cleaned = humanizeError(result.error)
-    return `error: ${cleaned}`
+    // A failed result can carry a side-effect disclosure too (the CSP recovery
+    // that reloaded the tab and still failed); it is as important as on success.
+    return result.warning ? `error: ${cleaned}\nwarning: ${result.warning}` : `error: ${cleaned}`
   }
   let body: string
   if (result.data === undefined || result.data === null) body = "ok"

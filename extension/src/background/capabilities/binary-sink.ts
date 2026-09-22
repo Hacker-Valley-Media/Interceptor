@@ -2,7 +2,7 @@ import { IK_SINK_TT_POLICY, SINK_TT_POLICY_NAME } from "../../inject-keys"
 import { runWithCspStripBypass } from "./evaluate"
 import { wsEndpoint } from "../ws-endpoint"
 
-type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; tabId?: number }
 
 type ByteSource = {
   url: string
@@ -130,7 +130,7 @@ async function executeNormalize(
   return (results[0]?.result as ActionResult) ?? { success: false, error: "no result" }
 }
 
-async function prepareByteSource(
+export async function prepareByteSource(
   tabId: number,
   code: string,
   world: "MAIN" | "ISOLATED"
@@ -161,7 +161,9 @@ async function prepareByteSource(
   if (!descriptor || typeof descriptor !== "object" || typeof descriptor.url !== "string") {
     return { success: false, error: "byte source normalization returned no blob URL" }
   }
-  return { success: true, data: descriptor as ByteSource }
+  // Keep the CSP-recovery disclosure: the reload that made the bytes reachable
+  // also discarded the page's state, and the caller hears that from `warning`.
+  return { success: true, data: descriptor as ByteSource, ...(evalResult.warning ? { warning: evalResult.warning } : {}) }
 }
 
 async function cleanupByteSource(tabId: number, source: ByteSource, world: "MAIN" | "ISOLATED"): Promise<void> {
@@ -412,7 +414,8 @@ export async function handleBinarySinkActions(
 
   const source = prepared.data as ByteSource
   try {
-    return await streamByteSource(tabId, source, out, chunkSize)
+    const result = await streamByteSource(tabId, source, out, chunkSize)
+    return prepared.warning ? { ...result, warning: prepared.warning } : result
   } finally {
     await cleanupByteSource(tabId, source, world)
   }

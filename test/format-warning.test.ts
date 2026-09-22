@@ -28,3 +28,22 @@ describe("formatResult warning passthrough", () => {
     expect(JSON.parse(out)).toEqual({ success: true, data: "x", warning: "w" })
   })
 })
+
+describe("formatResult warning on a failed result", () => {
+  test("text mode prints the error line and then the warning line", () => {
+    const out = formatResult(
+      { success: false, error: "TrustedScript required", warning: "the tab was reloaded to strip its CSP header and the retry still failed" },
+      false,
+    )
+    expect(out).toBe("error: TrustedScript required\nwarning: the tab was reloaded to strip its CSP header and the retry still failed")
+  })
+
+  test("a failed result without a warning is unchanged", () => {
+    expect(formatResult({ success: false, error: "boom" }, false)).toBe("error: boom")
+  })
+
+  test("json mode keeps error and warning in the envelope", () => {
+    const out = formatResult({ success: false, error: "e", warning: "w" }, true)
+    expect(JSON.parse(out)).toEqual({ success: false, error: "e", warning: "w" })
+  })
+})
