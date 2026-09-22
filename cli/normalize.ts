@@ -169,7 +169,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   cookies: DATA_BOOL, storage: DATA_BOOL, history: DATA_BOOL, bookmarks: DATA_BOOL, downloads: DATA_BOOL, clear: DATA_BOOL, clipboard: DATA_BOOL,
   status: META_BOOL, reload: META_BOOL, meta: META_BOOL, links: META_BOOL, images: META_BOOL, forms: META_BOOL,
   info: META_BOOL, page_info: META_BOOL, query: META_BOOL, exists: META_BOOL, count: META_BOOL, table: META_BOOL,
-  attr: META_BOOL, style: META_BOOL, events: META_BOOL, notify: META_BOOL, sessions: META_BOOL,
+  attr: META_BOOL, style: META_BOOL, events: META_BOOL, notify: META_BOOL, sessions: [...META_BOOL, "--activate"],
   capabilities: META_BOOL, modals: META_BOOL, panels: META_BOOL,
   eval: EVAL_BOOL, save: SAVE_BOOL, brand: [], group: [], batch: BATCH_BOOL, raw: BATCH_BOOL,
   monitor: MONITOR_BOOL, scene: SCENE_BOOL, sse: [], override: [],

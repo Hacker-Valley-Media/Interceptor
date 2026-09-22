@@ -157,7 +157,7 @@ const MAP_MACOS = `MACOS — native apps via the accessibility tree, background-
   Capture    macos screenshot (occluded/minimized windows too) · capture · stream · display
   Scripts    macos script run --jxa|--jsc|--script · intent dispatch (Apple Events, no foregrounding)
   System     macos clipboard · notifications · files · fs read|write|search · url · log query
-  Media/AI   macos vision (OCR any window) · listen (speech-to-text) · nlp · ai prompt · audio · sounds
+  Media/AI   macos vision (OCR any window or image file) · listen (speech-to-text) · nlp · ai prompt · audio · sounds
   Docs/data  macos pdf · detect · translate · thumbnail · calendar · reminders · contacts · photos · location · music · maps · share
   Electron   macos cdp discover|connect|app attach     drive an Electron/Chromium app's web contents
   Runtime    macos runtime enable|tree|read|eval|mutate     in-process control of a running native app
@@ -300,7 +300,8 @@ Page meta and data (one call each):
   interceptor notify <title> <message...>    Post a browser notification
   interceptor events [--tail] [--since <ms>] Daemon event log (request timings, timeouts)
   interceptor sessions [max]                 Recently closed tabs / windows (chrome.sessions)
-  interceptor sessions restore <id>          Restore a closed session entry
+  interceptor sessions restore <id>          Reopen a closed tab/window in the background, in your group
+  interceptor sessions restore <id> --activate   Browser's own restore (keeps history; brings the tab to the front)
   interceptor session start|end              Mark a CLI session (advisory; enables batch hints)
   interceptor history "<query>" [max]        Search browser history
   interceptor history delete <url>           Remove a history entry
@@ -658,7 +659,7 @@ macOS Bridge (full install only):
   interceptor macos vad status|start|stop
   interceptor macos sounds status|start|stop [--filter <pat>]
   interceptor macos audio output|input start|stop [--app <name>] [--save]
-  interceptor macos vision text|faces|hands|bodies [--app <name>]
+  interceptor macos vision text|faces|hands|bodies|classify|saliency [--app <name> | --image <path>]
   interceptor macos nlp entities|language|sentiment|tokens "<text>"
   interceptor macos nlp similar "<word1>" "<word2>"
   interceptor macos ai status|prompt "<prompt>"

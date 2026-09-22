@@ -139,6 +139,21 @@ async function ensureNamedGroup(label) {
   }
   return -1;
 }
+async function readoptNamedGroups(live) {
+  if (!hasTabGroupApi())
+    return;
+  await hydrateNamedGroups();
+  const groups = live ?? await chrome.tabGroups.query({}).catch(() => []);
+  const prefix = groupTitleFor("");
+  for (const g of groups) {
+    if (typeof g.title !== "string" || !g.title.startsWith(prefix))
+      continue;
+    const label = g.title.slice(prefix.length);
+    if (GROUP_LABEL_RE.test(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
+      await ensureNamedGroup(label);
+    }
+  }
+}
 function addTabToNamedGroup(tabId, label, colorOverride) {
   return serializeGroupAdd(label, () => addTabToNamedGroupSerialized(tabId, label, colorOverride));
 }
@@ -1996,7 +2011,11 @@ async function handleCanvasActions(action, tabId) {
 }
 
 // extension/src/background/tab-lifecycle.ts
-var DEFAULT_TAB_LIFECYCLE = { reuse: true, idleCloseMinutes: 10 };
+var DEFAULT_TAB_LIFECYCLE = {
+  reuse: true,
+  idleCloseMinutes: 10,
+  closeGroupWhenDone: false
+};
 var STORAGE_KEY = "tabLifecycle";
 var GROUP_LAST_SEEN_PREFIX = "groupLastSeen:";
 function normalizeTabLifecycle(raw) {
@@ -2006,7 +2025,8 @@ function normalizeTabLifecycle(raw) {
   if (typeof obj.idleCloseMinutes === "number" && Number.isFinite(obj.idleCloseMinutes)) {
     idle = Math.max(0, Math.round(obj.idleCloseMinutes));
   }
-  return { reuse, idleCloseMinutes: idle };
+  const closeGroupWhenDone = typeof obj.closeGroupWhenDone === "boolean" ? obj.closeGroupWhenDone : DEFAULT_TAB_LIFECYCLE.closeGroupWhenDone;
+  return { reuse, idleCloseMinutes: idle, closeGroupWhenDone };
 }
 function policyMayDecideReuse(action) {
   return action.reuse === undefined && action.reusePolicy === true && typeof action.group === "string" && action.group.length > 0;
@@ -2188,15 +2208,7 @@ async function handleTabActions(action, tabId) {
       await ensureInterceptorGroup();
       await hydrateNamedGroups();
       const live = await chrome.tabGroups.query({}).catch(() => []);
-      const prefix = `${groupTitleFor("")}`;
-      for (const g of live) {
-        if (typeof g.title !== "string" || !g.title.startsWith(prefix))
-          continue;
-        const label = g.title.slice(prefix.length);
-        if (GROUP_LABEL_RE.test(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
-          await ensureNamedGroup(label);
-        }
-      }
+      await readoptNamedGroups(live);
       const data = await Promise.all(live.map(async (g) => {
         const groupTabs = await chrome.tabs.query({ groupId: g.id });
         return {
@@ -2618,8 +2630,38 @@ async function handleSessionActions(action, _tabId) {
       };
     }
     case "session_restore": {
-      const restored = await chrome.sessions.restore(action.sessionId);
-      return { success: true, data: restored };
+      const sessionId = action.sessionId;
+      if (action.active === true) {
+        const restored = await chrome.sessions.restore(sessionId);
+        return { success: true, data: { method: "native", ...restored } };
+      }
+      const recent = await chrome.sessions.getRecentlyClosed();
+      const tabs = recent.flatMap((s) => {
+        if (s.window?.sessionId === sessionId)
+          return s.window.tabs ?? [];
+        return [s.tab, ...s.window?.tabs ?? []].filter((t) => t?.sessionId === sessionId);
+      });
+      const urls = tabs.map((t) => t?.url).filter((u) => typeof u === "string" && u.length > 0);
+      if (urls.length === 0) {
+        return { success: false, error: `no recently closed tab or window has sessionId '${sessionId}'. Run 'interceptor sessions' to list them.` };
+      }
+      const group = typeof action.group === "string" ? action.group : undefined;
+      const reopened = [];
+      for (const url of urls) {
+        const created = await handleTabActions({ type: "tab_create", url, reuse: false, group, groupColor: action.groupColor }, 0);
+        if (!created.success)
+          return created;
+        reopened.push({ ...created.data, url });
+      }
+      recordGroupActivity(group ?? "");
+      return {
+        success: true,
+        data: {
+          method: "reopen",
+          tabs: reopened,
+          note: "Reopened in the background. History and form state are not restored, and the entry stays in 'interceptor sessions'. Pass --activate for the browser's own restore, which brings the tab to the front."
+        }
+      };
     }
   }
   return { success: false, error: `unknown session action: ${action.type}` };

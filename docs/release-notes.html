@@ -26,6 +26,23 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.9">
+    <h2>Interceptor 1.0.9</h2>
+    <time datetime="2026-09-21">September 21, 2026</time>
+    <ul>
+      <li>New popup setting under Tab lifecycle: Delete the whole group when idle. It is off by default. When it is on, an Interceptor tab group that no command has touched for the idle window is removed completely, including tabs with unsaved form input and a window's last tab, so finished agent groups stop piling up in the tab strip.</li>
+      <li>The delete waits while you are looking at one of the group's tabs or one of them is playing sound, and it never empties the browser: when the group is everything that is open, a blank tab is created first.</li>
+      <li><code>interceptor status --verbose</code> shows which mode is armed.</li>
+      <li><code>interceptor sessions restore &lt;id&gt;</code> now reopens the closed page as a background tab in your group, so it no longer changes the tab you are looking at. Add <code>--activate</code> for the browser's own restore, which keeps history and brings the tab to the front.</li>
+      <li>The idle sweep finds Interceptor groups again after they are moved to another window or restored by the browser, so they no longer linger until someone runs <code>group list</code>.</li>
+      <li>Administrators can set the tab lifecycle policy and the tab group label through managed browser policy. The popup shows managed values read-only.</li>
+      <li><code>interceptor macos vision</code> can read a saved image with <code>--image &lt;path&gt;</code> instead of a live window, for every vision verb. No app has to be open, a rotated iPhone screenshot is read upright, and a bad path says what is wrong with it.</li>
+      <li><code>interceptor ios drag</code> and <code>ios scroll</code> accept screen coordinates as well as element refs, so games and canvas apps with no element tree can be driven. A drag from a point to the same point with <code>--duration</code> is a long press. A scroll with a ref that no longer resolves now reports an error and no longer swipes from the middle of the screen.</li>
+      <li>Dropdown commands now select an existing enabled option by exact value or unique label, and report an error instead of clearing the current choice.</li>
+      <li>Tree, forms, text, HTML, query, find, and diff reads mask password fields and fields filled from the secret vault. Trusted native typing sets its modifier flags on every key event, so mixed-case text arrives as typed.</li>
+    </ul>
+  </section>
+
   <section data-sparkle-version="1.0.3">
     <h2>Interceptor 1.0.3</h2>
     <time datetime="2026-09-17">September 17, 2026</time>

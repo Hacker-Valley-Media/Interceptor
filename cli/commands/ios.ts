@@ -46,6 +46,38 @@ function positionalsExcept(args: string[], start: number, valueFlags: string[]):
   return out
 }
 
+/** `ios scroll [<ref> | --x N --y N] [--dir <d>]`: half a coordinate pair is an error, not a swipe from the center. */
+export function buildIosScrollAction(args: string[]): Action {
+  const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
+  const x = numFlag(args, "--x"), y = numFlag(args, "--y")
+  if ((args.includes("--x") || args.includes("--y")) && (x === undefined || y === undefined)) {
+    console.error("error: ios scroll needs both --x <n> and --y <n>"); process.exit(1)
+  }
+  return { type: "ios_scroll", ref, x, y, dir: flagValue(args, "--dir") ?? "down" }
+}
+
+export const MAX_IOS_DRAG_DURATION_S = 55
+
+/** `ios drag <from> <to> [--duration s]`: each end is a ref or "x,y"; the same point twice is a long press. */
+export function buildIosDragAction(args: string[]): Action {
+  const from = args[2], to = args[3]
+  if (!from || !to || from.startsWith("--") || to.startsWith("--")) {
+    console.error("error: ios drag requires <from> <to>: each a ref or an x,y coordinate"); process.exit(1)
+  }
+  // Seconds, fractional allowed: parseInt turned a 1.5 s long press into 1 s and 0.5 s into 0.
+  const raw = flagValue(args, "--duration")
+  const duration = raw === undefined ? undefined : Number(raw)
+  if (duration !== undefined && !(Number.isFinite(duration) && duration >= 0)) {
+    console.error("error: ios drag --duration takes seconds, for example 0.6 or 2"); process.exit(1)
+  }
+  // The CLI, the daemon, and the runner channel all stop waiting at 60 s. A longer hold could
+  // still land after the caller was told it timed out, so refuse it before anything is sent.
+  if (duration !== undefined && duration > MAX_IOS_DRAG_DURATION_S) {
+    console.error(`error: ios drag --duration is at most ${MAX_IOS_DRAG_DURATION_S} seconds (the gesture deadline is 60 s)`); process.exit(1)
+  }
+  return { type: "ios_drag", from, to, duration }
+}
+
 function numFlag(args: string[], flag: string): number | undefined {
   const v = flagValue(args, flag)
   if (v === undefined) return undefined
@@ -128,8 +160,9 @@ Drive a phone (add --on <name>, or it uses your only phone):
   type    <ref> "text" | --secret <name>     focus + type (a vault secret by name never shows the value)
   keys    "text" | --secret <name>           type into the focused field
   unlock  --secret <name> | --probe          lock screen: wake, swipe up, type the passcode (runner must be resident)
-  scroll  [<ref>] --dir up|down|left|right   scroll
-  drag    <from> <to>                        drag between elements
+  scroll  [<ref> | --x N --y N] [--dir up|down|left|right]
+                                             swipe from a ref, a point, or (bare) the screen center; --dir defaults to down
+  drag    <from> <to> [--duration s]         each end is a ref or x,y (120,330); the same point twice is a long press
   press   home|lock|volume-up|volume-down    hardware button
   screenshot                                 capture the screen
   apps                                       installed apps
@@ -412,16 +445,12 @@ export async function runIosCommand(
     }
 
     case "scroll": {
-      const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
-      emitExit(await send({ type: "ios_scroll", ref, dir: flagValue(args, "--dir") ?? "down" }, contextId), jsonMode)
+      emitExit(await send(buildIosScrollAction(args), contextId), jsonMode)
       return
     }
 
     case "drag": {
-      const from = args[2]
-      const to = args[3]
-      if (!from || !to || from.startsWith("--") || to.startsWith("--")) { console.error("error: ios drag requires <from> <to> refs"); process.exit(1) }
-      emitExit(await send({ type: "ios_drag", from, to, duration: numFlag(args, "--duration") }, contextId), jsonMode)
+      emitExit(await send(buildIosDragAction(args), contextId), jsonMode)
       return
     }
 

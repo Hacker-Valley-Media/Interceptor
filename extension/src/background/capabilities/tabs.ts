@@ -1,7 +1,7 @@
 import {
   addTabToInterceptorGroup, ensureInterceptorGroup, interceptorGroupId,
   GROUP_LABEL_RE, ensureNamedGroup, addTabToNamedGroup, labelForGroupId,
-  namedGroups, hydrateNamedGroups, groupTitleFor, hasTabGroupApi, managedGroupWindows
+  namedGroups, hydrateNamedGroups, hasTabGroupApi, managedGroupWindows, readoptNamedGroups
 } from "../tab-group"
 import { resolveTabLifecycle, policyMayDecideReuse } from "../tab-lifecycle"
 import { waitForTabLoad } from "../content-bridge"
@@ -250,17 +250,7 @@ export async function handleTabActions(
       await ensureInterceptorGroup()
       await hydrateNamedGroups()
       const live = await chrome.tabGroups.query({}).catch(() => []) // windowless profile → no groups (issue #162)
-      // Re-adopt named groups the registry lost (e.g. browser restart restored
-      // the window): exact match on the brand-composed `<brand>-<label>` title.
-      // ponytail: current brand prefix only; a pre-rebrand title is re-adopted on the next brand change
-      const prefix = `${groupTitleFor("")}`
-      for (const g of live) {
-        if (typeof g.title !== "string" || !g.title.startsWith(prefix)) continue
-        const label = g.title.slice(prefix.length)
-        if (GROUP_LABEL_RE.test(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
-          await ensureNamedGroup(label)
-        }
-      }
+      await readoptNamedGroups(live)
       const data = await Promise.all(live.map(async g => {
         const groupTabs = await chrome.tabs.query({ groupId: g.id })
         return {

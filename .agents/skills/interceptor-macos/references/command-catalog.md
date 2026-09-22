@@ -132,7 +132,8 @@ Never include `activate` unless the user asked for foregrounding. `--javascript`
 ## Vision + Speech + NLP + AI
 
 ```bash
-interceptor macos vision text|faces|hands|bodies
+interceptor macos vision text|faces|hands|bodies|classify|saliency [--app <name>]   # a window (frontmost when --app is omitted)
+interceptor macos vision text --image <path>                                         # a saved image file instead: no window, no capture
 interceptor macos listen
 interceptor macos vad
 interceptor macos sounds
@@ -144,6 +145,8 @@ interceptor macos nlp entities|language|sentiment|tokens|similar|embed
 interceptor macos ai status|prompt|session                # macOS 26+
 interceptor macos sensitive check|monitor
 ```
+
+`--image <path>` works with every vision verb and returns the same shape as a window capture. A relative path resolves from your working directory, an EXIF rotation tag is applied so a rotated phone capture reads upright, and no Screen Recording capture happens. `--image` and `--app` cannot be combined. A bad path answers with the path and the reason (`cannot read image file …`, `not an image file …`); `failed to capture screen` only ever means a window capture failed. To read an iPhone screen: `interceptor ios screenshot --on phone`, then `interceptor macos vision text --image <the saved path>`. Region boxes are normalized 0 to 1 with the origin at the bottom left.
 
 ## Log Query (OSLog)
 

@@ -222,7 +222,7 @@ interceptor window resize --state maximized               # Don't combine maximi
 
 Use `--tab <id>` for a specific tab; `--any-tab` only when explicitly authorized.
 
-Solo agent work needs no label: `INTERCEPTOR_SESSION_ID` is the neutral session contract, and verified Maestro, Claude Code, and Codex variables are detected automatically. Interceptor hashes the full id into `s-<hash16>` and sends only that opaque label. The scope is SOFT: it supplies tab reuse and idle cleanup, but an empty session group can fall back to the active managed tab. Concurrent lanes often share one host session id, so each lane needs its own `--group lane-<n>` or `INTERCEPTOR_SESSION_ID`. An explicit `--group <label>` or non-empty `INTERCEPTOR_GROUP` provides HARD isolation by default: resolution stays in the named group and cross-group targets are rejected unless `--any-tab` is explicitly authorized. `--shared-group` or empty `INTERCEPTOR_GROUP=` suppresses session scope but still uses the shared default Interceptor group. Labels match `[A-Za-z0-9_-]{1,32}`. Pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done, then use `group list` as proof. The extension auto-closes groups after 10 minutes without tab activity by default; metadata polls do not keep them alive.
+Solo agent work needs no label: `INTERCEPTOR_SESSION_ID` is the neutral session contract, and verified Maestro, Claude Code, and Codex variables are detected automatically. Interceptor hashes the full id into `s-<hash16>` and sends only that opaque label. The scope is SOFT: it supplies tab reuse and idle cleanup, but an empty session group can fall back to the active managed tab. Concurrent lanes often share one host session id, so each lane needs its own `--group lane-<n>` or `INTERCEPTOR_SESSION_ID`. An explicit `--group <label>` or non-empty `INTERCEPTOR_GROUP` provides HARD isolation by default: resolution stays in the named group and cross-group targets are rejected unless `--any-tab` is explicitly authorized. `--shared-group` or empty `INTERCEPTOR_GROUP=` suppresses session scope but still uses the shared default Interceptor group. Labels match `[A-Za-z0-9_-]{1,32}`. Pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done, then use `group list` as proof. The extension auto-closes groups after 10 minutes without tab activity by default; metadata polls do not keep them alive. The popup's *Delete the whole group when idle* toggle (off by default) upgrades that sweep to a full delete: every tab in the idle group goes, unsaved-form tabs and a window's last tab included, and it only waits while the user is looking at one of the group's tabs or one is playing sound. The user may have it on, so do not assume a group you left behind is still there.
 
 ## Cookies / Storage / History / Bookmarks
 
@@ -279,6 +279,16 @@ interceptor --context safari read                   # Safari uses a stable conte
 Chrome/Brave profiles auto-generate stable UUIDs on first run (stored in `chrome.storage.local`); Safari registers the fixed id `safari`. `contexts` lists all currently connected IDs. Without `--context`, commands auto-route only when exactly one context is connected; zero or multiple connected contexts fail fast and require `--context <id>`.
 
 Primary use cases: multiple Chrome profiles logged in to different accounts, or Chrome/Brave and Safari connected to the same daemon simultaneously.
+
+## Recently closed tabs
+
+```bash
+interceptor sessions [max]                          # Recently closed tabs and windows, newest first, with sessionIds
+interceptor sessions restore <id>                   # Reopen the page(s) as background tabs in your group; your active tab does not change
+interceptor sessions restore <id> --activate        # The browser's own restore: keeps history and form state, brings the tab to the front
+```
+
+The default gives up back/forward history and form state, and the entry stays in the list. An id is required: the no-argument form would reopen whatever closed most recently, which may be the user's own window. This is the undo for a tab the idle sweep closed.
 
 ## Capabilities + Reload
 
