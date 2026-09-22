@@ -88,10 +88,16 @@ the daemon launches the test over the paired device through Xcode/CoreDevice.
 ## Verb protocol (daemon ⇄ runner)
 
 ```
-daemon → runner : { id, op, ...args }     op ∈ source|screenshot|windowSize|tap|drag|keys|press|app|ping
+daemon → runner : { id, op, ...args }     op ∈ source|screenshot|windowSize|tap|drag|keys|press|app|ping|gesture|stream
 runner → daemon : { id, result: { success, data?, error? } }
 register        : { type:"ios", udid, token, contextId }   (runner → daemon, once)
 ```
+
+While `stream` is running the runner also sends **binary** messages: each one is a
+whole JPEG frame (no header), which the daemon keeps as the newest frame for the
+device. `gesture` plays one private `XCSynthesizedEventRecord` with one pointer
+path per finger (`ObjCSupport.m`, `ICSynthesizeGesture`); a missing private
+selector comes back as an error naming it.
 
 `tree`/`find`/`inspect` **auto-target the foreground app** (resolved via the private
 XCTest AX client in `ObjCSupport.m`). `app activate <bundleId>` pins a specific app if needed.
