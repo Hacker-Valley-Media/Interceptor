@@ -1,5 +1,5 @@
 import { isSensitive, safeHtml, safeText, SECURE_MASK } from "../sensitive"
-import { resolveElement } from "../input-simulation"
+import { resolveElement, resolveElementOrSelector } from "../input-simulation"
 import { getOrAssignRef } from "../ref-registry"
 import { queryAllDeep, queryOneDeep } from "../deep-query"
 
@@ -57,7 +57,7 @@ export async function handleCount(action: Action): Promise<ActionResult> {
 export async function handleTableData(action: Action): Promise<ActionResult> {
   const table = (action.index !== undefined
     ? resolveElement(action.index as number | undefined, action.ref as string | undefined)
-    : document.querySelector(action.selector as string || "table")) as HTMLTableElement | null
+    : queryOneDeep(String(action.selector || "table"))) as HTMLTableElement | null
   if (!table) return { success: false, error: "table not found" }
   const rows: string[][] = []
   table.querySelectorAll("tr").forEach(tr => {
@@ -69,7 +69,7 @@ export async function handleTableData(action: Action): Promise<ActionResult> {
 }
 
 export async function handleAttrGet(action: Action): Promise<ActionResult> {
-  const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
+  const el = resolveElementOrSelector(action)
   if (!el) return { success: false, error: "element not found" }
   const name = action.name as string
   const value = el.getAttribute(name)
@@ -77,14 +77,14 @@ export async function handleAttrGet(action: Action): Promise<ActionResult> {
 }
 
 export async function handleAttrSet(action: Action): Promise<ActionResult> {
-  const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
+  const el = resolveElementOrSelector(action)
   if (!el) return { success: false, error: "element not found" }
   el.setAttribute(action.name as string, action.value as string)
   return { success: true }
 }
 
 export async function handleStyleGet(action: Action): Promise<ActionResult> {
-  const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) || document.querySelector(action.selector as string)
+  const el = resolveElementOrSelector(action)
   if (!el) return { success: false, error: "element not found" }
   const computed = getComputedStyle(el)
   if (action.property) {

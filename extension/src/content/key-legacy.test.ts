@@ -154,3 +154,38 @@ describe("legacy codes reach a listener in another world", () => {
     expect(inits.map((i) => i.charCode)).toEqual([0, 13, 0])
   })
 })
+
+describe("dispatchKeySequence Shift with a letter", () => {
+  test("Shift+a is delivered as the uppercase letter, as a keyboard sends it", async () => {
+    const { dispatchKeySequence } = await import("./input-simulation")
+    const input = document.createElement("input")
+    document.body.appendChild(input)
+    const seen = recorder(input, ["keydown", "keypress", "keyup"])
+
+    dispatchKeySequence(input, "Shift+a")
+    expect(seen.map((e) => e.type)).toEqual(["keydown", "keypress", "keyup"])
+    for (const event of seen) {
+      expect(event.key).toBe("A")
+      expect(event.code).toBe("KeyA")
+      expect(event.shiftKey).toBe(true)
+    }
+    expect(seen[0]!.keyCode).toBe(65)
+    expect(seen[1]!.charCode).toBe(65)
+    expect(seen[1]!.keyCode).toBe(65)
+  })
+
+  test("an uppercase letter without Shift, and Shift with a named key, are passed as written", async () => {
+    const { dispatchKeySequence } = await import("./input-simulation")
+    const input = document.createElement("input")
+    document.body.appendChild(input)
+    const seen = recorder(input, ["keydown"])
+
+    dispatchKeySequence(input, "A")
+    dispatchKeySequence(input, "Shift+Tab")
+    expect(seen[0]!.key).toBe("A")
+    expect(seen[0]!.shiftKey).toBe(false)
+    expect(seen[1]!.key).toBe("Tab")
+    expect(seen[1]!.shiftKey).toBe(true)
+    expect(seen[1]!.keyCode).toBe(9)
+  })
+})

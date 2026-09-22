@@ -1,6 +1,7 @@
 import { resolveRef } from "./ref-registry"
 import { isVisible } from "./element-discovery"
 import { selectorMap } from "./element-discovery"
+import { queryOneDeep } from "./deep-query"
 
 export type StaleElementResult = { success: false; error: string; delivered: false }
 
@@ -29,6 +30,13 @@ export function resolveElement(indexOrRef: number | undefined, ref?: string): El
   if (!el) return null
   if (!isVisible(el)) return null
   return el
+}
+
+/** Ref or index first; otherwise a shadow-piercing CSS selector. */
+export function resolveElementOrSelector(action: { [key: string]: unknown }): Element | null {
+  const el = resolveElement(action.index as number | undefined, action.ref as string | undefined)
+  if (el) return el
+  return action.selector ? queryOneDeep(String(action.selector)) : null
 }
 
 export function scrollIntoViewIfNeeded(el: Element) {
@@ -159,13 +167,17 @@ function producesKeypress(key: string): boolean {
 
 export function dispatchKeySequence(target: Element, combo: string) {
   const parts = combo.split("+")
-  const key = parts[parts.length - 1]
   const modifiers = {
     ctrlKey: parts.includes("Control"),
     shiftKey: parts.includes("Shift"),
     altKey: parts.includes("Alt"),
     metaKey: parts.includes("Meta")
   }
+  const raw = parts[parts.length - 1]
+  // Shift with one lowercase letter is that letter's uppercase form, as a
+  // keyboard sends it: key "A", keypress charCode 65. Every other key is
+  // passed as written (shifted punctuation and digits depend on the layout).
+  const key = modifiers.shiftKey && /^[a-z]$/.test(raw) ? raw.toUpperCase() : raw
 
   const code = getKeyCode(key)
   const legacy = getLegacyKeyCode(key)
@@ -221,24 +233,29 @@ export function waitForMutation(timeoutMs: number): Promise<boolean> {
 
 export function waitForElement(selector: string, timeout: number): Promise<Element | null> {
   return new Promise((resolve) => {
-    const existing = document.querySelector(selector)
+    const existing = queryOneDeep(selector)
     if (existing) { resolve(existing); return }
 
-    const timer = setTimeout(() => {
+    let done = false
+    const finish = (el: Element | null) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      clearInterval(poll)
       observer.disconnect()
-      resolve(null)
-    }, timeout)
+      resolve(el)
+    }
+    const check = () => {
+      const el = queryOneDeep(selector)
+      if (el) finish(el)
+    }
 
-    const observer = new MutationObserver(() => {
-      const el = document.querySelector(selector)
-      if (el) {
-        clearTimeout(timer)
-        observer.disconnect()
-        resolve(el)
-      }
-    })
-
+    const timer = setTimeout(() => finish(null), timeout)
+    const observer = new MutationObserver(check)
     observer.observe(document.body, { childList: true, subtree: true })
+    // A light-DOM observer never reports mutations inside a shadow tree, so an
+    // element rendered later inside an existing shadow root needs the poll.
+    const poll = setInterval(check, 250)
   })
 }
 
