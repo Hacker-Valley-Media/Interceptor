@@ -59,7 +59,7 @@ Unqualified `find` returns two typed current-page sections: literal case-insensi
 interceptor click e7
 interceptor click --selector "button span" --nth 4   # CSS-selector click; 0-based --nth matches query output; quote selectors with spaces
 interceptor type e9 "..."
-interceptor keys "Meta+K"
+interceptor keys "Meta+K"               # Events carry legacy keyCode/which/charCode; Enter is 13, Shift+a arrives as A
 interceptor select e12 "Option label"   # native select: exact value first, then one exact label
 interceptor hover e3 | drag e4 e8 | dblclick e5 | rightclick e5
 ```
@@ -69,6 +69,8 @@ Native `select`, `type`, and `act <ref> <value>` share option validation. Invali
 Password inputs and vault-filled controls are masked in tree, forms, snapshots/diff, scoped reads, and HTML/value-attribute output. Text-backed credential fields are masked in text/markdown/query output too. Scene reads can still expose field values. Eval, screenshots, network/storage capture, and page-created copies of credentials are outside this masking boundary.
 
 On pages whose a11y tree comes back empty (some SPAs render nothing tree-visible), `interceptor query "<css>"` still finds elements. Every result reports the total `count`, serialized `returned` count, and `truncated` flag; at most 20 elements are serialized. Each element carries a clickable `e<ref>`, so every ref verb (`click`, `type`, `check`, …) works on what query found. A navigating click resolves as `{navigated: true, url}` rather than an error; a selector click that produces no DOM change auto-escalates to an OS-level click when the OS transport is available.
+
+Every CSS-selector verb reaches inside web components: `query`, `exists`, `count`, `click --selector`, `wait`, `table`, `attr`, `style`, `rect`, and `screenshot --selector` search open and closed shadow roots after the light DOM. Light-DOM matches come first in document order, so `--nth` keeps its meaning on a page without shadow hosts. `wait` polls as well as observing, so an element rendered later inside an existing shadow root is found.
 
 ## Inspection + Network
 
@@ -313,9 +315,10 @@ interceptor eval --main "document.title"
 interceptor eval --main "window.__APP_STATE__"
 interceptor eval "document.title" --frame 4897        # Exactly that frame; a missing frame fails
 interceptor --frame 4897 eval "document.title"        # --frame is global: before or after the command
+interceptor eval --main --no-reload "app.state"       # Refuse the CSP-recovery reload; get the CSP error instead
 ```
 
-Use only when no built-in command exposes what you need. Thrown exceptions, rejected promises, and syntax errors are failures (exit 1) in both worlds; top-level `await` works. The default isolated world may need Allow User Scripts enabled for the extension; `--main` is an explicit page-world choice. On a strict-CSP page `--main` may strip the header and reload the tab once, and the result says so; task verification never reloads.
+Use only when no built-in command exposes what you need. Thrown exceptions, rejected promises, and syntax errors are failures (exit 1) in both worlds; top-level `await` works. The default isolated world may need Allow User Scripts enabled for the extension; `--main` is an explicit page-world choice. On a strict-CSP page `--main` may strip the header and reload the tab once; the result says so and a `warning:` line is printed, on success and on failure, for `eval` and for `save`. That reload discards the page's in-memory state (an open conversation, a half-filled form). Pass `--no-reload` on such a page to get the CSP error instead. Task verification never reloads.
 
 ## Durable task state
 
