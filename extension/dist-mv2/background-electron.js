@@ -526,6 +526,7 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
     function listener(updatedTabId, changeInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
         clearTimeout(hardTimer);
+        clearTimeout(stage1Timer);
         chrome.tabs.onUpdated.removeListener(listener);
         const remaining = Math.max(timeoutMs - (Date.now() - start), 2000);
         probeContentReady(tabId, remaining).then((ready) => {
@@ -533,8 +534,7 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
         });
       }
     }
-    chrome.tabs.onUpdated.addListener(listener);
-    setTimeout(async () => {
+    const stage1Timer = setTimeout(async () => {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (tab && tab.status === "complete") {
         chrome.tabs.onUpdated.removeListener(listener);
@@ -544,6 +544,7 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
         resolve({ ready, elapsed: Date.now() - start });
       }
     }, stage1Timeout);
+    chrome.tabs.onUpdated.addListener(listener);
   });
 }
 async function probeContentReady(tabId, timeoutMs) {
