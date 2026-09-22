@@ -124,6 +124,11 @@ export function pickTimeoutForAction(action: Action): number {
     const bridgeDeadline = typeof action.timeoutMs === "number" && action.timeoutMs > 0 ? action.timeoutMs : 10_000
     return Math.max(INTERCEPTOR_TIMEOUT_MS, bridgeDeadline + 5_000)
   }
+  // `ios web eval/call --timeout <s>` arms the WIP request timeout; the CLI must
+  // outlive it or a long expression dies at the 30 s default instead.
+  if ((action.type === "ios_web_eval" || action.type === "ios_web_call") && typeof action.timeout === "number" && action.timeout > 0) {
+    return Math.max(ACTION_TIMEOUT_OVERRIDES_MS[action.type] ?? INTERCEPTOR_TIMEOUT_MS, action.timeout + 5_000)
+  }
   return ACTION_TIMEOUT_OVERRIDES_MS[action.type] ?? INTERCEPTOR_TIMEOUT_MS
 }
 
@@ -202,7 +207,7 @@ export function probeContextCount(timeoutMs = 1500): Promise<number | null> {
 
 // Branch the timeout hint on `macos_*` so bridge commands don't get a
 // Chrome/Brave-extension troubleshooting hint.
-function timeoutMessage(actionType: string, ms: number): string {
+export function timeoutMessage(actionType: string, ms: number): string {
   const seconds = Math.round(ms / 1000)
   if (actionType === "daemon_shutdown") {
     return `timeout: the daemon did not acknowledge shutdown within ${seconds}s.`
@@ -216,8 +221,11 @@ function timeoutMessage(actionType: string, ms: number): string {
   if (IOS_DEV_ACTION_TYPES.has(actionType)) {
     return `timeout: no response for '${actionType}' after ${seconds}s. The Instruments/telemetry lane opens a RemoteXPC tunnel + DTX channel — confirm the device is unlocked and paired; a busy developer service can be retried.`
   }
+  if (actionType.startsWith("ios_web_")) {
+    return `timeout: no response for '${actionType}' after ${seconds}s. The web-inspector session did not reply. A session ends when its page navigates, and on iOS 27 Safari some page targets never answer Runtime.evaluate; run 'interceptor ios web status', then re-attach from 'interceptor ios web targets'.`
+  }
   if (actionType.startsWith("ios_")) {
-    return `timeout: no response for '${actionType}' after ${seconds}s. The InterceptorRunner may be busy with a slow XCUITest snapshot or a non-quiescing app; confirm the device is unlocked and 'interceptor ios status' shows it connected.`
+    return `timeout: no response for '${actionType}' after ${seconds}s. The InterceptorRunner may be busy with a slow XCUITest snapshot, or a runner built before 1.0.15 is waiting up to 60 s for a busy app to idle (run 'interceptor ios refresh'); confirm the device is unlocked and 'interceptor ios status' shows it connected.`
   }
   if (actionType === "file_upload" || actionType === "file_upload_chunk") {
     return `timeout: no response for '${actionType}' after ${seconds}s. The daemon may have rejected an oversized upload frame (check 'interceptor status' and the daemon log for "oversized socket frame"), or the tab/content script isn't reachable — large files are chunked automatically, so this usually means the target tab changed. Retry after 'interceptor state'.`

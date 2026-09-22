@@ -120,6 +120,7 @@ function fakeChannel() {
 function lastInnerRequest(writes: Buffer[]): any {
   for (let i = writes.length - 1; i >= 0; i--) {
     const body = tryReadWirFrame(writes[i])!.body
+    if (body.length === 0) continue // the empty-frame prompt that follows every message
     const decoded = decodePlist(body) as any
     const data = decoded.__argument?.[WIR_KEY.socketData]
     if (Buffer.isBuffer(data)) return JSON.parse(data.toString())

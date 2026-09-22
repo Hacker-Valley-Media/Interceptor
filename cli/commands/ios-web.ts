@@ -11,6 +11,13 @@ import { sendCommand, type DaemonResponse, type DaemonResult } from "../transpor
 
 type Action = { type: string; [key: string]: unknown }
 
+/** `--timeout` is documented in seconds; the daemon session wants milliseconds. */
+export function timeoutMsFlag(args: string[]): number | undefined {
+  const v = flagValue(args, "--timeout")
+  const s = v === undefined ? NaN : Number(v)
+  return !Number.isFinite(s) || s <= 0 ? undefined : Math.round(s * 1000)
+}
+
 function flagValue(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag)
   if (idx === -1) return undefined
@@ -89,7 +96,7 @@ Read (no runner needed):
   inspect <wN>                      node attributes, box, styles
 
 Protocol (no runner needed):
-  eval   <expression>               Runtime.evaluate
+  eval   <expression> [--timeout <s>]   Runtime.evaluate
   call   <Domain.method> [--params-json <json>] [--timeout <s>]   raw WIP (unredacted)
   console start|log|stop            buffered console events
   network start|log|stop            buffered network events (redacted)
@@ -168,7 +175,7 @@ export async function runIosWebCommand(
     case "eval": {
       const expression = positional(args, 3)
       if (!expression) { console.error("usage: interceptor ios web eval <expression>"); process.exit(1) }
-      emitExit(await send({ type: "ios_web_eval", expression, timeout: numFlag(args, "--timeout") }, contextId, sessionId), jsonMode,
+      emitExit(await send({ type: "ios_web_eval", expression, timeout: timeoutMsFlag(args) }, contextId, sessionId), jsonMode,
         (d) => JSON.stringify((d as { result?: unknown })?.result))
       return
     }
@@ -179,7 +186,7 @@ export async function runIosWebCommand(
       let params: unknown
       const raw = flagValue(args, "--params-json")
       if (raw) { try { params = JSON.parse(raw) } catch { console.error("error: --params-json is not valid JSON"); process.exit(1) } }
-      emitExit(await send({ type: "ios_web_call", method, params, timeout: numFlag(args, "--timeout"), mutating: hasFlag(args, "--mutating") }, contextId, sessionId), jsonMode,
+      emitExit(await send({ type: "ios_web_call", method, params, timeout: timeoutMsFlag(args), mutating: hasFlag(args, "--mutating") }, contextId, sessionId), jsonMode,
         (d) => JSON.stringify((d as { result?: unknown })?.result, null, 2))
       return
     }
