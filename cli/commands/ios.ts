@@ -48,6 +48,12 @@ function positionalsExcept(args: string[], start: number, valueFlags: string[]):
 }
 
 /** `ios scroll [<ref> | --x N --y N] [--dir <d>]`: half a coordinate pair is an error, not a swipe from the center. */
+/** `ios keys Enter|Return|Tab` presses that key; anything else is typed literally (XCUITest typeText). */
+export function iosKeysText(text: string): string {
+  const named: Record<string, string> = { enter: "\n", return: "\n", tab: "\t" }
+  return named[text.toLowerCase()] ?? text
+}
+
 export function buildIosScrollAction(args: string[]): Action {
   const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
   const x = numFlag(args, "--x"), y = numFlag(args, "--y")
@@ -55,6 +61,12 @@ export function buildIosScrollAction(args: string[]): Action {
     console.error("error: ios scroll needs both --x <n> and --y <n>"); process.exit(1)
   }
   return { type: "ios_scroll", ref, x, y, dir: flagValue(args, "--dir") ?? "down" }
+}
+
+/** `ios click [<ref> | --x N --y N]`: a ref, or a screen point with fractions kept. */
+export function buildIosClickAction(args: string[]): Action {
+  const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
+  return { type: "ios_click", ref, x: numFlag(args, "--x"), y: numFlag(args, "--y") }
 }
 
 export const MAX_IOS_DRAG_DURATION_S = 55
@@ -134,10 +146,11 @@ export function buildIosStreamAction(args: string[], cwd = process.cwd()): Actio
   return action
 }
 
+/** A numeric flag with fractions kept: Vision boxes give fractional points, and parseInt turned 10.7 into 10. */
 function numFlag(args: string[], flag: string): number | undefined {
   const v = flagValue(args, flag)
-  if (v === undefined) return undefined
-  const n = parseInt(v, 10)
+  if (v === undefined || v.trim() === "") return undefined
+  const n = Number(v)
   return Number.isFinite(n) ? n : undefined
 }
 
@@ -214,7 +227,7 @@ Drive a phone (add --on <name>, or it uses your only phone):
   inspect <ref>                              element details
   click   <ref> | --x N --y N                tap
   type    <ref> "text" | --secret <name>     focus + type (a vault secret by name never shows the value)
-  keys    "text" | --secret <name>           type into the focused field
+  keys    "text"|Enter|Tab | --secret <name>  type into the focused field; Enter/Return/Tab press that key
   unlock  --secret <name> | --probe          lock screen: wake, swipe up, type the passcode (runner must be resident)
   scroll  [<ref> | --x N --y N] [--dir up|down|left|right]
                                              swipe from a ref, a point, or (bare) the screen center; --dir defaults to down
@@ -452,11 +465,7 @@ export async function runIosCommand(
     }
 
     case "click": {
-      const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
-      emitExit(await send({
-        type: "ios_click", ref,
-        x: numFlag(args, "--x"), y: numFlag(args, "--y"),
-      }, contextId), jsonMode)
+      emitExit(await send(buildIosClickAction(args), contextId), jsonMode)
       return
     }
 
@@ -489,7 +498,7 @@ export async function runIosCommand(
       }
       const text = args[2]
       if (!text || text.startsWith("--")) { console.error("error: ios keys requires text"); process.exit(1) }
-      emitExit(await send({ type: "ios_keys", text, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
+      emitExit(await send({ type: "ios_keys", text: iosKeysText(text), bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
       return
     }
 
@@ -551,7 +560,8 @@ export async function runIosCommand(
     }
 
     case "screenshot": {
-      const result = await send({ type: "ios_screenshot", targetMaxLongEdge: numFlag(args, "--target-max-long-edge") }, contextId)
+      const edge = numFlag(args, "--target-max-long-edge")   // pixels: sips wants a whole number
+      const result = await send({ type: "ios_screenshot", targetMaxLongEdge: edge === undefined ? undefined : Math.trunc(edge) }, contextId)
       if (result.success && result.data && typeof result.data === "object") {
         const d = result.data as { dataUrl?: string; format?: string }
         if (d.dataUrl) {

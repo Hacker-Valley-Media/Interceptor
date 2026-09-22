@@ -257,11 +257,16 @@ export function resolveRunnerArtifact(): { dir?: string; tar?: string } {
 
 /** Find the `*-Runner.app` under a Products dir (top-level or Debug-iphoneos/). */
 export function findRunnerApp(dir: string): string | undefined {
-  const candidates = [dir, join(dir, "Debug-iphoneos")]
-  for (const c of candidates) {
+  let entries: string[]
+  try { entries = readdirSync(dir) } catch { return undefined }
+  const top = entries.find((f) => f.endsWith("-Runner.app"))
+  if (top) return join(dir, top)
+  // xcodebuild writes device products to Debug-iphoneos/ and simulator products to
+  // Debug-iphonesimulator/; sorted, the device folder is tried first.
+  for (const sub of entries.filter((f) => f.startsWith("Debug-")).sort()) {
     try {
-      const app = readdirSync(c).find((f) => f.endsWith("-Runner.app"))
-      if (app) return join(c, app)
+      const app = readdirSync(join(dir, sub)).find((f) => f.endsWith("-Runner.app"))
+      if (app) return join(dir, sub, app)
     } catch {}
   }
   return undefined

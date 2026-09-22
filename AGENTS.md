@@ -115,7 +115,7 @@ Deep mechanic notes (the `userActivation` override + `__interceptor_trust` marke
 ## Browser field safety
 
 - Native `select`, `type`, and `act <ref> <value>` accept an exact option value or unique exact label. Invalid, ambiguous, disabled, and custom-widget targets return failure. Read after a selection to verify application state.
-- Tree, forms, text/HTML, query, and snapshot reads mask password inputs and credential-marked controls. Scene reads can still expose field values. Eval, screenshots, network/storage capture, and page-created credential copies are outside this masking boundary.
+- Tree, forms, text/HTML, query, snapshot, and scene reads (`scene list`, `scene selected`, `scene text`) mask password inputs and credential-marked controls. Eval, screenshots, network/storage capture, and page-created credential copies are outside this masking boundary.
 
 ## File Uploads (browser)
 

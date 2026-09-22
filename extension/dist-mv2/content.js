@@ -3425,6 +3425,7 @@ async function handleFindAndCheck(action) {
 init_a11y_tree();
 init_element_discovery();
 init_ops();
+init_sensitive();
 var sceneRefRegistry = new Map;
 var sceneElementToId = new WeakMap;
 var sceneRefMeta = new Map;
@@ -3463,20 +3464,22 @@ function isHiddenProxyInput(el) {
   const role = el.getAttribute("role");
   return hiddenAttr === "true" || role === "application" && inputMode === "none";
 }
+function maskSensitiveText(el, text) {
+  return text && isSensitive(el) ? SECURE_MASK : text;
+}
 function readElementText(el) {
   if (!isHtmlElement(el))
     return "";
-  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-    return (el.value || "").toString();
-  }
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA")
+    return safeValue(el);
   if (el.isContentEditable || el.getAttribute("contenteditable") === "true") {
-    return (el.textContent || "").toString();
+    return maskSensitiveText(el, (el.textContent || "").toString());
   }
   const role = el.getAttribute("role");
   if (role === "textbox" || role === "combobox" || role === "searchbox") {
-    return (el.textContent || "").toString();
+    return maskSensitiveText(el, (el.textContent || "").toString());
   }
-  return (getAccessibleName(el) || el.getAttribute("aria-label") || el.textContent || "").toString();
+  return maskSensitiveText(el, (getAccessibleName(el) || el.getAttribute("aria-label") || el.textContent || "").toString());
 }
 function visibleOrActive(el) {
   return isVisible(el) || document.activeElement === el;
@@ -3748,10 +3751,8 @@ function readFocusedWritableText() {
   const surface = findFocusedWritableSurface();
   if (!surface)
     return null;
-  return {
-    text: surface.text,
-    length: surface.text.length
-  };
+  const text = maskSensitiveText(surface.element, surface.text);
+  return { text, length: text.length };
 }
 function setInputValue(el, text) {
   const tag = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -3826,7 +3827,7 @@ function selectedAdaptiveScene() {
       has: true,
       id,
       label: label2,
-      text: writable.text.slice(0, 200),
+      text: maskSensitiveText(writable.element, writable.text).slice(0, 200),
       extras: {
         kind: writable.kind,
         writable: true,
@@ -4045,6 +4046,7 @@ var canvaProfile = {
 
 // extension/src/content/scene/profiles/google-docs.ts
 init_ops();
+init_sensitive();
 function findTextEventTarget() {
   const iframe = document.querySelector(".docs-texteventtarget-iframe");
   if (!iframe)
@@ -4134,7 +4136,7 @@ var googleDocsProfile = {
       if (!sel || sel.rangeCount === 0)
         return { has: false };
       const range = sel.getRangeAt(0);
-      const text = range.toString();
+      const text = isSensitive(tet.textbox) && range.toString() ? SECURE_MASK : range.toString();
       return {
         has: text.length > 0,
         text: text.slice(0, 200),
@@ -4148,10 +4150,10 @@ var googleDocsProfile = {
     const tet = findTextEventTarget();
     if (!tet)
       return null;
-    const text = (tet.textbox.textContent || "").toString();
+    const text = safeText(tet.textbox);
     return {
       text,
-      html: opts?.withHtml ? tet.textbox.innerHTML : undefined,
+      html: opts?.withHtml ? safeHtml(tet.textbox) : undefined,
       length: text.length
     };
   },
@@ -4236,6 +4238,7 @@ var googleDocsProfile = {
 
 // extension/src/content/scene/profiles/google-slides.ts
 init_ops();
+init_sensitive();
 var FILMSTRIP_ID = /^filmstrip-slide-(\d+)-(gd[a-z0-9_-]+)$/i;
 function gatherSlides() {
   const all = Array.from(document.querySelectorAll('g[id^="filmstrip-slide-"]'));
@@ -4353,10 +4356,10 @@ var googleSlidesProfile = {
     if (paragraphs.length === 0) {
       const notesContainer = document.getElementById("speakernotes") || document.getElementById("speakernotes-workspace");
       if (notesContainer)
-        return (notesContainer.textContent || "").trim() || null;
+        return safeText(notesContainer).trim() || null;
       return null;
     }
-    const text = paragraphs.map((p) => (p.textContent || "").trim()).filter(Boolean).join(`
+    const text = paragraphs.map((p) => safeText(p).trim()).filter(Boolean).join(`
 `);
     return text || null;
   },
@@ -4371,7 +4374,7 @@ var googleSlidesProfile = {
       const textbox = doc.querySelector("[role=textbox]") || doc.querySelector("[contenteditable]");
       if (!textbox)
         return null;
-      const text = (textbox.textContent || "").trim();
+      const text = safeText(textbox).trim();
       return { text, length: text.length };
     } catch {
       return null;

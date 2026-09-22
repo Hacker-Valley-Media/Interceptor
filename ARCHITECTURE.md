@@ -199,7 +199,7 @@ Caps: 64 KiB per entry, JSON / text / XML / JS content types only, conservative 
 
 `content/sensitive.ts` reuses the isolated-world WeakSet used by credential delivery and the recorder. Password fields are intrinsically sensitive; the marker follows the same element and its descendants, including shadow-host ancestry, but does not transfer to replacement plain-text nodes. `safeValue` masks before truncation and snapshot caching, `safeText` sanitizes text-backed credential contents, and `safeHtml` sanitizes a clone without changing the live page. Trees, forms, snapshots/diffs, extract/query/attribute output, fallback accessible names, and find matching use these helpers. MCP inherits these results through the CLI.
 
-Scene adapters still read raw field values and can expose credentials. Arbitrary eval, pixels, network/storage data, and credentials copied elsewhere by page code are outside this field-masking boundary.
+Scene reads sit inside the same boundary: `readElementText` in `content/scene/adaptive.ts` goes through `safeValue` for inputs and textareas, and `readFocusedWritableText` / `selectedAdaptiveScene` mask a focused sensitive field, so `scene list`, `scene selected`, and `scene text` show `***SECURE***` where `read` and `forms` do. The writable surface keeps the raw value, so `scene insert` still appends after the real text. Arbitrary eval, pixels, network/storage data, and credentials copied elsewhere by page code are outside this field-masking boundary.
 
 ### Frame-aware read surfaces
 
@@ -228,6 +228,8 @@ Some pages return an empty accessibility tree while their DOM is fully queryable
 **Rendered text without layout (`content/sensitive.ts`).** `safeText(el, true)` reads `innerText`, and when that comes back blank (a tab that has never been rendered can answer an empty string for a body full of text) it falls back to `walkRenderedText`: text nodes in document order, skipping `script`, `style`, `noscript`, `template`, and elements hidden by computed `display` or `visibility`, with whitespace collapsed. Raw `textContent` was not used because it hands back stylesheet rules and script source. `innerText` still wins whenever it has content.
 
 **Legacy key codes (`content/input-simulation.ts`).** `dispatchKeySequence` passes `keyCode`, `which`, and `charCode` in the `KeyboardEventInit` dictionary, the only route that crosses from the content script's isolated world into the page. `keypress` fires only for character keys plus Enter and Space, a cancelled keydown suppresses it, and `Shift` with a lowercase letter dispatches the uppercase key. Composers that send on `keyCode === 13` now send.
+
+**Semantic check targets.** `interceptor check "<role>:<name>"` emits `find_and_check` (`cli/commands/actions.ts`), the content-script handler that resolves a role and accessible name the way `click "<role>:<name>"` does and then sets the box. The parser used to spread the semantic target into a plain `check`, which carried no ref and answered "stale element" for every role:name target.
 
 **Click outcome detection.** Every click lane (`click`, `click --selector`, `scene click`) registers its 200 ms `MutationObserver` *before* dispatching the synthetic click sequence, because handlers mutate synchronously and an observer installed afterwards missed them: the first click after a page load read as "no DOM change" three times out of three while the handler had run, which escalated to an OS click that the foreground guard refused on a background tab and surfaced as `click failed at all layers`. `content.ts` now appends its dirty-state note to the action's own warning instead of replacing it, and `router.ts` returns the synthetic success plus the warning when the OS escalation was refused by the guard (`data.hint` present, `--os` not requested), keeping `failed at all layers` for real OS failures.
 
@@ -480,6 +482,10 @@ lower-cased context slug resolves to the same pending `enable`. Concurrent verbs
 on a not-yet-connected device share one in-flight launch (dedup by `contextId`),
 so they can't double-launch and orphan a runner.
 
+**No idle wait before input.** Every XCUICoordinate verb (`tap`, `press…thenDragTo`, `typeText`) waits for the target app to go quiescent before the event, bounded by XCTest's 60 s `_XCTApplicationStateTimeout`; on a surface that never settles (a Home Screen icon menu, a browser new-tab page) the press landed and the verb still timed out, and every queued op then waited its own 60 s. `disableQuiescenceWait()` in `InterceptorRunnerUITests.swift` swizzles `XCUIApplicationProcess`'s wait to a no-op. Xcode 26 renamed the selectors to `waitForQuiescenceIncludingAnimationsIdle:isPreEvent:` and `…usingActivity:isPreEvent:`, so the runner patches those and the older names when present; `ios fgdebug` reports which were patched. The synthesized-event lane (`ios gesture`) never waited. `ios click --x 10.5 --y 20.25` and the coordinate forms of `drag` and `scroll` keep fractions (`Number`, not `parseInt`). `ios keys Enter|Return|Tab` as the whole argument maps to the control character `typeText` presses; any other text is typed literally.
+
+**Runner discovery.** `findRunnerApp` (`daemon/ios/tools.ts`) scans every `Debug-*` products directory under the build output, device first, so a runner built for the Simulator is found under `Debug-iphonesimulator/` without a symlink.
+
 Two launch paths, selected by `preferNoXcodeIosPath()`:
 
 - **Xcode (default).** `interceptor ios setup` runs `build-for-testing` with the
@@ -584,9 +590,21 @@ runtime dependencies; NSKeyedArchiver replies decode through `daemon/ios/nskeyed
 - **Classic-Lockdown device services** (`daemon/ios/service-*.ts`): diagnostics,
   syslog, AFC files, crash reports, profiles, Darwin notifications, SpringBoard —
   `interceptor ios logs / diag / fs / crash / profiles / notify / springboard`.
+  Service sockets are wrapped with the pair record's host key and certificate only
+  (`lockdownTlsOptions`, `daemon/ios/lockdown.ts`): passing the record's root
+  certificate as `ca` made Bun 1.4's handshake handler fetch the peer certificate
+  and throw `ERR_CRYPTO_OPERATION_FAILED`, after which neither the connect callback
+  nor `error` fired and every runner-free lane sat silent until its deadline over
+  Wi-Fi. The upgrade also rejects when the socket closes before the handshake ends.
 - **WebKit inspection** (`daemon/ios/webinspector-*.ts`, `web-manager.ts`): the
-  WebInspector protocol over RemoteXPC to read/drive Safari & WKWebView content —
-  `interceptor ios web *`.
+  WebInspector protocol (classic lockdown `com.apple.webinspector` first, the RemoteXPC
+  shim as fallback) to read/drive Safari & WKWebView content — `interceptor ios web *`.
+  Every outbound WIR frame is followed by an empty frame: on a real device
+  webinspectord does not act on a message larger than about two TCP segments until
+  more bytes arrive, so without the prompt every reply lands one request late and
+  the DOM serializer never answers (the ios-webkit-debug-proxy workaround, iOS 11+).
+  `ios web eval|call --timeout <s>` is seconds on the command line and milliseconds
+  on the session; the CLI deadline stretches to cover a longer timeout.
 
 **Passcodes and the lock screen (issue #244).** `ios type` / `ios keys` accept `--secret <name>`; the runner's `keys` op types into the foreground app and, when that app has no keyboard focus (a Face ID fallback sheet or Settings passcode sheet belongs to SpringBoard), retries against `com.apple.springboard`, or takes an explicit `bundleId`. The `unlock` op wakes the phone (`press(.home)`), swipes up to the passcode pad, waits for SpringBoard's `secureTextFields["Passcode field"]`, types, and waits for the `com.apple.springboard.lockstate` Darwin notification to read 0 (`ICIsScreenLocked` in `ObjCSupport.m`); `--probe` stops before typing and reports lock state and whether the field appeared. It only works while the runner is resident — XCTest cannot start on a locked phone, so the first unlock after a reboot is manual. `ios press lock` posts the Power key through XCTest's private `XCDeviceEvent` (HID page `0x0C`, usage `0x30`, 0.5 s) because `pressLockButton` no longer locks on iOS 27, and falls back to the old selector when the private API is absent.
 

@@ -26,6 +26,20 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.15">
+    <h2>Interceptor 1.0.15</h2>
+    <time datetime="2026-09-22">September 22, 2026</time>
+    <ul>
+      <li><code>interceptor ios click</code>, <code>drag</code>, <code>scroll</code>, and <code>type</code> return in about a second on every app. The runner no longer waits for the app to go idle, so a long press on a Home Screen icon or a tap in an animating browser page reports success instead of timing out after 60 seconds while the press had already landed. Run <code>interceptor ios refresh</code> once so the runner on the phone picks this up; <code>ios fgdebug</code> lists the patched <code>idleWait</code> selectors.</li>
+      <li><code>interceptor ios proc</code>, <code>shot</code>, <code>top</code>, <code>diag</code>, <code>profiles</code>, and <code>ios web targets</code> answer again over Wi-Fi. The lockdown TLS session no longer passes the pairing CA, which made Bun's handshake fail on the device certificate and left every runner-free lane silent until its deadline. A socket that closes mid-handshake now fails at once.</li>
+      <li><code>interceptor ios click --x 10.5 --y 20.25</code> and <code>ios scroll --x/--y</code> keep fractions. A runner built for the iOS Simulator is found under <code>Debug-iphonesimulator/</code> without a symlink.</li>
+      <li><code>interceptor scene list</code>, <code>scene selected</code>, and <code>scene text</code> mask password and credential-marked fields the way <code>read</code> and <code>forms</code> do. <code>interceptor check "checkbox:Remember me"</code> checks a box by role and name, as <code>click</code> already could.</li>
+      <li><code>interceptor ios web read</code>, <code>text</code>, <code>find</code>, <code>inspect</code>, <code>eval</code>, and <code>call</code> answer on iOS 27 Safari. The web-inspector transport now follows every message with an empty frame, the prompt webinspectord needs before it acts on a message larger than about two TCP segments; without it the DOM serializer never answered and every later reply arrived one request late.</li>
+      <li><code>interceptor ios keys Enter</code> (or <code>Return</code>, <code>Tab</code>) presses that key instead of typing the word. A literal newline character already did; the two characters <code>\n</code> are still typed as text.</li>
+      <li><code>interceptor ios web eval</code> and <code>call --timeout &lt;s&gt;</code> take seconds, as the help always said; the value used to reach the session as milliseconds, so <code>--timeout 5</code> gave up after 5 ms. The CLI deadline now stretches to cover a longer timeout.</li>
+    </ul>
+  </section>
+
   <section data-sparkle-version="1.0.13">
     <h2>Interceptor 1.0.13</h2>
     <time datetime="2026-09-22">September 22, 2026</time>

@@ -14,6 +14,14 @@
  * raw entry), and the named socket-setup variants. It frames over an injected
  * byte duplex so it is testable without a device. The INNER WIP JSON is handled
  * by webinspector-session.ts.
+ *
+ * Every outbound frame is followed by an EMPTY frame (a 4-byte zero length, no
+ * body). On a real device webinspectord does not act on a message larger than
+ * roughly two TCP segments (2.5-2.9 KB over Wi-Fi on iOS 27) until more bytes
+ * arrive on the socket; without the prompt every reply lands one request late
+ * and the DOM serializer never answers. ios-webkit-debug-proxy sends the same
+ * empty payload after each message on iOS 11+ ("webinspectord may not ack the
+ * message with relatively big payloads"). Inbound empty frames are ignored.
  */
 
 import { decodePlist, encodeXmlPlist, DEFAULT_PLIST_LIMITS, type PlistDict, type PlistValue } from "./webinspector-plist"
@@ -75,6 +83,11 @@ export const WIR_KEY = {
 
 export class WirFrameError extends Error {
   constructor(message: string) { super(message); this.name = "WirFrameError" }
+}
+
+/** The zero-length frame that prompts webinspectord to process the message before it. */
+export function encodeWirEmptyFrame(): Buffer {
+  return Buffer.alloc(4)
 }
 
 export function encodeWirFrame(value: PlistValue): Buffer {
@@ -257,6 +270,7 @@ export class WebInspectorTransport {
         const frame = tryReadWirFrame(this.acc, this.maxBytes)
         if (!frame) break
         this.acc = frame.rest
+        if (frame.body.length === 0) continue
         this.dispatch(frame.body)
       }
     } catch (err) {
@@ -311,6 +325,7 @@ export class WebInspectorTransport {
   private send(selector: string, argument: PlistDict): void {
     if (this.closed) return
     this.chan.write(encodeWirFrame({ __selector: selector, __argument: argument }))
+    this.chan.write(encodeWirEmptyFrame())
   }
 
   /** Announce our connection identifier (first message of the session). */

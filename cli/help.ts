@@ -293,7 +293,7 @@ Page meta and data (one call each):
   interceptor regions                        Landmark regions (header, nav, main, aside, footer) with refs
   interceptor frames                         List frames in the active tab (ids for --frame <id>)
   interceptor what-at <x,y>                  Element under viewport coordinates (ref, role, name, rect)
-  interceptor check <ref> [true|false]       Set a checkbox / toggle (omit the value to toggle)
+  interceptor check <ref|role:name> [true|false]  Check a box or switch (false unchecks); "checkbox:Remember me" targets by role and name
   interceptor blur                           Remove focus from the active element
   interceptor wait_for <css> [timeout-ms]    Wait until a selector matches (default 10000 ms)
   interceptor reload                         Reload the extension (an unpacked copy picks up installed files; a store copy asks the store for an update)

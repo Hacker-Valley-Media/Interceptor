@@ -9,8 +9,9 @@
 //  XCUIElementSnapshot). No HTTP server, no CocoaHTTPServer, no usbmux forward.
 //
 //  Hardening:
-//    - Quiescence wait is swizzled to a no-op, so AX ops don't block for tens of
-//      seconds on apps that never settle (the WDA "shouldWaitForQuiescence" fix).
+//    - XCUITest's "wait for the app to be idle" is swizzled to a no-op on every
+//      selector Xcode has used for it (the WDA "shouldWaitForQuiescence" fix), so
+//      input verbs don't block up to 60 s, twice, on apps that never settle.
 //    - Each verb runs inside ICRunCatching (Obj-C @try/@catch) so an XCUITest
 //      NSException becomes an error frame instead of crashing the session.
 //    - Verbs run on a dedicated serial queue; the WS receive loop is never
@@ -35,7 +36,7 @@ final class InterceptorRunnerUITests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = true
-        disableQuiescenceWait()
+        Runner.idleWaitPatched = disableQuiescenceWait()
     }
 
     /// Never-ending test that hosts the WebSocket agent (mirrors WDA's testRunner).
@@ -66,20 +67,31 @@ final class InterceptorRunnerUITests: XCTestCase {
     }
 }
 
-/// Neutralize XCUITest's "wait for the app to be idle" before every query/
-/// interaction. On busy apps this otherwise blocks for tens of seconds (or
-/// forever), stalling verbs. Private but allowed in a test bundle; safely no-ops
-/// if the symbol isn't present on this Xcode.
-private func disableQuiescenceWait() {
-    guard let cls = NSClassFromString("XCUIApplicationProcess") else { return }
-    let noop: @convention(block) (AnyObject, Double) -> Void = { _, _ in }
-    let imp = imp_implementationWithBlock(noop)
-    for name in ["waitForQuiescenceIncludingAnimationsIdle:", "_waitForQuiescenceIncludingAnimationsIdle:"] {
-        let sel = NSSelectorFromString(name)
-        if let method = class_getInstanceMethod(cls, sel) {
-            method_setImplementation(method, imp)
-        }
+/// Neutralize XCUITest's "wait for the app to be idle" before and after every
+/// interaction. On an app that never settles (SpringBoard with a context menu open,
+/// a browser's animating new-tab page) the wait runs to XCTest's 60 s ceiling
+/// (`_XCTApplicationStateTimeout`) on every XCUICoordinate verb, twice, while the
+/// press has already landed. Xcode 26 replaced the one-argument selector with the
+/// `…isPreEvent:` pair, so every name Xcode has used is tried and a missing one is
+/// skipped. Returns the names patched so `fgdebug` shows which build the phone runs.
+private func disableQuiescenceWait() -> [String] {
+    guard let cls = NSClassFromString("XCUIApplicationProcess") else { return [] }
+    let one: @convention(block) (AnyObject, Bool) -> Void = { _, _ in }
+    let preEvent: @convention(block) (AnyObject, Bool, Bool) -> Void = { _, _, _ in }
+    let activity: @convention(block) (AnyObject, Bool, AnyObject?, Bool) -> Void = { _, _, _, _ in }
+    let table: [(String, IMP)] = [
+        ("waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
+        ("_waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
+        ("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:", imp_implementationWithBlock(preEvent)),
+        ("waitForQuiescenceIncludingAnimationsIdle:usingActivity:isPreEvent:", imp_implementationWithBlock(activity)),
+    ]
+    var patched: [String] = []
+    for (name, imp) in table {
+        guard let method = class_getInstanceMethod(cls, NSSelectorFromString(name)) else { continue }
+        method_setImplementation(method, imp)
+        patched.append(name)
     }
+    return patched
 }
 
 // MARK: - WebSocket agent
@@ -209,6 +221,8 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
 enum Runner {
     private static let springboard = "com.apple.springboard"
     private static var currentBundleId = springboard
+    /// Idle-wait selectors replaced at setUp; empty means the phone waits for quiescence.
+    static var idleWaitPatched: [String] = []
 
     private static func app() -> XCUIApplication { XCUIApplication(bundleIdentifier: currentBundleId) }
 
@@ -252,7 +266,7 @@ enum Runner {
             let f = foregroundApp().frame
             return ok(["width": Double(f.width), "height": Double(f.height)])
         case "fgdebug":
-            return ok(["fg": ICActiveApplicationBundleID() ?? "nil", "debug": ICActiveApplicationDebug() ?? "nil"])
+            return ok(["fg": ICActiveApplicationBundleID() ?? "nil", "debug": ICActiveApplicationDebug() ?? "nil", "idleWait": idleWaitPatched])
         case "screenshot":
             return ok(XCUIScreen.main.screenshot().pngRepresentation.base64EncodedString())
         case "tap":

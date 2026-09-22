@@ -85,3 +85,6 @@ use-cases/deep-research-demo/
 
 # graphify knowledge-graph output (local analysis artifacts, never shipped)
 **/graphify-out/
+
+# GitNexus skill copies (local code-intelligence tooling, not shipped)
+.agents/skills/gitnexus-*/
