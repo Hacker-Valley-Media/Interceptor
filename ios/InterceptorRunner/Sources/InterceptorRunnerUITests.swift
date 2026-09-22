@@ -93,7 +93,13 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
     private(set) var finished = false
 
     private var session: URLSession!
-    private var task: URLSessionWebSocketTask?
+    // Written on the reconnect queue; read from the main, delegate, and stream queues.
+    private let taskLock = NSLock()
+    private var _task: URLSessionWebSocketTask?
+    private var task: URLSessionWebSocketTask? {
+        get { taskLock.lock(); defer { taskLock.unlock() }; return _task }
+        set { taskLock.lock(); _task = newValue; taskLock.unlock() }
+    }
     private var reconnects = 0
     private let maxReconnects = 5
 

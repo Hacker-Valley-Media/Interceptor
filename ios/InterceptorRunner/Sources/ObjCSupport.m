@@ -246,7 +246,11 @@ NSError * _Nullable ICSynthesizeGesture(NSArray<NSArray<NSDictionary<NSString *,
 //
 // Lives here rather than in Swift because the Xcode 26 SDK marks XCUIScreen and
 // XCUIScreenshot @MainActor; the stream loop runs on a background queue so verbs
-// keep dispatching on the main thread while frames flow.
+// keep dispatching on the main thread while frames flow. That mark is Swift-side
+// isolation: the screenshot is a synchronous proxy round trip that runs on any
+// thread, and this loop has captured thousands of frames from its own queue while
+// click, tree, and gesture verbs ran on main. Dispatching each 100 to 500 ms
+// capture to main would hold the main thread most of the time and starve them.
 
 NSData * _Nullable ICCaptureScreenJPEG(double scale, double quality, CGSize * _Nullable outPixels, double * _Nullable captureMs, double * _Nullable encodeMs) {
     CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
