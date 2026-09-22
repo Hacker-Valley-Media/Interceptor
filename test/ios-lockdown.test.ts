@@ -57,3 +57,35 @@ describe("lockdown plist + frame codec", () => {
     expect(obj.N).toBe(5)
   })
 })
+
+// The TLS upgrade passed the pairing CA; when that CA verified the device certificate,
+// Bun 1.4's handshake handler fetched the peer certificate, threw
+// ERR_CRYPTO_OPERATION_FAILED, and the upgrade never settled. Every runner-free lane
+// then timed out silently. The identity is the pair record's host key and cert only.
+describe("lockdown TLS upgrade", () => {
+  test("options carry the host identity and no CA", async () => {
+    const { lockdownTlsOptions } = await import("../daemon/ios/lockdown")
+    const pair = { HostPrivateKey: Buffer.from("k"), HostCertificate: Buffer.from("c"), RootCertificate: Buffer.from("r"), DeviceCertificate: Buffer.from("d") }
+    const o = lockdownTlsOptions(pair)
+    expect(o.key).toBe(pair.HostPrivateKey)
+    expect(o.cert).toBe(pair.HostCertificate)
+    expect(o.rejectUnauthorized).toBe(false)
+    expect("ca" in o).toBe(false)
+  })
+
+  test("a socket that closes before the handshake rejects instead of hanging", async () => {
+    const net = await import("node:net")
+    const { upgradeTls } = await import("../daemon/ios/lockdown")
+    const server = net.createServer((s) => s.destroy())
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+    const port = (server.address() as { port: number }).port
+    const raw = net.connect(port, "127.0.0.1")
+    await new Promise<void>((r) => raw.once("connect", r))
+    const outcome = await Promise.race([
+      upgradeTls(raw, { HostPrivateKey: undefined, HostCertificate: undefined }).then(() => "resolved", (e: Error) => `rejected: ${e.message}`),
+      new Promise<string>((r) => setTimeout(() => r("hung"), 5000)),
+    ])
+    server.close()
+    expect(outcome).toStartWith("rejected")
+  })
+})

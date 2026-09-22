@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test"
 import { IosManager } from "../daemon/ios/manager"
 import { RunnerChannel } from "../daemon/ios/channel"
 import { IosRefRegistry } from "../daemon/ios/tree"
-import { buildIosDragAction, buildIosScrollAction } from "../cli/commands/ios"
+import { buildIosClickAction, buildIosDragAction, buildIosScrollAction } from "../cli/commands/ios"
 
 // `ios drag` and `ios scroll` take screen coordinates as well as refs, for apps
 // (games, canvases) with no usable element tree. A gesture the caller did not
@@ -161,5 +161,26 @@ describe("ios gesture transport deadline", () => {
     expect(pickTimeoutForAction({ type: "ios_web_targets" })).toBe(20_000)
     expect(pickTimeoutForAction({ type: "ios_setup" })).toBe(600_000)
     expect(pickTimeoutForAction({ type: "click" })).toBe(INTERCEPTOR_TIMEOUT_MS)
+  })
+})
+
+// Vision boxes give fractional screen points; parseInt used to turn 10.7 into 10.
+describe("ios click and scroll keep fractional coordinates", () => {
+  test("scroll --x/--y", () => {
+    expect(buildIosScrollAction(["ios", "scroll", "--x", "10.7", "--y", "20.3"])).toMatchObject({ type: "ios_scroll", x: 10.7, y: 20.3 })
+  })
+
+  test("click --x/--y", () => {
+    expect(buildIosClickAction(["ios", "click", "--x", "196.5", "--y", "412.25"])).toMatchObject({ type: "ios_click", x: 196.5, y: 412.25 })
+    expect(buildIosClickAction(["ios", "click", "--x", "196.5", "--y", "412.25"]).ref).toBeUndefined()
+  })
+
+  test("click by ref sends no point", () => {
+    expect(buildIosClickAction(["ios", "click", "e3"])).toEqual({ type: "ios_click", ref: "e3", x: undefined, y: undefined })
+  })
+
+  test("a value that is not a number is left out", () => {
+    expect(buildIosClickAction(["ios", "click", "--x", "abc", "--y", "1"]).x).toBeUndefined()
+    expect(buildIosClickAction(["ios", "click", "--x", "", "--y", "1"]).x).toBeUndefined()
   })
 })
