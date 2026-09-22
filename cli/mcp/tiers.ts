@@ -44,6 +44,8 @@ const READ_VERBS: Record<Surface, Set<string>> = {
     "tree", "find", "inspect", "screenshot", "apps", "status", "devices",
     "discover", "diag", "crash", "profiles", "springboard", "proc", "ps", "top",
     "gpu", "shot", "axtree", "screen", "backup", "logs", "notify",
+    // The newest frame the stream already delivered; nothing is sent to the phone.
+    "frame",
   ]),
   local: new Set([
     "status", "manifest", "diagnose", "extensions", "contexts", "capabilities",

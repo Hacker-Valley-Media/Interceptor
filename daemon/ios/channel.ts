@@ -19,6 +19,10 @@ import { IOS_RUNNER_OPS } from "../../shared/ios-device"
 
 export type IosWindowSize = { x: number; y: number; width: number; height: number }
 
+/** One finger of a multi-touch gesture: samples in screen points, `t` in milliseconds. */
+export type GestureSample = { x: number; y: number; t: number }
+export type GestureFinger = GestureSample[]
+
 /** The device transport contract the manager's verb handlers depend on. */
 export interface IosDeviceChannel {
   /** Liveness probe. Resolves when the device channel is reachable. */
@@ -143,6 +147,14 @@ export class RunnerChannel implements IosDeviceChannel {
   async unlock(passcode?: string, probe = false): Promise<unknown> { return this.send(IOS_RUNNER_OPS.unlock, { passcode: passcode ?? "", probe }) }
 
   async pressButton(name: string): Promise<unknown> { return this.send(IOS_RUNNER_OPS.press, { name }) }
+
+  /** One multi-touch record: `fingers` is [[{x, y, t}]] with t in ms from the record start. */
+  async gesture(fingers: GestureFinger[]): Promise<unknown> { return this.send(IOS_RUNNER_OPS.gesture, { fingers }) }
+
+  /** Frame push loop on the runner: start (fps, scale, quality), stop, or status. Returns the runner-side stats. */
+  async stream(action: "start" | "stop" | "status", opts: { fps?: number; scale?: number; quality?: number } = {}): Promise<unknown> {
+    return this.send(IOS_RUNNER_OPS.stream, { action, ...opts })
+  }
 
   /** Diagnostic passthrough for an arbitrary runner op (e.g. "fgdebug"). */
   async rawOp(op: string, args: Record<string, unknown> = {}): Promise<unknown> { return this.send(op, args) }

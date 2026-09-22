@@ -76,6 +76,9 @@ const IOS_VERBS: { v: string; s: string }[] = [
   { v: "diag", s: "diagnostics" }, { v: "logs", s: "syslog" }, { v: "fs", s: "AFC filesystem (push is destructive)" }, { v: "crash", s: "crash reports" },
   { v: "profiles", s: "config profiles" }, { v: "notify", s: "Darwin notifications" }, { v: "springboard", s: "SpringBoard state" },
   { v: "web", s: "WebKit inspection (eval/call are exec)" },
+  { v: "stream", s: "continuous JPEG frames from the runner (start|stop|status, --out rewritten per frame)" },
+  { v: "frame", s: "save the newest streamed frame (read)" },
+  { v: "gesture", s: "multi-touch: x,y[@ms][>x,y@ms...] per finger, --hold ms" },
 ]
 
 function foldMenu(items: { v: string; s: string }[]): string {

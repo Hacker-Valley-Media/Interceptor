@@ -14,6 +14,7 @@ import { helpForCommand } from "../help"
 import { runIosWebCommand } from "./ios-web"
 import { runIosSvcCommand } from "./ios-svc"
 import { runIosDevCommand } from "./ios-dev"
+import { resolve } from "node:path"
 
 /** Device-service introspection subcommands, delegated to ios-svc.ts. */
 const IOS_SVC_SUBCOMMANDS = new Set(["diag", "logs", "fs", "crash", "profiles", "notify", "springboard"])
@@ -76,6 +77,61 @@ export function buildIosDragAction(args: string[]): Action {
     console.error(`error: ios drag --duration is at most ${MAX_IOS_DRAG_DURATION_S} seconds (the gesture deadline is 60 s)`); process.exit(1)
   }
   return { type: "ios_drag", from, to, duration }
+}
+
+/** One finger of `ios gesture`: `x,y[@ms][>x,y@ms...]`. A single sample lifts at `--hold`. */
+export type GestureSample = { x: number; y: number; t: number }
+
+export function parseGestureFinger(spec: string, holdMs: number): GestureSample[] | { error: string } {
+  const samples: GestureSample[] = []
+  for (const part of spec.split(">")) {
+    const m = part.trim().match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:@(\d+(?:\.\d+)?))?$/)
+    if (!m) return { error: `'${part.trim()}' is not x,y or x,y@ms` }
+    if (m[3] === undefined && samples.length) return { error: `'${part.trim()}' needs a time offset (x,y@ms) after the first sample` }
+    samples.push({ x: Number(m[1]), y: Number(m[2]), t: m[3] === undefined ? 0 : Number(m[3]) })
+  }
+  if (samples.length === 1) samples.push({ ...samples[0], t: samples[0].t + holdMs })
+  return samples
+}
+
+/** `ios gesture <finger> [<finger> ...] [--hold ms]`: every positional is one finger. */
+export function buildIosGestureAction(args: string[]): Action {
+  const holdRaw = flagValue(args, "--hold")
+  const holdMs = holdRaw === undefined ? 100 : Number(holdRaw)
+  if (!(Number.isFinite(holdMs) && holdMs >= 0)) { console.error("error: ios gesture --hold takes milliseconds, for example 600"); process.exit(1) }
+  const specs = positionalsExcept(args, 2, ["--hold", "--on", "--context"])
+  if (!specs.length) {
+    console.error('error: ios gesture requires at least one finger, e.g. ios gesture "380,700@0>380,700@600" "120,650@100>120,650@300"'); process.exit(1)
+  }
+  if (specs.length > 10) { console.error("error: ios gesture takes at most 10 fingers"); process.exit(1) }
+  const fingers: GestureSample[][] = []
+  for (const spec of specs) {
+    const finger = parseGestureFinger(spec, holdMs)
+    if ("error" in finger) { console.error(`error: ios gesture: ${finger.error}`); process.exit(1) }
+    fingers.push(finger)
+  }
+  return { type: "ios_gesture", fingers }
+}
+
+/** `ios stream start|stop|status [--fps N] [--scale S] [--quality Q] [--out <path>]`. */
+export function buildIosStreamAction(args: string[], cwd = process.cwd()): Action {
+  const op = args[2] && !args[2].startsWith("--") ? args[2] : undefined
+  if (!op || !["start", "stop", "status"].includes(op)) { console.error("error: ios stream requires start|stop|status"); process.exit(1) }
+  const action: Action = { type: "ios_stream", op }
+  if (op !== "start") return action
+  const ranges: Array<[string, number, number]> = [["--fps", 1, 30], ["--scale", 0.1, 1], ["--quality", 0.05, 1]]
+  for (const [flag, lo, hi] of ranges) {
+    if (!hasFlag(args, flag)) continue
+    const n = Number(flagValue(args, flag))
+    if (!(Number.isFinite(n) && n >= lo && n <= hi)) { console.error(`error: ios stream ${flag} must be ${lo} to ${hi}`); process.exit(1) }
+    action[flag.slice(2)] = n
+  }
+  if (hasFlag(args, "--out")) {
+    const out = flagValue(args, "--out")
+    if (!out) { console.error("error: ios stream --out requires a path"); process.exit(1) }
+    action.out = resolve(cwd, out)
+  }
+  return action
 }
 
 function numFlag(args: string[], flag: string): number | undefined {
@@ -164,7 +220,15 @@ Drive a phone (add --on <name>, or it uses your only phone):
                                              swipe from a ref, a point, or (bare) the screen center; --dir defaults to down
   drag    <from> <to> [--duration s]         each end is a ref or x,y (120,330); the same point twice is a long press
   press   home|lock|volume-up|volume-down    hardware button
-  screenshot                                 capture the screen
+  screenshot                                 capture the screen (one JPEG, VLM-budget resized)
+  stream  start|stop|status [--fps N] [--scale S] [--quality Q] [--out <path>]
+                                             the runner pushes JPEG frames continuously (default 10 fps, half size, quality 0.3);
+                                             --out is rewritten atomically with every frame, so a loop just reads that file
+  frame   [--out <path>]                     save the newest streamed frame (no device round trip)
+  gesture <finger> [<finger>...] [--hold ms] multi-touch: each finger is x,y[@ms][>x,y@ms...]; a lone x,y presses at 0 and
+                                             lifts at --hold (default 100). "380,700@0>380,700@600" "120,650@100>120,650@300"
+                                             holds a pedal 600 ms while an arrow is tapped from 100 to 300 ms. Hold over 500 ms
+                                             or UIKit reads a tap. Same screen points as click and drag.
   apps                                       installed apps
   app     launch|activate|terminate <id>     app lifecycle
   eval    "<js>" | --file <f.js>              run a JS program in the on-device brain (Interceptor.tree/tap/type/sleep/log/foreground)
@@ -458,6 +522,31 @@ export async function runIosCommand(
       const button = args[2]
       if (!button || button.startsWith("--")) { console.error("error: ios press requires home|lock|volume-up|volume-down"); process.exit(1) }
       emitExit(await send({ type: "ios_press", button }, contextId), jsonMode)
+      return
+    }
+
+    case "gesture": {
+      emitExit(await send(buildIosGestureAction(args), contextId), jsonMode)
+      return
+    }
+
+    case "stream": {
+      emitExit(await send(buildIosStreamAction(args), contextId), jsonMode)
+      return
+    }
+
+    case "frame": {
+      // Written by the daemon (it holds the bytes); the path is resolved here so a
+      // relative --out means the caller's directory, not the daemon's.
+      const out = resolve(process.cwd(), flagValue(args, "--out") ?? `interceptor-ios-frame-${Date.now()}.jpg`)
+      if (hasFlag(args, "--out") && !flagValue(args, "--out")) { console.error("error: ios frame --out requires a path"); process.exit(1) }
+      const result = await send({ type: "ios_frame", out }, contextId)
+      if (result.success && result.data && typeof result.data === "object" && !jsonMode) {
+        const d = result.data as { path?: string; seq?: number; ageMs?: number; width?: number; height?: number; running?: boolean }
+        console.log(`saved: ${d.path} (frame ${d.seq}, ${d.ageMs} ms old, ${d.width}x${d.height}${d.running ? "" : ", stream stopped"})`)
+        return
+      }
+      emitExit(result, jsonMode)
       return
     }
 

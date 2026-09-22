@@ -52,6 +52,10 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   ios_press: 60_000,
   ios_scroll: 60_000,
   ios_drag: 60_000,
+  // A gesture plays for up to 55 s before it returns; stream start/stop is one
+  // runner round trip. `ios_frame` never touches the device and keeps the default.
+  ios_gesture: 60_000,
+  ios_stream: 60_000,
   ios_setup: 600_000,
   ios_refresh: 600_000,
   ios_enable: 120_000,
