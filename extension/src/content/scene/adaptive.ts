@@ -93,7 +93,7 @@ function readElementText(el: Element): string {
   if (role === "textbox" || role === "combobox" || role === "searchbox") {
     return maskSensitiveText(el, (el.textContent || "").toString())
   }
-  return (getAccessibleName(el) || el.getAttribute("aria-label") || el.textContent || "").toString()
+  return maskSensitiveText(el, (getAccessibleName(el) || el.getAttribute("aria-label") || el.textContent || "").toString())
 }
 
 function visibleOrActive(el: Element): boolean {

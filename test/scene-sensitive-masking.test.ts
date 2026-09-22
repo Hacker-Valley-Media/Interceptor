@@ -49,3 +49,13 @@ describe("scene reads mask credentials", () => {
     expect(pw.value).toBe("hunter2secret!")
   })
 })
+
+describe("Google scene profiles mask credential-marked text", () => {
+  test("slides notes and a marked paragraph read as the mask", async () => {
+    const { googleSlidesProfile } = await import("../extension/src/content/scene/profiles/google-slides")
+    const { markSensitive } = await import("../extension/src/content/sensitive")
+    document.body.innerHTML = `<div id="speakernotes"><p id="speakernotes-i1-paragraph-0">plain note</p><p id="speakernotes-i1-paragraph-1">hunter2secret</p></div>`
+    markSensitive(document.getElementById("speakernotes-i1-paragraph-1")!)
+    expect(googleSlidesProfile.notes!()).toBe(`plain note\n${SECURE_MASK}`)
+  })
+})
