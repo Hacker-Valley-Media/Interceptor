@@ -85,7 +85,7 @@ cp "$BINARY" "$APP_DIR/Contents/MacOS/interceptor-bridge"
 # the rpath to @executable_path/../Frameworks, so this is the only step
 # needed for runtime resolution. Sparkle's own XPCServices/Autoupdate/
 # Updater.app helpers ship inside the framework.
-SPARKLE_FRAMEWORK="$BRIDGE_DIR/.build/arm64-apple-macosx/release/Sparkle.framework"
+SPARKLE_FRAMEWORK="$BRIDGE_DIR/.build/$(uname -m)-apple-macosx/release/Sparkle.framework"
 if [ -d "$SPARKLE_FRAMEWORK" ]; then
   echo "==> Copying Sparkle.framework into the .app"
   ditto "$SPARKLE_FRAMEWORK" "$APP_DIR/Contents/Frameworks/Sparkle.framework"

@@ -50,6 +50,17 @@ public struct VMSnapshot: Sendable {
         case diskOnly
     }
 
+    /// Paused-state save/restore (`VZVirtualMachine.saveMachineStateTo` /
+    /// `restoreMachineStateFrom`) is declared only for Apple silicon in the SDK.
+    /// Callers run this preflight before touching the filesystem so an
+    /// unsupported request fails without leaving a half-made snapshot directory
+    /// or a replaced live disk behind.
+    static func requirePausedStateSupport(_ operation: String) throws {
+        #if !arch(arm64)
+        throw VMSnapshotError.notSupported("\(operation) requires Apple silicon; use diskOnly on Intel")
+        #endif
+    }
+
 #if canImport(Virtualization)
     /// Save the current paused-state of `vm` and clone `Disk.img` to a new
     /// `<bundle>/snapshots/<tag>/` directory. The VM MUST be paused before
@@ -65,6 +76,9 @@ public struct VMSnapshot: Sendable {
         if FileManager.default.fileExists(atPath: snapDir.path) {
             throw VMSnapshotError.alreadyExists(snapDir.path)
         }
+        if mode != .diskOnly {
+            try requirePausedStateSupport("paused-state snapshots")
+        }
         do {
             try FileManager.default.createDirectory(at: snapDir, withIntermediateDirectories: true)
         } catch {
@@ -76,12 +90,18 @@ public struct VMSnapshot: Sendable {
 
         if mode != .diskOnly {
             let saveURL = bundle.snapshotFile(tag: tag)
+            #if arch(arm64)
             do {
                 try await vm.saveMachineStateTo(url: saveURL)
                 hasPaused = true
             } catch {
                 throw VMSnapshotError.ioFailure("saveMachineStateTo: \(error.localizedDescription)")
             }
+            #else
+            // VZVirtualMachine save/restore of machine state is declared only for Apple silicon in the SDK.
+            _ = saveURL
+            throw VMSnapshotError.notSupported("paused-state snapshots require Apple silicon; use diskOnly on Intel")
+            #endif
         }
 
         if mode != .pausedStateOnly {
@@ -125,6 +145,9 @@ public struct VMSnapshot: Sendable {
             throw VMSnapshotError.missing("snapshot '\(tag)' not found at \(manifestURL.path)")
         }
         let manifest = try readManifest(at: manifestURL)
+        if !diskOnly && manifest.hasPausedState {
+            try requirePausedStateSupport("paused-state restore")
+        }
 
         if !pausedStateOnly && manifest.hasDiskClone {
             let snapDisk = bundle.snapshotDir(tag: tag).appendingPathComponent("Disk.img")
@@ -148,11 +171,16 @@ public struct VMSnapshot: Sendable {
 
         if !diskOnly && manifest.hasPausedState {
             let saveURL = bundle.snapshotFile(tag: tag)
+            #if arch(arm64)
             do {
                 try await vm.restoreMachineStateFrom(url: saveURL)
             } catch {
                 throw VMSnapshotError.ioFailure("restoreMachineStateFrom: \(error.localizedDescription)")
             }
+            #else
+            _ = saveURL
+            throw VMSnapshotError.notSupported("paused-state restore requires Apple silicon; use diskOnly on Intel")
+            #endif
         }
 
         return manifest
@@ -168,13 +196,19 @@ public struct VMSnapshot: Sendable {
         guard manifest.hasPausedState else {
             throw VMSnapshotError.missing("snapshot '\(tag)' has no paused machine state")
         }
+        try requirePausedStateSupport("paused-state restore")
         let saveURL = bundle.snapshotFile(tag: tag)
+        #if arch(arm64)
         do {
             try await vm.restoreMachineStateFrom(url: saveURL)
         } catch {
             throw VMSnapshotError.ioFailure("restoreMachineStateFrom: \(error.localizedDescription)")
         }
         return manifest
+        #else
+        _ = saveURL
+        throw VMSnapshotError.notSupported("paused-state restore requires Apple silicon; use diskOnly on Intel")
+        #endif
     }
 #endif
 

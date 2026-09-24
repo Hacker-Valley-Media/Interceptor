@@ -85,7 +85,7 @@ public final class MacVMDelegate: NSObject, VZVirtualMachineDelegate, @unchecked
 
 public struct MacRuntime: Sendable {
 
-#if canImport(Virtualization)
+#if canImport(Virtualization) && arch(arm64)
     /// Install macOS into `bundle` using the restore image at `ipswURL`.
     /// Steps from
     /// `apple-developer-docs/Virtualization/installing-macos-on-a-virtual-machine.md`:
@@ -287,6 +287,27 @@ public struct MacRuntime: Sendable {
         } catch {
             throw MacRuntimeError.diskCreateFailed("truncate Disk.img to \(size): \(error.localizedDescription)")
         }
+    }
+#else
+    // VZMacOSInstaller / VZMacPlatformConfiguration and friends are declared only
+    // for Apple silicon in the Virtualization SDK; macOS guests cannot run on an
+    // Intel host. Keep the API surface so VMInstance / VmDomain compile unchanged.
+    @available(macOS 13.0, *)
+    public static func install(
+        spec: VMSpec,
+        bundle: VMBundle,
+        ipswURL: URL
+    ) async throws {
+        throw MacRuntimeError.unsupportedHost("macOS guests require an Apple silicon host")
+    }
+
+    @available(macOS 13.0, *)
+    public static func run(
+        spec: VMSpec,
+        bundle: VMBundle,
+        headless: Bool
+    ) async throws -> MacRunningVM {
+        throw MacRuntimeError.unsupportedHost("macOS guests require an Apple silicon host")
     }
 #endif
 }
