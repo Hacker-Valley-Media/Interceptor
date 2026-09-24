@@ -121,8 +121,9 @@ describe("render keep-alive (page side)", () => {
     await sleep(60)
     expect(runs.length).toBe(2)
     expect(typeof runs[0]).toBe("number")
-    // A late native delivery of the already-drained callback must not run it again.
-    nativeCallbacks.get(before)!(999)
+    // The drained callback's native request is cancelled, so Chromium holds no
+    // stale entry to fire on the next paint.
+    expect(nativeCallbacks.has(before)).toBe(false)
     expect(runs.length).toBe(2)
   })
 

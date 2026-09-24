@@ -338,7 +338,10 @@ describe("monitor sparse format + renderer + plan generator", () => {
       { event: "mon_stop",   sid: "focus-alpha", s: 6, t: 3000, evt: 7, mut: 0, net: 0, dur: 2000 },
     ])
     const plan = buildPlan("focus-alpha")
-    expect(plan).toContain("# focus-switch to tab 9 (https://www.youtube.com/): target it with --tab 9")
+    expect(plan).toContain("# focus-switch to tab 9 (https://www.youtube.com/): the commands below target it with --tab")
+    // Commands after the switch carry --tab 9; the ones before it do not.
+    expect(plan).toMatch(/"button:Play"[^\n]* --tab 9$/m)
+    expect(plan).not.toMatch(/"button:Open"[^\n]*--tab/m)
     // A replayed `tab switch` would take over the user's view; the comment
     // names --tab as the way to reach the tab instead.
     expect(plan).not.toMatch(/^interceptor tab switch/m)

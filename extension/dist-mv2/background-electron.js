@@ -2078,7 +2078,7 @@ function sessionArea4() {
   const storage = chrome.storage;
   return storage.session ?? chrome.storage.local;
 }
-async function rememberPriorActive(targetId, isManaged = isTabInAnyManagedGroup) {
+async function rememberPriorActive(targetId, group, isManaged = isTabInAnyManagedGroup) {
   try {
     const target = await chrome.tabs.get(targetId);
     const [prior] = await chrome.tabs.query({ active: true, windowId: target.windowId });
@@ -2090,15 +2090,16 @@ async function rememberPriorActive(targetId, isManaged = isTabInAnyManagedGroup)
     } catch {}
     if (managed)
       return;
-    await sessionArea4().set({ [priorActiveKey(target.windowId)]: prior.id });
+    const record = { tabId: prior.id, group: group ?? null };
+    await sessionArea4().set({ [priorActiveKey(target.windowId)]: record });
   } catch {}
 }
-async function consumeSwitchBack(tabId) {
+async function consumeSwitchBack(tabId, group) {
   try {
     const tab = await chrome.tabs.get(tabId);
     const key = priorActiveKey(tab.windowId);
-    const stored = await sessionArea4().get(key);
-    if (stored[key] !== tabId)
+    const stored = (await sessionArea4().get(key))[key];
+    if (!stored || stored.tabId !== tabId || stored.group !== (group ?? null))
       return false;
     await sessionArea4().remove(key);
     return true;
@@ -2121,13 +2122,13 @@ async function isKeepaliveTab(tabId) {
   const stored = await sessionArea5().get(key);
   return stored[key] === true;
 }
-async function applyKeepalive(tabId, on) {
+async function applyKeepalive(tabId, on, frameId) {
   const scripting = chrome.scripting;
   if (!scripting || typeof scripting.executeScript !== "function") {
     throw new Error("tab keepalive needs chrome.scripting (MV3); this browser package does not provide it");
   }
   const results = await scripting.executeScript({
-    target: { tabId, allFrames: true },
+    target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] },
     world: "MAIN",
     injectImmediately: true,
     args: [IK_KEEPALIVE, on],
@@ -2167,11 +2168,9 @@ async function setKeepalive(tabId, on) {
 function registerKeepaliveListeners() {
   const nav = chrome.webNavigation;
   nav?.onCommitted?.addListener(async (details) => {
-    if (details.frameId !== 0)
-      return;
     try {
       if (await isKeepaliveTab(details.tabId))
-        await applyKeepalive(details.tabId, true);
+        await applyKeepalive(details.tabId, true, details.frameId);
     } catch {}
   });
   chrome.tabs?.onRemoved?.addListener((tabId) => {
@@ -2294,7 +2293,7 @@ async function handleTabActions(action, tabId) {
     }
     case "tab_switch": {
       const switchId = action.tabId;
-      await rememberPriorActive(switchId);
+      await rememberPriorActive(switchId, typeof action.group === "string" ? action.group : undefined);
       await chrome.tabs.update(switchId, { active: true });
       return { success: true };
     }
@@ -5474,7 +5473,7 @@ async function handleDaemonMessage(msg) {
   if (tabId && needsTab(action.type) && !action.anyTab) {
     const membershipError = await managedTabGateError(tabId, groupLabel, groupHard);
     if (membershipError) {
-      switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId);
+      switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId, groupLabel);
       if (!switchBack) {
         fail(membershipError);
         return;

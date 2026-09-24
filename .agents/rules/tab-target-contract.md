@@ -38,9 +38,9 @@ pinning test files whenever you touch this surface.
    that to a console.warn — per-agent isolation consumers key off it.
 
 6. **One gate exemption: `tab switch` back to the user's tab.** The
-   `tab_switch` handler records the window's active tab before activating the
+   `tab_switch` handler records the window's active tab and the switching lane's group before activating the
    target, only when that tab is unmanaged (`switch-back.ts`); the dispatcher
-   lets a `tab_switch` whose target is that recorded tab through the
+   lets a `tab_switch` from the same group whose target is that recorded tab through the
    managed-group gate once (`consumeSwitchBack`), and skips the auto-target
    persist for that call. No other action type gets the exemption, and a
    managed prior is never recorded (it would overwrite the way back).

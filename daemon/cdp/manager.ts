@@ -24,13 +24,14 @@ import {
   type CdpTarget,
 } from "../../shared/cdp-app"
 
-/** Bundle id of the frontmost app via lsappinfo (no TCC grant needed); undefined off macOS or on failure. */
-function frontmostBundleId(): string | undefined {
-  if (process.platform !== "darwin") return undefined
+/** Frontmost app via lsappinfo (no TCC grant needed); empty off macOS or on failure. */
+function frontmostApp(): { bundleId?: string; pid?: number } {
+  if (process.platform !== "darwin") return {}
   const asn = spawnSync("lsappinfo", ["front"], { encoding: "utf-8" }).stdout?.trim()
-  if (!asn) return undefined
-  const info = spawnSync("lsappinfo", ["info", "-only", "bundleid", asn], { encoding: "utf-8" }).stdout ?? ""
-  return info.match(/"CFBundleIdentifier"="([^"]+)"/)?.[1]
+  if (!asn) return {}
+  const read = (key: string): string => spawnSync("lsappinfo", ["info", "-only", key, asn], { encoding: "utf-8" }).stdout ?? ""
+  const pid = Number(read("pid").match(/"pid"\s*=\s*(\d+)/)?.[1])
+  return { bundleId: read("bundleid").match(/"CFBundleIdentifier"="([^"]+)"/)?.[1], pid: Number.isFinite(pid) ? pid : undefined }
 }
 
 /**
@@ -529,7 +530,7 @@ export class CdpManager {
     // request to look at the app (background-first contract). Electron
     // apps often activate themselves on ready regardless, so the app that was frontmost before is put back
     // once the endpoint is up. lsappinfo needs no TCC grant.
-    const frontmostBefore = frontmostBundleId()
+    const frontmostBefore = frontmostApp().bundleId
     const res = spawnSync("open", ["-g", "-a", app, "--args", `--remote-debugging-port=${port}`], { encoding: "utf-8" })
     if (res.status !== 0) {
       return { success: false, error: `failed to relaunch ${app}: ${res.stderr || "open failed"}` }
@@ -544,12 +545,14 @@ export class CdpManager {
     // The debug endpoint is up before the app's window shows, and the
     // self-activation comes with the window (verified live: the check right
     // after the endpoint still saw the old frontmost, then the app took over).
-    // Watch for up to 5 s and put the previous app back the moment it changes.
+    // Watch for up to 5 s and put the previous app back the moment the
+    // relaunched app (one of its pids) is what took the front; a user switching
+    // to some third app in that window is left alone.
     let restoredFrontmost = false
     if (frontmostBefore) {
       for (let i = 0; i < 20; i++) {
-        const now = frontmostBundleId()
-        if (now && now !== frontmostBefore) {
+        const now = frontmostApp()
+        if (now.bundleId && now.bundleId !== frontmostBefore && now.pid !== undefined && runningPids().includes(now.pid)) {
           spawnSync("open", ["-b", frontmostBefore], { stdio: "ignore" })
           restoredFrontmost = true
           break

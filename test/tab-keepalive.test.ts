@@ -106,20 +106,21 @@ describe("tab keepalive — handler", () => {
     expect(result.error).toContain("chrome.scripting")
   })
 
-  test("listeners: onRemoved forgets the tab; onCommitted re-applies only flagged main frames", async () => {
+  test("listeners: onRemoved forgets the tab; onCommitted re-applies each committed frame of a flagged tab", async () => {
     const fake = installFakeChrome(); restore = fake.restore
     const { registerKeepaliveListeners } = await mod()
     registerKeepaliveListeners()
     expect(fake.removed.length).toBe(1)
     expect(fake.committed.length).toBe(1)
     fake.store.set("keepalive:7", true)
-    await fake.committed[0]({ tabId: 7, frameId: 1 })
-    expect(fake.executeCalls.length).toBe(0)
     await fake.committed[0]({ tabId: 8, frameId: 0 })
-    expect(fake.executeCalls.length).toBe(0)
+    expect(fake.executeCalls.length).toBe(0) // not flagged
     await fake.committed[0]({ tabId: 7, frameId: 0 })
-    expect(fake.executeCalls.length).toBe(1)
-    expect((fake.executeCalls[0] as { args: unknown[] }).args).toEqual([IK_KEEPALIVE, true])
+    await fake.committed[0]({ tabId: 7, frameId: 3 })
+    expect(fake.executeCalls.length).toBe(2)
+    expect((fake.executeCalls[0] as { target: unknown }).target).toEqual({ tabId: 7, frameIds: [0] })
+    expect((fake.executeCalls[1] as { target: unknown; args: unknown[] }).target).toEqual({ tabId: 7, frameIds: [3] })
+    expect((fake.executeCalls[1] as { args: unknown[] }).args).toEqual([IK_KEEPALIVE, true])
     fake.removed[0](7)
     await new Promise(r => setTimeout(r, 0))
     expect(fake.store.has("keepalive:7")).toBe(false)

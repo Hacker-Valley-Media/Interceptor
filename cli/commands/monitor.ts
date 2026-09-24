@@ -529,6 +529,17 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
   const hasRealUserEvents = events.some((e) => e.tr !== false && actionKinds.has(e.event || ""))
   const emitSynthetic = includeSynthetic || !hasRealUserEvents
 
+  // Commands emitted after a recorded focus switch target that tab with --tab
+  // until a child-tab handoff (`tab new` makes the new tab the auto-target).
+  let replayTab: { tid: number; from: number } | undefined
+  const closeReplayTab = (): void => {
+    if (!replayTab) return
+    for (let j = replayTab.from; j < lines.length; j++) {
+      if (lines[j].startsWith("interceptor ") && !lines[j].startsWith("interceptor tab new")) lines[j] += ` --tab ${replayTab.tid}`
+    }
+    replayTab = undefined
+  }
+
   type IndexedEvent = { ev: MonEvent; idx: number }
   const evList: IndexedEvent[] = events.map((ev, idx) => ({ ev, idx }))
 
@@ -627,15 +638,18 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
       }
       case "mon_attach": {
         if (ev.reason === "child_tab" && ev.u) {
+          closeReplayTab()
           lines.push(`# handoff to child tab ${ev.tid || "?"}`)
           lines.push(`interceptor tab new "${escapeArg(ev.u)}"`)
           lines.push(`interceptor wait-stable`)
         } else if (ev.reason === "focus_switch" && ev.tid) {
-          // A recorded focus switch is where the PERSON looked, not a step the
-          // replay must reproduce: every later verb can target the tab with
-          // --tab, and a replayed `tab switch` would take over the user's view
-          //. Foregrounding stays a deliberate choice for a trusted click.
-          lines.push(`# focus-switch to tab ${ev.tid}${ev.u ? ` (${ev.u})` : ""}: target it with --tab ${ev.tid}; foreground only for a trusted click, then switch back`)
+          // A recorded focus switch is where the person looked, not a step the
+          // replay reproduces: a replayed `tab switch` would take over the
+          // user's view, so the commands that follow carry --tab instead.
+          // Foregrounding stays a deliberate choice for a trusted click.
+          closeReplayTab()
+          lines.push(`# focus-switch to tab ${ev.tid}${ev.u ? ` (${ev.u})` : ""}: the commands below target it with --tab; foreground only for a trusted click, then switch back`)
+          replayTab = { tid: ev.tid, from: lines.length }
         }
         break
       }
@@ -661,6 +675,7 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
     }
   }
 
+  closeReplayTab()
   return lines.join("\n")
 }
 

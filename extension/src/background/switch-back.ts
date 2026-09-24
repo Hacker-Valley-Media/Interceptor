@@ -17,15 +17,19 @@ function sessionArea(): chrome.storage.StorageArea {
   return storage.session ?? chrome.storage.local
 }
 
+type PriorRecord = { tabId: number; group: string | null }
+
 /**
  * Before activating `targetId`: remember the tab its window was showing, but
  * only when that tab is the user's (unmanaged). A managed prior passes the
  * gate on its own, and recording it would overwrite the user's tab after a
  * managed-to-managed switch, which is exactly when the way back matters.
- * `isManaged` is injectable for tests; production uses the group registry.
+ * The record carries the switching lane's group so another lane cannot
+ * spend it. `isManaged` is injectable for tests; production uses the registry.
  */
 export async function rememberPriorActive(
   targetId: number,
+  group: string | undefined,
   isManaged: (tabId: number) => Promise<boolean> = isTabInAnyManagedGroup
 ): Promise<void> {
   try {
@@ -35,20 +39,21 @@ export async function rememberPriorActive(
     let managed = false
     try { managed = await isManaged(prior.id) } catch {}
     if (managed) return
-    await sessionArea().set({ [priorActiveKey(target.windowId)]: prior.id })
+    const record: PriorRecord = { tabId: prior.id, group: group ?? null }
+    await sessionArea().set({ [priorActiveKey(target.windowId)]: record })
   } catch {}
 }
 
 /**
  * One-shot: true when `tabId` is the tab that was showing in its window before
- * Interceptor's own switch. Clears the record so the exemption is not reusable.
+ * this lane's own switch. Clears the record so the exemption is not reusable.
  */
-export async function consumeSwitchBack(tabId: number): Promise<boolean> {
+export async function consumeSwitchBack(tabId: number, group: string | undefined): Promise<boolean> {
   try {
     const tab = await chrome.tabs.get(tabId)
     const key = priorActiveKey(tab.windowId)
-    const stored = await sessionArea().get(key) as Record<string, number | undefined>
-    if (stored[key] !== tabId) return false
+    const stored = (await sessionArea().get(key) as Record<string, PriorRecord | undefined>)[key]
+    if (!stored || stored.tabId !== tabId || stored.group !== (group ?? null)) return false
     await sessionArea().remove(key)
     return true
   } catch {

@@ -37,13 +37,13 @@ export async function isKeepaliveTab(tabId: number): Promise<boolean> {
  * the MAIN-world hooks are absent in the main frame (a chrome:// page, or a
  * page that loaded before the extension did).
  */
-export async function applyKeepalive(tabId: number, on: boolean): Promise<{ installed: boolean }> {
+export async function applyKeepalive(tabId: number, on: boolean, frameId?: number): Promise<{ installed: boolean }> {
   const scripting = (chrome as typeof chrome & { scripting?: typeof chrome.scripting }).scripting
   if (!scripting || typeof scripting.executeScript !== "function") {
     throw new Error("tab keepalive needs chrome.scripting (MV3); this browser package does not provide it")
   }
   const results = await scripting.executeScript({
-    target: { tabId, allFrames: true },
+    target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] },
     world: "MAIN" as chrome.scripting.ExecutionWorld,
     injectImmediately: true,
     args: [IK_KEEPALIVE, on],
@@ -81,13 +81,16 @@ export async function setKeepalive(tabId: number, on: boolean): Promise<ActionRe
   }
 }
 
-/** Re-apply after every main-frame navigation in a flagged tab; forget closed tabs. */
+/**
+ * Re-apply after every navigation in a flagged tab, frame by frame (an iframe
+ * that navigates later than the command would otherwise stay inert); forget
+ * closed tabs.
+ */
 export function registerKeepaliveListeners(): void {
   const nav = (chrome as typeof chrome & { webNavigation?: typeof chrome.webNavigation }).webNavigation
   nav?.onCommitted?.addListener(async (details) => {
-    if (details.frameId !== 0) return
     try {
-      if (await isKeepaliveTab(details.tabId)) await applyKeepalive(details.tabId, true)
+      if (await isKeepaliveTab(details.tabId)) await applyKeepalive(details.tabId, true, details.frameId)
     } catch {}
   })
   chrome.tabs?.onRemoved?.addListener((tabId) => {

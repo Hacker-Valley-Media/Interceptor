@@ -227,7 +227,7 @@ export async function handleTabActions(
       const switchId = action.tabId as number
       // Remember what the window was showing so the caller can put it back
       // (`tab switch <prior>` passes the group gate once).
-      await rememberPriorActive(switchId)
+      await rememberPriorActive(switchId, typeof action.group === "string" ? action.group : undefined)
       await chrome.tabs.update(switchId, { active: true })
       return { success: true }
     }

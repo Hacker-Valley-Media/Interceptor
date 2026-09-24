@@ -245,7 +245,7 @@ export async function handleDaemonMessage(msg: {
       // One exemption: `tab switch` back to the tab the window was
       // showing before Interceptor's own switch. The user's tab is never
       // persisted as an auto-target below.
-      switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId)
+      switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId, groupLabel)
       if (!switchBack) {
         fail(membershipError)
         return

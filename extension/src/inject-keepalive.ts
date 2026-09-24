@@ -82,10 +82,14 @@ export function installRenderKeepalive(win: Window & typeof globalThis, key: sym
   // never by a re-entrant drain (that burst until the stack overflowed).
   const drain = (): void => {
     if (!state.on || !realHidden() || pending.size === 0) return
-    const batch = Array.from(pending.values())
+    const batch = Array.from(pending.entries())
     pending.clear()
     const now = win.performance.now()
-    for (const cb of batch) {
+    for (const [id, cb] of batch) {
+      // The native request is cancelled too: a hidden tab never delivers it,
+      // so without this every drained frame would stay queued in Chromium
+      // (about 60 closures per second) and all fire at once on the next paint.
+      nativeCaf.call(win, id)
       try { cb(now) } catch {}
     }
   }
