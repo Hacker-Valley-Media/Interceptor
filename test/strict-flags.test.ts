@@ -192,7 +192,8 @@ describe("the whole inventory is accepted (table-driven)", () => {
         normalizeArgsSplit([...prefix, flag, "x"])
       }
       for (const flag of FLAG_INVENTORY.boolean[cmd] || []) {
-        normalizeArgsSplit([...prefix, flag])
+        // tab flags are per subverb: --off belongs to keepalive, the rest to new.
+        normalizeArgsSplit([...(cmd === "tab" && flag === "--off" ? [cmd, "keepalive"] : prefix), flag])
       }
       for (const flag of FLAG_INVENTORY.globalValue) {
         normalizeArgsSplit([...prefix, flag, "x"])

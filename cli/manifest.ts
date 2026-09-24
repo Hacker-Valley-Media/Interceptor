@@ -171,13 +171,14 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "tabs", surface: "browser", usage: "interceptor tabs", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
   {
     name: "tab", surface: "browser",
-    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id>",
-    summary: "Create, reuse, activate, or close managed tabs",
-    returns: "Tab metadata for creation, or ok / error for exact-ID lifecycle actions.",
+    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id> | tab keepalive <id> [--off]",
+    summary: "Create, reuse, activate, keep rendering, or close managed tabs",
+    returns: "Tab metadata for creation, or ok / error for exact-ID lifecycle actions; keepalive returns the flag state and its limits.",
     flags: [
       { name: "--reuse", description: "reuse the most recent tab in the caller's managed group" },
       { name: "--no-reuse", description: "force creation of a new managed tab" },
       { name: "--activate", description: "activate the created or reused tab (default is background-first)" },
+      { name: "--off", description: "tab keepalive: clear the flag so the page reads its real visibility again" },
     ],
   },
   {

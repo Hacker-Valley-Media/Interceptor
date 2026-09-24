@@ -47,3 +47,18 @@ describe("formatResult warning on a failed result", () => {
     expect(JSON.parse(out)).toEqual({ success: false, error: "e", warning: "w" })
   })
 })
+
+describe("formatResult hint on a failed result", () => {
+  test("text mode prints data.hint after the error line, before any warning", () => {
+    const out = formatResult(
+      { success: false, error: "tab 42 is not the active tab of window 5", data: { hint: "Try synthetic input first" }, warning: "w" },
+      false,
+    )
+    expect(out).toBe("error: tab 42 is not the active tab of window 5\nhint: Try synthetic input first\nwarning: w")
+  })
+
+  test("a non-string or empty hint prints nothing extra", () => {
+    expect(formatResult({ success: false, error: "boom", data: { hint: "" } }, false)).toBe("error: boom")
+    expect(formatResult({ success: false, error: "boom", data: { hint: 7 } }, false)).toBe("error: boom")
+  })
+})

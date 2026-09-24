@@ -655,7 +655,7 @@ async function cdpAttachActDetach(tabId, method, params) {
 }
 
 // extension/src/background/capabilities/os-input.ts
-var FOREGROUND_HINT = "trusted OS input needs the target tab visible in the OS-focused window — " + "`interceptor tab switch <id>` foregrounds it (explicit focus-moving opt-in), " + "or drop --trusted for background-safe synthetic input";
+var FOREGROUND_HINT = "trusted OS input needs the target tab visible in the OS-focused window. " + "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " + "If the page really needs an OS click, `interceptor tab switch <id>` shows the tab in its window " + "and replaces what the user is looking at; switch back to the previous tab when done.";
 async function requireForegroundTab(tabId) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) {
@@ -1456,6 +1456,7 @@ var IK_SINK_TT_POLICY = "z9t1";
 var IK_CANVAS_OBSERVER = "z9o0";
 var IK_CANVAS_WRAPPED = "z9r0";
 var IK_GETCTX_WRAPPED = "z9r1";
+var IK_KEEPALIVE = "z9v0";
 var K_NET = Symbol.for(IK_NET);
 var K_CANVAS = Symbol.for(IK_CANVAS);
 var K_WS = Symbol.for(IK_WS);
@@ -1465,6 +1466,7 @@ var K_TT_POLICY = Symbol.for(IK_TT_POLICY);
 var K_CANVAS_OBSERVER = Symbol.for(IK_CANVAS_OBSERVER);
 var K_CANVAS_WRAPPED = Symbol.for(IK_CANVAS_WRAPPED);
 var K_GETCTX_WRAPPED = Symbol.for(IK_GETCTX_WRAPPED);
+var K_KEEPALIVE = Symbol.for(IK_KEEPALIVE);
 var TT_POLICY_NAME = "tt-e";
 var SINK_TT_POLICY_NAME = "tt-s";
 
@@ -2068,11 +2070,121 @@ function recordGroupActivity(label) {
   } catch {}
 }
 
+// extension/src/background/switch-back.ts
+function priorActiveKey(windowId) {
+  return `priorActive:${windowId}`;
+}
+function sessionArea4() {
+  const storage = chrome.storage;
+  return storage.session ?? chrome.storage.local;
+}
+async function rememberPriorActive(targetId, group, isManaged = isTabInAnyManagedGroup) {
+  try {
+    const target = await chrome.tabs.get(targetId);
+    const [prior] = await chrome.tabs.query({ active: true, windowId: target.windowId });
+    if (typeof prior?.id !== "number" || prior.id === targetId)
+      return;
+    let managed = false;
+    try {
+      managed = await isManaged(prior.id);
+    } catch {}
+    if (managed)
+      return;
+    const record = { tabId: prior.id, group: group ?? null };
+    await sessionArea4().set({ [priorActiveKey(target.windowId)]: record });
+  } catch {}
+}
+async function consumeSwitchBack(tabId, group) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const key = priorActiveKey(tab.windowId);
+    const stored = (await sessionArea4().get(key))[key];
+    if (!stored || stored.tabId !== tabId || stored.group !== (group ?? null))
+      return false;
+    await sessionArea4().remove(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// extension/src/background/tab-keepalive.ts
+var KEEPALIVE_NOTE = "the page now reads visible and its animation-frame callbacks run on a timer while the tab is hidden; " + "IntersectionObserver and ResizeObserver callbacks still wait for a real paint, and Chromium keeps its " + "background timer rate (about one wake-up per second after 10 s hidden)";
+function keepaliveKey(tabId) {
+  return `keepalive:${tabId}`;
+}
+function sessionArea5() {
+  const storage = chrome.storage;
+  return storage.session ?? chrome.storage.local;
+}
+async function isKeepaliveTab(tabId) {
+  const key = keepaliveKey(tabId);
+  const stored = await sessionArea5().get(key);
+  return stored[key] === true;
+}
+async function applyKeepalive(tabId, on, frameId) {
+  const scripting = chrome.scripting;
+  if (!scripting || typeof scripting.executeScript !== "function") {
+    throw new Error("tab keepalive needs chrome.scripting (MV3); this browser package does not provide it");
+  }
+  const results = await scripting.executeScript({
+    target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] },
+    world: "MAIN",
+    injectImmediately: true,
+    args: [IK_KEEPALIVE, on],
+    func: (key, enable) => {
+      const state = window[Symbol.for(key)];
+      if (!state || typeof state.set !== "function")
+        return false;
+      state.set(enable);
+      return true;
+    }
+  });
+  const main = results.find((r) => r.frameId === 0) ?? results[0];
+  return { installed: main?.result === true };
+}
+async function setKeepalive(tabId, on) {
+  let applied;
+  try {
+    applied = await applyKeepalive(tabId, on);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+  if (!applied.installed) {
+    return {
+      success: false,
+      error: `keep-alive hooks are not installed in tab ${tabId} (a chrome:// page, or a page loaded before the extension) — reload the tab and retry`
+    };
+  }
+  if (on)
+    await sessionArea5().set({ [keepaliveKey(tabId)]: true });
+  else
+    await sessionArea5().remove(keepaliveKey(tabId));
+  return {
+    success: true,
+    data: { tabId, keepalive: on, note: on ? KEEPALIVE_NOTE : "the page reads its real visibility again" }
+  };
+}
+function registerKeepaliveListeners() {
+  const nav = chrome.webNavigation;
+  nav?.onCommitted?.addListener(async (details) => {
+    try {
+      if (await isKeepaliveTab(details.tabId))
+        await applyKeepalive(details.tabId, true, details.frameId);
+    } catch {}
+  });
+  chrome.tabs?.onRemoved?.addListener((tabId) => {
+    Promise.resolve(sessionArea5().remove(keepaliveKey(tabId))).catch(() => {
+      return;
+    });
+  });
+}
+
 // extension/src/background/capabilities/tabs.ts
 function activeTabKey(group) {
   return group ? `activeTabId:${group}` : "activeTabId";
 }
-function sessionArea4() {
+function sessionArea6() {
   const storage = chrome.storage;
   return storage.session ?? chrome.storage.local;
 }
@@ -2138,7 +2250,7 @@ async function handleTabActions(action, tabId) {
                   updated = await chrome.tabs.update(candidate.id, updateProps);
                   await waitForTabLoad(candidate.id);
                 }
-                await sessionArea4().set({ [activeTabKey(group)]: candidate.id });
+                await sessionArea6().set({ [activeTabKey(group)]: candidate.id });
                 return {
                   success: true,
                   data: { tabId: candidate.id, url: updated?.url ?? targetUrl, windowId: updated?.windowId ?? candidate.windowId, groupId, group, reused: true }
@@ -2159,7 +2271,7 @@ async function handleTabActions(action, tabId) {
         const groupId = group ? await addTabToNamedGroup(newTab.id, group, action.groupColor) : await addTabToInterceptorGroup(newTab.id);
         if (shouldActivate)
           await chrome.tabs.update(newTab.id, { active: true });
-        await sessionArea4().set({ [activeTabKey(group)]: newTab.id });
+        await sessionArea6().set({ [activeTabKey(group)]: newTab.id });
         const data = { tabId: newTab.id, url: newTab.url, windowId: newTab.windowId, groupId, group, reused: false };
         const groupWarning = groupWarningFor(groupId, hasTabGroupApi());
         if (groupWarning)
@@ -2172,16 +2284,21 @@ async function handleTabActions(action, tabId) {
       const closedId = action.tabId || tabId;
       await chrome.tabs.remove(closedId);
       const keys = ["activeTabId", typeof action.group === "string" ? activeTabKey(action.group) : null].filter((k) => !!k);
-      const stored = await sessionArea4().get(keys);
+      const stored = await sessionArea6().get(keys);
       for (const key of keys) {
         if (stored[key] === closedId)
-          await sessionArea4().remove(key);
+          await sessionArea6().remove(key);
       }
       return { success: true };
     }
     case "tab_switch": {
-      await chrome.tabs.update(action.tabId, { active: true });
+      const switchId = action.tabId;
+      await rememberPriorActive(switchId, typeof action.group === "string" ? action.group : undefined);
+      await chrome.tabs.update(switchId, { active: true });
       return { success: true };
+    }
+    case "tab_keepalive": {
+      return setKeepalive(tabId, action.enabled !== false);
     }
     case "tab_list": {
       const tabs = await chrome.tabs.query({});
@@ -2343,7 +2460,7 @@ async function handleWindowActions(action, _tabId) {
           left: action.left,
           top: action.top,
           incognito: !!action.incognito,
-          focused: action.focused !== false
+          focused: action.focused === true
         }));
         if (!win)
           return { success: false, error: "window creation returned no window" };
@@ -4943,6 +5060,7 @@ async function handlePowerIdleActions(action) {
 function initializeActionRouter() {
   registerMonitorListeners();
   restorePageCommCaptureConfig();
+  registerKeepaliveListeners();
 }
 var OS_INPUT_ACTIONS = new Set(["os_click", "os_key", "os_type", "os_move"]);
 var SCREENSHOT_ACTIONS = new Set(["screenshot", "screenshot_background", "page_capture", "ocr"]);
@@ -4961,6 +5079,7 @@ var TAB_ACTIONS = new Set([
   "tab_create",
   "tab_close",
   "tab_switch",
+  "tab_keepalive",
   "tab_list",
   "tab_duplicate",
   "tab_reload",
@@ -5350,14 +5469,18 @@ async function handleDaemonMessage(msg) {
     fail(noActiveTabError(windows ? windows.length : null));
     return;
   }
+  let switchBack = false;
   if (tabId && needsTab(action.type) && !action.anyTab) {
     const membershipError = await managedTabGateError(tabId, groupLabel, groupHard);
     if (membershipError) {
-      fail(membershipError);
-      return;
+      switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId, groupLabel);
+      if (!switchBack) {
+        fail(membershipError);
+        return;
+      }
     }
   }
-  if (tabId)
+  if (tabId && !switchBack)
     setActiveTabId(tabId, groupLabel);
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
     const urlErr = await verifyTabUrl(tabId, action.expectedUrl);

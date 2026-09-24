@@ -205,7 +205,8 @@ interceptor tab new <url> --activate  # Explicit foregrounding
 interceptor tab new <url> --reuse     # Navigate the group's most-recent tab instead of creating
                                       # New tabs land in the window that already holds Interceptor groups (own group's window first),
                                       # not the focused window; the result's windowId says where. A window is created only when none is normal.
-interceptor tab switch <tab-id>
+interceptor tab keepalive <tab-id>    # Hidden tab reads visible + runs its animation frames (no focus change); --off clears
+interceptor tab switch <tab-id>       # Explicit focus move; switching back to the tab that was showing passes the group gate once
 interceptor tab close <tab-id>
 
 interceptor open <url> --group <label>   # Open into a named per-agent group "<brand>-<label>" (created on first use)
@@ -215,7 +216,8 @@ interceptor open <url> --shared-group     # Suppress session scope; use the shar
 interceptor group list                   # All live tab groups: label, title, color, tab count
 interceptor group close <label>          # Atomically close every tab in a named group (other groups untouched)
 interceptor window list
-interceptor window new
+interceptor window new [url]                              # Background window (ordered below the user's)
+interceptor window new [url] --activate                   # Explicit focus move
 interceptor window focus <window-id>                      # Explicit focus move
 interceptor window resize <window-id> <width> <height>
 interceptor window resize <window-id> --left 0 --top 0 --width 960 --height 1080

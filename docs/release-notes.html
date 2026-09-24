@@ -26,6 +26,20 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.17">
+    <h2>Interceptor 1.0.17</h2>
+    <time datetime="2026-09-24">September 24, 2026</time>
+    <ul>
+      <li><code>interceptor tab keepalive &lt;id&gt;</code> makes a hidden managed tab read as visible and run its animation frames at frame rate, so a page that stops drawing in the background renders in place and <code>read</code>, <code>text</code>, and <code>eval</code> return its real content. No focus change. <code>--off</code> clears it, the flag survives navigation in that tab, and it ends with the tab. Limits, stated in the result: IntersectionObserver and ResizeObserver callbacks still wait for a real paint, and on a page whose security policy forbids web workers the frames run about once per second.</li>
+      <li><code>interceptor tab switch</code> back to the tab that was showing before Interceptor's own switch now passes the managed-group gate once, so an agent that brought a tab forward for a trusted click can put your tab back. Your tab is never stored as an auto-target.</li>
+      <li><code>interceptor window new</code> opens in the background; <code>--activate</code> is the opt-in that focuses the new window, matching <code>open</code> and <code>tab new</code>.</li>
+      <li>The trusted-input refusal now leads with the background-safe path (drop <code>--trusted</code>) and says that <code>tab switch</code> replaces what you are looking at; the hint prints in plain text, not only with <code>--json</code>. The <code>screenshot --pixel</code> help says the tab's window must be on screen and not covered; the browser does not need to be focused.</li>
+      <li><code>interceptor monitor export --plan</code> records a focus switch as a comment instead of a <code>tab switch</code> command, so a replayed recording never takes over your view.</li>
+      <li><code>interceptor macos cdp launch</code> relaunches the app behind your windows and puts the app you were using back in front if the relaunched app activates itself. It refuses a debug port another process already serves, naming that process, instead of reporting a connection that belonged to the wrong app.</li>
+      <li><code>read</code>, <code>open</code>, <code>act</code>, and <code>inspect</code> honor <code>--any-tab</code> the way single verbs already did.</li>
+    </ul>
+  </section>
+
   <section data-sparkle-version="1.0.15">
     <h2>Interceptor 1.0.15</h2>
     <time datetime="2026-09-22">September 22, 2026</time>

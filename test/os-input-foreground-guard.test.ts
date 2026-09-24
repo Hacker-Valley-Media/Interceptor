@@ -80,7 +80,12 @@ describe("trusted OS input — foreground guard (issue #166)", () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain("window 5 is not the OS-focused window")
     const data = result.data as { hint?: string }
+    // The background-safe path comes first; `tab switch` is named as
+    // the deliberate, view-replacing fallback, with the way back.
+    expect(data.hint).toMatch(/^trusted OS input needs the target tab visible in the OS-focused window\. Try synthetic input first/)
     expect(data.hint).toContain("tab switch")
+    expect(data.hint).toContain("replaces what the user is looking at")
+    expect(data.hint).toContain("switch back")
   })
 
   test("os_click refuses when the tab is not active in its window", async () => {
