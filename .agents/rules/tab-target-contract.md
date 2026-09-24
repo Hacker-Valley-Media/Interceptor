@@ -37,7 +37,15 @@ pinning test files whenever you touch this surface.
    the result carries `groupWarning` (`groupWarningFor`). Never downgrade
    that to a console.warn — per-agent isolation consumers key off it.
 
-Tests that pin this: `extension/src/background/resolve-tab.test.ts`
+6. **One gate exemption: `tab switch` back to the user's tab.** The
+   `tab_switch` handler records the window's active tab before activating the
+   target, only when that tab is unmanaged (`switch-back.ts`); the dispatcher
+   lets a `tab_switch` whose target is that recorded tab through the
+   managed-group gate once (`consumeSwitchBack`), and skips the auto-target
+   persist for that call. No other action type gets the exemption, and a
+   managed prior is never recorded (it would overwrite the way back).
+
+Tests that pin this: `extension/src/background/resolve-tab.test.ts`, `test/tab-switch-back.test.ts`
 (resolution precedence) and `test/tab-id-args.test.ts` (CLI arg forms). A
 change that flips any invariant above must update both the tests and the
 "Tab group isolation" section of `ARCHITECTURE.md`.
