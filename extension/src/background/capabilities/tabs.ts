@@ -5,6 +5,8 @@ import {
 } from "../tab-group"
 import { resolveTabLifecycle, policyMayDecideReuse } from "../tab-lifecycle"
 import { waitForTabLoad } from "../content-bridge"
+import { rememberPriorActive } from "../switch-back"
+import { setKeepalive } from "../tab-keepalive"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -222,8 +224,17 @@ export async function handleTabActions(
       // stored the switch target under the caller's (per-group or global) key;
       // a handler-side global write would clobber the ungrouped key on
       // grouped switches.
-      await chrome.tabs.update(action.tabId as number, { active: true })
+      const switchId = action.tabId as number
+      // Remember what the window was showing so the caller can put it back
+      // (`tab switch <prior>` passes the group gate once).
+      await rememberPriorActive(switchId)
+      await chrome.tabs.update(switchId, { active: true })
       return { success: true }
+    }
+
+    case "tab_keepalive": {
+      // The dispatcher already resolved and gated the explicit target.
+      return setKeepalive(tabId, action.enabled !== false)
     }
 
     case "tab_list": {

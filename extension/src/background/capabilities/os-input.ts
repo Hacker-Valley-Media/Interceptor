@@ -5,10 +5,14 @@ type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: 
 
 type WindowBounds = { left: number; top: number; width: number; height: number }
 
+// Leads with the background-safe path on purpose: agents follow the first
+// suggestion in a hint literally, and `tab switch` replaces what the user is
+// looking at.
 const FOREGROUND_HINT =
-  "trusted OS input needs the target tab visible in the OS-focused window — " +
-  "`interceptor tab switch <id>` foregrounds it (explicit focus-moving opt-in), " +
-  "or drop --trusted for background-safe synthetic input"
+  "trusted OS input needs the target tab visible in the OS-focused window. " +
+  "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " +
+  "If the page really needs an OS click, `interceptor tab switch <id>` shows the tab in its window " +
+  "and replaces what the user is looking at; switch back to the previous tab when done."
 
 // Trusted OS events are posted to the global HID tap, which macOS routes by
 // screen position and window z-order — not by tab. Delivery is only correct

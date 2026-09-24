@@ -161,13 +161,24 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
           }
           return { type: "tab_switch", tabId: parseInt(switchId) }
         }
+        case "keepalive": {
+          // Background-safe alternative to `tab switch` for a page that will
+          // not render while hidden. Explicit id only, same strictness
+          // as switch; `--off` clears the flag.
+          const keepId = filtered.slice(2).find(a => !a.startsWith("-"))
+          if (keepId === undefined || !/^\d+$/.test(keepId)) {
+            console.error(`error: tab keepalive requires a numeric tab ID${keepId !== undefined ? `, got '${keepId}'` : ""}`)
+            process.exit(1)
+          }
+          return { type: "tab_keepalive", tabId: parseInt(keepId), enabled: !filtered.includes("--off") }
+        }
         default: {
           // `tab list` was guessed 179 times in 90 agent sessions (2026-09-10
           // review); the listing verb is `tabs`, so say so instead of only
-          // naming the three real subcommands.
+          // naming the real subcommands.
           const sub = filtered[1]
           const listHint = sub === "list" || sub === "ls" ? " To list tabs run 'interceptor tabs'." : " (to list tabs: 'interceptor tabs')"
-          console.error(`error: unknown tab subcommand${sub ? ` '${sub}'` : ""}. Use: new, close, switch.${listHint}`)
+          console.error(`error: unknown tab subcommand${sub ? ` '${sub}'` : ""}. Use: new, close, switch, keepalive.${listHint}`)
           process.exit(1)
         }
       }
@@ -175,8 +186,13 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
 
     case "window":
       switch (filtered[1]) {
-        case "new":
-          return { type: "window_create", url: filtered[2], incognito: filtered.includes("--incognito") }
+        case "new": {
+          // Background-first like `tab new`; `--activate` is the opt-in that
+          // sends focused: true. The url is the first non-flag
+          // argument so `window new --activate` never reads the flag as a url.
+          const url = filtered.slice(2).find(a => !a.startsWith("-"))
+          return { type: "window_create", url, incognito: filtered.includes("--incognito"), focused: filtered.includes("--activate") }
+        }
         case "close":
           return { type: "window_close", windowId: parseWindowIdForCli(filtered[2]) }
         case "focus":

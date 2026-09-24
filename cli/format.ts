@@ -117,9 +117,16 @@ export function formatResult(result: { success: boolean; error?: string; data?: 
 
   if (!result.success) {
     const cleaned = humanizeError(result.error)
+    const lines = [`error: ${cleaned}`]
+    // A refusal's `data.hint` is the actionable part (the trusted-input
+    // foreground guard names the background-safe path there); text mode is
+    // what agents read, so it must not stay JSON-only.
+    const hint = (result.data as { hint?: unknown } | undefined)?.hint
+    if (typeof hint === "string" && hint.length > 0) lines.push(`hint: ${hint}`)
     // A failed result can carry a side-effect disclosure too (the CSP recovery
     // that reloaded the tab and still failed); it is as important as on success.
-    return result.warning ? `error: ${cleaned}\nwarning: ${result.warning}` : `error: ${cleaned}`
+    if (result.warning) lines.push(`warning: ${result.warning}`)
+    return lines.join("\n")
   }
   let body: string
   if (result.data === undefined || result.data === null) body = "ok"

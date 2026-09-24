@@ -7,6 +7,7 @@ import { routeAction } from "./router"
 import { needsTab } from "./no-tab-actions"
 import { resolveWorkingTabId } from "./resolve-tab"
 import { recordGroupActivity } from "./tab-lifecycle"
+import { consumeSwitchBack } from "./switch-back"
 
 export const MESSAGE_QUEUE_CAP = 50
 export const messageQueue: Array<{
@@ -237,18 +238,25 @@ export async function handleDaemonMessage(msg: {
     return
   }
 
+  let switchBack = false
   if (tabId && needsTab(action.type) && !action.anyTab) {
     const membershipError = await managedTabGateError(tabId, groupLabel, groupHard)
     if (membershipError) {
-      fail(membershipError)
-      return
+      // One exemption: `tab switch` back to the tab the window was
+      // showing before Interceptor's own switch. The user's tab is never
+      // persisted as an auto-target below.
+      switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId)
+      if (!switchBack) {
+        fail(membershipError)
+        return
+      }
     }
   }
 
   // Persist the auto-target only AFTER the group gate has passed — a rejected
   // cross-group request must never poison another group's (or the global)
   // auto-target key.
-  if (tabId) setActiveTabId(tabId, groupLabel)
+  if (tabId && !switchBack) setActiveTabId(tabId, groupLabel)
 
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
     const urlErr = await verifyTabUrl(tabId, action.expectedUrl as string)

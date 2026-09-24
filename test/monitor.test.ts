@@ -327,7 +327,7 @@ describe("monitor sparse format + renderer + plan generator", () => {
     expect(out).toContain("{\"ok\":true}")
   })
 
-  test("buildPlan emits tab switch for focus_switch attachments", () => {
+  test("buildPlan records a focus_switch as a comment, never as a tab switch command", () => {
     writeFixture([
       { event: "mon_start",  sid: "focus-alpha", s: 0, t: 1000, tid: 1, url: "http://localhost:21113/" },
       { event: "mon_attach", sid: "focus-alpha", s: 1, t: 1001, tid: 1, doc: "docA", reason: "start", u: "http://localhost:21113/" },
@@ -338,8 +338,10 @@ describe("monitor sparse format + renderer + plan generator", () => {
       { event: "mon_stop",   sid: "focus-alpha", s: 6, t: 3000, evt: 7, mut: 0, net: 0, dur: 2000 },
     ])
     const plan = buildPlan("focus-alpha")
-    expect(plan).toContain("# focus-switch to tab 9")
-    expect(plan).toContain("interceptor tab switch 9")
+    expect(plan).toContain("# focus-switch to tab 9 (https://www.youtube.com/): target it with --tab 9")
+    // A replayed `tab switch` would take over the user's view; the comment
+    // names --tab as the way to reach the tab instead.
+    expect(plan).not.toMatch(/^interceptor tab switch/m)
     // The focus_switch_handoff detach has no replay step (it's a transition marker, not an action)
     // The new tab's clicks must still appear in the plan
     expect(plan).toContain('"button:Play"')

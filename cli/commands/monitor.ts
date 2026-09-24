@@ -631,9 +631,11 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
           lines.push(`interceptor tab new "${escapeArg(ev.u)}"`)
           lines.push(`interceptor wait-stable`)
         } else if (ev.reason === "focus_switch" && ev.tid) {
-          lines.push(`# focus-switch to tab ${ev.tid}${ev.u ? ` (${ev.u})` : ""}`)
-          lines.push(`interceptor tab switch ${ev.tid}`)
-          lines.push(`interceptor wait-stable`)
+          // A recorded focus switch is where the PERSON looked, not a step the
+          // replay must reproduce: every later verb can target the tab with
+          // --tab, and a replayed `tab switch` would take over the user's view
+          //. Foregrounding stays a deliberate choice for a trusted click.
+          lines.push(`# focus-switch to tab ${ev.tid}${ev.u ? ` (${ev.u})` : ""}: target it with --tab ${ev.tid}; foreground only for a trusted click, then switch back`)
         }
         break
       }

@@ -1,4 +1,5 @@
-import { K_BEACON, K_BROADCAST, K_NET, K_TT_POLICY, K_WS, TT_NET_POLICY_NAME, TT_POLICY_NAME } from "./inject-keys"
+import { K_BEACON, K_BROADCAST, K_KEEPALIVE, K_NET, K_TT_POLICY, K_WS, TT_NET_POLICY_NAME, TT_POLICY_NAME } from "./inject-keys"
+import { installRenderKeepalive } from "./inject-keepalive"
 
 if ((window as any)[K_NET]) {
   // already patched — skip
@@ -36,6 +37,11 @@ if ((window as any)[K_NET]) {
       Object.defineProperty(proto, "hasBeenActive", { configurable: true, get() { return true } })
     }
   } catch {}
+
+  // Render keep-alive hooks: inert until `tab keepalive <id>` flips
+  // the symbol-keyed state from the background. Installed here, before page
+  // bundles capture the native rAF / visibility getters.
+  try { installRenderKeepalive(window, K_KEEPALIVE) } catch {}
 
   if ((window as any).trustedTypes?.createPolicy) {
     try {

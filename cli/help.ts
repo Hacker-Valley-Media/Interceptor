@@ -356,8 +356,10 @@ Tabs:
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
   interceptor tab new [url] --reuse          Navigate the group's most-recent tab instead of creating
   interceptor tab close [id]                 Close tab
-  interceptor tab switch <id>                Switch to tab (explicit focus move)
-  interceptor window new [url]               Open a new browser window
+  interceptor tab keepalive <id> [--off]     Make a hidden managed tab read as visible and run its animation frames (no focus change)
+  interceptor tab switch <id>                Switch to tab (explicit focus move; 'tab switch' back to the tab that was showing is allowed)
+  interceptor window new [url]               Open a new browser window in the background
+  interceptor window new [url] --activate    Open a new browser window and focus it (explicit opt-in)
   interceptor window list                    List all browser windows
   interceptor window close <id>              Close a browser window
   interceptor window focus <id>              Focus a browser window (explicit focus move)
@@ -373,7 +375,7 @@ Capture:
   interceptor screenshot --element N         Capture element by ref (off-screen elements supported)
   interceptor screenshot --region X,Y,W,H   Capture page region (rendered + cropped)
   interceptor screenshot --scale 2           Override pixel ratio (e.g. retina from 1x display)
-  interceptor screenshot --pixel             Pixel-true compositor capture (legacy captureVisibleTab — requires Chrome focused)
+  interceptor screenshot --pixel             Pixel-true compositor capture (captureVisibleTab — the tab's window must be on screen and not covered; Chrome need not be focused)
   interceptor screenshot --save              Save one auto-named file in cwd; takes no path value
   interceptor screenshot --format png        Output format: png (default), jpeg, or webp
   interceptor screenshot --quality 80        Encode quality 0-100 (defaults: png 92, jpeg 92, webp 85)
@@ -570,8 +572,9 @@ macOS Bridge (full install only):
   Background-first by contract (mirrors the browser surface in 'Tabs' and 'open' above):
   the only verbs that move the user's frontmost window or active tab are
   'macos app activate', 'macos open --activate', 'open --activate',
-  'tab new --activate', 'tab switch <id>', and 'window focus <id>'.
-  Every other 'macos *' verb and every routine 'open'/'tab new' leaves focus alone.
+  'tab new --activate', 'window new --activate', 'tab switch <id>', and 'window focus <id>'.
+  Every other 'macos *' verb and every routine 'open'/'tab new'/'window new' leaves focus alone.
+  A page that will not render in a background tab: 'tab keepalive <id>', not 'tab switch'.
 
   Compound (agent-optimized):
   interceptor macos open <app>               Tree + windows + app info (no foregrounding)
