@@ -2,6 +2,10 @@ node_modules/
 .build/
 # Orphaned temp files (~98MB each) from interrupted `bun build --compile` runs
 *.bun-build
+# Pinned Bun cross-compile seeds the Windows release lane drops in the workspace
+# root (bun-windows-<arch>-v<version>); untracked, they stamped every Windows
+# build `-dirty` (scripts/build.sh reads `git status --porcelain --untracked-files=normal`).
+/bun-windows-*-v*
 .claude/worktrees/
 dist/
 extension/dist/
