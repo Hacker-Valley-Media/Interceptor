@@ -72,24 +72,27 @@ final class InterceptorRunnerUITests: XCTestCase {
 /// a browser's animating new-tab page) the wait runs to XCTest's 60 s ceiling
 /// (`_XCTApplicationStateTimeout`) on every XCUICoordinate verb, twice, while the
 /// press has already landed. Xcode 26 replaced the one-argument selector with the
-/// `…isPreEvent:` pair, so every name Xcode has used is tried and a missing one is
-/// skipped. Returns the names patched so `fgdebug` shows which build the phone runs.
+/// `…isPreEvent:` pair. The application and AX client also have their own wait
+/// methods. Missing methods are skipped across Xcode versions; `fgdebug` lists
+/// the methods patched on this phone.
 private func disableQuiescenceWait() -> [String] {
-    guard let cls = NSClassFromString("XCUIApplicationProcess") else { return [] }
     let one: @convention(block) (AnyObject, Bool) -> Void = { _, _ in }
     let preEvent: @convention(block) (AnyObject, Bool, Bool) -> Void = { _, _, _ in }
     let activity: @convention(block) (AnyObject, Bool, AnyObject?, Bool) -> Void = { _, _, _, _ in }
-    let table: [(String, IMP)] = [
-        ("waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
-        ("_waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
-        ("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:", imp_implementationWithBlock(preEvent)),
-        ("waitForQuiescenceIncludingAnimationsIdle:usingActivity:isPreEvent:", imp_implementationWithBlock(activity)),
+    let table: [(String, String, IMP)] = [
+        ("XCUIApplicationProcess", "waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
+        ("XCUIApplicationProcess", "_waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
+        ("XCUIApplicationProcess", "waitForQuiescenceIncludingAnimationsIdle:isPreEvent:", imp_implementationWithBlock(preEvent)),
+        ("XCUIApplicationProcess", "waitForQuiescenceIncludingAnimationsIdle:usingActivity:isPreEvent:", imp_implementationWithBlock(activity)),
+        ("XCUIApplication", "_waitForQuiescenceAsPreEvent:", imp_implementationWithBlock(one)),
+        ("XCAXClient_iOS", "waitForQuiescenceOnAllForegroundApplicationsAsPreEvent:", imp_implementationWithBlock(one)),
     ]
     var patched: [String] = []
-    for (name, imp) in table {
+    for (className, name, imp) in table {
+        guard let cls = NSClassFromString(className) else { continue }
         guard let method = class_getInstanceMethod(cls, NSSelectorFromString(name)) else { continue }
         method_setImplementation(method, imp)
-        patched.append(name)
+        patched.append("\(className).\(name)")
     }
     return patched
 }
@@ -224,7 +227,7 @@ enum Runner {
     /// Idle-wait selectors replaced at setUp; empty means the phone waits for quiescence.
     static var idleWaitPatched: [String] = []
 
-    private static func app() -> XCUIApplication { XCUIApplication(bundleIdentifier: currentBundleId) }
+    private static func app() -> XCUIApplication { foregroundApp() }
 
     /// App to introspect: an explicitly-activated app wins; otherwise the live
     /// FOREGROUND app via the private accessibility client (so `tree`/`find` work
@@ -654,4 +657,3 @@ final class FrameStreamer {
         }
     }
 }
-

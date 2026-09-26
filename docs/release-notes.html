@@ -26,6 +26,16 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.19">
+    <h2>Interceptor 1.0.19</h2>
+    <time datetime="2026-09-26">September 26, 2026</time>
+    <ul>
+      <li>iOS typing now targets the app on screen after the runner process restarts. The same default applies to <code>ios keys</code>, <code>ios type</code>, and on-device <code>Interceptor.type</code>; explicit app targeting still works.</li>
+      <li>The iOS runner disables two more XCTest idle-wait paths used while reading or acting on active interfaces. <code>ios fgdebug</code> lists the paths patched on the connected device. Run <code>interceptor ios refresh</code> so the phone gets the new runner.</li>
+      <li><code>INTERCEPTOR_WS_URL</code> already pins the runner dial-back URL. The iOS docs now explain that it must be set in the daemon environment before startup, including for an on-device loopback relay.</li>
+      <li>Windows release builds now ignore temporary Bun cross-compile seeds when stamping the commit, so a clean release no longer reports <code>-dirty</code> because of those build files.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="1.0.17">
     <h2>Interceptor 1.0.17</h2>
     <time datetime="2026-09-24">September 24, 2026</time>
