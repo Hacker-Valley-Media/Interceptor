@@ -97,14 +97,15 @@ build, or `INTERCEPTOR_SKIP_RUNNER=1` to omit it. Legacy/internal:
 - Developer App certificate not trusted → iOS denies launch before the runner starts; trust it on-device in Settings → General → VPN & Device Management.
 - iOS 17+ launches use `xcodebuild test-without-building` by default.
 - Runner never connects → "InterceptorRunner did not register within Ns" + guidance (check WiFi pairing / Developer Mode, or set `INTERCEPTOR_RUNNER_PROJECT`).
-- Runner socket drops mid-session → context auto-disabled; the next drive verb launches it again.
+- Runner socket drops mid-session: a 10-second grace window lets the same runner re-dial. If it does not, the next drive verb launches a new runner.
+- Runner must dial through an on-device loopback relay: set `INTERCEPTOR_WS_URL=ws://127.0.0.1:19300` in the daemon's environment before it starts. The override is injected into every `.xctestrun`; `ios status` reports `dialBackVia: override`. A variable set only on a later CLI call cannot change the daemon.
 - Developer Mode off / not paired → `enable` reports exactly what to fix.
 - Stale ref → "ref `eN` is stale — re-read with `interceptor ios tree`."
 - Secure-Enclave gate / locked device → a specific error, not a hang.
 
 ## Actuation primitives (InterceptorRunner)
 
-The runner drives the foreground app via **public XCUITest APIs** (`ios/InterceptorRunner/Sources/InterceptorRunnerUITests.swift`): taps/drags are screen-absolute `XCUICoordinate.tap()` / `press(forDuration:thenDragTo:)`, text is `XCUIApplication.typeText`, screenshots are `XCUIScreen.main.screenshot()`, hardware buttons are `XCUIDevice.press(_:)`, and the `tree` comes from `XCUIElementSnapshot`. `tree`/`find`/`inspect` **auto-target whatever app is on screen** — the runner resolves the foreground app via the private XCTest AX client (`ObjCSupport.m` `ICActiveApplicationBundleID`: `XCUIDevice.accessibilityInterface.activeApplications` → pid → `applicationMonitor.applicationProcessWithPID:` → `bundleID`). `app activate <bundleId>` still pins a specific app if you want.
+The runner drives the foreground app via **public XCUITest APIs** (`ios/InterceptorRunner/Sources/InterceptorRunnerUITests.swift`): taps/drags are screen-absolute `XCUICoordinate.tap()` / `press(forDuration:thenDragTo:)`, text is `XCUIApplication.typeText`, screenshots are `XCUIScreen.main.screenshot()`, hardware buttons are `XCUIDevice.press(_:)`, and the `tree` comes from `XCUIElementSnapshot`. `tree`/`find`/`inspect` and default `type`/`keys` auto-target the app on screen. The runner resolves that app via the private XCTest AX client (`ObjCSupport.m` `ICActiveApplicationBundleID`: `XCUIDevice.accessibilityInterface.activeApplications` → pid → `applicationMonitor.applicationProcessWithPID:` → `bundleID`). `app activate <bundleId>` and `type`/`keys --bundle <bundleId>` still pin a specific app.
 
 ## Getting InterceptorRunner onto a device (iOS 26)
 

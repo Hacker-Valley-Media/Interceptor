@@ -34,6 +34,13 @@ agent use. No HTTP server, no CocoaHTTPServer, no usbmux port-forward.
 The daemon injects these into the `.xctestrun` at launch (the only point env
 reaches an on-device test process).
 
+To pin the dial-back URL, set `INTERCEPTOR_WS_URL` in the daemon's environment
+before it starts. For a phone with an on-device loopback relay forwarding to
+the Mac, use `INTERCEPTOR_WS_URL=ws://127.0.0.1:19300`. The daemon uses this
+value instead of its automatic LAN/VPN address at every runner launch;
+`interceptor ios status` reports `dialBackVia: override`. Setting it only on a
+later `interceptor ios` CLI invocation does not change the running daemon.
+
 ## Generate the Xcode project
 
 ```bash
@@ -100,4 +107,6 @@ path per finger (`ObjCSupport.m`, `ICSynthesizeGesture`); a missing private
 selector comes back as an error naming it.
 
 `tree`/`find`/`inspect` **auto-target the foreground app** (resolved via the private
-XCTest AX client in `ObjCSupport.m`). `app activate <bundleId>` pins a specific app if needed.
+XCTest AX client in `ObjCSupport.m`). `type`/`keys` use the same default target,
+including after a runner process restart. `app activate <bundleId>` or
+`type`/`keys --bundle <bundleId>` pins a specific app if needed.
