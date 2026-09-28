@@ -33,7 +33,7 @@ Implementation anchors:
 ## Command Surface
 
 ```bash
-interceptor net page-comm log [--type ws|beacon|broadcast] [--filter <text>] [--since <ms>] [--limit <n>]
+interceptor net page-comm log [--type ws|beacon|broadcast] [--filter <text>] [--since <30s|epoch-ms>] [--limit <n>]
 interceptor net page-comm clear
 
 interceptor net monitor on [--reload|--from-start] [--filter <match-pattern>] [--persist]
