@@ -1,6 +1,5 @@
 import { K_BEACON, K_BROADCAST, K_KEEPALIVE, K_NET, K_TT_POLICY, K_WS, TT_NET_POLICY_NAME, TT_POLICY_NAME } from "./inject-keys"
 import { installRenderKeepalive } from "./inject-keepalive"
-import { shouldPreserveNativeFetch } from "./preserve-native-fetch"
 
 if ((window as any)[K_NET]) {
   // already patched — skip
@@ -541,10 +540,17 @@ if ((window as any)[K_NET]) {
     })
   }, originalFetch)
 
-  // Sites that inspect native fetch identity (Upwork's auth bootstrap) fall
-  // back to an iframe fetch gated on requestAnimationFrame, which stalls in
-  // hidden tabs. Keep the original fetch there; XHR capture still applies.
-  if (!shouldPreserveNativeFetch(location.hostname)) window.fetch = patchedFetch
+  // Pages can check that fetch is still native with Function.prototype.toString
+  // (Upwork's sign-in bootstrap does, and otherwise falls back to an iframe fetch
+  // inside requestAnimationFrame, which never runs in a hidden tab). A Proxy has
+  // no source text, so it prints as native code, and it keeps fetch's name,
+  // length, and missing prototype; capture runs inside the apply trap.
+  // ponytail: V8 prints a Proxy without its name, so an exact
+  // "function fetch() { [native code] }" comparison still tells; faking
+  // Function.prototype.toString would be the next step and a bigger tell.
+  window.fetch = new Proxy(originalFetch, {
+    apply: (_target, self, args) => Reflect.apply(patchedFetch, self, args),
+  })
 
   const XHR = XMLHttpRequest.prototype
 
