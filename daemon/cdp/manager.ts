@@ -399,11 +399,11 @@ export class CdpManager {
     this.deps.emit("app_attach_begin", { app: appName, pid, contextId: ctxId, extPath })
     const boot = await bootstrapLoadExtension({ pid: pid!, extPath, inspectPort })
     if (!boot.success) {
-      this.deps.emit("app_attach_failed", { app: appName, pid, error: boot.error, fuseLikelyOff: boot.fuseLikelyOff, otrSession: boot.otrSession })
+      this.deps.emit("app_attach_failed", { app: appName, pid, error: boot.error, fuseLikelyOff: boot.fuseLikelyOff, otrSession: boot.otrSession, portBusy: boot.portBusy })
       return {
         success: false,
         error: boot.error,
-        data: { fuseLikelyOff: boot.fuseLikelyOff === true, otrSession: boot.otrSession === true, fallback: "cdp" },
+        data: { fuseLikelyOff: boot.fuseLikelyOff === true, otrSession: boot.otrSession === true, portBusy: boot.portBusy === true, fallback: "cdp" },
       }
     }
 
@@ -482,15 +482,8 @@ export class CdpManager {
     // Quit, then WAIT for the app to fully exit before relaunching — otherwise
     // `open --args` reactivates the still-running instance and drops the flag.
     const appForAppleScript = app.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-    const appForRegex = app.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    const runningPids = (): number[] => {
-      const check = spawnSync("pgrep", ["-f", `${appForRegex}.app/Contents/MacOS/`], { encoding: "utf-8" })
-      if (check.status !== 0 || !(check.stdout || "").trim()) return []
-      return check.stdout
-        .split(/\s+/)
-        .map(s => parseInt(s, 10))
-        .filter(n => Number.isFinite(n))
-    }
+    const runningPids = (): number[] =>
+      pidsRunningFromBundle(spawnSync("ps", ["-axww", "-o", "pid=,comm="], { encoding: "utf-8", maxBuffer: 8 * 1024 * 1024 }).stdout ?? "", app)
     const waitForExit = async (attempts: number): Promise<number[]> => {
       let pids: number[] = []
       for (let i = 0; i < attempts; i++) {
@@ -602,6 +595,21 @@ function deriveNameFromUrl(url: string): string | undefined {
     if (u.hostname) return u.hostname.replace(/^www\./, "")
   } catch {}
   return undefined
+}
+
+/**
+ * Pids whose EXECUTABLE lives in `<app>.app/Contents/MacOS/`, from `ps -o pid=,comm=`
+ * output. Matching the full command line instead (pgrep -f) also hit every shell,
+ * editor, or script that merely mentioned the path, and the relaunch then killed them.
+ */
+export function pidsRunningFromBundle(psOutput: string, app: string): number[] {
+  const marker = `/${app}.app/Contents/MacOS/`
+  const pids: number[] = []
+  for (const line of psOutput.split("\n")) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line)
+    if (m && m[2].includes(marker)) pids.push(parseInt(m[1], 10))
+  }
+  return pids
 }
 
 /** Enumerate running Electron MAIN processes via `ps`, parsing their command lines. */
