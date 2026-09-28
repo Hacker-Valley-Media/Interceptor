@@ -26,6 +26,14 @@ describe("Safari background bootstrap guardrails", () => {
     expect(connectAt).toBeGreaterThan(configureAt)
   })
 
+  test("a retrying native-relay failure logs a warning, not an error", () => {
+    // WebKit on macOS 27 records every background console.error as an extension
+    // error, and the packaging verifier runs with no native host.
+    const transport = readFileSync(`${root}/extension/src/background/transport.ts`, "utf-8")
+    expect(transport).toContain('console.warn("Safari native relay:", error.message)')
+    expect(transport).not.toContain('console.error("Safari native relay:", error.message)')
+  })
+
   test("shared router imports do not touch browser APIs", () => {
     expect(router).toContain("export function initializeActionRouter(): void")
     expect(router).not.toMatch(/^registerMonitorListeners\(\)$/m)
