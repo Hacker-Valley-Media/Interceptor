@@ -64,7 +64,12 @@ private actor SafariDaemonRelay {
         receiveTask = Task { [weak self] in
             await self?.receiveMessages(from: task)
         }
-        try await send(["type": "extension", "contextId": contextId], over: task)
+        // The daemon's `contexts --verbose` and `diagnose` read the version from this hello.
+        var hello: [String: Any] = ["type": "extension", "contextId": contextId]
+        if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            hello["version"] = version
+        }
+        try await send(hello, over: task)
     }
 
     private func send(_ object: Any, over socket: URLSessionWebSocketTask) async throws {
