@@ -26,6 +26,93 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.19">
+    <h2>Interceptor 1.0.19</h2>
+    <time datetime="2026-09-26">September 26, 2026</time>
+    <ul>
+      <li>iOS typing now targets the app on screen after the runner process restarts. The same default applies to <code>ios keys</code>, <code>ios type</code>, and on-device <code>Interceptor.type</code>; explicit app targeting still works.</li>
+      <li>The iOS runner disables two more XCTest idle-wait paths used while reading or acting on active interfaces. <code>ios fgdebug</code> lists the paths patched on the connected device. Run <code>interceptor ios refresh</code> so the phone gets the new runner.</li>
+      <li><code>INTERCEPTOR_WS_URL</code> already pins the runner dial-back URL. The iOS docs now explain that it must be set in the daemon environment before startup, including for an on-device loopback relay.</li>
+      <li>Windows release builds now ignore temporary Bun cross-compile seeds when stamping the commit, so a clean release no longer reports <code>-dirty</code> because of those build files.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="1.0.17">
+    <h2>Interceptor 1.0.17</h2>
+    <time datetime="2026-09-24">September 24, 2026</time>
+    <ul>
+      <li><code>interceptor tab keepalive &lt;id&gt;</code> makes a hidden managed tab read as visible and run its animation frames at frame rate, so a page that stops drawing in the background renders in place and <code>read</code>, <code>text</code>, and <code>eval</code> return its real content. No focus change. <code>--off</code> clears it, the flag survives navigation in that tab, and it ends with the tab. Limits, stated in the result: IntersectionObserver and ResizeObserver callbacks still wait for a real paint, and on a page whose security policy forbids web workers the frames run about once per second.</li>
+      <li><code>interceptor tab switch</code> back to the tab that was showing before Interceptor's own switch now passes the managed-group gate once, so an agent that brought a tab forward for a trusted click can put your tab back. Your tab is never stored as an auto-target.</li>
+      <li><code>interceptor window new</code> opens in the background; <code>--activate</code> is the opt-in that focuses the new window, matching <code>open</code> and <code>tab new</code>.</li>
+      <li>The trusted-input refusal now leads with the background-safe path (drop <code>--trusted</code>) and says that <code>tab switch</code> replaces what you are looking at; the hint prints in plain text, not only with <code>--json</code>. The <code>screenshot --pixel</code> help says the tab's window must be on screen and not covered; the browser does not need to be focused.</li>
+      <li><code>interceptor monitor export --plan</code> records a focus switch as a comment instead of a <code>tab switch</code> command, so a replayed recording never takes over your view.</li>
+      <li><code>interceptor macos cdp launch</code> relaunches the app behind your windows and puts the app you were using back in front if the relaunched app activates itself. It refuses a debug port another process already serves, naming that process, instead of reporting a connection that belonged to the wrong app.</li>
+      <li><code>read</code>, <code>open</code>, <code>act</code>, and <code>inspect</code> honor <code>--any-tab</code> the way single verbs already did.</li>
+    </ul>
+  </section>
+
+  <section data-sparkle-version="1.0.15">
+    <h2>Interceptor 1.0.15</h2>
+    <time datetime="2026-09-22">September 22, 2026</time>
+    <ul>
+      <li><code>interceptor ios click</code>, <code>drag</code>, <code>scroll</code>, and <code>type</code> return in about a second on every app. The runner no longer waits for the app to go idle, so a long press on a Home Screen icon or a tap in an animating browser page reports success instead of timing out after 60 seconds while the press had already landed. Run <code>interceptor ios refresh</code> once so the runner on the phone picks this up; <code>ios fgdebug</code> lists the patched <code>idleWait</code> selectors.</li>
+      <li><code>interceptor ios proc</code>, <code>shot</code>, <code>top</code>, <code>diag</code>, <code>profiles</code>, and <code>ios web targets</code> answer again over Wi-Fi. The lockdown TLS session no longer passes the pairing CA, which made Bun's handshake fail on the device certificate and left every runner-free lane silent until its deadline. A socket that closes mid-handshake now fails at once.</li>
+      <li><code>interceptor ios click --x 10.5 --y 20.25</code> and <code>ios scroll --x/--y</code> keep fractions. A runner built for the iOS Simulator is found under <code>Debug-iphonesimulator/</code> without a symlink.</li>
+      <li><code>interceptor scene list</code>, <code>scene selected</code>, and <code>scene text</code> mask password and credential-marked fields the way <code>read</code> and <code>forms</code> do. <code>interceptor check "checkbox:Remember me"</code> checks a box by role and name, as <code>click</code> already could.</li>
+      <li><code>interceptor ios web read</code>, <code>text</code>, <code>find</code>, <code>inspect</code>, <code>eval</code>, and <code>call</code> answer on iOS 27 Safari. The web-inspector transport now follows every message with an empty frame, the prompt webinspectord needs before it acts on a message larger than about two TCP segments; without it the DOM serializer never answered and every later reply arrived one request late.</li>
+      <li><code>interceptor ios keys Enter</code> (or <code>Return</code>, <code>Tab</code>) presses that key instead of typing the word. A literal newline character already did; the two characters <code>\n</code> are still typed as text.</li>
+      <li><code>interceptor ios web eval</code> and <code>call --timeout &lt;s&gt;</code> take seconds, as the help always said; the value used to reach the session as milliseconds, so <code>--timeout 5</code> gave up after 5 ms. The CLI deadline now stretches to cover a longer timeout.</li>
+    </ul>
+  </section>
+
+  <section data-sparkle-version="1.0.13">
+    <h2>Interceptor 1.0.13</h2>
+    <time datetime="2026-09-22">September 22, 2026</time>
+    <ul>
+      <li><code>interceptor ios stream start</code> has the phone push small JPEG frames continuously over Wi-Fi, no cable and no Screen Mirroring. With <code>--out &lt;path&gt;</code> the newest frame is rewritten atomically in that file, so a loop reads one path whenever it wants a look. <code>ios stream status</code> reports frames received, the age of the newest, and what the phone spent capturing and encoding; <code>ios frame</code> saves the newest frame on demand.</li>
+      <li><code>interceptor ios gesture</code> presses with up to ten fingers at once, each on its own timeline: <code>"380,700@0&gt;380,700@600" "120,650@100&gt;120,650@300"</code> holds one point for 600 ms while another is tapped from 100 to 300 ms. Coordinates are the same screen points <code>click</code> and <code>drag</code> use. Run <code>interceptor ios refresh</code> once so the runner on the phone picks up both verbs.</li>
+    </ul>
+  </section>
+
+  <section data-sparkle-version="1.0.11">
+    <h2>Interceptor 1.0.11</h2>
+    <time datetime="2026-09-22">September 22, 2026</time>
+    <ul>
+      <li>CSS-selector commands now find elements inside web components. <code>query</code>, <code>exists</code>, <code>count</code>, <code>click --selector</code>, <code>wait</code>, <code>table</code>, <code>attr</code>, <code>style</code>, <code>rect</code>, and <code>screenshot --selector</code> reach open and closed shadow roots. Light-DOM matches still come first, so <code>--nth</code> keeps its meaning on ordinary pages.</li>
+      <li>Simulated key presses carry the legacy <code>keyCode</code>, <code>which</code>, and <code>charCode</code> numbers, so a chat composer that sends on <code>keyCode === 13</code> sends when Interceptor presses Enter. <code>keypress</code> fires only for character keys, a cancelled keydown suppresses it, and <code>Shift+a</code> arrives as <code>A</code>.</li>
+      <li>Page text reads (<code>text</code>, <code>find</code>, <code>state</code>) no longer report an empty page in a tab the browser has never rendered. The fallback shows what a reader would see and leaves out stylesheet rules, script source, and hidden text.</li>
+      <li><code>interceptor eval --main --no-reload</code> refuses the reload that recovers from a strict page CSP and returns the CSP error instead, for pages whose state matters. When that reload does happen, <code>eval</code> and <code>save</code> print a warning, on success and on failure.</li>
+    </ul>
+  </section>
+
+  <section data-sparkle-version="1.0.9">
+    <h2>Interceptor 1.0.9</h2>
+    <time datetime="2026-09-21">September 21, 2026</time>
+    <ul>
+      <li>New popup setting under Tab lifecycle: Delete the whole group when idle. It is off by default. When it is on, an Interceptor tab group that no command has touched for the idle window is removed completely, including tabs with unsaved form input and a window's last tab, so finished agent groups stop piling up in the tab strip.</li>
+      <li>The delete waits while you are looking at one of the group's tabs or one of them is playing sound, and it never empties the browser: when the group is everything that is open, a blank tab is created first.</li>
+      <li><code>interceptor status --verbose</code> shows which mode is armed.</li>
+      <li><code>interceptor sessions restore &lt;id&gt;</code> now reopens the closed page as a background tab in your group, so it no longer changes the tab you are looking at. Add <code>--activate</code> for the browser's own restore, which keeps history and brings the tab to the front.</li>
+      <li>The idle sweep finds Interceptor groups again after they are moved to another window or restored by the browser, so they no longer linger until someone runs <code>group list</code>.</li>
+      <li>Administrators can set the tab lifecycle policy and the tab group label through managed browser policy. The popup shows managed values read-only.</li>
+      <li><code>interceptor macos vision</code> can read a saved image with <code>--image &lt;path&gt;</code> instead of a live window, for every vision verb. No app has to be open, a rotated iPhone screenshot is read upright, and a bad path says what is wrong with it.</li>
+      <li><code>interceptor ios drag</code> and <code>ios scroll</code> accept screen coordinates as well as element refs, so games and canvas apps with no element tree can be driven. A drag from a point to the same point with <code>--duration</code> is a long press. A scroll with a ref that no longer resolves now reports an error and no longer swipes from the middle of the screen.</li>
+      <li>Dropdown commands now select an existing enabled option by exact value or unique label, and report an error instead of clearing the current choice.</li>
+      <li>Tree, forms, text, HTML, query, find, and diff reads mask password fields and fields filled from the secret vault. Trusted native typing sets its modifier flags on every key event, so mixed-case text arrives as typed.</li>
+    </ul>
+  </section>
+
+  <section data-sparkle-version="1.0.3">
+    <h2>Interceptor 1.0.3</h2>
+    <time datetime="2026-09-17">September 17, 2026</time>
+    <ul>
+      <li>Each logged-in macOS account now runs its own Interceptor daemon. The socket, pid, lock, log, and event files live in that account's own temporary directory, and each account listens on its own loopback port pair derived from its user id. The primary account keeps ports 19221 and 19222.</li>
+      <li>The browser extension learns its account's port from the native host, so two accounts signed in at once no longer share one daemon.</li>
+      <li>The daemon binds 127.0.0.1 only.</li>
+      <li>When a port is held by another account's daemon, the CLI now says so and names the remedy instead of reporting missing runtime files.</li>
+      <li>Installing an update stops every account's daemon, so one install unblocks the whole Mac.</li>
+      <li>When the CLI runs as an account that is not logged in at the screen (over SSH, for example), Interceptor now says so and names the account that owns the screen, instead of suggesting a LaunchAgent bootstrap that cannot work.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="1.0.1">
     <h2>Interceptor 1.0.1</h2>
     <time datetime="2026-09-13">September 13, 2026</time>

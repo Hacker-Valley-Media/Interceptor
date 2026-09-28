@@ -59,7 +59,12 @@ function truncateText(text: string, maxChars: number): string {
     `\n... (truncated: showed ${maxChars} of ${text.length} chars. Pass --full to see all, or 'read e<ref> --text-only' to scope, or 'find "<term>"' to jump; INTERCEPTOR_TEXT_MAX_CHARS raises the cap.)`
 }
 
+// --any-tab is a global modifier; single verbs get it stamped in cli/index.ts,
+// compound sub-actions get it here (it was accepted and dropped before).
+let anyTabForCompound = false
+
 async function send(action: Action, tabId?: number, useWs = false, contextId?: string): Promise<Result> {
+  if (anyTabForCompound) action.anyTab = true
   try {
     const resp = useWs
       ? await sendCommandWs(action, tabId, contextId)
@@ -870,6 +875,7 @@ export async function runCompoundCommand(
   filtered: string[],
   opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; anyTab?: boolean; contextId?: string; positionalCount?: number }
 ): Promise<void> {
+  anyTabForCompound = opts.anyTab === true
   switch (cmd) {
     case "open":    return runOpen(filtered, opts.globalTabId, opts.jsonMode, opts.useWs, opts.contextId)
     case "websearch":

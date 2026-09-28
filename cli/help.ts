@@ -157,7 +157,7 @@ const MAP_MACOS = `MACOS — native apps via the accessibility tree, background-
   Capture    macos screenshot (occluded/minimized windows too) · capture · stream · display
   Scripts    macos script run --jxa|--jsc|--script · intent dispatch (Apple Events, no foregrounding)
   System     macos clipboard · notifications · files · fs read|write|search · url · log query
-  Media/AI   macos vision (OCR any window) · listen (speech-to-text) · nlp · ai prompt · audio · sounds
+  Media/AI   macos vision (OCR any window or image file) · listen (speech-to-text) · nlp · ai prompt · audio · sounds
   Docs/data  macos pdf · detect · translate · thumbnail · calendar · reminders · contacts · photos · location · music · maps · share
   Electron   macos cdp discover|connect|app attach     drive an Electron/Chromium app's web contents
   Runtime    macos runtime enable|tree|read|eval|mutate     in-process control of a running native app
@@ -165,8 +165,8 @@ const MAP_MACOS = `MACOS — native apps via the accessibility tree, background-
 
 const MAP_IOS = `iOS — automate a physical iPhone over WiFi (on-device XCUITest runner, no cable once paired):
   Drive      ios tree · find · inspect       on-screen elements + refs (auto-connects on first verb)
-  Input      ios click · type · keys · scroll · drag · press       trusted XCUITest input
-  Apps       ios screenshot · apps · app launch|activate|terminate · devices · name
+  Input      ios click · type · keys · scroll · drag · press · gesture   trusted XCUITest input (gesture = multi-touch)
+  Apps       ios screenshot · stream · frame · apps · app launch|activate|terminate · devices · name
   Setup      ios install | login | setup     one-time: put the InterceptorRunner on the phone
   Connection model (read this before you panic about 'connected: false'):
     • Phone must be owned, unlocked, in Developer Mode, and WiFi-paired to this Mac.
@@ -293,14 +293,15 @@ Page meta and data (one call each):
   interceptor regions                        Landmark regions (header, nav, main, aside, footer) with refs
   interceptor frames                         List frames in the active tab (ids for --frame <id>)
   interceptor what-at <x,y>                  Element under viewport coordinates (ref, role, name, rect)
-  interceptor check <ref> [true|false]       Set a checkbox / toggle (omit the value to toggle)
+  interceptor check <ref|role:name> [true|false]  Check a box or switch (false unchecks); "checkbox:Remember me" targets by role and name
   interceptor blur                           Remove focus from the active element
   interceptor wait_for <css> [timeout-ms]    Wait until a selector matches (default 10000 ms)
   interceptor reload                         Reload the extension (an unpacked copy picks up installed files; a store copy asks the store for an update)
   interceptor notify <title> <message...>    Post a browser notification
   interceptor events [--tail] [--since <ms>] Daemon event log (request timings, timeouts)
   interceptor sessions [max]                 Recently closed tabs / windows (chrome.sessions)
-  interceptor sessions restore <id>          Restore a closed session entry
+  interceptor sessions restore <id>          Reopen a closed tab/window in the background, in your group
+  interceptor sessions restore <id> --activate   Browser's own restore (keeps history; brings the tab to the front)
   interceptor session start|end              Mark a CLI session (advisory; enables batch hints)
   interceptor history "<query>" [max]        Search browser history
   interceptor history delete <url>           Remove a history entry
@@ -328,12 +329,12 @@ Actions:
   interceptor type <index|ref> <text>        Type into element (clears first)
   interceptor type <index|ref> <text> --append  Type without clearing
   interceptor type "role:name" <text>        Type using semantic selector (e.g. "button:Submit")
-  interceptor type <index|ref> --secret <name>   Type a vault secret by name (value resolved in the daemon, never shown)
+  interceptor type <index|ref> --secret <name>   Type a vault secret by name (resolved in daemon; tree/forms reads mask it)
   interceptor type <index|ref> --browser-login <host> [--user] [--browser <key>]   Fill a saved login from any installed Chromium browser (password, or username with --user)
   interceptor browser creds list [--host <host>] [--browser <key>]   List saved logins across installed Chromium browsers (host + username + browser; no passwords)
   interceptor browser creds status               List installed Chromium browsers and the profiles that hold a Login Data store
   interceptor click "text:<query>"            Click first element whose textContent matches (e.g. "text:Save")
-  interceptor select <index|ref> <value>     Select dropdown option
+  interceptor select <index|ref> <value>     Select native option by exact value or unique label; rejects invalid/disabled choices
   interceptor focus <index|ref>              Focus element
   interceptor hover <index|ref>              Hover over element
   interceptor hover <index> --from X,Y      Hover with mouse path
@@ -355,8 +356,10 @@ Tabs:
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
   interceptor tab new [url] --reuse          Navigate the group's most-recent tab instead of creating
   interceptor tab close [id]                 Close tab
-  interceptor tab switch <id>                Switch to tab (explicit focus move)
-  interceptor window new [url]               Open a new browser window
+  interceptor tab keepalive <id> [--off]     Make a hidden managed tab read as visible and run its animation frames (no focus change)
+  interceptor tab switch <id>                Switch to tab (explicit focus move; 'tab switch' back to the tab that was showing is allowed)
+  interceptor window new [url]               Open a new browser window in the background
+  interceptor window new [url] --activate    Open a new browser window and focus it (explicit opt-in)
   interceptor window list                    List all browser windows
   interceptor window close <id>              Close a browser window
   interceptor window focus <id>              Focus a browser window (explicit focus move)
@@ -372,7 +375,7 @@ Capture:
   interceptor screenshot --element N         Capture element by ref (off-screen elements supported)
   interceptor screenshot --region X,Y,W,H   Capture page region (rendered + cropped)
   interceptor screenshot --scale 2           Override pixel ratio (e.g. retina from 1x display)
-  interceptor screenshot --pixel             Pixel-true compositor capture (legacy captureVisibleTab — requires Chrome focused)
+  interceptor screenshot --pixel             Pixel-true compositor capture (captureVisibleTab — the tab's window must be on screen and not covered; Chrome need not be focused)
   interceptor screenshot --save              Save one auto-named file in cwd; takes no path value
   interceptor screenshot --format png        Output format: png (default), jpeg, or webp
   interceptor screenshot --quality 80        Encode quality 0-100 (defaults: png 92, jpeg 92, webp 85)
@@ -383,6 +386,7 @@ Capture:
   interceptor ocr --element N                OCR an element by ref
   interceptor eval <code>                    Run JS in isolated world
   interceptor eval <code> --main             Run JS in page context
+  interceptor eval <code> --main --no-reload Never reload the tab to beat page CSP
     --frame <id>                             Target exactly that frame; missing frames fail
     Isolated eval may require Allow User Scripts. MAIN CSP recovery discloses a tab reload, which can discard unsaved page state.
   interceptor save --out <path> <expr>       Stream page bytes (Blob/ArrayBuffer/blob: URL) to disk; no downloads/CDP — see 'save --help'
@@ -568,8 +572,9 @@ macOS Bridge (full install only):
   Background-first by contract (mirrors the browser surface in 'Tabs' and 'open' above):
   the only verbs that move the user's frontmost window or active tab are
   'macos app activate', 'macos open --activate', 'open --activate',
-  'tab new --activate', 'tab switch <id>', and 'window focus <id>'.
-  Every other 'macos *' verb and every routine 'open'/'tab new' leaves focus alone.
+  'tab new --activate', 'window new --activate', 'tab switch <id>', and 'window focus <id>'.
+  Every other 'macos *' verb and every routine 'open'/'tab new'/'window new' leaves focus alone.
+  A page that will not render in a background tab: 'tab keepalive <id>', not 'tab switch'.
 
   Compound (agent-optimized):
   interceptor macos open <app>               Tree + windows + app info (no foregrounding)
@@ -657,7 +662,7 @@ macOS Bridge (full install only):
   interceptor macos vad status|start|stop
   interceptor macos sounds status|start|stop [--filter <pat>]
   interceptor macos audio output|input start|stop [--app <name>] [--save]
-  interceptor macos vision text|faces|hands|bodies [--app <name>]
+  interceptor macos vision text|faces|hands|bodies|classify|saliency [--app <name> | --image <path>]
   interceptor macos nlp entities|language|sentiment|tokens "<text>"
   interceptor macos nlp similar "<word1>" "<word2>"
   interceptor macos ai status|prompt "<prompt>"
@@ -728,7 +733,7 @@ macOS Bridge (full install only):
   interceptor macos auth status|confirm|invalidate|domain-state                   (LocalAuthentication)
   interceptor macos auth confirm "<reason>" [--policy biometry|any|biometry-or-watch] [--reuse <seconds>]
 
-  Secret vault (keychain-backed; values never on argv, in logs, or in results):
+  Secret vault (keychain-backed; values stay off argv; output masking depends on the command):
   interceptor macos secret register <name> [--gate none|touchid|biometry] [--target sudo|macos:<bundleId>|browser:<host>|ios|any]... [--reuse <s>]
                                              Opens the native box (secure field + confirm). Default gate: none (unattended).
   interceptor macos secret set <name> --stdin [same flags]   Headless: value from stdin (hidden TTY prompt without --stdin)
@@ -778,6 +783,9 @@ const HELP_IOS = `  iOS — automate your iPhone (Xcode-signed device runner):
   interceptor ios name <device> <alias>       Rename a phone (then use --on <alias>)
   interceptor ios tree|find|inspect [--on <name>]                   On-screen elements (auto-connects)
   interceptor ios click|type|keys|scroll|drag|press [--on <name>]   Trusted XCUITest input
+  interceptor ios gesture <finger> [<finger>...] [--hold ms]        Multi-touch: x,y[@ms][>x,y@ms...] per finger
+  interceptor ios stream start|stop|status [--fps N] [--out <path>] Continuous JPEG frames from the phone
+  interceptor ios frame [--out <path>]                              Save the newest streamed frame
   interceptor ios type <ref> --secret <name> | keys --secret <name> | unlock --secret <name>   Vault-backed passcode entry
   interceptor ios screenshot | apps | app launch|activate|terminate <id> [--on <name>]
   Run 'interceptor ios help' for the full iOS surface.`

@@ -257,6 +257,7 @@ export function waitForTabLoad(
     function listener(updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
         clearTimeout(hardTimer)
+        clearTimeout(stage1Timer)
         chrome.tabs.onUpdated.removeListener(listener)
         const remaining = Math.max(timeoutMs - (Date.now() - start), 2000)
         probeContentReady(tabId, remaining).then((ready) => {
@@ -265,9 +266,9 @@ export function waitForTabLoad(
       }
     }
 
-    chrome.tabs.onUpdated.addListener(listener)
-
-    setTimeout(async () => {
+    // Cleared on the listener path: a stray stage-1 probe would otherwise fire
+    // seconds later against whatever tab state exists by then.
+    const stage1Timer = setTimeout(async () => {
       const tab = await chrome.tabs.get(tabId).catch(() => null)
       if (tab && tab.status === "complete") {
         chrome.tabs.onUpdated.removeListener(listener)
@@ -277,6 +278,8 @@ export function waitForTabLoad(
         resolve({ ready, elapsed: Date.now() - start })
       }
     }, stage1Timeout)
+
+    chrome.tabs.onUpdated.addListener(listener)
   })
 }
 

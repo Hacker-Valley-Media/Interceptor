@@ -9,8 +9,9 @@
 //  XCUIElementSnapshot). No HTTP server, no CocoaHTTPServer, no usbmux forward.
 //
 //  Hardening:
-//    - Quiescence wait is swizzled to a no-op, so AX ops don't block for tens of
-//      seconds on apps that never settle (the WDA "shouldWaitForQuiescence" fix).
+//    - XCUITest's "wait for the app to be idle" is swizzled to a no-op on every
+//      selector Xcode has used for it (the WDA "shouldWaitForQuiescence" fix), so
+//      input verbs don't block up to 60 s, twice, on apps that never settle.
 //    - Each verb runs inside ICRunCatching (Obj-C @try/@catch) so an XCUITest
 //      NSException becomes an error frame instead of crashing the session.
 //    - Verbs run on a dedicated serial queue; the WS receive loop is never
@@ -35,7 +36,7 @@ final class InterceptorRunnerUITests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = true
-        disableQuiescenceWait()
+        Runner.idleWaitPatched = disableQuiescenceWait()
     }
 
     /// Never-ending test that hosts the WebSocket agent (mirrors WDA's testRunner).
@@ -66,20 +67,34 @@ final class InterceptorRunnerUITests: XCTestCase {
     }
 }
 
-/// Neutralize XCUITest's "wait for the app to be idle" before every query/
-/// interaction. On busy apps this otherwise blocks for tens of seconds (or
-/// forever), stalling verbs. Private but allowed in a test bundle; safely no-ops
-/// if the symbol isn't present on this Xcode.
-private func disableQuiescenceWait() {
-    guard let cls = NSClassFromString("XCUIApplicationProcess") else { return }
-    let noop: @convention(block) (AnyObject, Double) -> Void = { _, _ in }
-    let imp = imp_implementationWithBlock(noop)
-    for name in ["waitForQuiescenceIncludingAnimationsIdle:", "_waitForQuiescenceIncludingAnimationsIdle:"] {
-        let sel = NSSelectorFromString(name)
-        if let method = class_getInstanceMethod(cls, sel) {
-            method_setImplementation(method, imp)
-        }
+/// Neutralize XCUITest's "wait for the app to be idle" before and after every
+/// interaction. On an app that never settles (SpringBoard with a context menu open,
+/// a browser's animating new-tab page) the wait runs to XCTest's 60 s ceiling
+/// (`_XCTApplicationStateTimeout`) on every XCUICoordinate verb, twice, while the
+/// press has already landed. Xcode 26 replaced the one-argument selector with the
+/// `…isPreEvent:` pair. The application and AX client also have their own wait
+/// methods. Missing methods are skipped across Xcode versions; `fgdebug` lists
+/// the methods patched on this phone.
+private func disableQuiescenceWait() -> [String] {
+    let one: @convention(block) (AnyObject, Bool) -> Void = { _, _ in }
+    let preEvent: @convention(block) (AnyObject, Bool, Bool) -> Void = { _, _, _ in }
+    let activity: @convention(block) (AnyObject, Bool, AnyObject?, Bool) -> Void = { _, _, _, _ in }
+    let table: [(String, String, IMP)] = [
+        ("XCUIApplicationProcess", "waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
+        ("XCUIApplicationProcess", "_waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(one)),
+        ("XCUIApplicationProcess", "waitForQuiescenceIncludingAnimationsIdle:isPreEvent:", imp_implementationWithBlock(preEvent)),
+        ("XCUIApplicationProcess", "waitForQuiescenceIncludingAnimationsIdle:usingActivity:isPreEvent:", imp_implementationWithBlock(activity)),
+        ("XCUIApplication", "_waitForQuiescenceAsPreEvent:", imp_implementationWithBlock(one)),
+        ("XCAXClient_iOS", "waitForQuiescenceOnAllForegroundApplicationsAsPreEvent:", imp_implementationWithBlock(one)),
+    ]
+    var patched: [String] = []
+    for (className, name, imp) in table {
+        guard let cls = NSClassFromString(className) else { continue }
+        guard let method = class_getInstanceMethod(cls, NSSelectorFromString(name)) else { continue }
+        method_setImplementation(method, imp)
+        patched.append("\(className).\(name)")
     }
+    return patched
 }
 
 // MARK: - WebSocket agent
@@ -93,7 +108,13 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
     private(set) var finished = false
 
     private var session: URLSession!
-    private var task: URLSessionWebSocketTask?
+    // Written on the reconnect queue; read from the main, delegate, and stream queues.
+    private let taskLock = NSLock()
+    private var _task: URLSessionWebSocketTask?
+    private var task: URLSessionWebSocketTask? {
+        get { taskLock.lock(); defer { taskLock.unlock() }; return _task }
+        set { taskLock.lock(); _task = newValue; taskLock.unlock() }
+    }
     private var reconnects = 0
     private let maxReconnects = 5
 
@@ -106,7 +127,20 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
         self.session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
     }
 
-    func start() { connect() }
+    func start() {
+        FrameStreamer.shared.sender = { [weak self] data, done in
+            guard let self = self else { done(URLError(.cancelled)); return }
+            self.sendBinary(data, completion: done)
+        }
+        connect()
+    }
+
+    /// One binary message on the live socket (stream frames). The task is re-read
+    /// per call, so frames follow a re-dialed connection.
+    func sendBinary(_ data: Data, completion: @escaping (Error?) -> Void) {
+        guard let t = task else { completion(URLError(.cancelled)); return }
+        t.send(.data(data), completionHandler: completion)
+    }
 
     private func connect() {
         let t = session.webSocketTask(with: url)
@@ -190,8 +224,10 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
 enum Runner {
     private static let springboard = "com.apple.springboard"
     private static var currentBundleId = springboard
+    /// Idle-wait selectors replaced at setUp; empty means the phone waits for quiescence.
+    static var idleWaitPatched: [String] = []
 
-    private static func app() -> XCUIApplication { XCUIApplication(bundleIdentifier: currentBundleId) }
+    private static func app() -> XCUIApplication { foregroundApp() }
 
     /// App to introspect: an explicitly-activated app wins; otherwise the live
     /// FOREGROUND app via the private accessibility client (so `tree`/`find` work
@@ -233,7 +269,7 @@ enum Runner {
             let f = foregroundApp().frame
             return ok(["width": Double(f.width), "height": Double(f.height)])
         case "fgdebug":
-            return ok(["fg": ICActiveApplicationBundleID() ?? "nil", "debug": ICActiveApplicationDebug() ?? "nil"])
+            return ok(["fg": ICActiveApplicationBundleID() ?? "nil", "debug": ICActiveApplicationDebug() ?? "nil", "idleWait": idleWaitPatched])
         case "screenshot":
             return ok(XCUIScreen.main.screenshot().pngRepresentation.base64EncodedString())
         case "tap":
@@ -255,6 +291,10 @@ enum Runner {
             return appOp(action: args["action"] as? String ?? "", bundleId: args["bundleId"] as? String ?? "")
         case "eval":
             return jsEval(script: args["script"] as? String ?? "")
+        case "gesture":
+            return synthesizeGesture(args["fingers"])
+        case "stream":
+            return FrameStreamer.shared.handle(action: args["action"] as? String ?? "status", args: args)
         default:
             return err("unknown op '\(op)'")
         }
@@ -393,6 +433,74 @@ enum Runner {
         }
     }
 
+    // MARK: multi-touch (private XCSynthesizedEventRecord, see ObjCSupport.m)
+
+    /// `fingers` is [[{x, y, t}]] with `t` in milliseconds from the record start.
+    /// Validated here so a bad request never reaches the private API.
+    private static func synthesizeGesture(_ raw: Any?) -> [String: Any] {
+        guard let fingers = raw as? [[[String: Any]]], !fingers.isEmpty, fingers.count <= 10 else {
+            return err("gesture requires 1 to 10 fingers, each a list of {x, y, t} samples")
+        }
+        var paths: [[[String: NSNumber]]] = []
+        var durationMs = 0.0
+        for finger in fingers {
+            guard !finger.isEmpty else { return err("gesture: a finger has no samples") }
+            var last = -1.0
+            var samples: [[String: NSNumber]] = []
+            for s in finger {
+                let t = dbl(s["t"])
+                guard t >= 0, t >= last else { return err("gesture: sample offsets must be non-negative and non-decreasing") }
+                last = t
+                samples.append(["x": NSNumber(value: dbl(s["x"])), "y": NSNumber(value: dbl(s["y"])), "t": NSNumber(value: t / 1000.0)])
+            }
+            durationMs = max(durationMs, last)
+            paths.append(samples)
+        }
+        guard durationMs <= 55_000 else { return err("gesture: the last offset is at most 55000 ms") }
+        // Points arrive in the app's interface space (what `click` and `tree` use).
+        // The private record lands touches in PORTRAIT screen space (proven live on a
+        // landscape game: app-space points did nothing, portrait-mapped points hit),
+        // so map by the app's layout: a wider-than-tall app frame is landscape, and
+        // the private `interfaceOrientation` picks the side (3: camera cutout on the
+        // left, 4: right; 3 when it is missing). Both agreed with the real layout
+        // every time they were checked (a landscape game, Safari upright and on its side).
+        let app = foregroundApp()
+        // The frame's short side is the portrait width whichever way it reports.
+        // (UIScreen in this hostless runner reports a 320x480 compatibility screen.)
+        let f = app.frame
+        var orientation: Int64 = 1
+        var source = "frame"
+        if f.width > f.height {
+            let o = ICApplicationInterfaceOrientation(app)
+            orientation = (o == 3 || o == 4) ? o : 3
+            source = (o == 3 || o == 4) ? "app" : "frame"
+        }
+        let W = Double(min(f.width, f.height)), H = Double(max(f.width, f.height))
+        let mapped: [[[String: NSNumber]]] = paths.map { finger in
+            finger.map { s in
+                let x = s["x"]!.doubleValue, y = s["y"]!.doubleValue
+                let p: (Double, Double)
+                // Raw UIInterfaceOrientation: 3 is the layout with the camera cutout on
+                // the left (proven live: the app reports 3 there and W - y, x lands).
+                switch orientation {
+                case 2: p = (W - x, H - y)
+                case 3: p = (W - y, x)
+                case 4: p = (y, H - x)
+                default: p = (x, y)
+                }
+                return ["x": NSNumber(value: p.0), "y": NSNumber(value: p.1), "t": s["t"]!]
+            }
+        }
+        let started = Date()
+        if let e = ICSynthesizeGesture(mapped, app, 1) { return err(e.localizedDescription) }
+        return ok([
+            "fingers": fingers.count, "durationMs": durationMs,
+            "elapsedMs": (Date().timeIntervalSince(started) * 1000).rounded(),
+            "orientation": orientation, "orientationSource": source,
+            "screen": ["width": W, "height": H],
+        ])
+    }
+
     // MARK: snapshot → WdaSourceNode JSON (matches daemon/ios/tree.ts)
 
     private static func serialize(_ s: XCUIElementSnapshot) -> [String: Any] {
@@ -417,13 +525,13 @@ enum Runner {
 
     // MARK: helpers
 
-    private static func ok(_ data: Any?) -> [String: Any] {
+    static func ok(_ data: Any?) -> [String: Any] {
         if let data = data { return ["success": true, "data": data] }
         return ["success": true]
     }
-    private static func err(_ msg: String) -> [String: Any] { ["success": false, "error": msg] }
+    static func err(_ msg: String) -> [String: Any] { ["success": false, "error": msg] }
 
-    private static func dbl(_ v: Any?, _ def: Double = 0) -> Double {
+    static func dbl(_ v: Any?, _ def: Double = 0) -> Double {
         if let n = v as? NSNumber { return n.doubleValue }
         if let d = v as? Double { return d }
         if let i = v as? Int { return Double(i) }
@@ -453,5 +561,99 @@ enum Runner {
             79: "Stepper", 80: "Tab", 81: "TouchBar", 82: "StatusItem",
         ]
         return "XCUIElementType" + (names[t.rawValue] ?? "Other")
+    }
+}
+
+// MARK: - Frame stream (binary JPEG frames to the daemon)
+
+/// Pushes downscaled JPEG frames of the screen to the daemon as binary WebSocket
+/// messages, paced to a target fps, on a background queue so verbs keep running
+/// on the main thread meanwhile. Capture and encode live in ObjCSupport.m
+/// (XCUIScreen is main-actor-isolated in the Xcode 26 SDK).
+final class FrameStreamer {
+    static let shared = FrameStreamer()
+    /// Installed by the WSAgent; sends one binary message on the live socket.
+    var sender: ((Data, @escaping (Error?) -> Void) -> Void)?
+
+    private let queue = DispatchQueue(label: "com.interceptor.runner.stream")
+    private let lock = NSLock()
+    private var generation = 0
+    private var running = false
+    private var inFlight = 0
+    private var stats: [String: Any] = ["running": false, "frames": 0]
+
+    func handle(action: String, args: [String: Any]) -> [String: Any] {
+        switch action {
+        case "start":
+            let fps = min(30.0, max(1.0, Runner.dbl(args["fps"], 10)))
+            let scale = min(1.0, max(0.1, Runner.dbl(args["scale"], 0.5)))
+            let quality = min(1.0, max(0.05, Runner.dbl(args["quality"], 0.3)))
+            start(fps: fps, scale: scale, quality: quality)
+            return Runner.ok(snapshot())
+        case "stop":
+            stop()
+            return Runner.ok(snapshot())
+        case "status":
+            return Runner.ok(snapshot())
+        default:
+            return Runner.err("unknown stream action '\(action)' (start|stop|status)")
+        }
+    }
+
+    private func snapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return stats }
+
+    private func update(_ f: (inout [String: Any]) -> Void) { lock.lock(); f(&stats); lock.unlock() }
+
+    private func isCurrent(_ gen: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return running && generation == gen }
+
+    private func stop() {
+        lock.lock(); running = false; generation += 1; stats["running"] = false; lock.unlock()
+    }
+
+    private func start(fps: Double, scale: Double, quality: Double) {
+        lock.lock()
+        running = true
+        generation += 1
+        let gen = generation
+        inFlight = 0
+        stats = ["running": true, "fps": fps, "scale": scale, "quality": quality, "frames": 0, "dropped": 0, "sendErrors": 0, "captureErrors": 0]
+        lock.unlock()
+        let interval = 1.0 / fps
+        queue.async { [self] in
+            var frames = 0, dropped = 0, captureErrors = 0
+            while isCurrent(gen) {
+                let t0 = Date()
+                var px = CGSize.zero
+                var captureMs = 0.0, encodeMs = 0.0
+                if let jpeg = ICCaptureScreenJPEG(scale, quality, &px, &captureMs, &encodeMs) {
+                    frames += 1
+                    // A slow link must not pile frames up in memory: at most three sends in flight.
+                    lock.lock()
+                    let send = inFlight < 3
+                    if send { inFlight += 1 }
+                    lock.unlock()
+                    if send, let sender = sender {
+                        sender(jpeg) { [self] error in
+                            lock.lock()
+                            inFlight -= 1
+                            if error != nil { stats["sendErrors"] = (stats["sendErrors"] as? Int ?? 0) + 1 }
+                            lock.unlock()
+                        }
+                    } else {
+                        dropped += 1
+                    }
+                    update { s in
+                        s["frames"] = frames; s["dropped"] = dropped
+                        s["lastCaptureMs"] = captureMs.rounded(); s["lastEncodeMs"] = encodeMs.rounded()
+                        s["lastBytes"] = jpeg.count; s["width"] = Int(px.width); s["height"] = Int(px.height)
+                    }
+                } else {
+                    captureErrors += 1
+                    update { s in s["captureErrors"] = captureErrors }
+                }
+                let elapsed = Date().timeIntervalSince(t0)
+                if elapsed < interval { Thread.sleep(forTimeInterval: interval - elapsed) }
+            }
+        }
     }
 }

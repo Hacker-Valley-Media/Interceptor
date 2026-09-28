@@ -7,6 +7,7 @@ import type {
   SceneResolvedTarget
 } from "../types"
 import { boundingBox, clickAtViewport } from "../ops"
+import { isSensitive, safeHtml, safeText, SECURE_MASK } from "../../sensitive"
 
 function findTextEventTarget(): { iframe: HTMLIFrameElement; doc: Document; textbox: HTMLElement } | null {
   const iframe = document.querySelector<HTMLIFrameElement>(".docs-texteventtarget-iframe")
@@ -103,7 +104,7 @@ export const googleDocsProfile: SceneProfile = {
       const sel = tet.iframe.contentWindow?.getSelection()
       if (!sel || sel.rangeCount === 0) return { has: false }
       const range = sel.getRangeAt(0)
-      const text = range.toString()
+      const text = isSensitive(tet.textbox) && range.toString() ? SECURE_MASK : range.toString()
       return {
         has: text.length > 0,
         text: text.slice(0, 200),
@@ -117,10 +118,10 @@ export const googleDocsProfile: SceneProfile = {
   text(opts?: { withHtml?: boolean }): SceneText | null {
     const tet = findTextEventTarget()
     if (!tet) return null
-    const text = (tet.textbox.textContent || "").toString()
+    const text = safeText(tet.textbox)
     return {
       text,
-      html: opts?.withHtml ? tet.textbox.innerHTML : undefined,
+      html: opts?.withHtml ? safeHtml(tet.textbox) : undefined,
       length: text.length
     }
   },

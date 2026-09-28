@@ -27,15 +27,45 @@ phone is set up. Phones auto-connect on the first drive verb.
 | `interceptor ios inspect <ref>` | Element details (type, label, enabled, frame). |
 | `interceptor ios click <ref> \| --x N --y N` | Deterministic coordinate tap at the ref's frame center (or raw coordinates). |
 | `interceptor ios type <ref> "text"` | Focus the field at `<ref>`, then type. Most reliable text entry — focus is atomic. |
-| `interceptor ios keys "text"` | Type into whatever is already focused (append). |
+| `interceptor ios keys "text"` / `ios keys Enter\|Return\|Tab` | Type into whatever is already focused (append); `Enter`, `Return`, or `Tab` as the whole argument presses that key (a real newline character does the same; the two characters `\n` are typed literally). |
 | `interceptor ios type <ref> --secret <name>` / `ios keys --secret <name>` | Type a vault secret (passcode) by name; the daemon resolves it and the runner falls back to SpringBoard when a system passcode sheet owns the keyboard. Register once: `interceptor macos secret register ios-passcode --target ios`. |
 | `interceptor ios unlock --secret <name>` / `ios unlock --probe` | Lock screen: wake, swipe up, type the passcode into SpringBoard's passcode field, wait for unlock. Needs the runner resident (it cannot start on a locked phone). `--probe` reports lock state + whether the passcode field appeared, without typing. |
-| `interceptor ios scroll [<ref>] --dir up\|down\|left\|right` | Scroll the view (or the element at `<ref>`). |
-| `interceptor ios drag <from> <to> [--duration s]` | Drag between two element refs (frame center to frame center). |
+| `interceptor ios scroll [<ref> \| --x N --y N] [--dir up\|down\|left\|right]` | Swipe 250 points from the ref's center, from a screen point, or (bare) from the screen center. `--dir` defaults to `down`. A ref that no longer resolves, or `--x` without `--y`, is an error: no gesture is sent. |
+| `interceptor ios drag <from> <to> [--duration s]` | Drag between two ends; each is a ref (frame center) or a screen point written `x,y` (`120,330`), and the two kinds can be mixed. `--duration` is the press time in seconds before the move (default 0.6, fractions allowed, at most 55: the gesture deadline is 60 s). |
+| `interceptor ios drag 200,400 200,400 --duration 2` | Long press: the same point twice. Use it for context menus and press-and-hold controls. It returns once the press has played, whether or not the surface settles (the Home Screen's icon menu, a browser's animating new-tab page). Run `interceptor ios refresh` after upgrading to 1.0.19 so the phone gets the expanded idle-wait patch; `ios fgdebug` lists the patched methods. |
 | `interceptor ios press home\|lock\|volume-up\|volume-down` | Hardware button. `lock` locks the phone (avoid mid-flow — it blocks launches). |
 | `interceptor ios screenshot` | Capture the screen; saved as a VLM-budget-resized JPG. |
+| `interceptor ios stream start\|stop\|status [--fps N] [--scale S] [--quality Q] [--out <path>]` | Continuous frames without a cable: the runner captures, downscales (default half size), JPEG-encodes (default quality 0.3), and pushes each frame over its own Wi-Fi socket at up to `--fps` (default 10, max 30). The daemon keeps the newest frame and, with `--out`, rewrites that file atomically for every frame, so a perception loop reads one path whenever it wants a look. `status` reports frames received, `ageMs` of the newest, `receivedFps`, frame `width`/`height` in pixels, and the runner's `lastCaptureMs`/`lastEncodeMs`. Runs alongside `click`, `gesture`, and `tree`. Not the Instruments `ios screen` poll. |
+| `interceptor ios frame [--out <path>]` | Save the newest streamed frame (default `interceptor-ios-frame-<seq>.jpg` in the working directory) and print its seq, age, and size. No device round trip; an error when no stream has delivered a frame. |
+| `interceptor ios gesture <finger> [<finger>...] [--hold ms]` | Multi-touch in one record, up to 10 fingers. Each positional is one finger written `x,y[@ms][>x,y@ms...]`: the first sample presses, later samples move, the last lifts. A lone `x,y` presses at 0 and lifts at `--hold` (default 100 ms). Points are in the app's own coordinate space, the same as `click`, `drag`, and the frames in `tree`; for a landscape app (a wider-than-tall app frame) the runner maps them to the screen and reports `orientation` (1 portrait; 3 the landscape with the camera cutout on the left, 4 on the right) and `orientationSource` (`app` when the app named the landscape side, `frame` otherwise). A phone lying on its side turns rotating apps such as Safari landscape too, so read `tree` or `find` frames for the current layout before choosing points. Returns when the record has played (`elapsedMs`, about 250 ms over the record length). The runner plays the timeline as written and applies no tap or long-press threshold; the app decides what a hold means (UIKit long-press recognizers want about 500 ms, so a short `--hold` reads as a tap). The last offset is at most 55,000 ms. Uses XCTest's private event record; on an SDK without it the error names the missing symbol. |
 | `interceptor ios apps` | Installed apps on the phone (bundle id, name, version). |
 | `interceptor ios app launch\|activate\|terminate <bundleId>` | App lifecycle by bundle id (e.g. `com.apple.Preferences`). |
+
+### Apps with no element tree (games, canvases)
+
+Coordinates are screen points, the same space as the frames in `ios tree` (the root element's frame is the screen size). When the tree is empty or useless, read the screen with the Mac's Vision framework and act by coordinate:
+
+```bash
+interceptor ios screenshot --on phone                               # prints the saved path
+interceptor macos vision text --image <that path>                   # regions: text plus a normalized box
+interceptor ios click --x 196 --y 412 --on phone                    # tap
+interceptor ios drag 196,412 196,412 --duration 2 --on phone        # long press
+interceptor ios scroll --x 196 --y 600 --dir down --on phone        # swipe from a point
+```
+
+A driving game wants a pedal held while an arrow is tapped, and a fresh look every few hundred milliseconds. Stream frames to one file and read that file; hold and tap in one gesture:
+
+```bash
+interceptor ios stream start --fps 5 --out /tmp/phone.jpg --on phone    # best effort: the runner sends what it captures; the file is rewritten atomically
+interceptor macos vision text --image /tmp/phone.jpg                      # read the HUD from the newest frame
+interceptor ios gesture "380,700@0>380,700@600" "120,650@100>120,650@300" --on phone   # gas held 600 ms, steer tapped 100 to 300 ms
+interceptor ios stream status --on phone                                  # frames, ageMs, receivedFps, capture and encode ms
+interceptor ios stream stop --on phone
+```
+
+Frame pixels map to screen points by the frame size over the screen size (`ios inspect e1` gives the screen frame in points): `x_pt = x_px * W_pt / width`. Frames follow the app's orientation (a landscape game gives a 1434x660 frame for a 956x440 point space), and capture is slower while a game renders (about 500 ms per frame against 100 ms on a static app), so ask for 3 to 5 fps in a game and 10 on ordinary apps.
+
+Vision boxes are normalized 0 to 1 with the origin at the bottom left, so for a screen `W` by `H` points the center of a region is `x = (box.x + box.width / 2) * W` and `y = (1 - box.y - box.height / 2) * H`.
 
 ## Runner-free lanes (Instruments / DTX / telemetry)
 

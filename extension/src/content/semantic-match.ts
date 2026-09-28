@@ -1,3 +1,4 @@
+import { safeText } from "./sensitive"
 import { refRegistry } from "./ref-registry"
 import { isVisible } from "./element-discovery"
 import { getEffectiveRole, getAccessibleName } from "./a11y-tree"
@@ -30,7 +31,7 @@ export function findBestMatch(name?: string, role?: string, text?: string): { re
       const placeholder = el.getAttribute("placeholder")?.toLowerCase()
       if (placeholder?.includes(query)) score += 40
       if (isTextPseudoRole) {
-        const elText = (el.textContent || "").trim().toLowerCase()
+        const elText = safeText(el).trim().toLowerCase()
         if (elText === query) score += 80
         else if (elText.includes(query)) score += 50
       }

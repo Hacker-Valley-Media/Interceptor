@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { DAEMON_HEALTH_SERVICE, LEGACY_HEALTH_BODY, decideDaemonRecovery, probeDaemonHealth } from "../shared/daemon-health"
+import { DAEMON_HEALTH_SERVICE, LEGACY_HEALTH_BODY, decideDaemonRecovery, pidOwnership, probeDaemonHealth } from "../shared/daemon-health"
 
 // Fixtures speak raw HTTP over Bun.listen so they do not depend on the global
 // Response class (happy-dom replaces it process-wide in the full suite).
@@ -88,6 +88,21 @@ describe("decideDaemonRecovery never spawns or unlinks against a held port", () 
     expect(r.action).toBe("fail")
     expect((r as { message: string }).message).toContain("pid 77 (0.23.28)")
     expect((r as { message: string }).message).toContain(log)
+  })
+  test("owner that belongs to another user → fail naming the account boundary, never the heal message", () => {
+    const r = decideDaemonRecovery({ state: "interceptor", pid: 2111, version: "0.23.30", healed: [] }, false, 19222, log, "foreign")
+    expect(r.action).toBe("fail")
+    const message = (r as { message: string }).message
+    expect(message).toContain("pid 2111 (0.23.30)")
+    expect(message).toContain("belongs to another user")
+    expect(message).toContain("port 19222")
+    expect(message).not.toContain("could not restore")
+  })
+  test("pidOwnership maps kill(pid, 0) outcomes", () => {
+    expect(pidOwnership(1, () => {})).toBe("own")
+    expect(pidOwnership(1, () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }) })).toBe("foreign")
+    expect(pidOwnership(1, () => { throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }) })).toBe("gone")
+    expect(pidOwnership(process.pid)).toBe("own")
   })
   test("legacy owner → fail with the kill recipe", () => {
     const r = decideDaemonRecovery({ state: "legacy" }, false, 19222, log)

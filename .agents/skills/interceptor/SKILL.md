@@ -28,7 +28,8 @@ Use this as the routing skill before loading a surface-specific skill.
 
 - Browser commands operate inside the cyan `interceptor` tab group. Do not use `--any-tab` unless the user explicitly authorizes acting outside that group.
 - Solo browser work in a supported agent shell gets a soft per-session group automatically. For concurrent lanes, set a unique `INTERCEPTOR_SESSION_ID` or pass a unique `--group <label>` to each lane. Explicit groups are hard-scoped by default unless `--any-tab` is authorized. Close named groups with `interceptor group close <label>` when done; the idle timer is based on tab activity, so metadata polls do not keep a group alive.
-- `interceptor open <url>` and `interceptor tab new <url>` create background tabs by default. Only `open --activate`, `tab new --activate`, `tab switch <id>`, and `window focus <id>` intentionally move browser focus.
+- `interceptor open <url>`, `interceptor tab new <url>`, and `interceptor window new [url]` create background tabs and windows by default. Only `open --activate`, `tab new --activate`, `window new --activate`, `tab switch <id>`, and `window focus <id>` intentionally move browser focus.
+- A page that will not render while hidden is not a reason to switch: `interceptor tab keepalive <id>` makes it read as visible and run its animation frames in place. After a `tab switch` for a trusted click, `tab switch` back to the tab that was showing is allowed once.
 - The macOS surface is background-first by default. Only `interceptor macos app activate <app>` and `interceptor macos open <app> --activate` intentionally move focus.
 - If multiple browser profiles are connected, run `interceptor contexts` and pass `--context <id>`.
 - Safari registers as `safari`; use `interceptor --context safari <verb>` for page content and `interceptor macos` for Safari chrome or native fallbacks.

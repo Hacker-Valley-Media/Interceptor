@@ -8,6 +8,7 @@ var IK_TT_POLICY = "z9t0";
 var IK_CANVAS_OBSERVER = "z9o0";
 var IK_CANVAS_WRAPPED = "z9r0";
 var IK_GETCTX_WRAPPED = "z9r1";
+var IK_KEEPALIVE = "z9v0";
 var K_NET = Symbol.for(IK_NET);
 var K_CANVAS = Symbol.for(IK_CANVAS);
 var K_WS = Symbol.for(IK_WS);
@@ -17,6 +18,7 @@ var K_TT_POLICY = Symbol.for(IK_TT_POLICY);
 var K_CANVAS_OBSERVER = Symbol.for(IK_CANVAS_OBSERVER);
 var K_CANVAS_WRAPPED = Symbol.for(IK_CANVAS_WRAPPED);
 var K_GETCTX_WRAPPED = Symbol.for(IK_GETCTX_WRAPPED);
+var K_KEEPALIVE = Symbol.for(IK_KEEPALIVE);
 
 // extension/src/inject-canvas.ts
 if (!window[K_CANVAS]) {

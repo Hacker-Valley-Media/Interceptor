@@ -18,6 +18,7 @@
 // "*" and can be embedded as data URLs without tainting the canvas.
 
 import { resolveElement } from "./input-simulation"
+import { queryOneDeep } from "./deep-query"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown }
 
@@ -246,7 +247,7 @@ export function checkRasterizeOutput(dataUrl: string, width: number, height: num
   )
 }
 
-function resolveTarget(action: DomScreenshotAction): { node: HTMLElement | null; error?: string } {
+export function resolveTarget(action: DomScreenshotAction): { node: HTMLElement | null; error?: string } {
   const mode = action.mode || "full"
   switch (mode) {
     case "full":
@@ -270,7 +271,7 @@ function resolveTarget(action: DomScreenshotAction): { node: HTMLElement | null;
       if (!action.selector) {
         return { node: null, error: "selector mode requires selector string" }
       }
-      const el = document.querySelector(action.selector)
+      const el = queryOneDeep(action.selector)
       if (!el) return { node: null, error: `selector not found: ${action.selector}` }
       if (!(el instanceof HTMLElement)) {
         return { node: null, error: `selector matched non-HTMLElement (got ${el.constructor.name})` }

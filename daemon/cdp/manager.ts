@@ -24,6 +24,16 @@ import {
   type CdpTarget,
 } from "../../shared/cdp-app"
 
+/** Frontmost app via lsappinfo (no TCC grant needed); empty off macOS or on failure. */
+function frontmostApp(): { bundleId?: string; pid?: number } {
+  if (process.platform !== "darwin") return {}
+  const asn = spawnSync("lsappinfo", ["front"], { encoding: "utf-8" }).stdout?.trim()
+  if (!asn) return {}
+  const read = (key: string): string => spawnSync("lsappinfo", ["info", "-only", key, asn], { encoding: "utf-8" }).stdout ?? ""
+  const pid = Number(read("pid").match(/"pid"\s*=\s*(\d+)/)?.[1])
+  return { bundleId: read("bundleid").match(/"CFBundleIdentifier"="([^"]+)"/)?.[1], pid: Number.isFinite(pid) ? pid : undefined }
+}
+
 /**
  * Lifecycle action types handled by the CdpManager. Explicit set (not a prefix
  * match) so it never collides with the extension's `cdp_tree` meta action.
@@ -490,6 +500,20 @@ export class CdpManager {
       }
       return pids
     }
+    // Refuse when another process already serves CDP on the port: the poll
+    // after the relaunch would answer for that process and report the app as
+    // wired while it never bound the port (seen with two Electron apps from one
+    // vendor that share the default port).
+    if (await pollForEndpoint("127.0.0.1", port, { timeoutMs: 300, intervalMs: 150 })) {
+      const holders = listElectronProcesses().filter(p => p.remoteDebuggingPort === port)
+      const other = holders.find(p => p.appName !== app)
+      if (other || holders.length === 0) {
+        return {
+          success: false,
+          error: `port ${port} already serves CDP${other ? ` for ${other.appName} (pid ${other.pid})` : ""}; pass --port <free port> to relaunch ${app}`,
+        }
+      }
+    }
     spawnSync("osascript", ["-e", `quit app "${appForAppleScript}"`], { stdio: "ignore" })
     let stillRunning = await waitForExit(24)
     if (stillRunning.length > 0) {
@@ -502,7 +526,12 @@ export class CdpManager {
         error: `failed to quit ${app} before relaunch; still running pid(s): ${stillRunning.join(", ")}`,
       }
     }
-    const res = spawnSync("open", ["-a", app, "--args", `--remote-debugging-port=${port}`], { encoding: "utf-8" })
+    // -g: relaunch behind the user's windows; a CDP relaunch is plumbing, not a
+    // request to look at the app (background-first contract). Electron
+    // apps often activate themselves on ready regardless, so the app that was frontmost before is put back
+    // once the endpoint is up. lsappinfo needs no TCC grant.
+    const frontmostBefore = frontmostApp().bundleId
+    const res = spawnSync("open", ["-g", "-a", app, "--args", `--remote-debugging-port=${port}`], { encoding: "utf-8" })
     if (res.status !== 0) {
       return { success: false, error: `failed to relaunch ${app}: ${res.stderr || "open failed"}` }
     }
@@ -513,8 +542,34 @@ export class CdpManager {
         error: `relaunched ${app}, but no CDP endpoint appeared on 127.0.0.1:${port}; the app may have dropped or rejected --remote-debugging-port`,
       }
     }
+    // The debug endpoint is up before the app's window shows, and the
+    // self-activation comes with the window (verified live: the check right
+    // after the endpoint still saw the old frontmost, then the app took over).
+    // Watch for up to 5 s and put the previous app back the moment the
+    // relaunched app (one of its pids) is what took the front; a user switching
+    // to some third app in that window is left alone.
+    let restoredFrontmost = false
+    if (frontmostBefore) {
+      for (let i = 0; i < 20; i++) {
+        const now = frontmostApp()
+        if (now.bundleId && now.bundleId !== frontmostBefore && now.pid !== undefined && runningPids().includes(now.pid)) {
+          spawnSync("open", ["-b", frontmostBefore], { stdio: "ignore" })
+          restoredFrontmost = true
+          break
+        }
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+    }
     this.deps.emit("app_relaunched", { app, port })
-    return { success: true, data: { app, port, note: `relaunched with --remote-debugging-port=${port}; run 'interceptor macos cdp connect ${port}' to attach` } }
+    return {
+      success: true,
+      data: {
+        app, port,
+        frontmostBefore: frontmostBefore ?? null,
+        restoredFrontmost,
+        note: `relaunched with --remote-debugging-port=${port}; run 'interceptor macos cdp connect ${port}' to attach`
+      }
+    }
   }
 
   private requireCtx(action: { [k: string]: unknown }): CdpAppContext | { error: string; success: false } {

@@ -59,12 +59,18 @@ Unqualified `find` returns two typed current-page sections: literal case-insensi
 interceptor click e7
 interceptor click --selector "button span" --nth 4   # CSS-selector click; 0-based --nth matches query output; quote selectors with spaces
 interceptor type e9 "..."
-interceptor keys "Meta+K"
-interceptor select e12 "Option label"
+interceptor keys "Meta+K"               # Events carry legacy keyCode/which/charCode; Enter is 13, Shift+a arrives as A
+interceptor select e12 "Option label"   # native select: exact value first, then one exact label
 interceptor hover e3 | drag e4 e8 | dblclick e5 | rightclick e5
 ```
 
-On pages whose a11y tree comes back empty (some SPAs render nothing tree-visible), `interceptor query "<css>"` still finds elements. Every result reports the total `count`, serialized `returned` count, and `truncated` flag; at most 20 elements are serialized. Each element carries a clickable `e<ref>`, so every ref verb (`click`, `type`, `check`, …) works on what query found. A navigating click resolves as `{navigated: true, url}` rather than an error; a selector click that produces no DOM change auto-escalates to an OS-level click when the OS transport is available.
+Native `select`, `type`, and `act <ref> <value>` share option validation. Invalid, ambiguous, disabled, and non-native targets fail without changing the selection. A multiple select replaces its selection with the one requested option. A successful changed selection emits input then change; page handlers that reject it produce an error. Use `html <ref>` to inspect coded option values. Custom dropdowns use their normal click/read workflow.
+
+Password inputs and vault-filled controls are masked in tree, forms, snapshots/diff, scoped reads, and HTML/value-attribute output. Text-backed credential fields are masked in text/markdown/query output too, and `scene list`, `scene selected`, and `scene text` mask the same fields. Eval, screenshots, network/storage capture, and page-created copies of credentials are outside this masking boundary.
+
+On pages whose a11y tree comes back empty (some SPAs render nothing tree-visible), `interceptor query "<css>"` still finds elements. Every result reports the total `count`, serialized `returned` count, and `truncated` flag; at most 20 elements are serialized. Each element carries a clickable `e<ref>`, so every ref verb (`click`, `type`, `check`, …) works on what query found. `click`, `type`, and `check` also take a `role:name` target (`checkbox:Remember me`) that the page resolves by accessible role and name. A navigating click resolves as `{navigated: true, url}` rather than an error; a selector click that produces no DOM change auto-escalates to an OS-level click when the OS transport is available.
+
+Every CSS-selector verb reaches inside web components: `query`, `exists`, `count`, `click --selector`, `wait`, `table`, `attr`, `style`, `rect`, and `screenshot --selector` search open and closed shadow roots after the light DOM. Light-DOM matches come first in document order, so `--nth` keeps its meaning on a page without shadow hosts. `wait` polls as well as observing, so an element rendered later inside an existing shadow root is found.
 
 ## Inspection + Network
 
@@ -199,7 +205,8 @@ interceptor tab new <url> --activate  # Explicit foregrounding
 interceptor tab new <url> --reuse     # Navigate the group's most-recent tab instead of creating
                                       # New tabs land in the window that already holds Interceptor groups (own group's window first),
                                       # not the focused window; the result's windowId says where. A window is created only when none is normal.
-interceptor tab switch <tab-id>
+interceptor tab keepalive <tab-id>    # Hidden tab reads visible + runs its animation frames (no focus change); --off clears
+interceptor tab switch <tab-id>       # Explicit focus move; switching back to the tab that was showing passes the group gate once
 interceptor tab close <tab-id>
 
 interceptor open <url> --group <label>   # Open into a named per-agent group "<brand>-<label>" (created on first use)
@@ -209,7 +216,8 @@ interceptor open <url> --shared-group     # Suppress session scope; use the shar
 interceptor group list                   # All live tab groups: label, title, color, tab count
 interceptor group close <label>          # Atomically close every tab in a named group (other groups untouched)
 interceptor window list
-interceptor window new
+interceptor window new [url]                              # Background window (ordered below the user's)
+interceptor window new [url] --activate                   # Explicit focus move
 interceptor window focus <window-id>                      # Explicit focus move
 interceptor window resize <window-id> <width> <height>
 interceptor window resize <window-id> --left 0 --top 0 --width 960 --height 1080
@@ -218,7 +226,7 @@ interceptor window resize --state maximized               # Don't combine maximi
 
 Use `--tab <id>` for a specific tab; `--any-tab` only when explicitly authorized.
 
-Solo agent work needs no label: `INTERCEPTOR_SESSION_ID` is the neutral session contract, and verified Maestro, Claude Code, and Codex variables are detected automatically. Interceptor hashes the full id into `s-<hash16>` and sends only that opaque label. The scope is SOFT: it supplies tab reuse and idle cleanup, but an empty session group can fall back to the active managed tab. Concurrent lanes often share one host session id, so each lane needs its own `--group lane-<n>` or `INTERCEPTOR_SESSION_ID`. An explicit `--group <label>` or non-empty `INTERCEPTOR_GROUP` provides HARD isolation by default: resolution stays in the named group and cross-group targets are rejected unless `--any-tab` is explicitly authorized. `--shared-group` or empty `INTERCEPTOR_GROUP=` suppresses session scope but still uses the shared default Interceptor group. Labels match `[A-Za-z0-9_-]{1,32}`. Pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done, then use `group list` as proof. The extension auto-closes groups after 10 minutes without tab activity by default; metadata polls do not keep them alive.
+Solo agent work needs no label: `INTERCEPTOR_SESSION_ID` is the neutral session contract, and verified Maestro, Claude Code, and Codex variables are detected automatically. Interceptor hashes the full id into `s-<hash16>` and sends only that opaque label. The scope is SOFT: it supplies tab reuse and idle cleanup, but an empty session group can fall back to the active managed tab. Concurrent lanes often share one host session id, so each lane needs its own `--group lane-<n>` or `INTERCEPTOR_SESSION_ID`. An explicit `--group <label>` or non-empty `INTERCEPTOR_GROUP` provides HARD isolation by default: resolution stays in the named group and cross-group targets are rejected unless `--any-tab` is explicitly authorized. `--shared-group` or empty `INTERCEPTOR_GROUP=` suppresses session scope but still uses the shared default Interceptor group. Labels match `[A-Za-z0-9_-]{1,32}`. Pick a color with `--group-color <grey|blue|red|yellow|green|pink|purple|cyan|orange>` on first open. Close your group when the job is done, then use `group list` as proof. The extension auto-closes groups after 10 minutes without tab activity by default; metadata polls do not keep them alive. The popup's *Delete the whole group when idle* toggle (off by default) upgrades that sweep to a full delete: every tab in the idle group goes, unsaved-form tabs and a window's last tab included, and it only waits while the user is looking at one of the group's tabs or one is playing sound. The user may have it on, so do not assume a group you left behind is still there.
 
 ## Cookies / Storage / History / Bookmarks
 
@@ -276,6 +284,16 @@ Chrome/Brave profiles auto-generate stable UUIDs on first run (stored in `chrome
 
 Primary use cases: multiple Chrome profiles logged in to different accounts, or Chrome/Brave and Safari connected to the same daemon simultaneously.
 
+## Recently closed tabs
+
+```bash
+interceptor sessions [max]                          # Recently closed tabs and windows, newest first, with sessionIds
+interceptor sessions restore <id>                   # Reopen the page(s) as background tabs in your group; your active tab does not change
+interceptor sessions restore <id> --activate        # The browser's own restore: keeps history and form state, brings the tab to the front
+```
+
+The default gives up back/forward history and form state, and the entry stays in the list. An id is required: the no-argument form would reopen whatever closed most recently, which may be the user's own window. This is the undo for a tab the idle sweep closed.
+
 ## Capabilities + Reload
 
 ```bash
@@ -299,9 +317,10 @@ interceptor eval --main "document.title"
 interceptor eval --main "window.__APP_STATE__"
 interceptor eval "document.title" --frame 4897        # Exactly that frame; a missing frame fails
 interceptor --frame 4897 eval "document.title"        # --frame is global: before or after the command
+interceptor eval --main --no-reload "app.state"       # Refuse the CSP-recovery reload; get the CSP error instead
 ```
 
-Use only when no built-in command exposes what you need. Thrown exceptions, rejected promises, and syntax errors are failures (exit 1) in both worlds; top-level `await` works. The default isolated world may need Allow User Scripts enabled for the extension; `--main` is an explicit page-world choice. On a strict-CSP page `--main` may strip the header and reload the tab once, and the result says so; task verification never reloads.
+Use only when no built-in command exposes what you need. Thrown exceptions, rejected promises, and syntax errors are failures (exit 1) in both worlds; top-level `await` works. The default isolated world may need Allow User Scripts enabled for the extension; `--main` is an explicit page-world choice. On a strict-CSP page `--main` may strip the header and reload the tab once; the result says so and a `warning:` line is printed, on success and on failure, for `eval` and for `save`. That reload discards the page's in-memory state (an open conversation, a half-filled form). Pass `--no-reload` on such a page to get the CSP error instead. Task verification never reloads.
 
 ## Durable task state
 

@@ -14,6 +14,91 @@ var __export = (target, all) => {
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 
+// extension/src/content/sensitive.ts
+function markSensitive(el) {
+  sensitiveElements.add(el);
+}
+function isSensitive(el) {
+  for (let node = el;node; node = node.parentElement || node.getRootNode().host || null) {
+    if (node.tagName === "INPUT" && node.type === "password")
+      markSensitive(node);
+    if (sensitiveElements.has(node))
+      return true;
+  }
+  return false;
+}
+function safeValue(el) {
+  const value = el.value || "";
+  const sensitive = isSensitive(el);
+  return value && sensitive ? SECURE_MASK : value;
+}
+function redactSensitiveText(text, root) {
+  for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
+    if (!isSensitive(el))
+      continue;
+    for (const value of [el.textContent, el.innerText]) {
+      if (value)
+        text = text.replaceAll(value, SECURE_MASK);
+    }
+  }
+  return text;
+}
+function hiddenByStyle(el) {
+  const style = getComputedStyle(el);
+  return style.display === "none" || style.visibility === "hidden";
+}
+function walkRenderedText(root) {
+  const parts = [];
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE)
+      return;
+    const el = node;
+    if (NON_RENDERED_TAGS.has(el.tagName) || hiddenByStyle(el))
+      return;
+    for (const child of Array.from(el.childNodes))
+      walk(child);
+  };
+  walk(root);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+function renderedText(el) {
+  const rendered = el.innerText;
+  if (rendered && rendered.trim())
+    return rendered;
+  return walkRenderedText(el);
+}
+function safeText(el, rendered = false) {
+  const text = rendered ? renderedText(el) : el.textContent || "";
+  if (isSensitive(el))
+    return text ? SECURE_MASK : "";
+  return redactSensitiveText(text, el);
+}
+function safeHtml(el) {
+  const clone = el.cloneNode(true);
+  const originals = [el, ...Array.from(el.querySelectorAll("*"))];
+  const copies = [clone, ...Array.from(clone.querySelectorAll("*"))];
+  for (let i = 0;i < originals.length; i++) {
+    const original = originals[i], copy = copies[i];
+    if (!isSensitive(original))
+      continue;
+    if (copy.hasAttribute("value"))
+      copy.setAttribute("value", copy.getAttribute("value") ? SECURE_MASK : "");
+    if (original.tagName !== "INPUT" && (original.textContent || original.value))
+      copy.textContent = SECURE_MASK;
+  }
+  return clone.outerHTML;
+}
+var globals, sensitiveElements, SECURE_MASK = "***SECURE***", NON_RENDERED_TAGS;
+var init_sensitive = __esm(() => {
+  globals = globalThis;
+  sensitiveElements = globals.__interceptor_sensitiveElements ??= new WeakSet;
+  NON_RENDERED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
+});
+
 // extension/src/content/ref-registry.ts
 function getOrAssignRef(el) {
   const existing = elementToRef.get(el);
@@ -101,7 +186,7 @@ function getRelevantAttrs(el) {
     const placeholder = el.getAttribute("placeholder");
     if (placeholder)
       attrs.push(`placeholder="${placeholder}"`);
-    const value = el.value;
+    const value = safeValue(el);
     if (value)
       attrs.push(`value="${value.slice(0, 40)}"`);
     if (el.checked)
@@ -110,7 +195,7 @@ function getRelevantAttrs(el) {
       attrs.push("disabled");
   }
   if (tag === "select" || tag === "textarea") {
-    const value = el.value;
+    const value = safeValue(el);
     if (value)
       attrs.push(`value="${value.slice(0, 40)}"`);
   }
@@ -174,6 +259,7 @@ function buildElementTree(elements) {
 }
 var STYLE_BUNDLE_PROPS;
 var init_element_tree = __esm(() => {
+  init_sensitive();
   init_a11y_tree();
   STYLE_BUNDLE_PROPS = [
     "display",
@@ -269,7 +355,7 @@ function getInteractiveElements() {
       const tag = el.tagName.toLowerCase();
       const text = getAccessibleName(el);
       const attrs = getRelevantAttrs(el);
-      refMetadata.set(refId, { role: getEffectiveRole(el, style), name: text, tag, value: (el.value || "").slice(0, 40) });
+      refMetadata.set(refId, { role: getEffectiveRole(el, style), name: text, tag, value: safeValue(el).slice(0, 40) });
       results.push({ index: idx, refId, element: el, selector, tag, text, attrs });
     }
   });
@@ -280,6 +366,7 @@ var init_element_discovery = __esm(() => {
   init_ref_registry();
   init_a11y_tree();
   init_element_tree();
+  init_sensitive();
   selectorMap = new Map;
   INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA", "DETAILS", "SUMMARY"]);
   INTERACTIVE_ROLES = new Set(["button", "link", "tab", "menuitem", "checkbox", "radio", "switch", "textbox", "combobox", "listbox", "option", "slider"]);
@@ -416,7 +503,7 @@ function getAccessibleName(el) {
   const title = el.getAttribute("title");
   if (title && title.trim())
     return title.trim();
-  return (el.textContent || "").trim().slice(0, 80);
+  return safeText(el).trim().slice(0, 80);
 }
 function compactAttrClause(attrs) {
   if (!attrs)
@@ -505,6 +592,7 @@ function buildA11yTree(root, depth, maxDepth, filter, includeStyle = false, form
 }
 var LANDMARK_ROLES, LANDMARK_TAGS;
 var init_a11y_tree = __esm(() => {
+  init_sensitive();
   init_element_discovery();
   init_ref_registry();
   init_element_tree();
@@ -515,9 +603,9 @@ var init_a11y_tree = __esm(() => {
 // extension/src/content/snapshot-diff.ts
 var exports_snapshot_diff = {};
 __export(exports_snapshot_diff, {
-  lastSnapshot: () => lastSnapshot,
+  cacheSnapshot: () => cacheSnapshot,
   computeSnapshotDiff: () => computeSnapshotDiff,
-  cacheSnapshot: () => cacheSnapshot
+  lastSnapshot: () => lastSnapshot
 });
 function cacheSnapshot() {
   const entries = [];
@@ -529,7 +617,7 @@ function cacheSnapshot() {
       refId,
       role: getEffectiveRole(el),
       name: getAccessibleName(el),
-      value: (el.value || "").slice(0, 40),
+      value: safeValue(el).slice(0, 40),
       states: getRelevantAttrs(el)
     });
   }
@@ -549,7 +637,7 @@ function computeSnapshotDiff() {
       refId,
       role: getEffectiveRole(el),
       name: getAccessibleName(el),
-      value: (el.value || "").slice(0, 40),
+      value: safeValue(el).slice(0, 40),
       states: getRelevantAttrs(el)
     });
   }
@@ -578,10 +666,78 @@ function computeSnapshotDiff() {
 }
 var lastSnapshot;
 var init_snapshot_diff = __esm(() => {
+  init_sensitive();
   init_ref_registry();
   init_a11y_tree();
   init_element_tree();
   lastSnapshot = [];
+});
+
+// extension/src/content/deep-query.ts
+function collectRoots(root = document) {
+  const roots = [root];
+  for (let i = 0;i < roots.length && roots.length < MAX_ROOTS; i++) {
+    const current = roots[i];
+    let hosts;
+    try {
+      hosts = Array.from(current.querySelectorAll("*"));
+    } catch {
+      continue;
+    }
+    for (const host of hosts) {
+      const shadow = getShadowRoot(host);
+      if (shadow) {
+        roots.push(shadow);
+        if (roots.length >= MAX_ROOTS)
+          break;
+      }
+    }
+  }
+  return roots;
+}
+function queryAllDeep(selector, root = document) {
+  const direct = Array.from(root.querySelectorAll(selector));
+  const roots = collectRoots(root);
+  if (roots.length === 1)
+    return direct;
+  const seen = new Set(direct);
+  const out = [...direct];
+  for (let i = 1;i < roots.length; i++) {
+    let matches;
+    try {
+      matches = Array.from(roots[i].querySelectorAll(selector));
+    } catch {
+      continue;
+    }
+    for (const el of matches) {
+      if (seen.has(el))
+        continue;
+      seen.add(el);
+      out.push(el);
+    }
+  }
+  return out;
+}
+function queryOneDeep(selector, root = document) {
+  const direct = root.querySelector(selector);
+  if (direct)
+    return direct;
+  const roots = collectRoots(root);
+  for (let i = 1;i < roots.length; i++) {
+    let match;
+    try {
+      match = roots[i].querySelector(selector);
+    } catch {
+      continue;
+    }
+    if (match)
+      return match;
+  }
+  return null;
+}
+var MAX_ROOTS = 2000;
+var init_deep_query = __esm(() => {
+  init_element_discovery();
 });
 
 // extension/src/content/input-simulation.ts
@@ -608,6 +764,12 @@ function resolveElement(indexOrRef, ref) {
   if (!isVisible(el))
     return null;
   return el;
+}
+function resolveElementOrSelector(action) {
+  const el = resolveElement(action.index, action.ref);
+  if (el)
+    return el;
+  return action.selector ? queryOneDeep(String(action.selector)) : null;
 }
 function scrollIntoViewIfNeeded(el) {
   const rect = el.getBoundingClientRect();
@@ -661,20 +823,45 @@ function getKeyCode(key) {
     return `Key${key.toUpperCase()}`;
   return KEY_CODES[key] || `Key${key.toUpperCase()}`;
 }
+function getLegacyKeyCode(key) {
+  const named = LEGACY_KEY_CODES[key];
+  if (named !== undefined)
+    return named;
+  if (key.length !== 1)
+    return 0;
+  return key.toUpperCase().charCodeAt(0);
+}
+function withLegacyCodes(event, keyCode, charCode) {
+  for (const [name, value] of [["keyCode", keyCode], ["which", keyCode], ["charCode", charCode]]) {
+    try {
+      Object.defineProperty(event, name, { get: () => value, configurable: true });
+    } catch {}
+  }
+  return event;
+}
+function producesKeypress(key) {
+  return key === "Enter" || key === "Space" || key.length === 1;
+}
 function dispatchKeySequence(target, combo) {
   const parts = combo.split("+");
-  const key = parts[parts.length - 1];
   const modifiers = {
     ctrlKey: parts.includes("Control"),
     shiftKey: parts.includes("Shift"),
     altKey: parts.includes("Alt"),
     metaKey: parts.includes("Meta")
   };
+  const raw = parts[parts.length - 1];
+  const key = modifiers.shiftKey && /^[a-z]$/.test(raw) ? raw.toUpperCase() : raw;
   const code = getKeyCode(key);
-  const keyOpts = { key, code, bubbles: true, cancelable: true, ...modifiers };
-  target.dispatchEvent(new KeyboardEvent("keydown", keyOpts));
-  target.dispatchEvent(new KeyboardEvent("keypress", keyOpts));
-  target.dispatchEvent(new KeyboardEvent("keyup", keyOpts));
+  const legacy = getLegacyKeyCode(key);
+  const base = { key, code, bubbles: true, cancelable: true, ...modifiers };
+  const fire = (type, keyCode, charCode) => target.dispatchEvent(withLegacyCodes(new KeyboardEvent(type, { ...base, keyCode, charCode, which: charCode || keyCode }), keyCode, charCode));
+  const notCancelled = fire("keydown", legacy, 0);
+  if (notCancelled && producesKeypress(key)) {
+    const charCode = key === "Enter" ? 13 : key === "Space" ? 32 : key.charCodeAt(0);
+    fire("keypress", charCode, charCode);
+  }
+  fire("keyup", legacy, 0);
 }
 function waitForMutation(timeoutMs) {
   return new Promise((resolve) => {
@@ -698,24 +885,30 @@ function waitForMutation(timeoutMs) {
 }
 function waitForElement(selector, timeout) {
   return new Promise((resolve) => {
-    const existing = document.querySelector(selector);
+    const existing = queryOneDeep(selector);
     if (existing) {
       resolve(existing);
       return;
     }
-    const timer = setTimeout(() => {
+    let done = false;
+    const finish = (el) => {
+      if (done)
+        return;
+      done = true;
+      clearTimeout(timer);
+      clearInterval(poll);
       observer.disconnect();
-      resolve(null);
-    }, timeout);
-    const observer = new MutationObserver(() => {
-      const el = document.querySelector(selector);
-      if (el) {
-        clearTimeout(timer);
-        observer.disconnect();
-        resolve(el);
-      }
-    });
+      resolve(el);
+    };
+    const check = () => {
+      const el = queryOneDeep(selector);
+      if (el)
+        finish(el);
+    };
+    const timer = setTimeout(() => finish(null), timeout);
+    const observer = new MutationObserver(check);
     observer.observe(document.body, { childList: true, subtree: true });
+    const poll = setInterval(check, 250);
   });
 }
 function waitForDomStable(debounceMs = 200, timeoutMs = 5000) {
@@ -747,11 +940,12 @@ function waitForDomStable(debounceMs = 200, timeoutMs = 5000) {
     }, debounceMs);
   });
 }
-var KEY_CODES;
+var KEY_CODES, LEGACY_KEY_CODES;
 var init_input_simulation = __esm(() => {
   init_ref_registry();
   init_element_discovery();
   init_element_discovery();
+  init_deep_query();
   KEY_CODES = {
     Enter: "Enter",
     Tab: "Tab",
@@ -780,24 +974,57 @@ var init_input_simulation = __esm(() => {
     F11: "F11",
     F12: "F12"
   };
+  LEGACY_KEY_CODES = {
+    Backspace: 8,
+    Tab: 9,
+    Enter: 13,
+    Shift: 16,
+    Control: 17,
+    Alt: 18,
+    Escape: 27,
+    Space: 32,
+    " ": 32,
+    PageUp: 33,
+    PageDown: 34,
+    End: 35,
+    Home: 36,
+    ArrowLeft: 37,
+    ArrowUp: 38,
+    ArrowRight: 39,
+    ArrowDown: 40,
+    Delete: 46,
+    Meta: 91,
+    F1: 112,
+    F2: 113,
+    F3: 114,
+    F4: 115,
+    F5: 116,
+    F6: 117,
+    F7: 118,
+    F8: 119,
+    F9: 120,
+    F10: 121,
+    F11: 122,
+    F12: 123
+  };
 });
 
 // extension/src/content/scene/ops.ts
 var exports_ops = {};
 __export(exports_ops, {
-  scrollElementIntoView: () => scrollElementIntoView,
-  parseTranslate: () => parseTranslate,
-  parseScale: () => parseScale,
-  parseDocCoord: () => parseDocCoord,
-  isVisibleRect: () => isVisibleRect,
-  focusIframeTextbox: () => focusIframeTextbox,
-  findElementById: () => findElementById,
-  findAncestorScale: () => findAncestorScale,
-  dispatchKeysIn: () => dispatchKeysIn,
-  dblclickElementCenter: () => dblclickElementCenter,
-  clickElementCenter: () => clickElementCenter,
+  boundingBox: () => boundingBox,
   clickAtViewport: () => clickAtViewport,
-  boundingBox: () => boundingBox
+  clickElementCenter: () => clickElementCenter,
+  dblclickElementCenter: () => dblclickElementCenter,
+  dispatchKeysIn: () => dispatchKeysIn,
+  findAncestorScale: () => findAncestorScale,
+  findElementById: () => findElementById,
+  focusIframeTextbox: () => focusIframeTextbox,
+  isVisibleRect: () => isVisibleRect,
+  parseDocCoord: () => parseDocCoord,
+  parseScale: () => parseScale,
+  parseTranslate: () => parseTranslate,
+  scrollElementIntoView: () => scrollElementIntoView
 });
 function boundingBox(el) {
   const r = el.getBoundingClientRect();
@@ -1096,17 +1323,8 @@ window.addEventListener("beforeunload", () => {
   domObserver.disconnect();
 });
 
-// extension/src/content/sensitive.ts
-var sensitiveElements = new WeakSet;
-function markSensitive(el) {
-  sensitiveElements.add(el);
-}
-function isSensitive(el) {
-  return sensitiveElements.has(el);
-}
-var SECURE_MASK = "***SECURE***";
-
 // extension/src/content/monitor.ts
+init_sensitive();
 init_ref_registry();
 init_a11y_tree();
 var armed = false;
@@ -1225,7 +1443,7 @@ function shouldPersistBody(contentType, body) {
     return true;
   return false;
 }
-function redactSensitiveText(text) {
+function redactSensitiveText2(text) {
   return text.replace(/("?(authorization|cookie|set-cookie|access[_-]?token|refresh[_-]?token|csrf|session(id)?|jwt)"?\s*[:=]\s*"?)([^"\s,&}]+)/gi, "$1[REDACTED]").replace(/\beyJ[A-Za-z0-9._-]{20,}\b/g, "[REDACTED_JWT]");
 }
 function buildBodyPreview(contentType, body) {
@@ -1233,7 +1451,7 @@ function buildBodyPreview(contentType, body) {
     return null;
   if (!persistBodiesAlways && !shouldPersistBody(contentType, body))
     return null;
-  const redacted = redactSensitiveText(body);
+  const redacted = redactSensitiveText2(body);
   const truncated = redacted.length > netBodyCap;
   const preview = truncated ? redacted.slice(0, netBodyCap) : redacted;
   return { preview, bytes: body.length, truncated };
@@ -1709,6 +1927,7 @@ init_ref_registry();
 init_a11y_tree();
 
 // extension/src/content/state.ts
+init_sensitive();
 init_element_discovery();
 init_element_tree();
 init_ref_registry();
@@ -1738,7 +1957,7 @@ function getPageState(full = false) {
     timestamp: Date.now()
   };
   if (full) {
-    state.staticText = document.body.innerText.slice(0, 5000);
+    state.staticText = safeText(document.body, true).slice(0, 5000);
   }
   cacheSnapshot();
   return { success: true, data: state };
@@ -1750,6 +1969,7 @@ init_input_simulation();
 // extension/src/content/actions/click.ts
 init_input_simulation();
 init_ref_registry();
+init_deep_query();
 init_a11y_tree();
 async function handleClick(action) {
   const el = resolveElement(action.index, action.ref);
@@ -1771,7 +1991,7 @@ async function handleClickSelector(action) {
     return { success: false, error: "click_selector: no selector given" };
   let matches;
   try {
-    matches = document.querySelectorAll(selector);
+    matches = queryAllDeep(selector);
   } catch {
     return { success: false, error: `click_selector: invalid CSS selector ${JSON.stringify(selector)}` };
   }
@@ -1860,11 +2080,17 @@ async function handleWhatAt(action) {
 init_input_simulation();
 init_element_discovery();
 init_ref_registry();
+init_sensitive();
 async function handleInputText(action) {
   const el = resolveElement(action.index, action.ref);
   if (!el)
     return staleElementError(action, "typed");
-  if (action.sensitive === true)
+  if (el.tagName === "SELECT") {
+    if (action.sensitive === true)
+      return { success: false, error: "credential delivery requires a text field" };
+    return handleSelectOption({ ...action, value: action.text });
+  }
+  if (action.sensitive === true || isSensitive(el))
     markSensitive(el);
   el.focus();
   const text = action.text;
@@ -1918,9 +2144,35 @@ async function handleSelectOption(action) {
   const el = resolveElement(action.index, action.ref);
   if (!el)
     return staleElementError(action, "selected");
-  el.value = action.value;
+  if (el.tagName !== "SELECT")
+    return { success: false, error: "select requires a native <select>; use click/read for a custom dropdown" };
+  if (typeof action.value !== "string")
+    return { success: false, error: "select requires an option value or label" };
+  if (el.matches(":disabled") || el.getAttribute("aria-disabled") === "true")
+    return { success: false, error: "select is disabled" };
+  const options = Array.from(el.options);
+  const exact = options.find((option2) => option2.value === action.value);
+  const labels = exact ? [] : options.filter((option2) => option2.label === action.value);
+  const option = exact || (labels.length === 1 ? labels[0] : undefined);
+  if (!option)
+    return {
+      success: false,
+      error: (labels.length > 1 ? "option label is ambiguous; use its exact value" : "no matching option; use an exact value or unique label") + `. Available options: ${JSON.stringify(options.slice(0, 30).map((o) => ({ value: o.value.slice(0, 160), label: o.label.slice(0, 160) })))}${options.length > 30 ? " (first 30)" : ""}`,
+      data: { options: options.slice(0, 30).map((o) => ({ value: o.value.slice(0, 160), label: o.label.slice(0, 160), disabled: o.matches(":disabled") })), total: options.length, truncated: options.length > 30 }
+    };
+  if (option.matches(":disabled"))
+    return { success: false, error: "option or its optgroup is disabled" };
+  if (el.selectedOptions.length === 1 && el.selectedOptions[0] === option) {
+    return { success: true, data: { value: option.value, label: option.label, changed: false } };
+  }
+  el.selectedIndex = options.indexOf(option);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
-  return { success: true };
+  await Promise.resolve();
+  if (!el.isConnected || el.selectedOptions.length !== 1 || el.selectedOptions[0] !== option) {
+    return { success: false, error: "page did not retain the selected option; read the dropdown before retrying" };
+  }
+  return { success: true, data: { value: option.value, label: option.label, changed: true } };
 }
 async function handleCheck(action) {
   const el = resolveElement(action.index, action.ref);
@@ -2302,11 +2554,30 @@ async function handleHover(action) {
 init_input_simulation();
 init_ref_registry();
 init_a11y_tree();
+init_sensitive();
+init_element_discovery();
 async function handleFocus(action) {
-  const el = resolveElement(action.index, action.ref);
+  const focusedSensitive = action.focused === true && action.sensitive === true;
+  const el = focusedSensitive ? document.activeElement : resolveElement(action.index, action.ref);
   if (!el)
     return staleElementError(action, "focused");
-  el.focus();
+  if (action.sensitive === true) {
+    if (el === document.body || el === document.documentElement)
+      return { success: false, error: "no focused credential field" };
+  }
+  if (!focusedSensitive)
+    el.focus();
+  if (action.sensitive === true) {
+    let active = document.activeElement;
+    let focused = active === el;
+    while (active && getShadowRoot(active)?.activeElement) {
+      active = getShadowRoot(active).activeElement;
+      focused ||= active === el;
+    }
+    if (!focused)
+      return { success: false, error: "credential target did not receive focus; nothing typed" };
+    markSensitive(focusedSensitive ? active : el);
+  }
   return { success: true };
 }
 async function handleBlur(_action) {
@@ -2338,10 +2609,12 @@ async function handleGetFocus(_action) {
 }
 
 // extension/src/content/data/extract.ts
+init_sensitive();
 init_input_simulation();
 
 // extension/src/content/data/markdown-extract.ts
 init_element_discovery();
+init_sensitive();
 var SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD", "META", "LINK", "TITLE"]);
 var BLOCK_TAGS = new Set(["P", "DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "MAIN", "ASIDE", "NAV", "FORM", "FIELDSET", "DETAILS", "SUMMARY", "FIGURE", "FIGCAPTION", "ADDRESS", "DD", "DT", "DL"]);
 function renderMarkdown(root) {
@@ -2363,6 +2636,8 @@ function walkNode(node) {
     return "";
   if (!isVisible(el) && tag !== "BODY")
     return "";
+  if (isSensitive(el))
+    return el.textContent ? SECURE_MASK : "";
   switch (tag) {
     case "H1":
     case "H2":
@@ -2417,8 +2692,8 @@ ${content}
     }
     case "CODE": {
       if (el.closest("pre"))
-        return el.textContent || "";
-      const c = (el.textContent || "").trim();
+        return safeText(el);
+      const c = safeText(el).trim();
       return c ? `\`${c}\`` : "";
     }
     case "A": {
@@ -2454,13 +2729,15 @@ ${content}
   return out;
 }
 function inlineChildren(el) {
+  if (isSensitive(el))
+    return el.textContent ? SECURE_MASK : "";
   let out = "";
   for (const child of el.childNodes)
     out += walkNode(child);
   return out.replace(/\s+/g, " ").trim();
 }
 function renderPre(el) {
-  const code = (el.textContent || "").replace(/^\n+|\n+$/g, "");
+  const code = safeText(el).replace(/^\n+|\n+$/g, "");
   if (!code)
     return "";
   const codeEl = el.querySelector("code");
@@ -2518,6 +2795,8 @@ ${items.join(`
 function renderListItem(el, kind, index, indent) {
   const pad = "  ".repeat(indent);
   const bullet = kind === "ul" ? "-" : `${index}.`;
+  if (isSensitive(el))
+    return el.textContent ? `${pad}${bullet} ${SECURE_MASK}` : "";
   let mainLine = "";
   const nested = [];
   for (const child of el.childNodes) {
@@ -2620,10 +2899,10 @@ async function handleExtractText(action) {
       const label = String(action.ref ?? action.index ?? "unknown");
       return { success: false, error: `stale element [${label}] — run interceptor state to refresh` };
     }
-    const raw = (el.textContent || "").trim();
+    const raw = safeText(el).trim();
     return { success: true, data: withTruncationMarker(raw, Math.min(maxChars, ELEMENT_MAX_CHARS)) };
   }
-  return { success: true, data: withTruncationMarker(document.body.innerText, maxChars) };
+  return { success: true, data: withTruncationMarker(safeText(document.body, true), maxChars) };
 }
 async function handleExtractMarkdown(action) {
   const maxChars = typeof action.maxChars === "number" && action.maxChars > 0 ? action.maxChars : DEFAULT_TEXT_MAX_CHARS;
@@ -2645,22 +2924,24 @@ async function handleExtractHtml(action) {
       const label = String(action.ref ?? action.index ?? "unknown");
       return { success: false, error: `stale element [${label}] — run interceptor state to refresh` };
     }
-    return { success: true, data: withTruncationMarker(el.outerHTML, Math.min(maxChars, ELEMENT_MAX_CHARS)) };
+    return { success: true, data: withTruncationMarker(safeHtml(el), Math.min(maxChars, ELEMENT_MAX_CHARS)) };
   }
-  return { success: true, data: withTruncationMarker(document.documentElement.outerHTML, maxChars) };
+  return { success: true, data: withTruncationMarker(safeHtml(document.documentElement), maxChars) };
 }
 
 // extension/src/content/data/query.ts
+init_sensitive();
 init_input_simulation();
 init_ref_registry();
+init_deep_query();
 async function handleQuery(action) {
   const selector = action.selector;
-  const els = document.querySelectorAll(selector);
-  const elements = Array.from(els).slice(0, 20).map((el, i) => ({
+  const els = queryAllDeep(selector);
+  const elements = els.slice(0, 20).map((el, i) => ({
     index: i,
     ref: getOrAssignRef(el),
     tag: el.tagName.toLowerCase(),
-    text: (el.textContent || "").trim().slice(0, 80),
+    text: safeText(el).trim().slice(0, 80),
     id: el.id || undefined,
     classes: el.className || undefined
   }));
@@ -2675,56 +2956,57 @@ async function handleQuery(action) {
   };
 }
 async function handleQueryOne(action) {
-  const el = document.querySelector(action.selector);
+  const el = queryOneDeep(action.selector);
   if (!el)
     return { success: false, error: `no element matching: ${action.selector}` };
   return {
     success: true,
     data: {
       tag: el.tagName.toLowerCase(),
-      text: (el.textContent || "").trim().slice(0, 200),
-      html: el.outerHTML.slice(0, 500),
+      text: safeText(el).trim().slice(0, 200),
+      html: safeHtml(el).slice(0, 500),
       id: el.id || undefined,
       rect: el.getBoundingClientRect()
     }
   };
 }
 async function handleExists(action) {
-  const el = document.querySelector(action.selector);
+  const el = queryOneDeep(action.selector);
   return { success: true, data: !!el };
 }
 async function handleCount(action) {
-  const els = document.querySelectorAll(action.selector);
+  const els = queryAllDeep(action.selector);
   return { success: true, data: els.length };
 }
 async function handleTableData(action) {
-  const table = action.index !== undefined ? resolveElement(action.index, action.ref) : document.querySelector(action.selector || "table");
+  const table = action.index !== undefined ? resolveElement(action.index, action.ref) : queryOneDeep(String(action.selector || "table"));
   if (!table)
     return { success: false, error: "table not found" };
   const rows = [];
   table.querySelectorAll("tr").forEach((tr) => {
     const cells = [];
-    tr.querySelectorAll("td, th").forEach((cell) => cells.push((cell.textContent || "").trim()));
+    tr.querySelectorAll("td, th").forEach((cell) => cells.push(safeText(cell).trim()));
     rows.push(cells);
   });
   return { success: true, data: rows };
 }
 async function handleAttrGet(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   const name = action.name;
-  return { success: true, data: el.getAttribute(name) };
+  const value = el.getAttribute(name);
+  return { success: true, data: name.toLowerCase() === "value" && value && isSensitive(el) ? SECURE_MASK : value };
 }
 async function handleAttrSet(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   el.setAttribute(action.name, action.value);
   return { success: true };
 }
 async function handleStyleGet(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   const computed = getComputedStyle(el);
@@ -2739,6 +3021,7 @@ async function handleStyleGet(action) {
 }
 
 // extension/src/content/data/forms.ts
+init_sensitive();
 async function handleForms(_action) {
   const forms = document.querySelectorAll("form");
   return {
@@ -2752,7 +3035,7 @@ async function handleForms(_action) {
         tag: el.tagName.toLowerCase(),
         type: el.type,
         name: el.name,
-        value: el.value?.slice(0, 40),
+        value: safeValue(el).slice(0, 40),
         placeholder: el.placeholder
       }))
     }))
@@ -2864,7 +3147,7 @@ init_input_simulation();
 init_element_discovery();
 init_a11y_tree();
 async function handleRect(action) {
-  const el = resolveElement(action.index, action.ref) || document.querySelector(action.selector);
+  const el = resolveElementOrSelector(action);
   if (!el)
     return { success: false, error: "element not found" };
   const r = el.getBoundingClientRect();
@@ -2961,6 +3244,7 @@ async function handlePanels(_action) {
 }
 
 // extension/src/content/semantic-match.ts
+init_sensitive();
 init_ref_registry();
 init_element_discovery();
 init_a11y_tree();
@@ -2992,7 +3276,7 @@ function findBestMatch(name, role, text) {
       if (placeholder?.includes(query))
         score += 40;
       if (isTextPseudoRole) {
-        const elText = (el.textContent || "").trim().toLowerCase();
+        const elText = safeText(el).trim().toLowerCase();
         if (elText === query)
           score += 80;
         else if (elText.includes(query))
@@ -3011,13 +3295,14 @@ init_ref_registry();
 init_element_discovery();
 init_a11y_tree();
 init_input_simulation();
-function findRenderedText(renderedText, rawQuery, limit = 10, contextChars = 80) {
+init_sensitive();
+function findRenderedText(renderedText2, rawQuery, limit = 10, contextChars = 80) {
   const query = rawQuery.trim();
   const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 10;
   const matches = [];
   let total = 0;
   if (query.length > 0) {
-    const haystack = renderedText.toLowerCase();
+    const haystack = renderedText2.toLowerCase();
     const needle = query.toLowerCase();
     let from = 0;
     while (from <= haystack.length - needle.length) {
@@ -3028,14 +3313,14 @@ function findRenderedText(renderedText, rawQuery, limit = 10, contextChars = 80)
       total++;
       if (matches.length < boundedLimit) {
         const snippetStart = Math.max(0, start - contextChars);
-        const snippetEnd = Math.min(renderedText.length, end + contextChars);
+        const snippetEnd = Math.min(renderedText2.length, end + contextChars);
         const prefix = snippetStart > 0 ? "…" : "";
-        const suffix = snippetEnd < renderedText.length ? "…" : "";
+        const suffix = snippetEnd < renderedText2.length ? "…" : "";
         matches.push({
           start,
           end,
-          matchedText: renderedText.slice(start, end),
-          snippet: `${prefix}${renderedText.slice(snippetStart, snippetEnd).replace(/\s+/g, " ").trim()}${suffix}`
+          matchedText: renderedText2.slice(start, end),
+          snippet: `${prefix}${renderedText2.slice(snippetStart, snippetEnd).replace(/\s+/g, " ").trim()}${suffix}`
         });
       }
       from = end;
@@ -3045,7 +3330,7 @@ function findRenderedText(renderedText, rawQuery, limit = 10, contextChars = 80)
     total,
     returned: matches.length,
     truncated: total > matches.length,
-    scannedCharacters: renderedText.length,
+    scannedCharacters: renderedText2.length,
     scanTruncated: false,
     matches
   };
@@ -3079,7 +3364,7 @@ function findAccessibleElements(rawQuery, rawRole, limit = 10) {
       const placeholder = el.getAttribute("placeholder")?.toLowerCase();
       if (placeholder?.includes(query))
         score += 40;
-      const value = (el.value || "").toLowerCase();
+      const value = isSensitive(el) ? "" : (el.value || "").toLowerCase();
       if (value.includes(query))
         score += 30;
     }
@@ -3100,7 +3385,7 @@ async function handleFindElement(action) {
   const mode = role ? "elements" : requestedMode;
   const data = { query, mode };
   if (mode !== "elements") {
-    data.text = findRenderedText(document.body?.innerText || "", query, limit);
+    data.text = findRenderedText(document.body ? safeText(document.body, true) : "", query, limit);
   }
   if (mode !== "text") {
     data.elements = findAccessibleElements(query, role, limit);
@@ -3126,7 +3411,7 @@ async function handleFindAndType(action) {
   if (!match)
     return { success: false, error: "no matching element found (score < 30)" };
   const typeResult = await handleInputText({ type: "input_text", ref: match.refId, text: action.inputText, clear: action.clear, sensitive: action.sensitive });
-  return { success: true, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: typeResult } };
+  return { ...typeResult, data: { matched: { ref: match.refId, role: match.role, name: match.name, score: match.score }, actionResult: typeResult } };
 }
 async function handleFindAndCheck(action) {
   const match = findBestMatch(action.name, action.role, action.text);
@@ -3140,6 +3425,7 @@ async function handleFindAndCheck(action) {
 init_a11y_tree();
 init_element_discovery();
 init_ops();
+init_sensitive();
 var sceneRefRegistry = new Map;
 var sceneElementToId = new WeakMap;
 var sceneRefMeta = new Map;
@@ -3178,20 +3464,22 @@ function isHiddenProxyInput(el) {
   const role = el.getAttribute("role");
   return hiddenAttr === "true" || role === "application" && inputMode === "none";
 }
+function maskSensitiveText(el, text) {
+  return text && isSensitive(el) ? SECURE_MASK : text;
+}
 function readElementText(el) {
   if (!isHtmlElement(el))
     return "";
-  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-    return (el.value || "").toString();
-  }
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA")
+    return safeValue(el);
   if (el.isContentEditable || el.getAttribute("contenteditable") === "true") {
-    return (el.textContent || "").toString();
+    return maskSensitiveText(el, (el.textContent || "").toString());
   }
   const role = el.getAttribute("role");
   if (role === "textbox" || role === "combobox" || role === "searchbox") {
-    return (el.textContent || "").toString();
+    return maskSensitiveText(el, (el.textContent || "").toString());
   }
-  return (getAccessibleName(el) || el.getAttribute("aria-label") || el.textContent || "").toString();
+  return maskSensitiveText(el, (getAccessibleName(el) || el.getAttribute("aria-label") || el.textContent || "").toString());
 }
 function visibleOrActive(el) {
   return isVisible(el) || document.activeElement === el;
@@ -3463,10 +3751,8 @@ function readFocusedWritableText() {
   const surface = findFocusedWritableSurface();
   if (!surface)
     return null;
-  return {
-    text: surface.text,
-    length: surface.text.length
-  };
+  const text = maskSensitiveText(surface.element, surface.text);
+  return { text, length: text.length };
 }
 function setInputValue(el, text) {
   const tag = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -3541,7 +3827,7 @@ function selectedAdaptiveScene() {
       has: true,
       id,
       label: label2,
-      text: writable.text.slice(0, 200),
+      text: maskSensitiveText(writable.element, writable.text).slice(0, 200),
       extras: {
         kind: writable.kind,
         writable: true,
@@ -3760,6 +4046,7 @@ var canvaProfile = {
 
 // extension/src/content/scene/profiles/google-docs.ts
 init_ops();
+init_sensitive();
 function findTextEventTarget() {
   const iframe = document.querySelector(".docs-texteventtarget-iframe");
   if (!iframe)
@@ -3849,7 +4136,7 @@ var googleDocsProfile = {
       if (!sel || sel.rangeCount === 0)
         return { has: false };
       const range = sel.getRangeAt(0);
-      const text = range.toString();
+      const text = isSensitive(tet.textbox) && range.toString() ? SECURE_MASK : range.toString();
       return {
         has: text.length > 0,
         text: text.slice(0, 200),
@@ -3863,10 +4150,10 @@ var googleDocsProfile = {
     const tet = findTextEventTarget();
     if (!tet)
       return null;
-    const text = (tet.textbox.textContent || "").toString();
+    const text = safeText(tet.textbox);
     return {
       text,
-      html: opts?.withHtml ? tet.textbox.innerHTML : undefined,
+      html: opts?.withHtml ? safeHtml(tet.textbox) : undefined,
       length: text.length
     };
   },
@@ -3951,6 +4238,7 @@ var googleDocsProfile = {
 
 // extension/src/content/scene/profiles/google-slides.ts
 init_ops();
+init_sensitive();
 var FILMSTRIP_ID = /^filmstrip-slide-(\d+)-(gd[a-z0-9_-]+)$/i;
 function gatherSlides() {
   const all = Array.from(document.querySelectorAll('g[id^="filmstrip-slide-"]'));
@@ -4068,10 +4356,10 @@ var googleSlidesProfile = {
     if (paragraphs.length === 0) {
       const notesContainer = document.getElementById("speakernotes") || document.getElementById("speakernotes-workspace");
       if (notesContainer)
-        return (notesContainer.textContent || "").trim() || null;
+        return safeText(notesContainer).trim() || null;
       return null;
     }
-    const text = paragraphs.map((p) => (p.textContent || "").trim()).filter(Boolean).join(`
+    const text = paragraphs.map((p) => safeText(p).trim()).filter(Boolean).join(`
 `);
     return text || null;
   },
@@ -4086,7 +4374,7 @@ var googleSlidesProfile = {
       const textbox = doc.querySelector("[role=textbox]") || doc.querySelector("[contenteditable]");
       if (!textbox)
         return null;
-      const text = (textbox.textContent || "").trim();
+      const text = safeText(textbox).trim();
       return { text, length: text.length };
     } catch {
       return null;
@@ -4456,6 +4744,7 @@ async function handleCanvasAction(action) {
 
 // extension/src/content/dom-screenshot.ts
 init_input_simulation();
+init_deep_query();
 var TRANSPARENT_1PX = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==";
 var SKIP_TAGS2 = new Set(["script", "noscript", "style", "link", "meta", "template", "iframe", "object", "embed"]);
 function extractUrls(cssValue) {
@@ -4644,7 +4933,7 @@ function resolveTarget(action) {
       if (!action.selector) {
         return { node: null, error: "selector mode requires selector string" };
       }
-      const el = document.querySelector(action.selector);
+      const el = queryOneDeep(action.selector);
       if (!el)
         return { node: null, error: `selector not found: ${action.selector}` };
       if (!(el instanceof HTMLElement)) {

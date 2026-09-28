@@ -14,6 +14,7 @@ import { helpForCommand } from "../help"
 import { runIosWebCommand } from "./ios-web"
 import { runIosSvcCommand } from "./ios-svc"
 import { runIosDevCommand } from "./ios-dev"
+import { resolve } from "node:path"
 
 /** Device-service introspection subcommands, delegated to ios-svc.ts. */
 const IOS_SVC_SUBCOMMANDS = new Set(["diag", "logs", "fs", "crash", "profiles", "notify", "springboard"])
@@ -46,10 +47,110 @@ function positionalsExcept(args: string[], start: number, valueFlags: string[]):
   return out
 }
 
+/** `ios scroll [<ref> | --x N --y N] [--dir <d>]`: half a coordinate pair is an error, not a swipe from the center. */
+/** `ios keys Enter|Return|Tab` presses that key; anything else is typed literally (XCUITest typeText). */
+export function iosKeysText(text: string): string {
+  const named: Record<string, string> = { enter: "\n", return: "\n", tab: "\t" }
+  return named[text.toLowerCase()] ?? text
+}
+
+export function buildIosScrollAction(args: string[]): Action {
+  const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
+  const x = numFlag(args, "--x"), y = numFlag(args, "--y")
+  if ((args.includes("--x") || args.includes("--y")) && (x === undefined || y === undefined)) {
+    console.error("error: ios scroll needs both --x <n> and --y <n>"); process.exit(1)
+  }
+  return { type: "ios_scroll", ref, x, y, dir: flagValue(args, "--dir") ?? "down" }
+}
+
+/** `ios click [<ref> | --x N --y N]`: a ref, or a screen point with fractions kept. */
+export function buildIosClickAction(args: string[]): Action {
+  const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
+  return { type: "ios_click", ref, x: numFlag(args, "--x"), y: numFlag(args, "--y") }
+}
+
+export const MAX_IOS_DRAG_DURATION_S = 55
+
+/** `ios drag <from> <to> [--duration s]`: each end is a ref or "x,y"; the same point twice is a long press. */
+export function buildIosDragAction(args: string[]): Action {
+  const from = args[2], to = args[3]
+  if (!from || !to || from.startsWith("--") || to.startsWith("--")) {
+    console.error("error: ios drag requires <from> <to>: each a ref or an x,y coordinate"); process.exit(1)
+  }
+  // Seconds, fractional allowed: parseInt turned a 1.5 s long press into 1 s and 0.5 s into 0.
+  const raw = flagValue(args, "--duration")
+  const duration = raw === undefined ? undefined : Number(raw)
+  if (duration !== undefined && !(Number.isFinite(duration) && duration >= 0)) {
+    console.error("error: ios drag --duration takes seconds, for example 0.6 or 2"); process.exit(1)
+  }
+  // The CLI, the daemon, and the runner channel all stop waiting at 60 s. A longer hold could
+  // still land after the caller was told it timed out, so refuse it before anything is sent.
+  if (duration !== undefined && duration > MAX_IOS_DRAG_DURATION_S) {
+    console.error(`error: ios drag --duration is at most ${MAX_IOS_DRAG_DURATION_S} seconds (the gesture deadline is 60 s)`); process.exit(1)
+  }
+  return { type: "ios_drag", from, to, duration }
+}
+
+/** One finger of `ios gesture`: `x,y[@ms][>x,y@ms...]`. A single sample lifts at `--hold`. */
+export type GestureSample = { x: number; y: number; t: number }
+
+export function parseGestureFinger(spec: string, holdMs: number): GestureSample[] | { error: string } {
+  const samples: GestureSample[] = []
+  for (const part of spec.split(">")) {
+    const m = part.trim().match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:@(\d+(?:\.\d+)?))?$/)
+    if (!m) return { error: `'${part.trim()}' is not x,y or x,y@ms` }
+    if (m[3] === undefined && samples.length) return { error: `'${part.trim()}' needs a time offset (x,y@ms) after the first sample` }
+    samples.push({ x: Number(m[1]), y: Number(m[2]), t: m[3] === undefined ? 0 : Number(m[3]) })
+  }
+  if (samples.length === 1) samples.push({ ...samples[0], t: samples[0].t + holdMs })
+  return samples
+}
+
+/** `ios gesture <finger> [<finger> ...] [--hold ms]`: every positional is one finger. */
+export function buildIosGestureAction(args: string[]): Action {
+  const holdRaw = flagValue(args, "--hold")
+  const holdMs = holdRaw === undefined ? 100 : Number(holdRaw)
+  if (!(Number.isFinite(holdMs) && holdMs >= 0)) { console.error("error: ios gesture --hold takes milliseconds, for example 600"); process.exit(1) }
+  const specs = positionalsExcept(args, 2, ["--hold", "--on", "--context"])
+  if (!specs.length) {
+    console.error('error: ios gesture requires at least one finger, e.g. ios gesture "380,700@0>380,700@600" "120,650@100>120,650@300"'); process.exit(1)
+  }
+  if (specs.length > 10) { console.error("error: ios gesture takes at most 10 fingers"); process.exit(1) }
+  const fingers: GestureSample[][] = []
+  for (const spec of specs) {
+    const finger = parseGestureFinger(spec, holdMs)
+    if ("error" in finger) { console.error(`error: ios gesture: ${finger.error}`); process.exit(1) }
+    fingers.push(finger)
+  }
+  return { type: "ios_gesture", fingers }
+}
+
+/** `ios stream start|stop|status [--fps N] [--scale S] [--quality Q] [--out <path>]`. */
+export function buildIosStreamAction(args: string[], cwd = process.cwd()): Action {
+  const op = args[2] && !args[2].startsWith("--") ? args[2] : undefined
+  if (!op || !["start", "stop", "status"].includes(op)) { console.error("error: ios stream requires start|stop|status"); process.exit(1) }
+  const action: Action = { type: "ios_stream", op }
+  if (op !== "start") return action
+  const ranges: Array<[string, number, number]> = [["--fps", 1, 30], ["--scale", 0.1, 1], ["--quality", 0.05, 1]]
+  for (const [flag, lo, hi] of ranges) {
+    if (!hasFlag(args, flag)) continue
+    const n = Number(flagValue(args, flag))
+    if (!(Number.isFinite(n) && n >= lo && n <= hi)) { console.error(`error: ios stream ${flag} must be ${lo} to ${hi}`); process.exit(1) }
+    action[flag.slice(2)] = n
+  }
+  if (hasFlag(args, "--out")) {
+    const out = flagValue(args, "--out")
+    if (!out) { console.error("error: ios stream --out requires a path"); process.exit(1) }
+    action.out = resolve(cwd, out)
+  }
+  return action
+}
+
+/** A numeric flag with fractions kept: Vision boxes give fractional points, and parseInt turned 10.7 into 10. */
 function numFlag(args: string[], flag: string): number | undefined {
   const v = flagValue(args, flag)
-  if (v === undefined) return undefined
-  const n = parseInt(v, 10)
+  if (v === undefined || v.trim() === "") return undefined
+  const n = Number(v)
   return Number.isFinite(n) ? n : undefined
 }
 
@@ -126,12 +227,21 @@ Drive a phone (add --on <name>, or it uses your only phone):
   inspect <ref>                              element details
   click   <ref> | --x N --y N                tap
   type    <ref> "text" | --secret <name>     focus + type (a vault secret by name never shows the value)
-  keys    "text" | --secret <name>           type into the focused field
+  keys    "text"|Enter|Tab | --secret <name>  type into the focused field; Enter/Return/Tab press that key
   unlock  --secret <name> | --probe          lock screen: wake, swipe up, type the passcode (runner must be resident)
-  scroll  [<ref>] --dir up|down|left|right   scroll
-  drag    <from> <to>                        drag between elements
+  scroll  [<ref> | --x N --y N] [--dir up|down|left|right]
+                                             swipe from a ref, a point, or (bare) the screen center; --dir defaults to down
+  drag    <from> <to> [--duration s]         each end is a ref or x,y (120,330); the same point twice is a long press
   press   home|lock|volume-up|volume-down    hardware button
-  screenshot                                 capture the screen
+  screenshot                                 capture the screen (one JPEG, VLM-budget resized)
+  stream  start|stop|status [--fps N] [--scale S] [--quality Q] [--out <path>]
+                                             the runner pushes JPEG frames continuously (default 10 fps, half size, quality 0.3);
+                                             --out is rewritten atomically with every frame, so a loop just reads that file
+  frame   [--out <path>]                     save the newest streamed frame (no device round trip)
+  gesture <finger> [<finger>...] [--hold ms] multi-touch: each finger is x,y[@ms][>x,y@ms...]; a lone x,y presses at 0 and
+                                             lifts at --hold (default 100). "380,700@0>380,700@600" "120,650@100>120,650@300"
+                                             holds a pedal 600 ms while an arrow is tapped from 100 to 300 ms. Hold over 500 ms
+                                             or UIKit reads a tap. Same screen points as click and drag.
   apps                                       installed apps
   app     launch|activate|terminate <id>     app lifecycle
   eval    "<js>" | --file <f.js>              run a JS program in the on-device brain (Interceptor.tree/tap/type/sleep/log/foreground)
@@ -355,11 +465,7 @@ export async function runIosCommand(
     }
 
     case "click": {
-      const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
-      emitExit(await send({
-        type: "ios_click", ref,
-        x: numFlag(args, "--x"), y: numFlag(args, "--y"),
-      }, contextId), jsonMode)
+      emitExit(await send(buildIosClickAction(args), contextId), jsonMode)
       return
     }
 
@@ -392,7 +498,7 @@ export async function runIosCommand(
       }
       const text = args[2]
       if (!text || text.startsWith("--")) { console.error("error: ios keys requires text"); process.exit(1) }
-      emitExit(await send({ type: "ios_keys", text, bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
+      emitExit(await send({ type: "ios_keys", text: iosKeysText(text), bundleId: flagValue(args, "--bundle") }, contextId), jsonMode)
       return
     }
 
@@ -412,16 +518,12 @@ export async function runIosCommand(
     }
 
     case "scroll": {
-      const ref = args[2] && !args[2].startsWith("--") ? args[2] : undefined
-      emitExit(await send({ type: "ios_scroll", ref, dir: flagValue(args, "--dir") ?? "down" }, contextId), jsonMode)
+      emitExit(await send(buildIosScrollAction(args), contextId), jsonMode)
       return
     }
 
     case "drag": {
-      const from = args[2]
-      const to = args[3]
-      if (!from || !to || from.startsWith("--") || to.startsWith("--")) { console.error("error: ios drag requires <from> <to> refs"); process.exit(1) }
-      emitExit(await send({ type: "ios_drag", from, to, duration: numFlag(args, "--duration") }, contextId), jsonMode)
+      emitExit(await send(buildIosDragAction(args), contextId), jsonMode)
       return
     }
 
@@ -432,8 +534,34 @@ export async function runIosCommand(
       return
     }
 
+    case "gesture": {
+      emitExit(await send(buildIosGestureAction(args), contextId), jsonMode)
+      return
+    }
+
+    case "stream": {
+      emitExit(await send(buildIosStreamAction(args), contextId), jsonMode)
+      return
+    }
+
+    case "frame": {
+      // Written by the daemon (it holds the bytes); the path is resolved here so a
+      // relative --out means the caller's directory, not the daemon's.
+      const out = resolve(process.cwd(), flagValue(args, "--out") ?? `interceptor-ios-frame-${Date.now()}.jpg`)
+      if (hasFlag(args, "--out") && !flagValue(args, "--out")) { console.error("error: ios frame --out requires a path"); process.exit(1) }
+      const result = await send({ type: "ios_frame", out }, contextId)
+      if (result.success && result.data && typeof result.data === "object" && !jsonMode) {
+        const d = result.data as { path?: string; seq?: number; ageMs?: number; width?: number; height?: number; running?: boolean }
+        console.log(`saved: ${d.path} (frame ${d.seq}, ${d.ageMs} ms old, ${d.width}x${d.height}${d.running ? "" : ", stream stopped"})`)
+        return
+      }
+      emitExit(result, jsonMode)
+      return
+    }
+
     case "screenshot": {
-      const result = await send({ type: "ios_screenshot", targetMaxLongEdge: numFlag(args, "--target-max-long-edge") }, contextId)
+      const edge = numFlag(args, "--target-max-long-edge")   // pixels: sips wants a whole number
+      const result = await send({ type: "ios_screenshot", targetMaxLongEdge: edge === undefined ? undefined : Math.trunc(edge) }, contextId)
       if (result.success && result.data && typeof result.data === "object") {
         const d = result.data as { dataUrl?: string; format?: string }
         if (d.dataUrl) {

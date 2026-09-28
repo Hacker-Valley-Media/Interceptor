@@ -21,6 +21,18 @@ enum Platform {
     static let bridgePidPath = runtimeDir + "/interceptor-bridge.pid"
     static let bridgeLogPath = runtimeDir + "/interceptor-bridge.log"
     static let bridgeEventsPath = runtimeDir + "/interceptor-bridge-events.jsonl"
+
+    // The daemon's WebSocket port is per OS user: uid 501 keeps 19222, uid 504
+    // gets 19228, root 20220 (shared/platform.ts derivePorts is the source of
+    // truth; the runtime agent and the Safari appex carry the same line).
+    static func wsPort(uid: uid_t) -> Int {
+        let slot = ((Int(uid) - 501) % 500 + 500) % 500
+        return 19222 + 2 * slot
+    }
+    static let wsPort: Int = {
+        if let raw = ProcessInfo.processInfo.environment["INTERCEPTOR_WS_PORT"], let port = Int(raw) { return port }
+        return wsPort(uid: getuid())
+    }()
     static let maxEventFileSize = 10 * 1024 * 1024
 
     // Monitor-session artifacts. The directory mirrors the browser's
@@ -32,7 +44,7 @@ enum Platform {
         if let override = ProcessInfo.processInfo.environment["INTERCEPTOR_MONITOR_SESSIONS_DIR"], !override.isEmpty {
             return override
         }
-        return "/tmp/interceptor-monitor-sessions"
+        return runtimeDir + "/interceptor-monitor-sessions"
     }
 
     static func sessionDir(_ sid: String) -> String {

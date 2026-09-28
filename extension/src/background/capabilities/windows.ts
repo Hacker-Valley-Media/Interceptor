@@ -72,7 +72,11 @@ export async function handleWindowActions(
             left: action.left as number | undefined,
             top: action.top as number | undefined,
             incognito: !!action.incognito,
-            focused: action.focused !== false,
+            // Background-first like tab_create: only an explicit `--activate`
+            // (action.focused === true) takes the user's focus. Chromium's own
+            // default is focused (tabs_api.cc WindowsCreateFunction), so the
+            // flag has to be sent either way.
+            focused: action.focused === true,
           })
         )
         if (!win) return { success: false, error: "window creation returned no window" }

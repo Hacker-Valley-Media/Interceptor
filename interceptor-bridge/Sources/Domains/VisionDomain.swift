@@ -37,6 +37,15 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func acquireImage(action: [String: Any], completion: @escaping @Sendable (CGImage?) -> Void) {
+        // File source: run Vision over a saved image (e.g. an iOS screenshot)
+        // instead of capturing a live macOS window. EXIF orientation is applied
+        // so iPhone captures read upright. When imagePath is set, app/window
+        // capture is skipped entirely.
+        if let imagePath = action["imagePath"] as? String {
+            completion(Self.loadImage(atPath: imagePath))
+            return
+        }
+
         let appName = action["app"] as? String
 
         if let streamFrame = StreamDomain.shared?.latestFrame(for: appName) {
@@ -122,10 +131,53 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
+    /// Why `acquireImage` produced nothing. ImageIO only returns nil, so a file
+    /// source works out the reason here; a capture keeps its original text.
+    static func imageFailureMessage(imagePath: String?) -> String {
+        guard let imagePath else { return "failed to capture screen" }
+        do {
+            _ = try URL(fileURLWithPath: imagePath).checkResourceIsReachable()
+        } catch {
+            return "cannot read image file \(imagePath): \(error.localizedDescription)"
+        }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: imagePath, isDirectory: &isDirectory), isDirectory.boolValue {
+            return "not an image file (it is a directory): \(imagePath)"
+        }
+        if !FileManager.default.isReadableFile(atPath: imagePath) {
+            return "cannot read image file \(imagePath): permission denied"
+        }
+        return "not an image file (ImageIO could not decode it): \(imagePath)"
+    }
+
+    /// Decode an image file and apply its EXIF orientation. nil when the file
+    /// is unreachable or is not an image.
+    static func loadImage(atPath imagePath: String) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: imagePath) as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return orientedCGImage(source: source, image: image)
+    }
+
+    /// Apply a file's EXIF orientation to a decoded CGImage so iPhone
+    /// screenshots (whose pixel data is landscape with an orientation tag)
+    /// read upright before Vision runs over them.
+    static func orientedCGImage(source: CGImageSource, image: CGImage) -> CGImage? {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let rawOrientation = props[kCGImagePropertyOrientation] as? UInt32,
+              let orientation = CGImagePropertyOrientation(rawValue: rawOrientation),
+              orientation != .up else {
+            return image
+        }
+        let ciImage = CIImage(cgImage: image).oriented(orientation)
+        let context = CIContext()
+        return context.createCGImage(ciImage, from: ciImage.extent) ?? image
+    }
+
     private func detectFaces(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let imagePath = action["imagePath"] as? String
         acquireImage(action: action) { image in
             guard let image = image else {
-                completion(WireFormat.error("failed to capture screen"))
+                completion(WireFormat.error(Self.imageFailureMessage(imagePath: imagePath)))
                 return
             }
             let request = VNDetectFaceRectanglesRequest()
@@ -152,9 +204,10 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
     private func recognizeText(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         // Capture sendable scalars before entering the @Sendable closure.
         let debugDumpPath = action["debugDumpPath"] as? String
+        let imagePath = action["imagePath"] as? String
         acquireImage(action: action) { image in
             guard let image = image else {
-                completion(WireFormat.error("failed to capture screen"))
+                completion(WireFormat.error(Self.imageFailureMessage(imagePath: imagePath)))
                 return
             }
             // PRD-63 Spec 2 diagnostic: dump the captured image so we can
@@ -204,9 +257,10 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func detectHands(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let imagePath = action["imagePath"] as? String
         acquireImage(action: action) { image in
             guard let image = image else {
-                completion(WireFormat.error("failed to capture screen"))
+                completion(WireFormat.error(Self.imageFailureMessage(imagePath: imagePath)))
                 return
             }
             let request = VNDetectHumanHandPoseRequest()
@@ -232,9 +286,10 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func detectBodies(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let imagePath = action["imagePath"] as? String
         acquireImage(action: action) { image in
             guard let image = image else {
-                completion(WireFormat.error("failed to capture screen"))
+                completion(WireFormat.error(Self.imageFailureMessage(imagePath: imagePath)))
                 return
             }
             let request = VNDetectHumanBodyPoseRequest()
@@ -258,9 +313,10 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func classifyImage(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let imagePath = action["imagePath"] as? String
         acquireImage(action: action) { image in
             guard let image = image else {
-                completion(WireFormat.error("failed to capture screen"))
+                completion(WireFormat.error(Self.imageFailureMessage(imagePath: imagePath)))
                 return
             }
             let request = VNClassifyImageRequest()
@@ -279,9 +335,10 @@ final class VisionDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func detectSaliency(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let imagePath = action["imagePath"] as? String
         acquireImage(action: action) { image in
             guard let image = image else {
-                completion(WireFormat.error("failed to capture screen"))
+                completion(WireFormat.error(Self.imageFailureMessage(imagePath: imagePath)))
                 return
             }
             let request = VNGenerateAttentionBasedSaliencyImageRequest()

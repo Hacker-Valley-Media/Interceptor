@@ -141,12 +141,13 @@ const COMPOUND_BOOL = ["--activate", "--append", "--full", "--include-frames", "
 const STATE_BOOL = ["--elements-only", "--full", "--include-frames", "--markdown", "--native", "--text-only"]
 const ACTIONS_BOOL = ["--append", "--dropzone", "--picker", "--trusted", "--os", "--user"]
 const TABS_BOOL = ["--incognito"]
-const TAB_BOOL = ["--activate", "--no-reuse", "--reuse"]
+const TAB_BOOL = ["--activate", "--no-reuse", "--off", "--reuse"]
+const WINDOW_BOOL = ["--activate", "--incognito"]
 const NET_BOOL = ["--from-start", "--persist", "--reload", "--redact-auth"]
 const SCREENSHOT_BOOL = ["--background", "--full", "--image", "--no-fallback", "--pixel", "--save", "--webgl"]
 const DATA_BOOL = ["--session"]
 const META_BOOL = ["--author", "--explain", "--tail", "--top-only", "--verbose"]
-const EVAL_BOOL = ["--main"]
+const EVAL_BOOL = ["--main", "--no-reload"]
 const SAVE_BOOL = ["--isolated", "--main"]
 const BATCH_BOOL = ["--stop-on-error"]
 const MONITOR_BOOL = ["--force-diagnostic", "--from-start", "--include-synthetic", "--no-regenerate", "--plan", "--raw", "--reload", "--snapshot-sources", "--stop-sources", "--with-bodies"]
@@ -163,13 +164,13 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   hover: ACTIONS_BOOL, drag: ACTIONS_BOOL, dblclick: ACTIONS_BOOL, rightclick: ACTIONS_BOOL,
   check: ACTIONS_BOOL, keys: ACTIONS_BOOL, "click-at": ACTIONS_BOOL, "what-at": ACTIONS_BOOL, regions: ACTIONS_BOOL,
   navigate: [], back: [], forward: [], scroll: [], wait: [], "wait-stable": [], wait_for: [],
-  tabs: TABS_BOOL, tab: TAB_BOOL, window: TABS_BOOL, frames: [], session: [],
+  tabs: TABS_BOOL, tab: TAB_BOOL, window: WINDOW_BOOL, frames: [], session: [],
   network: NET_BOOL, net: NET_BOOL, headers: NET_BOOL,
   screenshot: SCREENSHOT_BOOL, canvas: SCREENSHOT_BOOL, capture: SCREENSHOT_BOOL, ocr: SCREENSHOT_BOOL,
   cookies: DATA_BOOL, storage: DATA_BOOL, history: DATA_BOOL, bookmarks: DATA_BOOL, downloads: DATA_BOOL, clear: DATA_BOOL, clipboard: DATA_BOOL,
   status: META_BOOL, reload: META_BOOL, meta: META_BOOL, links: META_BOOL, images: META_BOOL, forms: META_BOOL,
   info: META_BOOL, page_info: META_BOOL, query: META_BOOL, exists: META_BOOL, count: META_BOOL, table: META_BOOL,
-  attr: META_BOOL, style: META_BOOL, events: META_BOOL, notify: META_BOOL, sessions: META_BOOL,
+  attr: META_BOOL, style: META_BOOL, events: META_BOOL, notify: META_BOOL, sessions: [...META_BOOL, "--activate"],
   capabilities: META_BOOL, modals: META_BOOL, panels: META_BOOL,
   eval: EVAL_BOOL, save: SAVE_BOOL, brand: [], group: [], batch: BATCH_BOOL, raw: BATCH_BOOL,
   monitor: MONITOR_BOOL, scene: SCENE_BOOL, sse: [], override: [],
@@ -268,10 +269,13 @@ export function normalizeArgsSplit(filtered: string[]): NormalizedArgs {
     positionals.push(tok)
   }
 
-  if (cmd === "tab" && positionals[0] !== "new") {
-    const unsupported = TAB_BOOL.find((flag) => flags.includes(flag))
+  if (cmd === "tab") {
+    // Per-subverb: `tab new` takes the create flags, `tab keepalive` takes
+    // --off, the rest take none.
+    const allowed = positionals[0] === "new" ? TAB_BOOL.filter((flag) => flag !== "--off") : positionals[0] === "keepalive" ? ["--off"] : []
+    const unsupported = TAB_BOOL.find((flag) => flags.includes(flag) && !allowed.includes(flag))
     if (unsupported) {
-      throw new Error(`flag '${unsupported}' is only valid with 'tab new'.`)
+      throw new Error(`flag '${unsupported}' is only valid with 'tab ${unsupported === "--off" ? "keepalive" : "new"}'.`)
     }
   }
 

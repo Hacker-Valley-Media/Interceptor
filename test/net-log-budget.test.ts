@@ -95,3 +95,15 @@ describe("timeout hint picks the honest branch (#161)", () => {
     expect(isGenericBrowserAction("daemon_shutdown")).toBe(false)
   })
 })
+
+describe("timeout hint names the lane that went quiet", () => {
+  test("ios_web_* points at the web-inspector session, not the runner", async () => {
+    const { timeoutMessage } = await import("../cli/transport")
+    const web = timeoutMessage("ios_web_read", 20_000)
+    expect(web).toContain("web-inspector session")
+    expect(web).toContain("ios web targets")
+    expect(web).not.toContain("InterceptorRunner")
+    expect(timeoutMessage("ios_click", 60_000)).toContain("InterceptorRunner")
+    expect(timeoutMessage("ios_click", 60_000)).toContain("ios refresh")
+  })
+})

@@ -1,3 +1,4 @@
+import { safeText } from "./sensitive"
 import { setDomDirty } from "./dom-observer"
 import { getInteractiveElements } from "./element-discovery"
 import { buildElementTree } from "./element-tree"
@@ -32,7 +33,7 @@ export function getPageState(full = false) {
   }
 
   if (full) {
-    state.staticText = document.body.innerText.slice(0, 5000)
+    state.staticText = safeText(document.body, true).slice(0, 5000)
   }
 
   cacheSnapshot()

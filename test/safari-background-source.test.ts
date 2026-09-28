@@ -41,7 +41,8 @@ describe("Safari background bootstrap guardrails", () => {
   })
 
   test("native appex owns the daemon WebSocket for Safari Path B", () => {
-    expect(safariNativeHandler).toContain('URL(string: "ws://127.0.0.1:19222")')
+    expect(safariNativeHandler).toContain('URL(string: "ws://127.0.0.1:\\(19222 + 2 * slot)")')
+    expect(safariNativeHandler).toContain("getuid()")
     expect(safariNativeHandler).toContain('"type": "extension", "contextId": contextId')
     expect(safariNativeHandler).toContain('"interceptor_safari_relay"')
   })
@@ -54,7 +55,7 @@ describe("Safari background bootstrap guardrails", () => {
   })
 
   test("Safari extension CSP explicitly permits the daemon WebSocket", () => {
-    expect(buildScript).toContain("connect-src ws://localhost:19222 ws://127.0.0.1:19222")
+    expect(buildScript).toContain("connect-src ws://127.0.0.1:* ws://localhost:*")
   })
 
   test("unnotarized Safari packages cannot masquerade as release artifacts", () => {

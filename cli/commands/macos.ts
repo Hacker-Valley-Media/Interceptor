@@ -6,6 +6,7 @@
  */
 
 import { existsSync } from "node:fs"
+import { resolve } from "node:path"
 import { bridgePidPathForDetection, bridgeSocketPathForDetection } from "../../shared/bridge-paths"
 import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
 import {
@@ -640,10 +641,21 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     // ── Vision ──
     case "vision": {
       const op = filtered[2] || "text"
+      const app = flagVal(filtered, "--app")
+      const image = flagVal(filtered, "--image")
+      // A dropped --image would recognize whatever window is frontmost and report success.
+      if (filtered.includes("--image") && (!image || image.startsWith("--"))) {
+        console.error("error: interceptor macos vision --image requires a path to an image file"); process.exit(1)
+      }
+      if (image && app) {
+        console.error("error: interceptor macos vision takes --image <path> or --app <name>, not both"); process.exit(1)
+      }
       const action: Action = {
         type: "macos_vision",
         sub: op,
-        app: flagVal(filtered, "--app"),
+        app,
+        // The bridge's working directory is "/", so a relative path means the caller's.
+        imagePath: image ? resolve(image) : undefined,
       }
       // diagnostic: dump the captured image to disk so the operator
       // can see what Vision actually fed VNRecognizeTextRequest. Off by

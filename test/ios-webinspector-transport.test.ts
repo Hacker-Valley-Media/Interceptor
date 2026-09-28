@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeWirFrame, tryReadWirFrame, WirFrameError,
+  encodeWirFrame, encodeWirEmptyFrame, tryReadWirFrame, WirFrameError,
   buildSocketSetupArgument, parseApplicationListing, parseConnectedApplicationList,
   wirTypeToTargetType, WebInspectorTransport, WIR_KEY, WIR_INCOMING, WIR_SELECTOR,
   type DuplexBytes,
@@ -168,5 +168,31 @@ describe("WebInspectorTransport dispatch", () => {
     d.feed(encodeWirFrame({ notASelector: 1 }))
     expect(errored).toBe(true)
     expect(closed).toBe(true)
+  })
+})
+
+describe("WIR empty-frame prompt (webinspectord large-message stall)", () => {
+  test("every outbound frame is followed by a 4-byte zero-length frame", () => {
+    const d = fakeDuplex()
+    const t = new WebInspectorTransport(d.chan, "C1")
+    t.reportIdentifier()
+    t.forwardSocketData("PID:1", 1, "S", Buffer.from("x".repeat(12_000)))
+    expect(d.writes).toHaveLength(4)
+    expect(sentFrame(d.writes[0]).selector).toBe(WIR_SELECTOR.reportIdentifier)
+    expect(d.writes[1].equals(encodeWirEmptyFrame())).toBe(true)
+    expect(sentFrame(d.writes[2]).selector).toBe(WIR_SELECTOR.forwardSocketData)
+    expect(d.writes[3].equals(Buffer.alloc(4))).toBe(true)
+    expect(d.writes[3].readUInt32BE(0)).toBe(0)
+  })
+
+  test("an inbound zero-length frame between two real frames is ignored, not a protocol error", () => {
+    const d = fakeDuplex()
+    const chunks: Buffer[] = []
+    let errored = false
+    new WebInspectorTransport(d.chan, "C1", { onSocketData: (data) => chunks.push(data), onError: () => { errored = true } })
+    const frame = (s: string) => encodeWirFrame({ __selector: WIR_INCOMING.applicationSentData, __argument: { [WIR_KEY.messageData]: Buffer.from(s) } })
+    d.feed(Buffer.concat([frame("a"), encodeWirEmptyFrame(), frame("b")]))
+    expect(errored).toBe(false)
+    expect(chunks.map((c) => c.toString())).toEqual(["a", "b"])
   })
 })

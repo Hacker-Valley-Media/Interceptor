@@ -160,10 +160,35 @@ if (hasTabGroups) {
 
   statusEl.parentElement?.insertBefore(wrap, statusEl)
 
-  void chrome.storage.local.get("brandTabGroup").then((stored) => {
-    const b = (stored as { brandTabGroup?: { title?: unknown; color?: unknown } }).brandTabGroup
+  // A managed policy outranks this popup (managed > local), so show what is in
+  // force and lock the controls instead of saving a value that would lose.
+  const managedGet = (key: string): Promise<Record<string, unknown> | undefined> => {
+    const area = (chrome.storage as unknown as { managed?: chrome.storage.StorageArea }).managed
+    if (!area) return Promise.resolve(undefined)
+    return area.get(key).then((v) => {
+      const raw = (v as Record<string, unknown>)[key]
+      return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined
+    }).catch(() => undefined)
+  }
+  const lockAsManaged = (container: HTMLElement, controls: Array<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>) => {
+    for (const el of controls) {
+      el.disabled = true
+      // The Save buttons carry an inline background, so a disabled one still looks live.
+      el.style.opacity = "0.45"
+      el.style.cursor = "not-allowed"
+    }
+    const note = document.createElement("div")
+    note.className = "managedNote"
+    note.style.cssText = "margin-top:4px;font-size:11px;color:#b25000;line-height:1.35;"
+    note.textContent = "Managed by your organization. Changes here have no effect."
+    container.appendChild(note)
+  }
+
+  void Promise.all([chrome.storage.local.get("brandTabGroup"), managedGet("brandTabGroup")]).then(([stored, managed]) => {
+    const b = managed ?? (stored as { brandTabGroup?: { title?: unknown; color?: unknown } }).brandTabGroup
     if (b && typeof b.title === "string") titleInput.value = b.title
     if (b && typeof b.color === "string" && COLORS.includes(b.color)) colorSelect.value = b.color
+    if (managed) lockAsManaged(wrap, [titleInput, colorSelect, brandSave])
   })
 
   brandSave.addEventListener("click", async () => {
@@ -176,7 +201,7 @@ if (hasTabGroups) {
   // --- tab lifecycle policy ---
   // This popup is the ONLY writer for the `tabLifecycle` key. Same dynamic-injection
   // gating as the brand block above: no tabGroups API (MV2 Electron) → no controls.
-  const DEFAULT_LIFECYCLE = { reuse: true, idleCloseMinutes: 10 }
+  const DEFAULT_LIFECYCLE = { reuse: true, idleCloseMinutes: 10, closeGroupWhenDone: false }
 
   const lcWrap = document.createElement("div")
   lcWrap.style.marginTop = "14px"
@@ -210,6 +235,25 @@ if (hasTabGroups) {
   idleRow.appendChild(document.createTextNode("min (0 = never)"))
   lcWrap.appendChild(idleRow)
 
+  // Full-purge toggle. Off by default: it deliberately drops every guard the
+  // ordinary sweep applies, so it is the user's call, never an implied one.
+  const purgeRow = document.createElement("label")
+  purgeRow.style.cssText = "display:flex;align-items:flex-start;gap:6px;font-weight:400;margin-top:6px;"
+  const purgeCheck = document.createElement("input")
+  purgeCheck.id = "lcPurge"
+  purgeCheck.type = "checkbox"
+  purgeCheck.style.cssText = "width:auto;margin-top:2px;"
+  purgeCheck.checked = DEFAULT_LIFECYCLE.closeGroupWhenDone
+  purgeRow.appendChild(purgeCheck)
+  purgeRow.appendChild(document.createTextNode("Delete the whole group when idle"))
+  lcWrap.appendChild(purgeRow)
+
+  const purgeHint = document.createElement("div")
+  purgeHint.style.cssText = "margin-top:4px;font-size:11px;color:#888;line-height:1.35;"
+  purgeHint.textContent =
+    "Closes every tab in an idle Interceptor group, including tabs with unsaved form input and a window's last tab, so the group disappears from the tab strip. Waits while you are looking at one of its tabs or one is playing sound. Needs an idle window above 0."
+  lcWrap.appendChild(purgeHint)
+
   const lcRow = document.createElement("div")
   lcRow.className = "row"
   const lcSave = document.createElement("button")
@@ -221,18 +265,30 @@ if (hasTabGroups) {
 
   statusEl.parentElement?.insertBefore(lcWrap, statusEl)
 
-  void chrome.storage.local.get("tabLifecycle").then((stored) => {
-    const lc = (stored as { tabLifecycle?: { reuse?: unknown; idleCloseMinutes?: unknown } }).tabLifecycle
+  void Promise.all([chrome.storage.local.get("tabLifecycle"), managedGet("tabLifecycle")]).then(([stored, managed]) => {
+    const lc: { reuse?: unknown; idleCloseMinutes?: unknown; closeGroupWhenDone?: unknown } | undefined =
+      managed ?? (stored as { tabLifecycle?: Record<string, unknown> }).tabLifecycle
     if (lc && typeof lc.reuse === "boolean") reuseCheck.checked = lc.reuse
     if (lc && typeof lc.idleCloseMinutes === "number" && Number.isFinite(lc.idleCloseMinutes)) {
       idleInput.value = String(Math.max(0, Math.round(lc.idleCloseMinutes)))
     }
+    if (lc && typeof lc.closeGroupWhenDone === "boolean") purgeCheck.checked = lc.closeGroupWhenDone
+    if (managed) lockAsManaged(lcWrap, [reuseCheck, idleInput, purgeCheck, lcSave])
   })
 
   lcSave.addEventListener("click", async () => {
     const idle = Math.max(0, Math.round(Number(idleInput.value)))
     if (!Number.isFinite(idle)) { showStatus("Idle minutes must be a number."); return }
-    await chrome.storage.local.set({ tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle } })
-    showStatus("Tab lifecycle saved.")
+    // Idle is the only "done" signal the extension has, so a 0 idle window with
+    // the purge on would save a setting that can never fire. Refuse loudly
+    // instead of storing a dead toggle.
+    if (purgeCheck.checked && idle === 0) {
+      showStatus("Set an idle window above 0 to delete groups.", 3000)
+      return
+    }
+    await chrome.storage.local.set({
+      tabLifecycle: { reuse: reuseCheck.checked, idleCloseMinutes: idle, closeGroupWhenDone: purgeCheck.checked },
+    })
+    showStatus(purgeCheck.checked ? `Saved. Groups are deleted after ${idle}m idle.` : "Tab lifecycle saved.")
   })
 }

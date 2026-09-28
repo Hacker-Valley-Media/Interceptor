@@ -111,6 +111,8 @@ build_extension() {
   bun build extension/src/offscreen.ts --outfile=extension/dist/offscreen.js --target=browser
   bun build extension/src/popup.ts --outfile=extension/dist/popup.js --target=browser --format=iife
   cp extension/manifest.json extension/dist/
+  # The manifest names this file; a missing or invalid schema stops Chrome from loading the extension.
+  cp extension/managed-schema.json extension/dist/
   cp extension/offscreen.html extension/dist/
   cp extension/popup.html extension/dist/
   rm -rf extension/dist/icons
@@ -219,7 +221,7 @@ const manifest = {
   // loopback endpoints explicit for diagnostic/fallback probes. The selected
   // production path is the containing appex native relay.
   content_security_policy: {
-    extension_pages: "script-src '"'"'self'"'"'; object-src '"'"'self'"'"'; connect-src ws://localhost:19222 ws://127.0.0.1:19222"
+    extension_pages: "script-src '"'"'self'"'"'; object-src '"'"'self'"'"'; connect-src ws://127.0.0.1:* ws://localhost:*"
   },
   action: {
     default_title: "Interceptor",

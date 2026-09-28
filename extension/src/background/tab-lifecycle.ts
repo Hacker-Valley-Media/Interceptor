@@ -1,8 +1,9 @@
 /**
  * extension/src/background/tab-lifecycle.ts — runtime tab lifecycle policy.
  *
- * Two knobs, resolved at RUNTIME from chrome.storage key "tabLifecycle" with precedence
- * `managed` > `local` > built-in default `{ reuse: true, idleCloseMinutes: 10 }`,
+ * Three knobs, resolved at RUNTIME from chrome.storage key "tabLifecycle" with precedence
+ * `managed` > `local` > built-in default
+ * `{ reuse: true, idleCloseMinutes: 10, closeGroupWhenDone: false }`,
  * mirroring the brand-tab-group.ts pattern. The popup is the only writer.
  *
  *   reuse            `open --group <label>` navigates that group's most-recent tab
@@ -12,6 +13,22 @@
  *   idleCloseMinutes Close a managed group with no tab activity for N minutes.
  *                    0 = off. Swept via a 1-minute chrome.alarms tick (30s-floor
  *                    alarms need Chrome 120; manifest floor is 116).
+ *   closeGroupWhenDone
+ *                    Opt-in. Turns the guarded sweep into a FULL PURGE: when a
+ *                    managed group goes idle, every tab in it is removed and the
+ *                    group disappears from the tab strip: no last-tab or dirty-form
+ *                    exceptions, and an active tab goes too unless a person is on it
+ *                    (a pinned tab is never in a group: Chrome ungroups it when it is
+ *                    pinned, so G3 has nothing to guard). It exists because the guarded
+ *                    sweep routinely leaves a group standing forever: an agent that
+ *                    typed into any form makes its tab permanently "dirty" (and an
+ *                    all-dirty pass re-stamps the idle clock), and the last tab of
+ *                    a dedicated Interceptor window is never closed. Off by default;
+ *                    requires idleCloseMinutes > 0 (idle is the only "done" signal
+ *                    the extension has: the CLI is one process per command).
+ *                    "Idle" means no CLI command, not no person, so the purge WAITS
+ *                    (no re-stamp, re-checked next tick) while the group holds the
+ *                    OS-focused window's active tab or an audible tab.
  *
  * This module is module-load SIDE-EFFECT-FREE. It is transitively bundled into the MV2
  * `background-electron.js` (via capabilities/tabs.ts), so it must NOT touch `chrome.*`
@@ -19,12 +36,16 @@
  * accessors, and registerTabLifecycle() is called ONLY from the MV3 background.ts entry.
  */
 
-import { hasTabGroupApi, ensureInterceptorGroup, hydrateNamedGroups, namedGroups } from "./tab-group"
+import { hasTabGroupApi, ensureInterceptorGroup, hydrateNamedGroups, namedGroups, readoptNamedGroups } from "./tab-group"
 
-export type TabLifecycle = { reuse: boolean; idleCloseMinutes: number }
+export type TabLifecycle = { reuse: boolean; idleCloseMinutes: number; closeGroupWhenDone: boolean }
 export type TabLifecycleSource = "managed" | "local" | "default"
 
-export const DEFAULT_TAB_LIFECYCLE: TabLifecycle = { reuse: true, idleCloseMinutes: 10 }
+export const DEFAULT_TAB_LIFECYCLE: TabLifecycle = {
+  reuse: true,
+  idleCloseMinutes: 10,
+  closeGroupWhenDone: false,
+}
 
 const STORAGE_KEY = "tabLifecycle"
 const SWEEP_ALARM = "tabLifecycleSweep"
@@ -37,13 +58,18 @@ const GROUP_LAST_SEEN_PREFIX = "groupLastSeen:"
 
 /** Validate/clamp a raw stored value into a complete policy. Never throws. */
 export function normalizeTabLifecycle(raw: unknown): TabLifecycle {
-  const obj = raw && typeof raw === "object" ? (raw as { reuse?: unknown; idleCloseMinutes?: unknown }) : {}
+  const obj = raw && typeof raw === "object"
+    ? (raw as { reuse?: unknown; idleCloseMinutes?: unknown; closeGroupWhenDone?: unknown })
+    : {}
   const reuse = typeof obj.reuse === "boolean" ? obj.reuse : DEFAULT_TAB_LIFECYCLE.reuse
   let idle = DEFAULT_TAB_LIFECYCLE.idleCloseMinutes
   if (typeof obj.idleCloseMinutes === "number" && Number.isFinite(obj.idleCloseMinutes)) {
     idle = Math.max(0, Math.round(obj.idleCloseMinutes))
   }
-  return { reuse, idleCloseMinutes: idle }
+  const closeGroupWhenDone = typeof obj.closeGroupWhenDone === "boolean"
+    ? obj.closeGroupWhenDone
+    : DEFAULT_TAB_LIFECYCLE.closeGroupWhenDone
+  return { reuse, idleCloseMinutes: idle, closeGroupWhenDone }
 }
 
 /**
@@ -103,6 +129,17 @@ export function recordGroupActivity(label: string | undefined): void {
   } catch {}
 }
 
+/**
+ * Drop a group's liveness stamp. Called after a full purge: the group no longer
+ * exists, so a leftover stamp would only make the next group minted under the
+ * same label look instantly idle (its grace-stamp branch never runs).
+ */
+export async function clearGroupActivity(label: string | undefined): Promise<void> {
+  try {
+    await sessionArea().remove(stampKey(label ?? ""))
+  } catch {}
+}
+
 // --- sweep decision (pure — unit-testable without Chrome) --------------------
 
 export type SweepTab = {
@@ -153,6 +190,38 @@ export function selectSweepCandidates(tabs: SweepTab[], ctx: SweepContext): numb
     for (const t of removable) out.push(t.id)
   }
   return out
+}
+
+/**
+ * Full-purge plan for `closeGroupWhenDone`: every tab in the idle group goes.
+ * The last-tab and dirty-form guards are deliberately absent: an opt-in "delete
+ * the group when the session is done" that still spares those tabs does not
+ * delete the group, which is the complaint this option answers.
+ *
+ * The one thing it will not do is take the browser down with the group.
+ * `chrome.tabs.remove` of a window's last tab closes that window, and on
+ * Windows/Linux closing the last window quits the browser (taking the service
+ * worker, the daemon connection, and every other agent lane with it). So when
+ * the purge would close every tab in the profile's NORMAL windows (groups only
+ * live there; popup/app/DevTools tabs are not a usable browser window), a blank
+ * survivor tab is created first, ungrouped, so the group still disappears.
+ *
+ * And it waits for a person. The idle stamp only sees CLI commands, so someone
+ * who took over an agent tab (login, captcha, watching a render, listening to a
+ * result) looks idle. `deferred` is true while the group holds the active tab of
+ * the OS-focused window or an audible tab; the caller skips the group WITHOUT
+ * re-stamping, so it is deleted on the first tick where neither holds. Unknown
+ * focus (browser not frontmost: the overnight-run case) does not defer.
+ */
+export function planGroupPurge(
+  tabs: SweepTab[],
+  remainingNormalTabs: number,
+  focusedWindowId: number | null = null
+): { closeIds: number[]; needsSurvivorTab: boolean; deferred: boolean } {
+  const deferred = tabs.some((t) =>
+    t.audible || (t.active && focusedWindowId !== null && t.windowId === focusedWindowId))
+  const closeIds = deferred ? [] : tabs.map((t) => t.id)
+  return { closeIds, needsSurvivorTab: closeIds.length > 0 && closeIds.length >= remainingNormalTabs, deferred }
 }
 
 // --- G9: dirty-form guard -----------------------------------------------------
@@ -256,12 +325,16 @@ export async function runTabLifecycleSweep(now = Date.now()): Promise<void> {
   const { policy } = await resolveTabLifecycle()
   if (policy.idleCloseMinutes <= 0) return
   const cutoffMs = policy.idleCloseMinutes * 60_000
+  const purge = policy.closeGroupWhenDone === true
 
   // Candidate groups: the default brand group ("") + every registered named group.
   await hydrateNamedGroups()
   const groups: Array<{ label: string; groupId: number }> = []
   const defaultGid = await ensureInterceptorGroup()
   if (defaultGid !== -1) groups.push({ label: "", groupId: defaultGid })
+  // A group that changed id (moved to another window, re-created by the
+  // browser's own restore) is otherwise invisible here until `group list` runs.
+  await readoptNamedGroups()
   for (const [label, gid] of namedGroups) groups.push({ label, groupId: gid })
   if (groups.length === 0) return
 
@@ -307,22 +380,51 @@ export async function runTabLifecycleSweep(now = Date.now()): Promise<void> {
         pinned: t.pinned === true,
         audible: t.audible === true,
       }))
-    let closeIds = selectSweepCandidates(sweepTabs, { focusedWindowId, windowTabCounts })
+    let closeIds: number[]
+    if (purge) {
+      // Re-read the profile tab count per purge: an earlier group in this same
+      // tick may already have closed tabs, and a stale-high count is exactly the
+      // case where the survivor tab would be skipped and the browser could quit.
+      // An unreadable count is treated as 0 for the same reason: assume the purge
+      // empties the profile and mint the survivor.
+      const remaining = await chrome.tabs.query({ windowType: "normal" }).then((t) => t.length).catch(() => 0)
+      const plan = planGroupPurge(sweepTabs, remaining, focusedWindowId)
+      if (plan.deferred) {
+        console.log(`tab-lifecycle purge: '${label || "(default)"}' is in use (focused or playing sound), re-checking next tick`)
+        continue
+      }
+      closeIds = plan.closeIds
+      if (plan.needsSurvivorTab) {
+        try {
+          // In the group's own window, so that window is the one that survives.
+          await chrome.tabs.create({ windowId: sweepTabs[0]?.windowId, active: false })
+        } catch (err) {
+          console.warn("tab-lifecycle purge: survivor tab failed, skipping group to keep the browser alive:", err)
+          continue
+        }
+      }
+    } else {
+      closeIds = selectSweepCandidates(sweepTabs, { focusedWindowId, windowTabCounts })
+    }
     if (closeIds.length === 0) continue
 
     // G9: tabs.remove bypasses beforeunload (T5-proven), so screen for unsaved
-    // user state ourselves and keep any dirty tab.
-    const dirtyChecks = await Promise.all(closeIds.map(async (id) => ({ id, dirty: await isTabDirty(id) })))
-    const keptDirty = dirtyChecks.filter((c) => c.dirty).map((c) => c.id)
-    closeIds = dirtyChecks.filter((c) => !c.dirty).map((c) => c.id)
-    if (keptDirty.length > 0) {
-      console.log(`tab-lifecycle sweep: keeping ${keptDirty.length} dirty tab(s) in '${label || "(default)"}':`, keptDirty)
-    }
-    if (closeIds.length === 0) {
-      // Everything idle-eligible is dirty — re-stamp so the group isn't re-scanned
-      // every tick, and leave it for the agent's own `group close`.
-      recordGroupActivity(label)
-      continue
+    // user state ourselves and keep any dirty tab. Skipped under purge — the
+    // whole point of that mode is that nothing in the group survives, and the
+    // check's timeout-is-dirty bias would veto the purge on a wedged page.
+    if (!purge) {
+      const dirtyChecks = await Promise.all(closeIds.map(async (id) => ({ id, dirty: await isTabDirty(id) })))
+      const keptDirty = dirtyChecks.filter((c) => c.dirty).map((c) => c.id)
+      closeIds = dirtyChecks.filter((c) => !c.dirty).map((c) => c.id)
+      if (keptDirty.length > 0) {
+        console.log(`tab-lifecycle sweep: keeping ${keptDirty.length} dirty tab(s) in '${label || "(default)"}':`, keptDirty)
+      }
+      if (closeIds.length === 0) {
+        // Everything idle-eligible is dirty — re-stamp so the group isn't re-scanned
+        // every tick, and leave it for the agent's own `group close`.
+        recordGroupActivity(label)
+        continue
+      }
     }
 
     const closedUrls = groupTabs
@@ -335,12 +437,15 @@ export async function runTabLifecycleSweep(now = Date.now()): Promise<void> {
       continue
     }
     // Survivors (guard-vetoed tabs) get a fresh idle window rather than a
-    // re-attack on every subsequent tick. A fully swept group's stamp is moot —
-    // the group is gone and tabGroups.onRemoved purges its registry entry.
-    recordGroupActivity(label)
+    // re-attack on every subsequent tick. A purged group has no survivors, so
+    // its stamp is dropped instead — tabGroups.onRemoved purges the registry
+    // entry, and a fresh group under the same label starts from a grace stamp.
+    if (purge) await clearGroupActivity(label)
+    else recordGroupActivity(label)
     const summary = {
       at: new Date(now).toISOString(),
       group: label || "(default)",
+      mode: purge ? "purge" : "guarded",
       idleMinutes: Math.round(idleMs / 60_000),
       closed: closeIds.length,
       kept: sweepTabs.length - closeIds.length,

@@ -5,6 +5,7 @@ import { recoverPendingRequestsAfterNativeDisconnect } from "./pending-request-r
 import { INITIAL_RECONNECT_DELAY_MS, delayWithJitter, nextReconnectDelay } from "./reconnect-lifecycle"
 import { clearContextConflictBadge, registrationControlType, setContextConflictBadge } from "./context-registration"
 import { SafariNativeRelayClient, type SafariNativeRelayRuntime } from "./safari-native-relay"
+import { adoptWsPort, onWsPortChange, restoreWsPort, wsEndpoint } from "./ws-endpoint"
 
 type ActiveTransport = "none" | "native" | "websocket" | "safari-native"
 export type HostDeliveryResult = "sent" | "queued" | "failed"
@@ -36,7 +37,11 @@ let wsKeepAliveTimer: ReturnType<typeof setInterval> | null = null
 let keepalivePongTimer: ReturnType<typeof setTimeout> | null = null
 let pendingHandshakePort: chrome.runtime.Port | null = null
 let lastNativeActivityAt = 0
-const WS_URL = "ws://localhost:19222"
+// A pong that names a different port (this user is not the primary account)
+// moves the WebSocket lane there; the socket dialed on the default port is
+// closed so the reconnect lands on this user's daemon.
+onWsPortChange(() => { if (wsChannel) closeWsForReconnect(wsChannel) })
+restoreWsPort()
 let configuredContextId: string | null = null
 let forceWebSocketTransport = false
 let WebSocketImpl = globalThis.WebSocket
@@ -399,6 +404,7 @@ export function connectToHost(): void {
   }) => {
     if (msg.type === "pong") {
       lastNativeActivityAt = Date.now()
+      adoptWsPort((msg as { wsPort?: unknown }).wsPort)
       if (pendingHandshakePort === port) {
         clearTimeout(handshakeTimer)
         pendingHandshakePort = null
@@ -650,7 +656,7 @@ export function connectWsChannel(): void {
   }
   if (wsChannel && (wsChannel.readyState === WebSocketImpl.OPEN || wsChannel.readyState === WebSocketImpl.CONNECTING)) return
   try {
-    const ws = new WebSocketImpl(WS_URL)
+    const ws = new WebSocketImpl(wsEndpoint())
     wsChannel = ws
     ws.onopen = async () => {
       if (wsChannel !== ws) {

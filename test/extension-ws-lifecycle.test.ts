@@ -94,7 +94,7 @@ describe("extension websocket lifecycle", () => {
     connectWsChannel()
 
     expect(FakeWebSocket.instances).toHaveLength(1)
-    expect(FakeWebSocket.instances[0].url).toBe("ws://localhost:19222")
+    expect(FakeWebSocket.instances[0].url).toBe("ws://127.0.0.1:19222")
     expect(FakeWebSocket.instances[0].sent).toEqual([])
 
     FakeWebSocket.instances[0].readyState = FakeWebSocket.OPEN

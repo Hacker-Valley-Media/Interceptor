@@ -25,6 +25,7 @@ import { handlePassiveNetActions, restorePageCommCaptureConfig } from "./capabil
 import { handleCdpNetworkActions } from "./capabilities/cdp-network-actions"
 import { handleMonitorActions, registerMonitorListeners } from "./capabilities/monitor"
 import { handlePowerIdleActions } from "./keepawake"
+import { registerKeepaliveListeners } from "./tab-keepalive"
 
 // Keep this module import-safe. `transport.ts` imports the message dispatcher,
 // which imports this router, so any top-level browser API call here runs before
@@ -35,6 +36,7 @@ import { handlePowerIdleActions } from "./keepawake"
 export function initializeActionRouter(): void {
   registerMonitorListeners()
   restorePageCommCaptureConfig()
+  registerKeepaliveListeners()
 }
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number; warning?: string }
@@ -53,7 +55,7 @@ const CANVAS_ACTIONS = new Set([
   "canvas_ocr"
 ])
 const TAB_ACTIONS = new Set([
-  "tab_create", "tab_close", "tab_switch", "tab_list", "tab_duplicate",
+  "tab_create", "tab_close", "tab_switch", "tab_keepalive", "tab_list", "tab_duplicate",
   "tab_reload", "tab_mute", "tab_pin", "tab_zoom_get", "tab_zoom_set",
   "tab_group", "tab_ungroup", "tab_move", "tab_discard",
   "group_list", "group_close"

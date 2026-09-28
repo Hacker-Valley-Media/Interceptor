@@ -213,8 +213,13 @@ export function parseActionsCommand(filtered: string[], positionalCount?: number
       return { type: "rightclick", ...parseElementTarget(filtered[1]), ...parseAt(filtered) }
     }
 
-    case "check":
-      return { type: "check", ...parseElementTarget(filtered[1]), checked: filtered[2] !== "false" }
+    case "check": {
+      const target = parseElementTarget(filtered[1])
+      const checked = filtered[2] !== "false"
+      // A role:name target resolves in the page, the way click and type already do.
+      if (target.semantic) return { type: "find_and_check", name: target.semantic.name, role: target.semantic.role, checked }
+      return { type: "check", ...target, checked }
+    }
 
     case "keys": {
       if (hasTrustedFlag(filtered)) {

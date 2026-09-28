@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "properties": {
+    "tabLifecycle": {
+      "title": "Tab lifecycle policy",
+      "description": "How Interceptor reuses and closes the tabs it manages. Overrides the setting in the extension popup.",
+      "type": "object",
+      "properties": {
+        "reuse": {
+          "title": "Reuse tabs in named groups",
+          "type": "boolean"
+        },
+        "idleCloseMinutes": {
+          "title": "Close idle Interceptor groups after this many minutes (0 = never)",
+          "type": "integer",
+          "minimum": 0
+        },
+        "closeGroupWhenDone": {
+          "title": "Delete the whole group when idle",
+          "type": "boolean"
+        }
+      }
+    },
+    "brandTabGroup": {
+      "title": "Tab group label",
+      "description": "Title and color of the tab groups Interceptor creates. Overrides the setting in the extension popup.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string",
+          "enum": ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]
+        }
+      }
+    }
+  }
+}

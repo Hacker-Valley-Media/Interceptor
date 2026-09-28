@@ -17,6 +17,13 @@ describe("sessions restore parsing", () => {
     expect(action).toMatchObject({ type: "session_restore", sessionId: "12345" })
   })
 
+  test("restore is background by default; --activate asks for the browser's own restore", async () => {
+    const plain = await parseMetaCommand(["sessions", "restore", "12345"])
+    expect(plain).toEqual({ type: "session_restore", sessionId: "12345" })
+    const front = await parseMetaCommand(["sessions", "restore", "--activate", "12345"])
+    expect(front).toEqual({ type: "session_restore", sessionId: "12345", active: true })
+  })
+
   test("sessions list skips flags when reading maxResults", async () => {
     const action = await parseMetaCommand(["sessions", "--json"])
     expect(action).toMatchObject({ type: "session_list", maxResults: 10 })

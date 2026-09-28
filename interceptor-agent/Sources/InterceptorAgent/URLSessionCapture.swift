@@ -45,7 +45,7 @@ final class URLSessionCapture: NSObject, @unchecked Sendable {
         if let s = url.scheme?.lowercased(), s == "ws" || s == "wss" { return true }
         let host = url.host ?? ""
         if host == "127.0.0.1" || host == "::1" || host == "localhost" {
-            let wsPort = ProcessInfo.processInfo.environment["INTERCEPTOR_WS_PORT"] ?? "19222"
+            let wsPort = interceptorWsPort()
             if String(url.port ?? -1) == wsPort { return true }
         }
         return false

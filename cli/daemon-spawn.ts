@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { IS_WIN, SOCKET_PATH, PID_PATH, LOCK_PATH, LOG_PATH, WS_PORT } from "../shared/platform"
-import { decideDaemonRecovery, probeDaemonHealth } from "../shared/daemon-health"
+import { decideDaemonRecovery, pidOwnership, probeDaemonHealth } from "../shared/daemon-health"
 import { readLockFile } from "../daemon/lifecycle"
 import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 export const MACOS_PKG_DAEMON_PATH = "/Library/Application Support/Interceptor/interceptor-daemon"
@@ -127,7 +127,8 @@ export async function ensureDaemon(): Promise<void> {
   // a free port; an owner that answered but still left the files unready is
   // reported by decideDaemonRecovery.
   const probe = await probeDaemonHealth(WS_PORT)
-  const recovery = decideDaemonRecovery(probe, readRuntimeReadiness().ready, WS_PORT, LOG_PATH)
+  const pidOwner = probe.state === "interceptor" ? pidOwnership(probe.pid) : "own"
+  const recovery = decideDaemonRecovery(probe, readRuntimeReadiness().ready, WS_PORT, LOG_PATH, pidOwner)
   if (recovery.action === "connect") return
   if (recovery.action === "fail") {
     console.error(`error: ${recovery.message}`)

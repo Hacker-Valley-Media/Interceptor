@@ -81,10 +81,13 @@ describe("daemon ↔ CLI integration", () => {
     expect(win.transportLabel).toBe(`tcp:127.0.0.1:${IPC_PORT}`)
     expect(win.pidPath).toContain("interceptor.pid")
 
-    const mac = resolvePlatformConfig("darwin")
+    // Per-user runtime files: the temp dir is the account's own, never /tmp.
+    const noKill = () => { throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }) }
+    const mac = resolvePlatformConfig("darwin", undefined, { env: { TMPDIR: "/var/folders/t/T" }, uid: 501, kill: noKill })
     expect(mac.isWin).toBe(false)
-    expect(mac.socketPath).toBe("/tmp/interceptor.sock")
-    expect(mac.transportLabel).toBe("unix:/tmp/interceptor.sock")
-    expect(mac.pidPath).toBe("/tmp/interceptor.pid")
+    expect(mac.socketPath).toBe("/var/folders/t/T/interceptor.sock")
+    expect(mac.transportLabel).toBe("unix:/var/folders/t/T/interceptor.sock")
+    expect(mac.pidPath).toBe("/var/folders/t/T/interceptor.pid")
+    expect(mac.wsPort).toBe(19222)
   })
 })

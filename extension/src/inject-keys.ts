@@ -40,6 +40,10 @@ export const IK_SINK_TT_POLICY = "z9t1";
 export const IK_CANVAS_OBSERVER = "z9o0";
 export const IK_CANVAS_WRAPPED = "z9r0";
 export const IK_GETCTX_WRAPPED = "z9r1";
+// Render keep-alive state object: `tab keepalive <id>` flips it from
+// the background via executeScript, so the string crosses the serialisation
+// boundary and the symbol is re-derived in the page.
+export const IK_KEEPALIVE = "z9v0";
 
 // Symbols for the files that can `import` (inject-net.ts, inject-canvas.ts).
 export const K_NET = Symbol.for(IK_NET);
@@ -51,6 +55,7 @@ export const K_TT_POLICY = Symbol.for(IK_TT_POLICY);
 export const K_CANVAS_OBSERVER = Symbol.for(IK_CANVAS_OBSERVER);
 export const K_CANVAS_WRAPPED = Symbol.for(IK_CANVAS_WRAPPED);
 export const K_GETCTX_WRAPPED = Symbol.for(IK_GETCTX_WRAPPED);
+export const K_KEEPALIVE = Symbol.for(IK_KEEPALIVE);
 
 // Unbranded Trusted-Types policy names. Policy names are observable via CSP
 // violation reports, so keep them non-attributable too.

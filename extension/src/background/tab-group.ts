@@ -143,6 +143,27 @@ export async function ensureNamedGroup(label: string): Promise<number> {
   return -1
 }
 
+/**
+ * Re-register named groups the registry lost. A group moved to another window,
+ * re-created by the browser's own restore, or restored after a restart comes
+ * back under a new id, and tabGroups.onRemoved already dropped the old entry.
+ * Exact match on the brand-composed `<brand>-<label>` title.
+ */
+// ponytail: current brand prefix only; a pre-rebrand title is re-adopted on the next brand change
+export async function readoptNamedGroups(live?: chrome.tabGroups.TabGroup[]): Promise<void> {
+  if (!hasTabGroupApi()) return
+  await hydrateNamedGroups()
+  const groups = live ?? await chrome.tabGroups.query({}).catch(() => []) // windowless profile → no groups (issue #162)
+  const prefix = groupTitleFor("")
+  for (const g of groups) {
+    if (typeof g.title !== "string" || !g.title.startsWith(prefix)) continue
+    const label = g.title.slice(prefix.length)
+    if (GROUP_LABEL_RE.test(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
+      await ensureNamedGroup(label)
+    }
+  }
+}
+
 export function addTabToNamedGroup(
   tabId: number,
   label: string,

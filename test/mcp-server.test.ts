@@ -47,6 +47,27 @@ describe("buildServer", () => {
     }
   })
 
+
+  test("iOS verb menu covers the runner stream and multi-touch verbs", async () => {
+    const script = `
+      import assert from "node:assert/strict";
+      import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+      import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+      import { buildServer } from ${JSON.stringify(resolve("cli/mcp/server.ts"))};
+      const server = buildServer();
+      const client = new Client({ name: "menu", version: "1" });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a); await client.connect(b);
+      const ios = (await client.listTools()).tools.find((t) => t.name === "interceptor_ios");
+      const verbs = ios.inputSchema.properties.verb.enum;
+      for (const v of ["stream", "frame", "gesture", "screenshot", "click", "drag"]) assert.ok(verbs.includes(v), v);
+      await client.close(); await server.close();
+    `
+    const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, INTERCEPTOR_MCP_ALLOW: "" }, stdout: "pipe", stderr: "pipe" })
+    const code = await child.exited
+    expect(code, await new Response(child.stderr).text()).toBe(0)
+  })
+
   test("browser verb menu is non-empty (enum source of truth)", () => {
     expect(COMMAND_SPECS.filter(c => c.surface === "browser").length).toBeGreaterThan(20)
   })

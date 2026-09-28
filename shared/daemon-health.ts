@@ -91,6 +91,20 @@ export async function probeDaemonHealth(wsPort: number, timeoutMs = 1500): Promi
   return { state: "foreign", detail: `HTTP ${raw.status} ${body.slice(0, 60).replace(/\s+/g, " ")}` }
 }
 
+// Whether the port owner is a process this account may signal. `kill(pid, 0)`
+// throws EPERM for another user's process: on a Mac with two logged-in
+// accounts and a daemon from before per-user ports, that is the whole story,
+// and no amount of file healing can help. ESRCH means the pid is gone.
+export type PidOwner = "own" | "foreign" | "gone"
+export function pidOwnership(pid: number, kill: (pid: number, signal: 0) => void = process.kill): PidOwner {
+  try {
+    kill(pid, 0)
+    return "own"
+  } catch (err) {
+    return (err as { code?: string }).code === "EPERM" ? "foreign" : "gone"
+  }
+}
+
 export type DaemonRecovery =
   | { action: "connect" }
   | { action: "spawn" }
@@ -98,12 +112,18 @@ export type DaemonRecovery =
 
 // CLI side. `readyAfterProbe` is the runtime-file readiness re-read after the
 // probe, because a successful probe is what heals the files.
-export function decideDaemonRecovery(probe: DaemonProbe, readyAfterProbe: boolean, wsPort: number, logPath: string): DaemonRecovery {
+export function decideDaemonRecovery(probe: DaemonProbe, readyAfterProbe: boolean, wsPort: number, logPath: string, pidOwner: PidOwner = "own"): DaemonRecovery {
   if (readyAfterProbe) return { action: "connect" }
   switch (probe.state) {
     case "free":
       return { action: "spawn" }
     case "interceptor":
+      if (pidOwner === "foreign") {
+        return {
+          action: "fail",
+          message: `daemon pid ${probe.pid} (${probe.version}) holds port ${wsPort} but belongs to another user, so this account cannot use it. Log that user out, or reinstall Interceptor (the installer stops every account's daemon), then retry.`,
+        }
+      }
       return {
         action: "fail",
         message: `daemon pid ${probe.pid} (${probe.version}) holds port ${wsPort} but could not restore its runtime files. Check ${logPath}, or run 'interceptor daemon stop' and retry.`,

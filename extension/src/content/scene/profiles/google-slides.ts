@@ -1,5 +1,6 @@
 import type { SceneProfile, SceneObject, SceneSelection, SceneSlideInfo, SceneRenderResult, SceneResolvedTarget } from "../types"
 import { boundingBox, clickAtViewport } from "../ops"
+import { safeText } from "../../sensitive"
 
 const FILMSTRIP_ID = /^filmstrip-slide-(\d+)-(gd[a-z0-9_-]+)$/i
 
@@ -128,10 +129,10 @@ export const googleSlidesProfile: SceneProfile = {
     const paragraphs = Array.from(document.querySelectorAll('[id^="speakernotes-i"][id*="paragraph"]'))
     if (paragraphs.length === 0) {
       const notesContainer = document.getElementById("speakernotes") || document.getElementById("speakernotes-workspace")
-      if (notesContainer) return (notesContainer.textContent || "").trim() || null
+      if (notesContainer) return safeText(notesContainer).trim() || null
       return null
     }
-    const text = paragraphs.map((p) => (p.textContent || "").trim()).filter(Boolean).join("\n")
+    const text = paragraphs.map((p) => safeText(p).trim()).filter(Boolean).join("\n")
     void slideIndex
     return text || null
   },
@@ -144,7 +145,7 @@ export const googleSlidesProfile: SceneProfile = {
       if (!doc) return null
       const textbox = doc.querySelector<HTMLElement>('[role=textbox]') || doc.querySelector<HTMLElement>('[contenteditable]')
       if (!textbox) return null
-      const text = (textbox.textContent || "").trim()
+      const text = safeText(textbox).trim()
       return { text, length: text.length }
     } catch {
       return null

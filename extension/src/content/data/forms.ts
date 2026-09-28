@@ -1,3 +1,4 @@
+import { safeValue } from "../sensitive"
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
 
@@ -13,7 +14,7 @@ export async function handleForms(_action: Action): Promise<ActionResult> {
         tag: el.tagName.toLowerCase(),
         type: (el as HTMLInputElement).type,
         name: (el as HTMLInputElement).name,
-        value: (el as HTMLInputElement).value?.slice(0, 40),
+        value: safeValue(el).slice(0, 40),
         placeholder: (el as HTMLInputElement).placeholder
       }))
     }))
