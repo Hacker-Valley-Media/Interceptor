@@ -19,9 +19,19 @@
  * needing live validation.
  */
 
+import { spawnSync } from "node:child_process"
 import { CdpConnection } from "./connection"
 import { pollForEndpoint } from "./discovery"
 import { DEFAULT_NODE_INSPECT_PORT } from "../../shared/cdp-app"
+
+/** The process listening on a local TCP port, or undefined when free or unknown (no lsof). */
+export function inspectPortHolder(port: number): { pid: number; name: string } | undefined {
+  const r = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf-8" })
+  const pid = parseInt((r.stdout ?? "").trim().split("\n")[0] ?? "", 10)
+  if (!Number.isFinite(pid)) return undefined
+  const name = spawnSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf-8" }).stdout?.trim().split("/").pop() || "unknown"
+  return { pid, name }
+}
 
 export type BootstrapResult = {
   success: boolean
@@ -32,6 +42,8 @@ export type BootstrapResult = {
   fuseLikelyOff?: boolean
   /** True when loadExtension was rejected for an off-the-record / temporary session. */
   otrSession?: boolean
+  /** True when another process holds the inspector port; nothing was signaled. */
+  portBusy?: boolean
 }
 
 function buildLoadExtensionExpression(extPath: string): string {
@@ -90,11 +102,24 @@ export async function bootstrapLoadExtension(opts: {
     return { success: false, error: "SIGUSR1 inspector bootstrap is not available on Windows; use the CDP fallback (macos cdp connect)" }
   }
 
-  // 1. Send SIGUSR1 to start the inspector.
-  try {
-    process.kill(opts.pid, "SIGUSR1")
-  } catch (err) {
-    return { success: false, error: `failed to signal pid ${opts.pid}: ${(err as Error).message}` }
+  // 1. Send SIGUSR1 to start the inspector — unless another process already
+  // holds the port: the app's inspector cannot bind it, and the poll below would
+  // answer for that process (seen with a Chromium browser on 9229).
+  const holder = inspectPortHolder(inspectPort)
+  if (holder && holder.pid !== opts.pid) {
+    return {
+      success: false,
+      portBusy: true,
+      error: `inspector port ${inspectPort} is held by ${holder.name} (pid ${holder.pid}), so the app's inspector cannot start there; SIGUSR1 was not sent. ` +
+        `Relaunch the app with its inspector on a free port (open -g -a "<App>" --args --inspect=<port>) and pass --inspect-port <port>, or free port ${inspectPort}.`,
+    }
+  }
+  if (!holder) {
+    try {
+      process.kill(opts.pid, "SIGUSR1")
+    } catch (err) {
+      return { success: false, error: `failed to signal pid ${opts.pid}: ${(err as Error).message}` }
+    }
   }
 
   // 2. Wait for the inspector endpoint.

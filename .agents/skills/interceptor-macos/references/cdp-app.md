@@ -74,7 +74,26 @@ surface; use `eval` with `document.querySelector(...)` or `screenshot` instead:
 `drag`. They return a clear pointer rather than failing silently. (Full ref
 parity arrives with the MV2/injected-serializer Path 0.)
 
+## Verb support on Path 0 (`app:` contexts)
+
+The resident extension runs in Electron's extension host, which offers a small,
+callback-only part of the Chrome extension API. Works: `tabs`, `read`, `tree`,
+`text`, `find`, `click`, `type`, `keys`, `scroll`. The app's windows are the
+"tabs"; the first window is the default target, `--tab <id>` picks another.
+Not available (the error names Path A): `eval`, `save`, `screenshot`, `net`, `sse`,
+`override`, tab groups, `tab new`/`tab close`. Use `macos cdp connect` for those.
+
 ## Gotchas (from live testing)
+
+- Old Electron can crash on any runtime extension load. One Electron 18.3 app
+  on macOS 27 died 2 to 9 s after `session.loadExtension`, with an empty
+  extension too: a null-pointer fault inside Electron Framework. Path 0 cannot
+  avoid that; use Path A for such an app. An Electron 27.3 app attached and
+  read cleanly.
+- `macos cdp app attach` refuses when another process holds the inspector port
+  (default 9229) and sends no signal. Quit the app, relaunch it with
+  `open -g -a "<App>" --args --inspect=<free port>`, then attach with
+  `--inspect-port <free port>`.
 
 - `macos cdp launch` waits for the app to fully quit before relaunching (a bare
   `open --args` races and silently drops the flag).

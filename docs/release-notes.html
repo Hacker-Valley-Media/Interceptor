@@ -26,6 +26,20 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.21">
+    <h2>Interceptor 1.0.21</h2>
+    <time datetime="2026-09-28">September 28, 2026</time>
+    <ul>
+      <li>Pages that check whether <code>fetch</code> is still the browser's own function now pass that check with Interceptor installed. Upwork's signed-in pages no longer stall on a Loading screen in a background tab, and <code>net log</code> keeps capturing their fetch requests. Thanks to MerryEcho for tracking down the cause in #275.</li>
+      <li><code>interceptor override</code> can now change the response: <code>--status</code>, <code>--body</code>, and <code>--content-type</code> answer a matching fetch or XHR without sending it, and <code>--delay</code> holds the real request. <code>key=value</code> still rewrites query parameters, and <code>status=500</code> now prints a note pointing to <code>--status 500</code>.</li>
+      <li><code>net log</code>, <code>net headers</code>, and <code>sse log</code> include requests made inside iframes. Failed and aborted requests are listed with status 0 and the error.</li>
+      <li><code>--since</code> on <code>net log</code>, <code>net page-comm log</code>, and <code>network log</code> takes a duration such as <code>30s</code> or <code>5m</code>, or an epoch-millisecond timestamp. A bare number like <code>30</code> is refused.</li>
+      <li><code>sse tail</code> waits for a stream to start, prints it through its final chunk, and exits 1 if none starts before <code>--timeout</code>.</li>
+      <li><code>macos cdp app attach</code> refuses, without signaling the app, when another process holds the inspector port, and says how to relaunch on a free port. On attached Electron apps <code>tabs</code>, <code>read</code>, <code>text</code>, <code>find</code>, and <code>click</code> now work; <code>eval</code>, <code>screenshot</code>, and <code>net</code> say to use <code>macos cdp connect</code>.</li>
+      <li><code>macos cdp launch</code> now stops only the app's own process before relaunching it. It used to match the app's path anywhere in a command line, which could end an unrelated shell or script.</li>
+      <li><code>contexts --verbose</code> and <code>diagnose</code> show the Safari extension's version.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="1.0.19">
     <h2>Interceptor 1.0.19</h2>
     <time datetime="2026-09-26">September 26, 2026</time>

@@ -83,32 +83,40 @@ interceptor inspect --filter api
 Passive network (preferred over CDP):
 
 ```bash
-interceptor net log [--filter <p>] [--since 30s] [--limit 100]
+interceptor net log [--filter <p>] [--since 30s] [--limit 100]   # --since: 500ms|30s|5m|2h|1d back from now, or an epoch-ms timestamp
 interceptor net log --format json|har|pcapng [--out <path>] [--redact-auth]   # file is 0600; headers kept unless --redact-auth
 interceptor net headers [--filter <p>]
 interceptor net clear
 ```
 
-Overrides (declarativeNetRequest — no debugger banner):
+Overrides (page-level fetch/XHR wrapper, no debugger banner). `key=value` rewrites
+query parameters; the flags change the response:
 
 ```bash
-interceptor override "*api/search*" status=500
-interceptor override "*api/search*" delay=1000
-interceptor override "*api/search*" status=200 body='{"results":[]}'
+interceptor override "*api/search*" count=5                       # rewrite a query parameter
+interceptor override "*api/search*" --status 500                  # answer locally, request never sent
+interceptor override "*api/search*" --status 200 --body '{"results":[]}' [--content-type application/json]
+interceptor override "*api/search*" --delay 1000                  # hold the real request at least 1000 ms (a background tab rounds timers up to the next second)
 interceptor override clear
 ```
+
+Each `override` call replaces the previous rule. An override lives in the page it
+was set on: a navigation or reload drops it. Overridden responses show
+`"mocked": true` in `net log`; failed requests show `status: 0` and an `error`.
 
 CDP only when passive `net` is insufficient:
 
 ```bash
 interceptor network on | log | off
-interceptor network override "*api*" status=500
+interceptor network override on '[{"urlPattern":"*api*","setHeaders":{"x-debug":"1"}}]'   # rewrites the request (url, query, headers, body), not the response
+interceptor network override off
 ```
 
 SSE:
 
 ```bash
-interceptor sse streams | log | tail
+interceptor sse streams | log
+interceptor sse tail [--filter <p>] [--timeout 60000]   # waits for a stream, prints it to its last chunk, exits 1 if none starts
 ```
 
 Page communication (WebSocket / Beacon / BroadcastChannel, no CDP):

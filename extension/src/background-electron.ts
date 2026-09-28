@@ -1,3 +1,4 @@
+import "./background/electron-compat"
 import { connectWsChannel, registerStorageContextListener, registerSwKeepaliveListener } from "./background/transport"
 import { initializeActionRouter } from "./background/router"
 

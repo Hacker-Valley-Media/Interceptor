@@ -123,7 +123,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   capabilities: META, modals: META, panels: META,
   // singles
   eval: [], save: SAVE, brand: BRAND, group: [], batch: BATCH, raw: BATCH,
-  monitor: MONITOR, scene: SCENE, sse: SSE, override: [],
+  monitor: MONITOR, scene: SCENE, sse: SSE, override: ["--status", "--body", "--delay", "--content-type"],
   upgrade: [], init: [], research: RESEARCH, extensions: [], contexts: [],
   skills: SKILLS, daemon: DAEMON, manifest: [],
   keepawake: POWER, idle: POWER,

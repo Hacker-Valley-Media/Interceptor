@@ -1,3 +1,135 @@
+// extension/src/background/electron-compat.ts
+function installElectronCompat(c) {
+  const lastError = () => c.runtime?.lastError?.message;
+  const call = (fn, self, args) => new Promise((resolve, reject) => {
+    fn.apply(self, [...args, (value) => {
+      const err = lastError();
+      if (err)
+        reject(new Error(err));
+      else
+        resolve(value);
+    }]);
+  });
+  const promisable = (ns, name) => {
+    const fn = ns?.[name];
+    if (typeof fn !== "function")
+      return;
+    ns[name] = function(...args) {
+      if (typeof args[args.length - 1] === "function")
+        return fn.apply(ns, args);
+      return call(fn, ns, args);
+    };
+  };
+  for (const name of ["get", "set", "remove", "clear"])
+    promisable(c.storage?.local, name);
+  const pathA = (what) => new Error(`${what} is not available on Electron Path 0: the app's extension host runs isolated, synchronous MV2 content scripts only. ` + "Use Path A: interceptor macos cdp launch <app> --port <N> --confirm, then interceptor macos cdp connect <N> --app <app>");
+  const tabs = c.tabs;
+  const nativeQuery = typeof tabs.query === "function" ? tabs.query : undefined;
+  const nativeGet = tabs.get;
+  const nativeExecute = tabs.executeScript;
+  const ownPages = c.runtime.getURL("");
+  const BATCH = 128;
+  let ceiling = BATCH;
+  async function probeTabs() {
+    const found = [];
+    for (let from = 1;from <= ceiling; from += BATCH) {
+      const hits = (await Promise.all(Array.from({ length: BATCH }, (_, i) => call(nativeGet, tabs, [from + i]).catch(() => null)))).filter(Boolean);
+      found.push(...hits);
+      if (hits.length && from + BATCH > ceiling)
+        ceiling += BATCH;
+    }
+    return found;
+  }
+  const isOwnPage = (t) => String(t.url ?? "").startsWith(ownPages);
+  async function listTabs() {
+    const found = nativeQuery ? await call(nativeQuery, tabs, [{}]) : await probeTabs();
+    const pages = found.filter((t) => !isOwnPage(t)).sort((a, b) => a.id - b.id).map((t) => ({ ...t, groupId: -1 }));
+    if (pages.length && !pages.some((t) => t.active))
+      pages[0].active = true;
+    return pages;
+  }
+  const promiseOnly = (name, args) => {
+    if (args.some((a) => typeof a === "function"))
+      throw new TypeError(`tabs.${name}: the Electron compatibility layer takes no callback; await the result`);
+  };
+  const FILTERS = new Set(["active", "groupId", "currentWindow", "lastFocusedWindow", "windowId", "windowType"]);
+  tabs.query = async (info = {}, ...rest) => {
+    promiseOnly("query", [info, ...rest]);
+    const unknown = Object.keys(info).filter((k) => !FILTERS.has(k));
+    if (unknown.length)
+      throw pathA(`tabs.query filter '${unknown.join("', '")}'`);
+    return (await listTabs()).filter((t) => (info.active === undefined || t.active === info.active) && (info.groupId === undefined || info.groupId === -1));
+  };
+  tabs.get = async (tabId, ...rest) => {
+    promiseOnly("get", rest);
+    const tab = await call(nativeGet, tabs, [tabId]);
+    if (!tab || isOwnPage(tab))
+      throw new Error(`No tab with id: ${tabId}.`);
+    const first = (await listTabs())[0];
+    return { ...tab, groupId: -1, active: tab.active === true || first?.id === tab.id };
+  };
+  for (const name of ["sendMessage", "update", "reload", "executeScript", "insertCSS"])
+    promisable(tabs, name);
+  const NET_BUFFER = /^(get|clear|set)_(net|page_comm|captured_headers|sse)/;
+  const sendMessage = tabs.sendMessage;
+  tabs.sendMessage = (tabId, msg, ...rest) => {
+    if (!NET_BUFFER.test(String(msg?.type ?? "")))
+      return sendMessage(tabId, msg, ...rest);
+    const reply = { success: false, error: pathA("Passive network capture (net, sse, override)").message };
+    const cb = rest[rest.length - 1];
+    return typeof cb === "function" ? cb(reply) : Promise.resolve(reply);
+  };
+  for (const name of ["create", "remove", "duplicate", "move", "group", "ungroup", "discard", "goBack", "goForward", "captureVisibleTab"]) {
+    if (typeof tabs[name] !== "function")
+      tabs[name] = async () => {
+        throw pathA(`tabs.${name} (tab and window management)`);
+      };
+  }
+  const noopEvent = { addListener() {}, removeListener() {}, hasListener: () => false };
+  for (const name of ["onUpdated", "onRemoved", "onActivated", "onCreated", "onReplaced"]) {
+    if (!tabs[name])
+      tabs[name] = noopEvent;
+  }
+  if (!c.declarativeNetRequest) {
+    const refuse = async () => {
+      throw pathA("declarativeNetRequest (screenshot, eval CSP bypass)");
+    };
+    c.declarativeNetRequest = { updateSessionRules: refuse, getSessionRules: refuse };
+  }
+  if (!c.scripting && typeof nativeExecute === "function") {
+    c.scripting = {
+      async executeScript(opts) {
+        if (opts.world === "MAIN" || opts.func?.constructor?.name === "AsyncFunction") {
+          throw pathA("A MAIN-world or async script (eval, screenshot)");
+        }
+        const { target } = opts;
+        const what = opts.files?.length ? opts.files.map((file) => ({ file })) : opts.func ? [{ code: `(${opts.func.toString()})(...${JSON.stringify(opts.args ?? [])})` }] : [];
+        const run = async (where) => {
+          let results2 = [];
+          for (const script of what)
+            results2 = await call(nativeExecute, tabs, [target.tabId, { ...where, ...script }]) ?? [];
+          return results2;
+        };
+        if (target.frameIds?.length) {
+          const out = [];
+          for (const frameId of target.frameIds)
+            out.push({ frameId, result: (await run({ frameId }))[0] });
+          return out;
+        }
+        const results = await run(target.allFrames ? { allFrames: true } : {});
+        return results.map((result, i) => ({ frameId: i === 0 ? 0 : -1, result }));
+      }
+    };
+  }
+  if (!c.windows) {
+    const win = { id: 0, focused: true, type: "normal", state: "normal", incognito: false, alwaysOnTop: false };
+    const one = async () => win;
+    c.windows = { getAll: async () => [win], get: one, getCurrent: one, getLastFocused: one, WINDOW_ID_CURRENT: -2, WINDOW_ID_NONE: -1 };
+  }
+}
+if (typeof chrome !== "undefined")
+  installElectronCompat(chrome);
+
 // extension/src/background/brand-tab-group.ts
 var VALID_COLORS = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
 var DEFAULT_TAB_GROUP_TITLE = "interceptor";
@@ -513,6 +645,35 @@ async function sendNetDirect(tabId, msg) {
     success: false,
     error: `content script re-injected on tab ${tabId} but message still failed: ${retried.error || "unknown error"}`
   };
+}
+async function sendNetAllFrames(tabId, msg) {
+  const top = await sendNetDirect(tabId, msg);
+  const nav = chrome.webNavigation;
+  if (!top.success || typeof nav?.getAllFrames !== "function")
+    return top;
+  let frames = [];
+  try {
+    frames = await nav.getAllFrames({ tabId }) ?? [];
+  } catch {}
+  const children = frames.filter((f) => f.frameId !== 0);
+  if (!children.length)
+    return top;
+  const replies = await Promise.all(children.map((f) => new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), 1500);
+    chrome.tabs.sendMessage(tabId, msg, { frameId: f.frameId }, (reply) => {
+      chrome.runtime.lastError;
+      clearTimeout(timer);
+      resolve(reply);
+    });
+  })));
+  if (!Array.isArray(top.data))
+    return top;
+  const at = (e) => {
+    const r = e;
+    return r?.timestamp ?? r?.startTime ?? 0;
+  };
+  const merged = [...top.data, ...replies.flatMap((r) => r?.success && Array.isArray(r.data) ? r.data : [])];
+  return { ...top, data: merged.sort((a, b) => at(a) - at(b)) };
 }
 function waitForTabLoad(tabId, timeoutMs = 15000) {
   return new Promise((resolve) => {
@@ -4055,7 +4216,7 @@ function budgetNetLogEntries(entries, budgetBytes = NET_LOG_BODY_BUDGET_BYTES) {
 async function handlePassiveNetActions(action, tabId) {
   switch (action.type) {
     case "net_log": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_net_log",
         filter: action.filter,
         since: action.since
@@ -4068,7 +4229,7 @@ async function handlePassiveNetActions(action, tabId) {
       return { success: true, data: entries };
     }
     case "page_comm_log": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_page_comm_log",
         filter: action.filter,
         entryType: action.entryType,
@@ -4077,10 +4238,10 @@ async function handlePassiveNetActions(action, tabId) {
       });
       if (!result.success)
         return { success: false, error: result.error || "failed to get page communication log" };
-      return { success: true, data: result.data || [] };
+      return { success: true, data: (result.data || []).slice(-(action.limit || 100)) };
     }
     case "page_comm_clear": {
-      const result = await sendNetDirect(tabId, { type: "clear_page_comm_log" });
+      const result = await sendNetAllFrames(tabId, { type: "clear_page_comm_log" });
       return result.success ? { success: true, data: "page communication log cleared" } : { success: false, error: result.error || "failed to clear page communication log" };
     }
     case "page_comm_enable": {
@@ -4129,11 +4290,11 @@ async function handlePassiveNetActions(action, tabId) {
       return { success: true, data: await readPageCommConfig() };
     }
     case "net_clear": {
-      const result = await sendNetDirect(tabId, { type: "clear_net_log" });
+      const result = await sendNetAllFrames(tabId, { type: "clear_net_log" });
       return result.success ? { success: true, data: "passive net log cleared" } : { success: false, error: result.error };
     }
     case "net_headers": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_captured_headers",
         filter: action.filter
       });
@@ -4142,7 +4303,7 @@ async function handlePassiveNetActions(action, tabId) {
       return { success: true, data: result.data };
     }
     case "sse_log": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_sse_log",
         filter: action.filter,
         limit: action.limit
@@ -4152,7 +4313,7 @@ async function handlePassiveNetActions(action, tabId) {
       return { success: true, data: result.data || [] };
     }
     case "sse_streams": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_sse_streams"
       });
       if (!result.success)
@@ -4163,21 +4324,23 @@ async function handlePassiveNetActions(action, tabId) {
       const result = await sendNetDirect(tabId, {
         type: "get_sse_chunk",
         filter: action.filter,
-        since: action.since
+        since: action.since,
+        after: action.after,
+        stream: action.stream
       });
       if (!result.success)
         return { success: false, error: result.error || "failed to get SSE chunk" };
       return { success: true, data: result.data };
     }
     case "set_net_overrides": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "set_net_overrides",
         rules: action.rules
       });
       return result.success ? { success: true, data: { overrides: "set", ruleCount: Array.isArray(action.rules) ? action.rules.length : 0 } } : { success: false, error: result.error || "failed to set net overrides" };
     }
     case "clear_net_overrides": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "clear_net_overrides"
       });
       return result.success ? { success: true, data: "net overrides cleared" } : { success: false, error: result.error || "failed to clear net overrides" };
@@ -6167,7 +6330,7 @@ function connectSafariNativeRelayChannel() {
     },
     onError: (error) => {
       safariNativeConnecting = false;
-      console.error("Safari native relay:", error.message);
+      console.warn("Safari native relay:", error.message);
     }
   });
   safariNativeConnecting = true;

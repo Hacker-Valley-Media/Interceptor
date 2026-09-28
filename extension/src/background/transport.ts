@@ -548,7 +548,10 @@ export function connectSafariNativeRelayChannel(): void {
     },
     onError: (error) => {
       safariNativeConnecting = false
-      console.error("Safari native relay:", error.message)
+      // A warning, not an error: the loop retries on its own, and WebKit on
+      // macOS 27 records every background console.error as an extension error,
+      // which failed the packaging bootstrap check with no native host present.
+      console.warn("Safari native relay:", error.message)
     },
   })
   safariNativeConnecting = true

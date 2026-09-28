@@ -202,8 +202,15 @@ async function runApp(sub: string, args: string[], contextId: string | undefined
       })
       emit(result, jsonMode)
       // Path 0 unavailable → guide to the Path A fallback (no silent state loss).
-      const data = (result.data ?? {}) as { fuseLikelyOff?: boolean; fallback?: string; remoteDebuggingPort?: number }
-      if (!result.success && (data.fuseLikelyOff || data.fallback === "cdp")) {
+      const data = (result.data ?? {}) as { fuseLikelyOff?: boolean; portBusy?: boolean; fallback?: string; remoteDebuggingPort?: number }
+      if (!result.success && data.portBusy) {
+        const name = app ?? "<app>"
+        console.error("")
+        console.error("Path 0 needs a free inspector port. Relaunch the app with one (loses unsaved app state):")
+        console.error(`  interceptor macos app quit "${name}"`)
+        console.error(`  open -g -a "${name}" --args --inspect=9339`)
+        console.error(`  interceptor macos cdp app attach "${name}" --inspect-port 9339`)
+      } else if (!result.success && (data.fuseLikelyOff || data.fallback === "cdp")) {
         const name = app ?? "<app>"
         console.error("")
         console.error("Path 0 (extension) unavailable for this app. Fallback to direct CDP:")

@@ -9,6 +9,22 @@ function flagValue(filtered: string[], flag: string): string | undefined {
   return idx !== -1 ? filtered[idx + 1] : undefined
 }
 
+const SINCE_UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }
+
+/**
+ * `--since` takes a duration back from now (500ms, 30s, 5m, 2h, 1d) or an
+ * epoch-milliseconds timestamp. Entry timestamps are epoch ms, so a bare small
+ * number would silently match everything; it is rejected instead.
+ */
+export function parseSince(raw: string | undefined, now = Date.now()): number | undefined {
+  if (raw === undefined) return undefined
+  const m = /^(\d+)(ms|s|m|h|d)$/i.exec(raw.trim())
+  if (m) return now - parseInt(m[1], 10) * SINCE_UNITS[m[2].toLowerCase()]
+  if (/^\d{11,}$/.test(raw.trim())) return parseInt(raw, 10)
+  console.error(`error: --since takes a duration (500ms, 30s, 5m, 2h, 1d) or an epoch-ms timestamp, got '${raw}'`)
+  process.exit(1)
+}
+
 function flagPresent(filtered: string[], flag: string): boolean {
   return filtered.includes(flag)
 }
@@ -39,7 +55,7 @@ export function parseNetworkCommand(filtered: string[]): Action {
         case "log":
           return {
             type: "network_log",
-            since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : undefined,
+            since: parseSince(flagValue(filtered, "--since")),
             limit: filtered.includes("--limit") ? parseInt(filtered[filtered.indexOf("--limit") + 1]) : undefined
           }
         case "override":
@@ -82,7 +98,7 @@ export function parseNetworkCommand(filtered: string[]): Action {
               type: "page_comm_log",
               filter: flagValue(filtered, "--filter"),
               entryType: flagValue(filtered, "--type"),
-              since: flagValue(filtered, "--since") ? parseInt(flagValue(filtered, "--since")!) : undefined,
+              since: parseSince(flagValue(filtered, "--since")),
               limit: flagValue(filtered, "--limit") ? parseInt(flagValue(filtered, "--limit")!) : undefined
             }
           }
@@ -100,7 +116,7 @@ export function parseNetworkCommand(filtered: string[]): Action {
           return {
             type: "net_log",
             filter: filtered.includes("--filter") ? filtered[filtered.indexOf("--filter") + 1] : undefined,
-            since: filtered.includes("--since") ? parseInt(filtered[filtered.indexOf("--since") + 1]) : undefined,
+            since: parseSince(flagValue(filtered, "--since")),
             limit: filtered.includes("--limit") ? parseInt(filtered[filtered.indexOf("--limit") + 1]) : undefined,
             format: formatRaw,
             out: filtered.includes("--out") ? filtered[filtered.indexOf("--out") + 1] : undefined,
