@@ -35,6 +35,8 @@ async function send(
   }
 }
 
+const RESPONSE_FLAGS = new Set(["--status", "--body", "--delay", "--content-type"])
+
 export async function runOverride(
   filtered: string[],
   opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; contextId?: string },
@@ -62,9 +64,32 @@ export async function runOverride(
 
   const urlPattern = sub
   const queryAddOrReplace: Record<string, string> = {}
+  const response: { status?: number; body?: string; contentType?: string; delayMs?: number } = {}
+  const fail = (msg: string): never => {
+    console.error(`error: ${msg}`)
+    process.exit(1)
+  }
 
   for (let i = 2; i < filtered.length; i++) {
     const arg = filtered[i]
+    if (RESPONSE_FLAGS.has(arg)) {
+      const value = filtered[++i]
+      if (value === undefined) fail(`${arg} needs a value`)
+      if (arg === "--status") {
+        const n = Number(value)
+        if (!Number.isInteger(n) || n < 200 || n > 599) fail(`--status must be an integer from 200 to 599, got '${value}'`)
+        response.status = n
+      } else if (arg === "--delay") {
+        const n = Number(value)
+        if (!Number.isInteger(n) || n < 0 || n > 600_000) fail(`--delay must be milliseconds from 0 to 600000, got '${value}'`)
+        response.delayMs = n
+      } else if (arg === "--body") {
+        response.body = value
+      } else {
+        response.contentType = value
+      }
+      continue
+    }
     if (arg.startsWith("--")) continue
     const eqIdx = arg.indexOf("=")
     if (eqIdx <= 0) {
@@ -74,21 +99,31 @@ export async function runOverride(
     const key = arg.slice(0, eqIdx)
     const value = arg.slice(eqIdx + 1)
     queryAddOrReplace[key] = value
+    // key=value always rewrites the query string; say so when it looks like a response override.
+    if (key === "status" || key === "delay" || key === "body") {
+      console.error(`note: ${key}=${value} rewrites the query parameter '${key}'. To change the response, use --${key} ${value}.`)
+    }
   }
 
-  if (Object.keys(queryAddOrReplace).length === 0) {
-    console.error("error: interceptor override requires at least one key=value pair. Usage: interceptor override \"*pattern*\" count=5")
-    process.exit(1)
+  if (Object.keys(queryAddOrReplace).length === 0 && Object.keys(response).length === 0) {
+    fail("interceptor override needs a key=value query pair or a response flag. Usage: interceptor override \"*pattern*\" count=5 | --status 500 [--body <text>] [--delay <ms>]")
+  }
+  if (response.contentType !== undefined && response.status === undefined && response.body === undefined) {
+    fail("--content-type only applies with --status or --body")
   }
 
-  const rules = [{ urlPattern, queryAddOrReplace }]
+  const rules = [{ urlPattern, ...(Object.keys(queryAddOrReplace).length ? { queryAddOrReplace } : {}), ...response }]
   const result = await sender({ type: "set_net_overrides", rules }, opts.globalTabId, opts.useWs, opts.contextId)
 
   if (opts.jsonMode) {
     console.log(JSON.stringify(result, null, 2))
   } else if (result.success) {
-    const pairs = Object.entries(queryAddOrReplace).map(([k, v]) => `${k}=${v}`).join(", ")
-    console.log(`override set: ${urlPattern} → ${pairs}`)
+    const parts = Object.entries(queryAddOrReplace).map(([k, v]) => `${k}=${v}`)
+    if (response.status !== undefined || response.body !== undefined) {
+      parts.push(`respond ${response.status ?? 200}${response.body !== undefined ? ` (${response.body.length} chars)` : ""} without sending`)
+    }
+    if (response.delayMs !== undefined) parts.push(`delay ${response.delayMs} ms`)
+    console.log(`override set: ${urlPattern} → ${parts.join(", ")}`)
   } else {
     console.error(`error: ${result.error}`)
     process.exit(1)

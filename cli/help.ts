@@ -405,13 +405,16 @@ Network (CDP — explicit opt-in):
 
 Request Override (passive, no CDP):
   interceptor override "*pattern*" key=value   Override query param on matching requests
+  interceptor override "*pattern*" --status 500 [--body <text>] [--content-type <type>]
+                                              Answer matching fetch/XHR locally (never sent; net log marks it mocked)
+  interceptor override "*pattern*" --delay 1500  Hold matching requests at least 1500 ms before sending (combines with the above)
   interceptor override "*api*" limit=50 offset=0  Multiple params
   interceptor override clear                  Remove all overrides
 
 Passive Network (always-on, no CDP):
   interceptor net log                        Passively captured fetch/XHR traffic
   interceptor net log --filter <pattern>     Filter by URL substring
-  interceptor net log --since <timestamp>    Entries after timestamp
+  interceptor net log --since <30s|5m|ts>    Entries from the last 30s/5m/2h/1d, or after an epoch-ms timestamp
   interceptor net log --limit <n>            Max entries (default 100)
   interceptor net log --format json|har|pcapng --out <path>   Export the buffer (file is created mode 600)
   interceptor net log --format har --out <path> --redact-auth Same, credential headers replaced with [redacted]
@@ -428,7 +431,7 @@ Passive Network (always-on, no CDP):
 SSE Stream Capture:
   interceptor sse log [--filter <pattern>] [--limit N]   Show completed SSE streams
   interceptor sse streams                                  List active SSE streams
-  interceptor sse tail [--filter <pattern>]                Live tail SSE stream chunks
+  interceptor sse tail [--filter <pattern>] [--timeout ms] Wait for a stream, print it to its last chunk
 
 Headers:
   interceptor headers add <name> <value>     Add request header

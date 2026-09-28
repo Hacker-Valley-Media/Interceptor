@@ -1,4 +1,4 @@
-import { sendNetDirect } from "../content-bridge"
+import { sendNetAllFrames, sendNetDirect } from "../content-bridge"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 const PAGE_COMM_CONFIG_KEY = "interceptor_page_comm_capture"
@@ -99,7 +99,7 @@ export async function handlePassiveNetActions(
 ): Promise<ActionResult> {
   switch (action.type) {
     case "net_log": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_net_log",
         filter: action.filter as string | undefined,
         since: action.since as number | undefined
@@ -112,7 +112,7 @@ export async function handlePassiveNetActions(
     }
 
     case "page_comm_log": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_page_comm_log",
         filter: action.filter as string | undefined,
         entryType: action.entryType as string | undefined,
@@ -120,11 +120,11 @@ export async function handlePassiveNetActions(
         limit: action.limit as number | undefined
       }) as { success: boolean; data?: unknown[]; error?: string }
       if (!result.success) return { success: false, error: result.error || "failed to get page communication log" }
-      return { success: true, data: result.data || [] }
+      return { success: true, data: (result.data || []).slice(-((action.limit as number) || 100)) }
     }
 
     case "page_comm_clear": {
-      const result = await sendNetDirect(tabId, { type: "clear_page_comm_log" }) as {
+      const result = await sendNetAllFrames(tabId, { type: "clear_page_comm_log" }) as {
         success: boolean; error?: string
       }
       return result.success
@@ -183,7 +183,7 @@ export async function handlePassiveNetActions(
     }
 
     case "net_clear": {
-      const result = await sendNetDirect(tabId, { type: "clear_net_log" }) as {
+      const result = await sendNetAllFrames(tabId, { type: "clear_net_log" }) as {
         success: boolean; error?: string
       }
       return result.success
@@ -192,7 +192,7 @@ export async function handlePassiveNetActions(
     }
 
     case "net_headers": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_captured_headers",
         filter: action.filter as string | undefined
       }) as { success: boolean; data?: unknown[]; error?: string }
@@ -201,7 +201,7 @@ export async function handlePassiveNetActions(
     }
 
     case "sse_log": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_sse_log",
         filter: action.filter as string | undefined,
         limit: action.limit as number | undefined
@@ -210,7 +210,7 @@ export async function handlePassiveNetActions(
       return { success: true, data: result.data || [] }
     }
     case "sse_streams": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "get_sse_streams"
       }) as { success: boolean; data?: unknown[]; error?: string }
       if (!result.success) return { success: false, error: result.error || "failed to get SSE streams" }
@@ -220,14 +220,16 @@ export async function handlePassiveNetActions(
       const result = await sendNetDirect(tabId, {
         type: "get_sse_chunk",
         filter: action.filter as string | undefined,
-        since: action.since as number | undefined
+        since: action.since as number | undefined,
+        after: action.after as number | undefined,
+        stream: action.stream as number | undefined
       }) as { success: boolean; data?: unknown; error?: string }
       if (!result.success) return { success: false, error: result.error || "failed to get SSE chunk" }
       return { success: true, data: result.data }
     }
 
     case "set_net_overrides": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "set_net_overrides",
         rules: action.rules as unknown[]
       }) as { success: boolean; error?: string }
@@ -237,7 +239,7 @@ export async function handlePassiveNetActions(
     }
 
     case "clear_net_overrides": {
-      const result = await sendNetDirect(tabId, {
+      const result = await sendNetAllFrames(tabId, {
         type: "clear_net_overrides"
       }) as { success: boolean; error?: string }
       return result.success

@@ -38,10 +38,12 @@ const SSE_HELP = `interceptor sse — inspect SSE (Server-Sent Events) streams
 Usage:
   interceptor sse log [--filter <pattern>] [--limit N]   Show completed SSE streams
   interceptor sse streams                                  List active SSE streams
-  interceptor sse tail [--filter <pattern>]                Live tail of SSE stream chunks
+  interceptor sse tail [--filter <pattern>] [--timeout ms] Live tail of one SSE stream
 
 log       Show completed SSE streams from the buffer (up to 50 most recent).
 streams   List currently active SSE streams with URL, chunk count, byte count.
-tail      Poll for new SSE chunks every 200ms. Exits when stream completes.
+tail      Waits up to --timeout ms (default 60000) for a stream to start, then
+          prints that stream as it arrives, polled every 200ms, including its
+          final chunk. Exits 0 when the stream ends, 1 if none started.
           Use --filter to match a URL pattern (e.g. --filter f/conversation).
 `

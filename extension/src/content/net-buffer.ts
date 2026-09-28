@@ -261,17 +261,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "get_sse_chunk") {
     try {
       const filter = (msg.filter || "").toLowerCase()
-      let found: SseStreamEntry | undefined
+      const hit = (url: string) => !filter || url.toLowerCase().includes(filter)
+      // A tail pins one stream by its startTime; `after` is when the tail began.
+      const pinned = typeof msg.stream === "number" ? msg.stream : undefined
+      const after = typeof msg.after === "number" ? msg.after : 0
+      let found: { url: string; startTime: number; text: string; active: boolean; chunkCount: number; totalBytes: number } | undefined
       for (const [, s] of activeStreams) {
-        if (!filter || s.url.toLowerCase().includes(filter)) { found = s; break }
+        if (hit(s.url) && (pinned === undefined || s.startTime === pinned)) {
+          found = { url: s.url, startTime: s.startTime, text: s.chunks.join(""), active: true, chunkCount: s.chunks.length, totalBytes: s.totalBytes }
+          break
+        }
+      }
+      if (!found && (pinned !== undefined || after > 0)) {
+        // The stream ended between polls: hand back its tail so the last chunk is not lost.
+        const done = completedStreams.slice().reverse().find((s) =>
+          hit(s.url) && (pinned !== undefined ? s.startTime === pinned : s.endTime >= after))
+        if (done) found = { url: done.url, startTime: done.startTime, text: done.body, active: false, chunkCount: done.totalChunks, totalBytes: done.totalBytes }
       }
       if (!found) {
         sendResponse({ success: true, data: { active: false, text: "", chunkCount: 0 } })
       } else {
         const since = msg.since || 0
-        const allText = found.chunks.join("")
-        const newText = allText.slice(since)
-        sendResponse({ success: true, data: { active: true, url: found.url, text: newText, offset: allText.length, chunkCount: found.chunks.length, totalBytes: found.totalBytes } })
+        sendResponse({ success: true, data: { active: found.active, url: found.url, stream: found.startTime, text: found.text.slice(since), offset: found.text.length, chunkCount: found.chunkCount, totalBytes: found.totalBytes } })
       }
     } catch (err) {
       sendResponse({ success: false, error: (err as Error).message })

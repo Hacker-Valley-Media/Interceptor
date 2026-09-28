@@ -533,29 +533,36 @@ async function main() {
     const timeout = (action.timeout as number) || 60000
     const startTime = Date.now()
     let offset = 0
-    let lastActive = true
+    let stream: number | undefined
+    let waitingNoted = false
 
     while (Date.now() - startTime < timeout) {
       try {
-        const chunkAction = { type: "sse_chunk", filter, since: offset }
+        const chunkAction = { type: "sse_chunk", filter, since: offset, after: startTime, stream }
         const resp = useWs
           ? await sendCommandWs(chunkAction, globalTabId, globalContextId)
           : await sendCommand(chunkAction, globalTabId, globalContextId)
         const result = unwrapResult(resp)
         if (result?.success && result.data) {
-          const d = result.data as { active: boolean; text?: string; offset?: number }
+          const d = result.data as { active: boolean; text?: string; offset?: number; stream?: number }
+          if (stream === undefined && typeof d.stream === "number") stream = d.stream
           if (d.text) {
             process.stdout.write(d.text)
             offset = d.offset || offset
           }
-          if (!d.active && lastActive) {
-            // stream ended
-            break
+          // The tailed stream ended; its final chunk was printed above.
+          if (!d.active && stream !== undefined) process.exit(0)
+          if (stream === undefined && !waitingNoted) {
+            waitingNoted = true
+            console.error(`waiting for an SSE stream${filter ? ` matching '${filter}'` : ""} (up to ${Math.round(timeout / 1000)}s)…`)
           }
-          lastActive = d.active
         }
       } catch {}
       await new Promise(r => setTimeout(r, 200))
+    }
+    if (stream === undefined) {
+      console.error(`error: no SSE stream${filter ? ` matching '${filter}'` : ""} started within ${Math.round(timeout / 1000)}s`)
+      process.exit(1)
     }
     process.exit(0)
   }

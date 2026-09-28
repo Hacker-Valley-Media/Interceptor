@@ -240,6 +240,40 @@ export async function sendNetDirect(
   }
 }
 
+/**
+ * sendNetDirect, plus every child frame: each frame keeps its own net buffer and
+ * MAIN-world wrapper. Array replies merge in time order; for writes (clear,
+ * overrides) the top frame's reply stands once every frame has been told.
+ */
+export async function sendNetAllFrames(
+  tabId: number,
+  msg: { type: string; [key: string]: unknown }
+): Promise<unknown> {
+  const top = await sendNetDirect(tabId, msg) as { success: boolean; data?: unknown; error?: string }
+  const nav = (chrome as unknown as { webNavigation?: typeof chrome.webNavigation }).webNavigation
+  if (!top.success || typeof nav?.getAllFrames !== "function") return top
+  let frames: { frameId: number }[] = []
+  try { frames = (await nav.getAllFrames({ tabId })) ?? [] } catch {}
+  const children = frames.filter((f) => f.frameId !== 0)
+  if (!children.length) return top
+  const replies = await Promise.all(children.map((f) => new Promise<{ success?: boolean; data?: unknown } | undefined>((resolve) => {
+    // A frame without a net buffer (about:blank, restricted origin) answers with lastError; one that never answers is capped.
+    const timer = setTimeout(() => resolve(undefined), 1500)
+    chrome.tabs.sendMessage(tabId, msg, { frameId: f.frameId } as chrome.tabs.MessageSendOptions, (reply) => {
+      void chrome.runtime.lastError
+      clearTimeout(timer)
+      resolve(reply)
+    })
+  })))
+  if (!Array.isArray(top.data)) return top
+  const at = (e: unknown) => {
+    const r = e as { timestamp?: number; startTime?: number }
+    return r?.timestamp ?? r?.startTime ?? 0
+  }
+  const merged = [...top.data, ...replies.flatMap((r) => r?.success && Array.isArray(r.data) ? r.data : [])]
+  return { ...top, data: merged.sort((a, b) => at(a) - at(b)) }
+}
+
 export function waitForTabLoad(
   tabId: number,
   timeoutMs = 15000
