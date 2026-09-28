@@ -41,6 +41,20 @@ const SDK_STDIO_FILES = [
 
 const PAYLOAD_CHARS = 300_000
 
+// Same step as scripts/build.sh: `bun build --compile` output can carry a
+// malformed signature, and macOS 27 kills such a binary at launch (exit 137,
+// no output), so re-sign ad hoc before running it.
+function compileFixture(entry: string, outfile: string): void {
+  const build = Bun.spawnSync(["bun", "build", "--compile", entry, "--outfile", outfile], {
+    cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe",
+  })
+  expect(build.exitCode).toBe(0)
+  if (process.platform !== "darwin") return
+  Bun.spawnSync(["codesign", "--remove-signature", outfile])
+  const sign = Bun.spawnSync(["codesign", "--force", "--sign", "-", outfile], { stderr: "pipe" })
+  expect(sign.exitCode, sign.stderr.toString()).toBe(0)
+}
+
 describe("compiled stdout pipe integrity (issue #183)", () => {
   test("MCP SDK stdio transports are de-poisoned of node:process imports", () => {
     for (const rel of SDK_STDIO_FILES) {
@@ -75,12 +89,7 @@ describe("compiled stdout pipe integrity (issue #183)", () => {
       ].join("\n"))
 
       const outfile = join(outdir, "fixture-bin")
-      const build = Bun.spawnSync(["bun", "build", "--compile", entry, "--outfile", outfile], {
-        cwd: REPO_ROOT,
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      expect(build.exitCode).toBe(0)
+      compileFixture(entry, outfile)
 
       // Must be a real shell pipe: Bun.spawn's own stdout pipe drains
       // aggressively enough that the truncation does not manifest there
@@ -126,10 +135,7 @@ describe("compiled stdout pipe integrity (issue #183)", () => {
         `console.log("x".repeat(${PAYLOAD_CHARS}))`,
       ].join("\n"))
       const outfile = join(dir, "fixture-bin")
-      const build = Bun.spawnSync(["bun", "build", "--compile", entry, "--outfile", outfile], {
-        cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe",
-      })
-      expect(build.exitCode).toBe(0)
+      compileFixture(entry, outfile)
       // 2>&1 inside the shell so stderr and stdout share one pipe — the
       // failing consumer topology.
       const run = Bun.spawnSync(["/bin/sh", "-c", '"$1" 2>&1 | wc -c', "_", outfile], {
