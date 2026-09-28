@@ -74,7 +74,7 @@ export async function runOverride(
     const arg = filtered[i]
     if (RESPONSE_FLAGS.has(arg)) {
       const value = filtered[++i]
-      if (value === undefined) fail(`${arg} needs a value`)
+      if (value === undefined || RESPONSE_FLAGS.has(value)) fail(`${arg} needs a value`)
       if (arg === "--status") {
         const n = Number(value)
         if (!Number.isInteger(n) || n < 200 || n > 599) fail(`--status must be an integer from 200 to 599, got '${value}'`)

@@ -117,6 +117,8 @@ describe("runOverride response flags", () => {
     expect(await refused(["*api*", "--status", "99"])).toContain("--status must be an integer from 200 to 599")
     expect(await refused(["*api*", "--delay", "soon"])).toContain("--delay must be milliseconds")
     expect(await refused(["*api*", "--status"])).toContain("--status needs a value")
+    expect(await refused(["*api*", "--body", "--status", "500"])).toContain("--body needs a value")
+    expect(await refused(["*api*", "--content-type", "--delay", "100"])).toContain("--content-type needs a value")
     expect(await refused(["*api*", "--content-type", "text/html"])).toContain("--content-type only applies")
     expect(await refused(["*api*"])).toContain("needs a key=value query pair or a response flag")
   })

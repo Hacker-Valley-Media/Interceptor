@@ -14,6 +14,8 @@ async function runInPage(body: string): Promise<void> {
       if (url.includes("down.test")) throw new TypeError("Failed to fetch");
       return new Response("real", { status: 200, headers: { "content-type": "text/plain" } });
     };
+    const xhrSent = [];
+    XMLHttpRequest.prototype.send = function () { xhrSent.push(this._interceptor_url) };
     await import("./extension/src/inject-net.ts");
     const nets = [];
     document.addEventListener("__interceptor_net", (e) => nets.push(e.detail));
@@ -95,5 +97,29 @@ test("xhr: response overrides fire load with the mocked status and body", async 
     assert.equal(nets[0].type, "xhr");
     assert.equal(nets[0].status, 418);
     assert.equal(nets[0].mocked, true);
+  `)
+})
+
+test("xhr: a synchronous request is never held and gets its local answer before send() returns", async () => {
+  await runInPage(`
+    setRules([{ urlPattern: "*slow.test*", delayMs: 300 }]);
+    const held = new XMLHttpRequest();
+    held.open("GET", "https://slow.test/async");
+    held.send();
+    assert.deepEqual(xhrSent, [], "an asynchronous request waits for the delay");
+    const sync = new XMLHttpRequest();
+    sync.open("GET", "https://slow.test/sync", false);
+    sync.send();
+    assert.deepEqual(xhrSent, ["https://slow.test/sync"], "a synchronous request is sent at once");
+    await until(() => xhrSent.length === 2);
+    assert.equal(xhrSent[1], "https://slow.test/async");
+
+    setRules([{ urlPattern: "*api.test/s*", status: 503, body: "down", delayMs: 300 }]);
+    const mocked = new XMLHttpRequest();
+    mocked.open("GET", "https://api.test/s", false);
+    mocked.send();
+    assert.equal(mocked.status, 503);
+    assert.equal(mocked.responseText, "down");
+    assert.equal(xhrSent.length, 2, "the mocked request is not sent");
   `)
 })

@@ -44,44 +44,58 @@ export function installElectronCompat(c: any): void {
   const nativeExecute: AnyFn = tabs.executeScript
   const ownPages = c.runtime.getURL("")
 
-  async function listTabs(): Promise<Tab[]> {
-    let found: Tab[]
-    if (nativeQuery) {
-      found = await call(nativeQuery, tabs, [{}])
-    } else {
-      // ponytail: Electron 18 has no tabs.query; tab ids are webContents ids
-      // counted from 1, so probe 1..128. Raise the ceiling if an app churns windows.
-      const probes = await Promise.all(Array.from({ length: 128 }, (_, i) =>
-        call(nativeGet, tabs, [i + 1]).catch(() => null)))
-      found = probes.filter(Boolean)
+  // Tab ids are webContents ids counted from 1. Electron 18 has no tabs.query,
+  // so ids are probed in batches of 128 and the scan grows while its top batch
+  // holds a live id. ponytail: a run of 128 dead ids ends the scan; tabs.get
+  // takes any id directly, so an explicit --tab still reaches a tab past it.
+  const BATCH = 128
+  let ceiling = BATCH
+  async function probeTabs(): Promise<Tab[]> {
+    const found: Tab[] = []
+    for (let from = 1; from <= ceiling; from += BATCH) {
+      const hits = (await Promise.all(Array.from({ length: BATCH }, (_, i) =>
+        call(nativeGet, tabs, [from + i]).catch(() => null)))).filter(Boolean)
+      found.push(...hits)
+      if (hits.length && from + BATCH > ceiling) ceiling += BATCH
     }
+    return found
+  }
+
+  const isOwnPage = (t: Tab) => String(t.url ?? "").startsWith(ownPages)
+
+  async function listTabs(): Promise<Tab[]> {
+    const found: Tab[] = nativeQuery ? await call(nativeQuery, tabs, [{}]) : await probeTabs()
     // The extension's own background page is a "tab" in Electron; hide it.
     // Electron has no tab groups but reports groupId 0; Chrome's "none" is -1.
-    const pages = found
-      .filter((t) => !String(t.url ?? "").startsWith(ownPages))
-      .sort((a, b) => a.id - b.id)
-      .map((t) => ({ ...t, groupId: -1 }))
+    const pages = found.filter((t) => !isOwnPage(t)).sort((a, b) => a.id - b.id).map((t) => ({ ...t, groupId: -1 }))
     // No tab is ever active in Electron; the app's first window stands in.
     if (pages.length && !pages.some((t) => t.active)) pages[0].active = true
     return pages
   }
 
-  const withCallback = <T>(p: Promise<T>, cb?: AnyFn): Promise<T> | void => {
-    if (typeof cb !== "function") return p
-    p.then((v) => cb(v), () => cb(undefined))
+  // The shared background code only uses the promise form of these two, and
+  // only these filters; anything else fails instead of answering wrongly.
+  const promiseOnly = (name: string, args: unknown[]) => {
+    if (args.some((a) => typeof a === "function")) throw new TypeError(`tabs.${name}: the Electron compatibility layer takes no callback; await the result`)
+  }
+  const FILTERS = new Set(["active", "groupId", "currentWindow", "lastFocusedWindow", "windowId", "windowType"])
+
+  tabs.query = async (info: Record<string, unknown> = {}, ...rest: unknown[]) => {
+    promiseOnly("query", [info, ...rest])
+    const unknown = Object.keys(info).filter((k) => !FILTERS.has(k))
+    if (unknown.length) throw pathA(`tabs.query filter '${unknown.join("', '")}'`)
+    return (await listTabs()).filter((t) =>
+      (info.active === undefined || t.active === info.active) &&
+      (info.groupId === undefined || info.groupId === -1))
   }
 
-  tabs.query = (info: { active?: boolean; groupId?: number } = {}, cb?: AnyFn) =>
-    withCallback(listTabs().then((all) => all.filter((t) =>
-      (info.active === undefined || t.active === info.active) &&
-      (info.groupId === undefined || info.groupId === -1))), cb)
-
-  tabs.get = (tabId: number, cb?: AnyFn) =>
-    withCallback(listTabs().then((all) => {
-      const tab = all.find((t) => t.id === tabId)
-      if (!tab) throw new Error(`No tab with id: ${tabId}.`)
-      return tab
-    }), cb)
+  tabs.get = async (tabId: number, ...rest: unknown[]) => {
+    promiseOnly("get", rest)
+    const tab: Tab = await call(nativeGet, tabs, [tabId])
+    if (!tab || isOwnPage(tab)) throw new Error(`No tab with id: ${tabId}.`)
+    const first = (await listTabs())[0]
+    return { ...tab, groupId: -1, active: tab.active === true || first?.id === tab.id }
+  }
 
   for (const name of ["sendMessage", "update", "reload", "executeScript", "insertCSS"]) promisable(tabs, name)
 
@@ -123,16 +137,21 @@ export function installElectronCompat(c: any): void {
           throw pathA("A MAIN-world or async script (eval, screenshot)")
         }
         const { target } = opts
-        const where = target.allFrames ? { allFrames: true }
-          : target.frameIds?.length ? { frameId: target.frameIds[0] } : {}
-        let results: unknown[] = []
-        if (opts.files?.length) {
-          for (const file of opts.files) results = await call(nativeExecute, tabs, [target.tabId, { ...where, file }])
-        } else if (opts.func) {
-          const code = `(${opts.func.toString()})(...${JSON.stringify(opts.args ?? [])})`
-          results = await call(nativeExecute, tabs, [target.tabId, { ...where, code }])
+        const what = opts.files?.length ? opts.files.map((file) => ({ file }))
+          : opts.func ? [{ code: `(${opts.func.toString()})(...${JSON.stringify(opts.args ?? [])})` }] : []
+        const run = async (where: object): Promise<unknown[]> => {
+          let results: unknown[] = []
+          for (const script of what) results = (await call(nativeExecute, tabs, [target.tabId, { ...where, ...script }])) ?? []
+          return results
         }
-        return (results ?? []).map((result, i) => ({ frameId: i === 0 ? (target.frameIds?.[0] ?? 0) : i, result }))
+        if (target.frameIds?.length) {
+          const out: { frameId: number; result: unknown }[] = []
+          for (const frameId of target.frameIds) out.push({ frameId, result: (await run({ frameId }))[0] })
+          return out
+        }
+        // MV2 returns all-frame results top frame first and without ids: -1 marks an unknown frame.
+        const results = await run(target.allFrames ? { allFrames: true } : {})
+        return results.map((result, i) => ({ frameId: i === 0 ? 0 : -1, result }))
       },
     }
   }

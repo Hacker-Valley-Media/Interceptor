@@ -28,31 +28,46 @@ function installElectronCompat(c) {
   const nativeGet = tabs.get;
   const nativeExecute = tabs.executeScript;
   const ownPages = c.runtime.getURL("");
-  async function listTabs() {
-    let found;
-    if (nativeQuery) {
-      found = await call(nativeQuery, tabs, [{}]);
-    } else {
-      const probes = await Promise.all(Array.from({ length: 128 }, (_, i) => call(nativeGet, tabs, [i + 1]).catch(() => null)));
-      found = probes.filter(Boolean);
+  const BATCH = 128;
+  let ceiling = BATCH;
+  async function probeTabs() {
+    const found = [];
+    for (let from = 1;from <= ceiling; from += BATCH) {
+      const hits = (await Promise.all(Array.from({ length: BATCH }, (_, i) => call(nativeGet, tabs, [from + i]).catch(() => null)))).filter(Boolean);
+      found.push(...hits);
+      if (hits.length && from + BATCH > ceiling)
+        ceiling += BATCH;
     }
-    const pages = found.filter((t) => !String(t.url ?? "").startsWith(ownPages)).sort((a, b) => a.id - b.id).map((t) => ({ ...t, groupId: -1 }));
+    return found;
+  }
+  const isOwnPage = (t) => String(t.url ?? "").startsWith(ownPages);
+  async function listTabs() {
+    const found = nativeQuery ? await call(nativeQuery, tabs, [{}]) : await probeTabs();
+    const pages = found.filter((t) => !isOwnPage(t)).sort((a, b) => a.id - b.id).map((t) => ({ ...t, groupId: -1 }));
     if (pages.length && !pages.some((t) => t.active))
       pages[0].active = true;
     return pages;
   }
-  const withCallback = (p, cb) => {
-    if (typeof cb !== "function")
-      return p;
-    p.then((v) => cb(v), () => cb(undefined));
+  const promiseOnly = (name, args) => {
+    if (args.some((a) => typeof a === "function"))
+      throw new TypeError(`tabs.${name}: the Electron compatibility layer takes no callback; await the result`);
   };
-  tabs.query = (info = {}, cb) => withCallback(listTabs().then((all) => all.filter((t) => (info.active === undefined || t.active === info.active) && (info.groupId === undefined || info.groupId === -1))), cb);
-  tabs.get = (tabId, cb) => withCallback(listTabs().then((all) => {
-    const tab = all.find((t) => t.id === tabId);
-    if (!tab)
+  const FILTERS = new Set(["active", "groupId", "currentWindow", "lastFocusedWindow", "windowId", "windowType"]);
+  tabs.query = async (info = {}, ...rest) => {
+    promiseOnly("query", [info, ...rest]);
+    const unknown = Object.keys(info).filter((k) => !FILTERS.has(k));
+    if (unknown.length)
+      throw pathA(`tabs.query filter '${unknown.join("', '")}'`);
+    return (await listTabs()).filter((t) => (info.active === undefined || t.active === info.active) && (info.groupId === undefined || info.groupId === -1));
+  };
+  tabs.get = async (tabId, ...rest) => {
+    promiseOnly("get", rest);
+    const tab = await call(nativeGet, tabs, [tabId]);
+    if (!tab || isOwnPage(tab))
       throw new Error(`No tab with id: ${tabId}.`);
-    return tab;
-  }), cb);
+    const first = (await listTabs())[0];
+    return { ...tab, groupId: -1, active: tab.active === true || first?.id === tab.id };
+  };
   for (const name of ["sendMessage", "update", "reload", "executeScript", "insertCSS"])
     promisable(tabs, name);
   const NET_BUFFER = /^(get|clear|set)_(net|page_comm|captured_headers|sse)/;
@@ -88,16 +103,21 @@ function installElectronCompat(c) {
           throw pathA("A MAIN-world or async script (eval, screenshot)");
         }
         const { target } = opts;
-        const where = target.allFrames ? { allFrames: true } : target.frameIds?.length ? { frameId: target.frameIds[0] } : {};
-        let results = [];
-        if (opts.files?.length) {
-          for (const file of opts.files)
-            results = await call(nativeExecute, tabs, [target.tabId, { ...where, file }]);
-        } else if (opts.func) {
-          const code = `(${opts.func.toString()})(...${JSON.stringify(opts.args ?? [])})`;
-          results = await call(nativeExecute, tabs, [target.tabId, { ...where, code }]);
+        const what = opts.files?.length ? opts.files.map((file) => ({ file })) : opts.func ? [{ code: `(${opts.func.toString()})(...${JSON.stringify(opts.args ?? [])})` }] : [];
+        const run = async (where) => {
+          let results2 = [];
+          for (const script of what)
+            results2 = await call(nativeExecute, tabs, [target.tabId, { ...where, ...script }]) ?? [];
+          return results2;
+        };
+        if (target.frameIds?.length) {
+          const out = [];
+          for (const frameId of target.frameIds)
+            out.push({ frameId, result: (await run({ frameId }))[0] });
+          return out;
         }
-        return (results ?? []).map((result, i) => ({ frameId: i === 0 ? target.frameIds?.[0] ?? 0 : i, result }));
+        const results = await run(target.allFrames ? { allFrames: true } : {});
+        return results.map((result, i) => ({ frameId: i === 0 ? 0 : -1, result }));
       }
     };
   }

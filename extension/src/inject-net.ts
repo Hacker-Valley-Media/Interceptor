@@ -614,6 +614,7 @@ if ((window as any)[K_NET]) {
     _interceptor_url?: string
     _interceptor_method?: string
     _interceptor_headers?: Record<string, string>
+    _interceptor_sync?: boolean
   }
 
   const origOpen = XHR.open
@@ -626,6 +627,7 @@ if ((window as any)[K_NET]) {
     this._interceptor_url = overriddenUrl
     this._interceptor_method = method
     this._interceptor_headers = {}
+    this._interceptor_sync = rest[0] === false
     if (overriddenUrl !== rawUrl) {
       return origOpen.apply(this, [method, overriddenUrl, ...rest] as any)
     }
@@ -703,16 +705,18 @@ if ((window as any)[K_NET]) {
       })
     }
 
-    if (!mock) return origSend.apply(this, arguments as any)
+    // A synchronous request has to be finished when send() returns, so it is never held.
+    const sync = this._interceptor_sync === true
+    if (!mock || (sync && !local)) return origSend.apply(this, arguments as any)
     const args = arguments
     if (!local) {
       void holdFor(mock.delayMs).then(() => origSend.apply(this, args as any))
       return
     }
-    // ponytail: answered asynchronously even for sync XHR, and non-text responseTypes
-    // (arraybuffer, blob, document) get the text; convert if a site needs them.
+    // ponytail: non-text responseTypes (arraybuffer, blob, document) get the text;
+    // convert if a site needs them.
     const { status, text, contentType } = overrideParts(mock)
-    void holdFor(mock.delayMs).then(() => {
+    const answer = () => {
       let response: unknown = text
       if (this.responseType === "json") { try { response = JSON.parse(text) } catch { response = null } }
       // Instance accessors shadow the XMLHttpRequest.prototype getters.
@@ -725,7 +729,9 @@ if ((window as any)[K_NET]) {
       self.getResponseHeader = (name: string) => name.toLowerCase() === "content-type" ? contentType : null
       self.getAllResponseHeaders = () => `content-type: ${contentType}\r\n`
       for (const type of ["readystatechange", "load", "loadend"]) this.dispatchEvent(new ProgressEvent(type))
-    })
+    }
+    if (sync) answer()
+    else void holdFor(mock.delayMs).then(answer)
   }
 
 	  const OriginalEventSource = (window as any).EventSource as typeof EventSource | undefined

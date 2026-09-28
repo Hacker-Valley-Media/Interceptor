@@ -3,12 +3,13 @@ import { installElectronCompat } from "../extension/src/background/electron-comp
 
 // A callback-only chrome like Electron's MV2 host: promise calls throw, lastError
 // carries failures, and the background page shows up as a tab.
-function fakeElectron(opts: { hasQuery: boolean }) {
+function fakeElectron(opts: { hasQuery: boolean; extraTabIds?: number[] }) {
   const tabs = new Map<number, { id: number; url: string; active: boolean; groupId: number }>([
     [1, { id: 1, url: "file:///app/index.html", active: false, groupId: 0 }],
     [2, { id: 2, url: "chrome-extension://abc/_generated_background_page.html", active: false, groupId: 0 }],
     [3, { id: 3, url: "file:///app/prefs.html", active: false, groupId: 0 }],
   ])
+  for (const id of opts.extraTabIds ?? []) tabs.set(id, { id, url: `file:///app/window-${id}.html`, active: false, groupId: 0 })
   const runtime: { lastError?: { message: string }; getURL: (p: string) => string } = {
     getURL: (p: string) => `chrome-extension://abc/${p}`,
   }
@@ -59,11 +60,34 @@ for (const hasQuery of [true, false]) {
 }
 
 describe("electron compat shims", () => {
-  test("storage.local and callback forms keep working", async () => {
+  test("storage.local gets a promise form and keeps its callback form", async () => {
     const { chrome } = fakeElectron({ hasQuery: true })
     expect(await chrome.storage.local.get(null)).toEqual({ contextId: "app:x" })
-    const viaCallback = await new Promise((r) => chrome.tabs.query({}, r))
-    expect((viaCallback as unknown[]).length).toBe(2)
+    expect(await new Promise<unknown>((r) => chrome.storage.local.get(null, r))).toEqual({ contextId: "app:x" })
+  })
+
+  test("tabs.query and tabs.get refuse a callback and an unsupported filter", async () => {
+    const { chrome } = fakeElectron({ hasQuery: true })
+    await expect(chrome.tabs.query({}, () => {})).rejects.toThrow("takes no callback")
+    await expect(chrome.tabs.get(1, () => {})).rejects.toThrow("takes no callback")
+    await expect(chrome.tabs.query({ url: "file:///app/*" })).rejects.toThrow("tabs.query filter 'url'")
+    expect((await chrome.tabs.query({ windowType: "normal" })).length).toBe(2)
+  })
+
+  test("Electron 18: the id scan grows past 128 and tabs.get takes any id", async () => {
+    const { chrome } = fakeElectron({ hasQuery: false, extraTabIds: [120, 200, 700] })
+    const ids = (await chrome.tabs.query({})).map((t: { id: number }) => t.id)
+    expect(ids).toEqual([1, 3, 120, 200])
+    expect((await chrome.tabs.get(700)).url).toBe("file:///app/window-700.html")
+    expect((await chrome.tabs.get(1)).active).toBe(true)
+    expect((await chrome.tabs.get(200)).active).toBe(false)
+  })
+
+  test("scripting.executeScript runs in every requested frame and marks unknown frame ids", async () => {
+    const { chrome, executed } = fakeElectron({ hasQuery: true })
+    const perFrame = await chrome.scripting.executeScript({ target: { tabId: 1, frameIds: [4, 9] }, files: ["content.js"] })
+    expect(perFrame).toEqual([{ frameId: 4, result: 42 }, { frameId: 9, result: 42 }])
+    expect(executed).toEqual([{ tabId: 1, frameId: 4, file: "content.js" }, { tabId: 1, frameId: 9, file: "content.js" }])
   })
 
   test("scripting.executeScript runs files and sync functions through tabs.executeScript", async () => {

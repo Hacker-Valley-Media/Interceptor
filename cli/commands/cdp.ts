@@ -207,9 +207,9 @@ async function runApp(sub: string, args: string[], contextId: string | undefined
         const name = app ?? "<app>"
         console.error("")
         console.error("Path 0 needs a free inspector port. Relaunch the app with one (loses unsaved app state):")
-        console.error(`  interceptor macos app quit ${name}`)
+        console.error(`  interceptor macos app quit "${name}"`)
         console.error(`  open -g -a "${name}" --args --inspect=9339`)
-        console.error(`  interceptor macos cdp app attach ${name} --inspect-port 9339`)
+        console.error(`  interceptor macos cdp app attach "${name}" --inspect-port 9339`)
       } else if (!result.success && (data.fuseLikelyOff || data.fallback === "cdp")) {
         const name = app ?? "<app>"
         console.error("")
