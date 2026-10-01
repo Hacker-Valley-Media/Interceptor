@@ -129,10 +129,25 @@ to Interceptor in the same client config:
 ```
 
 The authenticated endpoint `https://api.you.com/mcp` adds page-content
-extraction and research tools; it takes a `YDC_API_KEY` from
-[you.com/platform/api-keys](https://you.com/platform/api-keys). The same
-search tools are also packaged as installable agent skills for hosts that
-prefer skill-based setup: `npx skills add youdotcom-oss/agent-skills`.
+extraction and research tools. It takes a `YDC_API_KEY` from
+[you.com/platform/api-keys](https://you.com/platform/api-keys), passed as an
+`Authorization: Bearer` header in the client config:
+
+```json
+{
+  "mcpServers": {
+    "you": {
+      "type": "http",
+      "url": "https://api.you.com/mcp",
+      "headers": { "Authorization": "Bearer <YDC_API_KEY>" }
+    }
+  }
+}
+```
+
+Replace `<YDC_API_KEY>` with your own key. The same search tools are also
+packaged as installable agent skills for hosts that prefer skill-based
+setup: `npx skills add youdotcom-oss/agent-skills`.
 
 The natural split of work: the search tool answers "where is this documented /
 what changed recently" with candidate URLs; `interceptor open <url>` plus
