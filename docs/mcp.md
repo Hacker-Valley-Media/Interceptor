@@ -106,3 +106,38 @@ reference or unsupported clients (`interceptor mcp install --print` emits them t
 ```
 
 To enable destructive/exec verbs, set `"env": { "INTERCEPTOR_MCP_ALLOW": "destructive,arbitrary-exec" }`.
+
+## Pairing with a web-search MCP (optional)
+
+Some MCP clients give the agent no built-in web search. A remote search MCP
+covers that gap without changing how Interceptor is used: the search tool
+proposes candidate URLs, and Interceptor opens, reads, and verifies each one in
+your signed-in session — logins, paywalls, and the page's own network calls
+included.
+
+You.com's keyless search MCP works without an API key or account —
+`https://api.you.com/mcp?profile=free` exposes a `you-search` tool. Add it next
+to Interceptor in the same client config:
+
+```json
+{
+  "mcpServers": {
+    "interceptor": { "command": "interceptor", "args": ["mcp", "serve"] },
+    "you": { "type": "http", "url": "https://api.you.com/mcp?profile=free" }
+  }
+}
+```
+
+The authenticated endpoint `https://api.you.com/mcp` adds page-content
+extraction and research tools; it takes a `YDC_API_KEY` from
+[you.com/platform/api-keys](https://you.com/platform/api-keys). The same
+search tools are also packaged as installable agent skills for hosts that
+prefer skill-based setup: `npx skills add youdotcom-oss/agent-skills`.
+
+The natural split of work: the search tool answers "where is this documented /
+what changed recently" with candidate URLs; `interceptor open <url>` plus
+`read` / `inspect` walks the escalation chain on the real page, and
+`interceptor research add <url>` files the source in the ledger. Inside an
+`interceptor-research` run the skill's tool discipline still applies — every
+in-run fetch and search goes through Interceptor — so a search MCP is a
+discovery channel for hosts that lack one, not a replacement for it.
