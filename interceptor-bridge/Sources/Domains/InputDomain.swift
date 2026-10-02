@@ -87,6 +87,13 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
 
     private static let windowInputUnavailable =
         "window-addressed input is not available on this macOS build (nothing was delivered)"
+    private static let deliveryFailed =
+        "could not deliver to the window: no event source, or the window could not be given focus (nothing was delivered)"
+
+    /// The daemon's browser path. It arrives under its own domain key so a
+    /// bridge that predates window-addressed input answers "no handler"
+    /// instead of posting the event to the frontmost app.
+    static let browserDomainKey = "bginput"
 
     // `window` is a CGWindowID from `macos windows`; `windowTitle` +
     // `windowBounds` come from the daemon for a browser tab's window.
@@ -109,6 +116,9 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     private func addressed(_ action: [String: Any], pid: pid_t?, point: CGPoint?, refKeys: [String], mustResolve: Bool) -> Addressed {
         var request = windowRequest(action)
         let explicit = request.isExplicit
+        if (action["type"] as? String)?.hasPrefix("macos_\(Self.browserDomainKey)_") == true, request.bounds == nil {
+            return .problem("the daemon named no window to address (nothing was delivered)")
+        }
         guard pid != nil || explicit else { return .none }
         guard cgsWindowInputAvailable else {
             // Without a pid there is no safe unaddressed fallback: the HID tap
@@ -240,7 +250,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             case .session(let session):
                 DispatchQueue.global().async {
                     guard session.click(at: point, right: right, count: clickCount) else {
-                        completion(WireFormat.error("failed to create event source"))
+                        completion(WireFormat.error(Self.deliveryFailed))
                         return
                     }
                     completion(WireFormat.success("clicked at (\(Int(point.x)), \(Int(point.y))) → \(session.routing)"))
@@ -351,7 +361,12 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         }
 
         DispatchQueue.global().async {
-            session?.focus()
+            if session != nil { BackgroundInputSession.gate.lock() }
+            defer { if session != nil { BackgroundInputSession.gate.unlock() } }
+            if let session = session, !session.focus() {
+                completion(WireFormat.error(Self.deliveryFailed))
+                return
+            }
             let posted = Self.postUnicodeKeystrokes(text, to: postTarget)
             session?.restore()
             guard posted else {
@@ -450,7 +465,12 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         }
 
         DispatchQueue.global().async { [self] in
-            session?.focus()
+            if session != nil { BackgroundInputSession.gate.lock() }
+            defer { if session != nil { BackgroundInputSession.gate.unlock() } }
+            if let session = session, !session.focus() {
+                completion(WireFormat.error(Self.deliveryFailed))
+                return
+            }
             defer { session?.restore() }
             // Press modifiers
             let modKeyCodes: [(String, CGKeyCode)] = [
@@ -628,7 +648,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             case .session(let session):
                 DispatchQueue.global().async {
                     guard session.drag(from: fromPoint, to: toPoint) else {
-                        completion(WireFormat.error("failed to create event source"))
+                        completion(WireFormat.error(Self.deliveryFailed))
                         return
                     }
                     completion(WireFormat.success("dragged from (\(Int(fromPoint.x)),\(Int(fromPoint.y))) to (\(Int(toPoint.x)),\(Int(toPoint.y))) → \(session.routing)"))

@@ -64,15 +64,20 @@ enum BackgroundInput {
             if let pid = pid, w.pid != pid {
                 return .problem("window \(id) belongs to pid \(w.pid), not the requested app/pid \(pid) (nothing was delivered)")
             }
+            if let point = point, !w.bounds.contains(point) {
+                return .problem("(\(Int(point.x)), \(Int(point.y))) is outside window \(id); 'interceptor macos windows' lists window frames (nothing was delivered)")
+            }
             return .found(w)
         }
         if let bounds = request.bounds {
-            let sameFrame = windows.filter { $0.layer == 0 && (pid == nil || $0.pid == pid) && near($0.bounds, bounds) }
-            var matches = sameFrame
-            if let title = request.title, !title.isEmpty {
-                let exact = sameFrame.filter { $0.title == title }
-                matches = exact.isEmpty ? sameFrame.filter { !$0.title.isEmpty && $0.title.hasPrefix(title) } : exact
+            // The frame alone is not enough: this match runs across every app,
+            // and two maximized windows share a frame.
+            guard let title = request.title, !title.isEmpty else {
+                return .problem("the tab has no title to tell its window apart from other windows (nothing was delivered)")
             }
+            let sameFrame = windows.filter { $0.layer == 0 && (pid == nil || $0.pid == pid) && near($0.bounds, bounds) }
+            let exact = sameFrame.filter { $0.title == title }
+            let matches = exact.isEmpty ? sameFrame.filter { $0.title.hasPrefix(title) } : exact
             if matches.count == 1 { return .found(matches[0]) }
             if matches.isEmpty {
                 return .problem("no on-screen window matches the tab's window (it may be minimized, hidden, or on another Space) (nothing was delivered)")
@@ -137,15 +142,25 @@ final class BackgroundInputSession: @unchecked Sendable {
 
     init(window: WindowInfo) { self.window = window }
 
+    // One addressed gesture at a time. Handlers run concurrently, and a focus
+    // record from a second gesture would move the first one's remaining
+    // events to the other window.
+    static let gate = NSLock()
+
     var routing: String { "pid=\(pid) window=\(window.id)" }
 
     // MARK: Focus
 
-    /// Makes the target window read as key to its app. Safe to call once per gesture.
-    func focus() {
-        guard undoFocus == nil, let front = cgsFrontProcess() else { return }
+    /// Makes the target window read as key to its app. Safe to call once per
+    /// gesture. False when the window could not be given focus: the caller
+    /// must not post, because the events would land in whichever window the
+    /// app last had key.
+    @discardableResult
+    func focus() -> Bool {
+        guard undoFocus == nil else { return true }
+        guard let front = cgsFrontProcess() else { return false }
         var target = ProcessSerialNumber()
-        guard GetProcessForPID(pid, &target) == noErr else { return }
+        guard GetProcessForPID(pid, &target) == noErr else { return false }
         let wid = window.id
         let targetIsFront = front.highLongOfPSN == target.highLongOfPSN && front.lowLongOfPSN == target.lowLongOfPSN
 
@@ -153,7 +168,7 @@ final class BackgroundInputSession: @unchecked Sendable {
         let fallbackKey = targetIsFront ? BackgroundInput.onScreenWindows().first(where: { $0.pid == pid && $0.layer == 0 })?.id : nil
         switch FocusPlan.decide(targetIsFrontProcess: targetIsFront, target: wid, frontAppKeyWindow: appKey?.id ?? fallbackKey) {
         case .none:
-            return
+            return true
         case .sameApp(let keyWindow):
             cgsPostFocusRecord(to: target, windowID: keyWindow, activate: false)
             cgsPostFocusRecord(to: target, windowID: wid, activate: true)
@@ -180,6 +195,7 @@ final class BackgroundInputSession: @unchecked Sendable {
         usleep(50_000)
         _ = cgsWakeWindowEventLoop(pid: pid, windowID: wid)
         usleep(30_000)
+        return true
     }
 
     /// Hands focus back to whoever had it. No-op when focus() sent nothing.
@@ -210,11 +226,13 @@ final class BackgroundInputSession: @unchecked Sendable {
 
     // MARK: Gestures
 
-    /// False when no event source could be created.
+    /// False when no event source could be created or the window could not
+    /// be given focus. Nothing was posted in either case.
     func click(at point: CGPoint, right: Bool, count: Int) -> Bool {
+        Self.gate.lock(); defer { Self.gate.unlock() }
         guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
         // A right-click is accepted by a non-key window; a left click is not.
-        if !right { focus() }
+        if !right, !focus() { return false }
         let button: CGMouseButton = right ? .right : .left
         postMouse(source, .mouseMoved, point, .left, phase: 2, clickState: 0)
         usleep(15_000)
@@ -229,8 +247,9 @@ final class BackgroundInputSession: @unchecked Sendable {
     }
 
     func drag(from: CGPoint, to: CGPoint, steps: Int = 20) -> Bool {
+        Self.gate.lock(); defer { Self.gate.unlock() }
         guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
-        focus()
+        guard focus() else { return false }
         postMouse(source, .mouseMoved, from, .left, phase: 2, clickState: 0)
         usleep(12_000)
         postMouse(source, .leftMouseDown, from, .left, subtype: 0)
@@ -249,6 +268,7 @@ final class BackgroundInputSession: @unchecked Sendable {
     }
 
     func scroll(at point: CGPoint, dy: Int32, dx: Int32, times: Int, intervalMs: Int) -> Bool {
+        Self.gate.lock(); defer { Self.gate.unlock() }
         guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
         let wid = Int64(window.id)
         for i in 0..<times {

@@ -3,9 +3,14 @@
 // The HID tap (os-input.ts) reaches only the frontmost window. When the
 // extension's gate reports an active tab in an unfocused window it returns a
 // `background` target; this module turns the action into the bridge's
-// window-addressed `macos_click` / `macos_type` / `macos_keys`, which name the
-// window by its frame and tab title. When the bridge cannot deliver, the
-// caller gets the gate's original refusal and hint back.
+// window-addressed click / type / keys, which name the window by its frame and
+// tab title. When the bridge cannot deliver, the caller gets the gate's
+// original refusal and hint back.
+//
+// The actions go to the bridge's `bginput` domain, not to `macos_click` /
+// `macos_type` / `macos_keys`. A bridge from before window-addressed input
+// ignores the window fields on those and posts to the frontmost app; it has no
+// `bginput` handler, so it refuses and nothing is delivered.
 
 import { translateCoords } from "./os-input-loader"
 
@@ -35,16 +40,16 @@ export function bridgeActionFor(action: OsAction): Record<string, unknown> | nul
       if (pageX === undefined || pageY === undefined) return null
       const { screenX, screenY } = translateCoords(pageX, pageY, windowBounds, (action.chromeUiHeight as number) || 88)
       return {
-        type: "macos_click", coords: `${screenX},${screenY}`,
+        type: "macos_bginput_click", coords: `${screenX},${screenY}`,
         right: action.button === "right", double: action.clickCount === 2, ...window,
       }
     }
     case "os_type":
-      return typeof action.text === "string" && action.text ? { type: "macos_type", text: action.text, ...window } : null
+      return typeof action.text === "string" && action.text ? { type: "macos_bginput_type", text: action.text, ...window } : null
     case "os_key": {
       if (typeof action.key !== "string" || !action.key) return null
       const modifiers = Array.isArray(action.modifiers) ? action.modifiers as string[] : []
-      return { type: "macos_keys", keys: [...modifiers, action.key].join("+"), ...window }
+      return { type: "macos_bginput_keys", keys: [...modifiers, action.key].join("+"), ...window }
     }
     default:
       return null

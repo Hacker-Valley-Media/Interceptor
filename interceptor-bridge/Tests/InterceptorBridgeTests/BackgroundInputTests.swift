@@ -30,6 +30,11 @@ final class BackgroundInputTests: XCTestCase {
         XCTAssertEqual(pick(pid: 300, point: CGPoint(x: 450, y: 450)), .found(windows[3]))
     }
 
+    func testPointOutsideTheNamedWindowIsRefused() {
+        // (100, 150) is inside window 31 only. Naming 32 must not click through it.
+        XCTAssertEqual(problem(pick(pid: 300, WindowRequest(windowID: 32), point: CGPoint(x: 100, y: 150)))?.contains("is outside window 32"), true)
+    }
+
     func testNamedWindowNeedsNoPid() {
         XCTAssertEqual(pick(WindowRequest(windowID: 22)), .found(windows[2]))
     }
@@ -76,8 +81,13 @@ final class BackgroundInputTests: XCTestCase {
     func testBrowserWindowWithNoMatchOrAnAmbiguousMatchIsRefused() {
         let frame = CGRect(x: 0, y: 30, width: 1728, height: 1011)
         XCTAssertEqual(problem(pick(WindowRequest(title: "Gone", bounds: frame)))?.contains("no on-screen window matches"), true)
-        // No title to tell three same-frame windows apart.
-        XCTAssertEqual(problem(pick(WindowRequest(title: "", bounds: frame)))?.contains("3 on-screen windows share"), true)
+        // The match runs across every app, so a tab with no title is never
+        // matched by frame alone, even when one window has that frame.
+        XCTAssertEqual(problem(pick(WindowRequest(title: "", bounds: frame)))?.contains("no title"), true)
+        XCTAssertEqual(problem(pick(WindowRequest(bounds: CGRect(x: 60, y: 118, width: 520, height: 452))))?.contains("no title"), true)
+        // Two windows with the same frame and the same title.
+        let twins = windows + [WindowInfo(id: 23, pid: 500, bounds: frame, title: "Inbox")]
+        XCTAssertEqual(problem(BackgroundInput.pick(from: twins, pid: nil, request: WindowRequest(title: "Inbox", bounds: frame), point: nil))?.contains("2 on-screen windows share"), true)
         XCTAssertEqual(problem(pick(WindowRequest(title: "A", bounds: CGRect(x: 5, y: 5, width: 9, height: 9))))?.contains("no on-screen window matches"), true)
     }
 
@@ -93,7 +103,8 @@ final class BackgroundInputTests: XCTestCase {
         // Keys go to a normal window, not the overlay in front of it.
         XCTAssertEqual(BackgroundInput.pick(from: list, pid: 400, request: WindowRequest(), point: nil), .found(list[1]))
         // A browser tab is never matched to a panel that happens to share its frame.
-        XCTAssertEqual(BackgroundInput.pick(from: list, pid: nil, request: WindowRequest(title: "", bounds: CGRect(x: 0, y: 0, width: 800, height: 600)), point: nil), .found(list[1]))
+        XCTAssertEqual(BackgroundInput.pick(from: list, pid: nil, request: WindowRequest(title: "Doc", bounds: CGRect(x: 0, y: 0, width: 800, height: 600)), point: nil), .found(list[1]))
+        XCTAssertEqual(problem(BackgroundInput.pick(from: list, pid: nil, request: WindowRequest(title: "overlay", bounds: CGRect(x: 0, y: 0, width: 800, height: 600)), point: nil))?.contains("no on-screen window matches"), true)
     }
 
     func testFocusPlan() {

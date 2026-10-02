@@ -200,10 +200,13 @@ export async function handleOsInputActions(
       const fg = await requireForegroundTab(tabId, backgroundOk)
       if (!fg.ok) return fg.result
       if (action.index !== undefined || action.ref || action.sensitive === true) {
+        // A framed ref lives in its own frame; the top frame has a different
+        // element under the same number.
+        const frameId = action.ref && typeof action.frameId === "number" ? action.frameId : undefined
         const focused = await sendToContentScript(tabId, {
           type: "focus", index: action.index, ref: action.ref,
           sensitive: action.sensitive, focused: action.index === undefined && !action.ref
-        }) as ActionResult
+        }, frameId) as ActionResult
         if (!focused.success) return focused
         await new Promise(r => setTimeout(r, 50))
       }

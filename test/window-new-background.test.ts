@@ -59,7 +59,7 @@ describe("window_create — handler focus gate", () => {
 // moves into the new window first; the shared default group stays put and the
 // result carries a groupWarning.
 describe("window_create — the caller's group follows it into the new window", () => {
-  async function create(action: Record<string, unknown>, groups: { id: number; title: string; windowId: number }[]) {
+  async function create(action: Record<string, unknown>, groups: { id: number; title: string; windowId: number }[], moveFails = false) {
     const { namedGroups } = await import("../extension/src/background/tab-group")
     namedGroups.clear()
     const globals = globalThis as { chrome?: unknown }
@@ -83,7 +83,10 @@ describe("window_create — the caller's group follows it into the new window", 
       tabGroups: {
         query: async () => groups,
         get: async (id: number) => { const x = groups.find(y => y.id === id); if (!x) throw new Error("no group"); return x },
-        move: async (id: number, to: { windowId: number }) => { moves.push([id, to]); groups.find(x => x.id === id)!.windowId = to.windowId },
+        move: async (id: number, to: { windowId: number }) => {
+          if (moveFails) throw new Error("Tabs cannot be edited right now")
+          moves.push([id, to]); groups.find(x => x.id === id)!.windowId = to.windowId
+        },
         update: async () => {},
       },
       storage: {},
@@ -102,6 +105,13 @@ describe("window_create — the caller's group follows it into the new window", 
     expect(r.moves).toEqual([[40, { windowId: 11, index: -1 }]])
     expect(r.tabWindow).toBe(11)
     expect(r.data.groupWarning).toBeUndefined()
+  })
+
+  test("a named group that could not be moved is reported, by name", async () => {
+    const r = await create({ group: "mine" }, [{ id: 40, title: "interceptor-mine", windowId: 1 }], true)
+    expect(r.tabWindow).toBe(1)
+    expect(r.data.groupWarning).toContain("group 'mine' could not be moved")
+    expect(r.data.groupWarning).not.toContain("shared default group")
   })
 
   test("a named group that does not exist yet moves nothing", async () => {

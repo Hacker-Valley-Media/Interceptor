@@ -99,7 +99,9 @@ export async function handleWindowActions(
           try {
             const landed = await chrome.tabs.get(firstTab.id)
             if (landed.windowId !== win.id) {
-              groupWarning = `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`
+              groupWarning = group
+                ? `group '${group}' could not be moved, so the tab joined it in window ${landed.windowId} and has no window of its own`
+                : `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`
             }
           } catch {}
         }

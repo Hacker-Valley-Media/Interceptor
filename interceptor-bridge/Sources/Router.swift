@@ -19,6 +19,8 @@ final class Router: @unchecked Sendable {
     private static let axGatedDomains: Set<String> = [
         "tree", "find", "inspect", "value", "action", "focused", "windows",
         "resize", "move", "click", "type", "keys", "scroll", "drag",
+        // The daemon's window-addressed browser input (click / type / keys).
+        "bginput",
         "menu", "text",
         // issue #244: the admin-prompt filler reads and drives SecurityAgent via AX.
         "authdialog",

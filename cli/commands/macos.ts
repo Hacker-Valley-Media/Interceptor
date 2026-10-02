@@ -2185,8 +2185,15 @@ function flagInt(args: string[], flag: string): number | undefined {
 // `--window <id>`: the window id (from `macos windows`) an input verb should
 // reach, for when another window of the same app covers the point.
 function withWindow(action: Action, args: string[]): void {
-  const id = flagInt(args, "--window")
-  if (id !== undefined) action.window = id
+  if (!args.includes("--window")) return
+  const raw = flagVal(args, "--window")
+  // Strict digits: a dropped or half-parsed id would send the input to the
+  // frontmost window instead.
+  if (raw === undefined || !/^[1-9]\d*$/.test(raw)) {
+    console.error(`error: --window takes a numeric window id (the windowId field of 'interceptor macos windows'), got '${raw ?? ""}'`)
+    process.exit(1)
+  }
+  action.window = Number(raw)
 }
 
 // Collect every value that follows a repeated --flag occurrence.

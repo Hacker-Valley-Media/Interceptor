@@ -75,6 +75,27 @@ describe("macos parser", () => {
     expect((parseMacosCommand(["macos", "type", "hello", "--window", "4242"]) as Record<string, unknown>).text).toBe("hello")
   })
 
+  test("--window refuses anything but a numeric id instead of dropping it", () => {
+    // A dropped id would send the input to the frontmost window. 'e5' is the
+    // ref 'macos windows' prints beside the windowId.
+    const realExit = process.exit
+    const realError = console.error
+    const errors: string[] = []
+    process.exit = ((code?: number) => { throw new Error(`__exit_${code}`) }) as never
+    console.error = (...args: unknown[]) => { errors.push(args.join(" ")) }
+    try {
+      for (const bad of ["e5", "12abc", "0", "-3", "4.2"]) {
+        expect(() => parseMacosCommand(["macos", "click", "100,200", "--window", bad])).toThrow("__exit_1")
+      }
+      expect(() => parseMacosCommand(["macos", "keys", "Meta+A", "--app", "TextEdit", "--window"])).toThrow("__exit_1")
+    } finally {
+      process.exit = realExit
+      console.error = realError
+    }
+    expect(errors).toHaveLength(6)
+    expect(errors[0]).toContain("--window takes a numeric window id")
+  })
+
   test("type --app carries the app target through to the bridge", () => {
     const action = parseMacosCommand(["macos", "type", "hello", "--app", "TextEdit"]) as Record<string, unknown>
     expect(action.type).toBe("macos_type")
