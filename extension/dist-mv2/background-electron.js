@@ -314,6 +314,20 @@ async function addTabToNamedGroupSerialized(tabId, label, colorOverride) {
   }
   return groupId;
 }
+async function moveNamedGroupToWindow(label, windowId) {
+  if (!hasTabGroupApi() || typeof chrome.tabGroups.move !== "function")
+    return;
+  const groupId = await ensureNamedGroup(label);
+  if (groupId === -1)
+    return;
+  try {
+    const group = await chrome.tabGroups.get(groupId);
+    if (group.windowId !== windowId)
+      await chrome.tabGroups.move(groupId, { windowId, index: -1 });
+  } catch (err) {
+    console.warn(`moveNamedGroupToWindow: group '${label}' stayed where it was:`, err);
+  }
+}
 async function isTabInNamedGroup(tabId, label) {
   if (!hasTabGroupApi())
     return true;
@@ -816,8 +830,8 @@ async function cdpAttachActDetach(tabId, method, params) {
 }
 
 // extension/src/background/capabilities/os-input.ts
-var FOREGROUND_HINT = "trusted OS input needs the target tab visible in the OS-focused window. " + "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " + "If the page really needs an OS click, `interceptor tab switch <id>` shows the tab in its window " + "and replaces what the user is looking at; switch back to the previous tab when done.";
-async function requireForegroundTab(tabId) {
+var FOREGROUND_HINT = "trusted OS input reaches a tab only when it is the active tab of a window that is not minimized. " + "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " + "If the page really needs an OS click, run `interceptor window new`: it moves your tab group into its own background window. " + "`interceptor tab switch <id>` there shows the tab in that window only, and a full install then delivers the click without changing the frontmost app. " + "Never switch tabs in a window the user is working in.";
+async function requireForegroundTab(tabId, backgroundOk = false) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) {
     return { ok: false, result: { success: false, error: `tab ${tabId} not found` } };
@@ -840,46 +854,96 @@ async function requireForegroundTab(tabId) {
       data: { hint: FOREGROUND_HINT }
     } };
   }
-  if (!win.focused) {
-    return { ok: false, result: {
-      success: false,
-      error: `window ${tab.windowId} is not the OS-focused window — trusted OS events are routed by the OS to whatever is frontmost, not to the target tab`,
-      data: { hint: FOREGROUND_HINT }
-    } };
-  }
-  return { ok: true, windowBounds: {
+  const windowBounds = {
     left: win.left || 0,
     top: win.top || 0,
     width: win.width || 0,
     height: win.height || 0
-  } };
+  };
+  if (!win.focused) {
+    const error = `window ${tab.windowId} is not the OS-focused window — trusted OS events are routed by the OS to whatever is frontmost, not to the target tab`;
+    if (!backgroundOk) {
+      return { ok: false, result: { success: false, error, data: { hint: FOREGROUND_HINT } } };
+    }
+    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT } };
+  }
+  return { ok: true, windowBounds };
+}
+async function chromeUiHeightFor(tabId, windowHeight, viewportHeight) {
+  const fallback = 88 + (debuggerAttached.has(tabId) ? 35 : 0);
+  if (typeof viewportHeight !== "number")
+    return fallback;
+  let zoom = 1;
+  try {
+    zoom = await chrome.tabs.getZoom(tabId);
+  } catch {
+    return fallback;
+  }
+  const fromViewport = windowHeight - viewportHeight;
+  return zoom === 1 && fromViewport >= 0 && fromViewport <= 200 ? fromViewport : fallback;
+}
+async function rectIn(tabId, query, frameId) {
+  const result = await sendToContentScript(tabId, { type: "rect", ...query }, frameId);
+  return result.success && result.data ? result.data : null;
+}
+async function frameOrigin(tabId, frameId) {
+  const frames = await chrome.webNavigation?.getAllFrames({ tabId }).catch(() => null) ?? [];
+  let left = 0;
+  let top = 0;
+  let host = null;
+  for (let id = frameId, hops = 0;id !== 0; hops++) {
+    const frame = frames.find((f) => f.frameId === id);
+    if (!frame || frame.parentFrameId < 0 || hops > 16)
+      return null;
+    host = await rectIn(tabId, { hostOfFrame: id, hostUrl: frame.url }, frame.parentFrameId);
+    if (!host)
+      return null;
+    left += host.left;
+    top += host.top;
+    id = frame.parentFrameId;
+  }
+  return host && { ...host, left, top };
 }
 async function handleOsInputActions(action, tabId) {
+  const backgroundOk = action.backgroundOk === true;
   switch (action.type) {
     case "os_click": {
-      const fg = await requireForegroundTab(tabId);
+      const fg = await requireForegroundTab(tabId, backgroundOk);
       if (!fg.ok)
         return fg.result;
       const windowBounds = fg.windowBounds;
       let pageX = action.x;
       let pageY = action.y;
+      let viewportHeight;
+      let pageHidden = false;
+      const frameId = typeof action.frameId === "number" ? action.frameId : 0;
+      const origin = frameId !== 0 ? await frameOrigin(tabId, frameId) : null;
+      if (frameId !== 0 && !origin) {
+        return {
+          success: false,
+          error: `could not locate iframe ${frameId} in the page, so nothing was clicked. ` + "Click by screen point instead: 'interceptor macos click X,Y --app <browser> --window <id>'"
+        };
+      }
       if ((action.index !== undefined || action.ref) && (pageX === undefined || pageY === undefined)) {
-        const rectResult = await sendToContentScript(tabId, {
-          type: "rect",
-          index: action.index,
-          ref: action.ref
-        });
-        if (!rectResult.success || !rectResult.data) {
+        const rect = await rectIn(tabId, { index: action.index, ref: action.ref }, frameId || undefined);
+        if (!rect) {
           return { success: false, error: "failed to get element coordinates for os_click" };
         }
-        const rect = rectResult.data;
         pageX = rect.left + rect.width / 2;
         pageY = rect.top + rect.height / 2;
+        viewportHeight = rect.viewportHeight;
+        pageHidden = rect.pageHidden === true;
       }
       if (pageX === undefined || pageY === undefined) {
         return { success: false, error: "os_click requires element target or x,y coordinates" };
       }
-      const chromeUiHeight = action.chromeUiHeight || 88 + (debuggerAttached.has(tabId) ? 35 : 0);
+      if (origin) {
+        pageX += origin.left;
+        pageY += origin.top;
+        viewportHeight = origin.viewportHeight;
+        pageHidden = origin.pageHidden === true;
+      }
+      const chromeUiHeight = action.chromeUiHeight || await chromeUiHeightFor(tabId, windowBounds.height, viewportHeight);
       return {
         success: true,
         data: {
@@ -888,18 +952,24 @@ async function handleOsInputActions(action, tabId) {
           windowBounds,
           button: action.button || "left",
           clickCount: action.clickCount || 1,
-          chromeUiHeight
+          chromeUiHeight,
+          ...fg.background ? { background: { ...fg.background, pageHidden } } : {}
         }
       };
     }
     case "os_key": {
-      const fg = await requireForegroundTab(tabId);
+      const fg = await requireForegroundTab(tabId, backgroundOk);
       if (!fg.ok)
         return fg.result;
-      return { success: true, data: { method: "os_event", key: action.key, modifiers: action.modifiers || [] } };
+      return { success: true, data: {
+        method: "os_event",
+        key: action.key,
+        modifiers: action.modifiers || [],
+        ...fg.background ? { background: fg.background, windowBounds: fg.windowBounds } : {}
+      } };
     }
     case "os_type": {
-      const fg = await requireForegroundTab(tabId);
+      const fg = await requireForegroundTab(tabId, backgroundOk);
       if (!fg.ok)
         return fg.result;
       if (action.index !== undefined || action.ref || action.sensitive === true) {
@@ -914,7 +984,11 @@ async function handleOsInputActions(action, tabId) {
           return focused;
         await new Promise((r) => setTimeout(r, 50));
       }
-      return { success: true, data: { method: "os_event", text: action.text } };
+      return { success: true, data: {
+        method: "os_event",
+        text: action.text,
+        ...fg.background ? { background: fg.background, windowBounds: fg.windowBounds } : {}
+      } };
     }
     case "os_move": {
       const fg = await requireForegroundTab(tabId);
@@ -2627,13 +2701,27 @@ async function handleWindowActions(action, _tabId) {
           return { success: false, error: "window creation returned no window" };
         const firstTab = win.tabs?.[0];
         let groupId;
+        let groupWarning;
         if (firstTab?.id && !action.incognito) {
           const group = typeof action.group === "string" && GROUP_LABEL_RE.test(action.group) ? action.group : undefined;
+          if (group && typeof win.id === "number")
+            await moveNamedGroupToWindow(group, win.id);
           groupId = group ? await addTabToNamedGroup(firstTab.id, group, action.groupColor) : await addTabToInterceptorGroup(firstTab.id);
+          try {
+            const landed = await chrome.tabs.get(firstTab.id);
+            if (landed.windowId !== win.id) {
+              groupWarning = `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`;
+            }
+          } catch {}
         }
         return {
           success: true,
-          data: { windowId: win.id, groupId, tabs: win.tabs?.map((t) => ({ id: t.id, url: t.url })) }
+          data: {
+            windowId: win.id,
+            groupId,
+            tabs: win.tabs?.map((t) => ({ id: t.id, url: t.url })),
+            ...groupWarning ? { groupWarning } : {}
+          }
         };
       }
       case "window_close": {
