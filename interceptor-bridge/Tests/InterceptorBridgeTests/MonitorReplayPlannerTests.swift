@@ -17,21 +17,36 @@ final class MonitorReplayPlannerTests: XCTestCase {
         XCTAssertTrue(plan.contains("# Instruction: send hello in slack"))
     }
 
-    func testFrontmostTriggersAppLaunchOrActivate() {
+    // The recorded user switched apps; the replay must not. An app change
+    // becomes a background `open`, with or without a bundle id on the event.
+    func testAppChangeOpensInTheBackgroundAndNeverTakesFocus() {
         let events: [[String: Any]] = [
-            ["event": "frontmost", "app": "Slack", "bundleId": "com.tinyspeck.slackmacgap"]
+            ["event": "frontmost", "app": "Slack", "bundleId": "com.tinyspeck.slackmacgap"],
+            ["event": "key", "kc": "Meta+K", "app": "Slack"],
+            ["event": "frontmost", "app": "Mail"],
+            ["event": "click", "x": 120, "y": 240, "app": "Mail"],
+            ["event": "input", "r": "AXTextField", "n": "To", "v": "sam", "app": "Mail"],
         ]
         let plan = MonitorReplayPlanner.generateReplayPlan(events: events, instruction: nil)
-        // Bundle id is preferred when present.
-        XCTAssertTrue(plan.contains("interceptor macos app launch \"com.tinyspeck.slackmacgap\""))
+        XCTAssertTrue(plan.contains("interceptor macos open \"Slack\""))
+        XCTAssertTrue(plan.contains("interceptor macos open \"Mail\""))
+        XCTAssertFalse(plan.contains("app activate"))
+        XCTAssertFalse(plan.contains("app launch"))
+        XCTAssertFalse(plan.contains("--activate"))
+        // Every input line names its app, so none falls back to the frontmost app.
+        XCTAssertTrue(plan.contains("interceptor macos type \"AXTextField:To\" \"sam\" --app \"Mail\""))
+        for line in plan.split(separator: "\n") where line.hasPrefix("interceptor macos keys") || line.hasPrefix("interceptor macos click 1") {
+            XCTAssertTrue(line.contains("--app"), "no --app on: \(line)")
+        }
     }
 
-    func testFrontmostFallsBackToAppActivateWhenNoBundleId() {
+    func testOneOpenPerAppRun() {
         let events: [[String: Any]] = [
-            ["event": "frontmost", "app": "Slack"]
+            ["event": "key", "kc": "a", "app": "Slack"],
+            ["event": "key", "kc": "b", "app": "Slack"],
         ]
         let plan = MonitorReplayPlanner.generateReplayPlan(events: events, instruction: nil)
-        XCTAssertTrue(plan.contains("interceptor macos app activate \"Slack\""))
+        XCTAssertEqual(plan.components(separatedBy: "interceptor macos open \"Slack\"").count - 1, 1)
     }
 
     func testClickWithRoleAndNameEmitsInterceptorClick() {
