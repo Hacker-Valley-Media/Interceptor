@@ -52,3 +52,68 @@ describe("window_create — handler focus gate", () => {
     expect((await createWith({ focused: "true" })).focused).toBe(false)
   })
 })
+
+// A tab group lives in one window. `window new` in a group that already had a
+// tab elsewhere used to add the new tab to that group, which pulled the tab
+// back to the group's window and left the new window empty. A named group now
+// moves into the new window first; the shared default group stays put and the
+// result carries a groupWarning.
+describe("window_create — the caller's group follows it into the new window", () => {
+  async function create(action: Record<string, unknown>, groups: { id: number; title: string; windowId: number }[]) {
+    const { namedGroups } = await import("../extension/src/background/tab-group")
+    namedGroups.clear()
+    const globals = globalThis as { chrome?: unknown }
+    const originalChrome = globals.chrome
+    const moves: unknown[] = []
+    // The new tab is in window 11 until it is added to a group that lives elsewhere.
+    let tabWindow = 11
+    globals.chrome = {
+      windows: {
+        create: async () => ({ id: 11, tabs: [{ id: 77, url: "" }] }),
+        get: async (id: number) => ({ id, type: "normal" }),
+      },
+      tabs: {
+        get: async (id: number) => ({ id, windowId: tabWindow }),
+        group: async (args: { groupId?: number }) => {
+          const target = groups.find(x => x.id === args.groupId)
+          if (target) tabWindow = target.windowId
+          return args.groupId ?? 900
+        },
+      },
+      tabGroups: {
+        query: async () => groups,
+        get: async (id: number) => { const x = groups.find(y => y.id === id); if (!x) throw new Error("no group"); return x },
+        move: async (id: number, to: { windowId: number }) => { moves.push([id, to]); groups.find(x => x.id === id)!.windowId = to.windowId },
+        update: async () => {},
+      },
+      storage: {},
+    }
+    try {
+      const result = await handleWindowActions({ type: "window_create", ...action }, 0)
+      return { data: result.data as { windowId: number; groupWarning?: string }, moves, tabWindow }
+    } finally {
+      globals.chrome = originalChrome
+      namedGroups.clear()
+    }
+  }
+
+  test("a named group in another window moves to the new window, so the tab stays there", async () => {
+    const r = await create({ group: "mine" }, [{ id: 40, title: "interceptor-mine", windowId: 1 }])
+    expect(r.moves).toEqual([[40, { windowId: 11, index: -1 }]])
+    expect(r.tabWindow).toBe(11)
+    expect(r.data.groupWarning).toBeUndefined()
+  })
+
+  test("a named group that does not exist yet moves nothing", async () => {
+    const r = await create({ group: "fresh" }, [])
+    expect(r.moves).toEqual([])
+    expect(r.tabWindow).toBe(11)
+  })
+
+  test("the shared default group is not dragged along; the result says the tab has no window of its own", async () => {
+    const r = await create({}, [{ id: 50, title: "interceptor", windowId: 1 }])
+    expect(r.moves).toEqual([])
+    expect(r.tabWindow).toBe(1)
+    expect(r.data.groupWarning).toContain("no window of its own")
+  })
+})

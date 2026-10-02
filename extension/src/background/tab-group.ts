@@ -204,6 +204,23 @@ async function addTabToNamedGroupSerialized(
   return groupId
 }
 
+/**
+ * Moves a named group and its tabs into `windowId`. A group lives in one
+ * window, so adding a tab from another window to it pulls that tab back to the
+ * group's window. No-op when the group does not exist or is already there.
+ */
+export async function moveNamedGroupToWindow(label: string, windowId: number): Promise<void> {
+  if (!hasTabGroupApi() || typeof chrome.tabGroups.move !== "function") return
+  const groupId = await ensureNamedGroup(label)
+  if (groupId === -1) return
+  try {
+    const group = await chrome.tabGroups.get(groupId)
+    if (group.windowId !== windowId) await chrome.tabGroups.move(groupId, { windowId, index: -1 })
+  } catch (err) {
+    console.warn(`moveNamedGroupToWindow: group '${label}' stayed where it was:`, err)
+  }
+}
+
 export async function isTabInNamedGroup(tabId: number, label: string): Promise<boolean> {
   if (!hasTabGroupApi()) return true
   const groupId = await ensureNamedGroup(label)
