@@ -296,6 +296,10 @@ public actor VMInstance {
             if pausedStateOnly && !manifest.hasPausedState {
                 throw VMSnapshotError.missing("snapshot '\(tag)' has no paused machine state")
             }
+            if !diskOnly && manifest.hasPausedState {
+                // Preflight before restoreDisk replaces the live Disk.img.
+                try VMSnapshot.requirePausedStateSupport("paused-state restore")
+            }
             if !pausedStateOnly && manifest.hasDiskClone {
                 _ = try VMSnapshot.restoreDisk(bundle: bundle, tag: tag)
             }

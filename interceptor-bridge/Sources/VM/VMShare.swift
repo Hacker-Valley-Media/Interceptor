@@ -64,6 +64,7 @@ public struct VMShare: Sendable {
             } catch {
                 throw VMShareError.invalidTag("rosetta tag: \(error.localizedDescription)")
             }
+            #if arch(arm64)
             let rosetta: VZLinuxRosettaDirectoryShare
             do {
                 rosetta = try VZLinuxRosettaDirectoryShare()
@@ -75,6 +76,9 @@ public struct VMShare: Sendable {
             let dev = VZVirtioFileSystemDeviceConfiguration(tag: tag)
             dev.share = rosetta
             devs.append(dev)
+            #else
+            throw VMShareError.rosettaUnavailable("Rosetta directory shares require an Apple silicon host")
+            #endif
         }
 
         return devs
@@ -85,7 +89,11 @@ public struct VMShare: Sendable {
     @available(macOS 13.0, *)
     public static var rosettaAvailable: Bool {
         // VZLinuxRosettaDirectoryShare.availability is the typed accessor.
+        #if arch(arm64)
         return VZLinuxRosettaDirectoryShare.availability == .installed
+        #else
+        return false
+        #endif
     }
 #endif
 }
