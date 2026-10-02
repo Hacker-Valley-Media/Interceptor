@@ -37,6 +37,7 @@
       <li><code>interceptor window new</code> moves your tab group into the new background window, so the new tab stays there and keeps painting. On the shared default group the result carries a <code>groupWarning</code>.</li>
       <li>Replay plans from <code>macos monitor export --plan</code> no longer ask apps to come forward. An app change is written as <code>interceptor macos open</code>, and typed text is addressed to its app. An app that is not running is launched in the background, and macOS can still bring it forward while it starts.</li>
       <li>The bundled agent skills now put background work first: use a background verb, then <code>tab keepalive</code>, then your own window with <code>window new</code>, and take focus only when nothing else works.</li>
+      <li>The native macOS bridge now builds from source on Intel Macs. The macOS packages are still built for Apple silicon. On Intel, the <code>interceptor macos vm</code> commands that need Apple silicon say so, and a paused-state snapshot or restore is refused before any file is touched. Thanks to kootik for the fix in #290.</li>
     </ul>
   </section>
   <section data-sparkle-version="1.0.21">
