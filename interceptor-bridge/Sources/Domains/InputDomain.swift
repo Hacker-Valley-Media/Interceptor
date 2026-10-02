@@ -78,6 +78,16 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         for ref in refs {
             if let problem = selector.explicitTargetProblem(ref: ref, appName: appName, pid: pid) { return problem }
         }
+        // A ref and --window must name the same window. The AX press and
+        // value-set paths act on the ref before any window is picked, so a
+        // mismatch would change the ref's window while reporting the other.
+        if let wanted = windowRequest(action).windowID {
+            for ref in refs {
+                guard let element = refRegistry.resolve(ref),
+                      let owner = BackgroundInput.windowID(owning: element, transport: transport), owner != wanted else { continue }
+                return "ref \(ref) is in window \(owner), not window \(wanted); drop --window or use a ref from that window (nothing was delivered)"
+            }
+        }
         return nil
     }
 
