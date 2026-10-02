@@ -113,9 +113,9 @@ public struct VMImage: Sendable {
         #endif
     }
 
+    #if arch(arm64)
     /// `mostFeaturefulSupportedConfiguration` for a given IPSW. Used by
     /// `MacRuntime` to pick the hardware model + minimum CPU/memory.
-    #if arch(arm64)
     public static func loadRestoreImage(at url: URL) async throws -> VZMacOSRestoreImage {
         do {
             return try await VZMacOSRestoreImage.image(from: url)

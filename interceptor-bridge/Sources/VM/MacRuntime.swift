@@ -292,6 +292,7 @@ public struct MacRuntime: Sendable {
     // VZMacOSInstaller / VZMacPlatformConfiguration and friends are declared only
     // for Apple silicon in the Virtualization SDK; macOS guests cannot run on an
     // Intel host. Keep the API surface so VMInstance / VmDomain compile unchanged.
+    /// Intel hosts: always throws `unsupportedHost`. macOS guests need Apple silicon.
     @available(macOS 13.0, *)
     public static func install(
         spec: VMSpec,
@@ -301,6 +302,7 @@ public struct MacRuntime: Sendable {
         throw MacRuntimeError.unsupportedHost("macOS guests require an Apple silicon host")
     }
 
+    /// Intel hosts: always throws `unsupportedHost`. macOS guests need Apple silicon.
     @available(macOS 13.0, *)
     public static func run(
         spec: VMSpec,
