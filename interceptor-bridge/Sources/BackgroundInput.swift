@@ -183,8 +183,13 @@ final class BackgroundInputSession: @unchecked Sendable {
         case .none:
             return true
         case .sameApp(let keyWindow):
-            cgsPostFocusRecord(to: target, windowID: keyWindow, activate: false)
-            cgsPostFocusRecord(to: target, windowID: wid, activate: true)
+            // Both records have to be posted, or the events that follow land
+            // in the window that is still key.
+            guard cgsPostFocusRecord(to: target, windowID: keyWindow, activate: false),
+                  cgsPostFocusRecord(to: target, windowID: wid, activate: true) else {
+                cgsPostFocusRecord(to: target, windowID: keyWindow, activate: true)
+                return false
+            }
             let transport = self.transport
             undoFocus = {
                 // Public AX hands the key window back without raising anything.
@@ -198,8 +203,11 @@ final class BackgroundInputSession: @unchecked Sendable {
             var frontPSN = front
             _ = GetProcessPID(&frontPSN, &frontPid)
             let frontWindow = BackgroundInput.onScreenWindows().first(where: { $0.pid == frontPid && $0.layer == 0 })?.id ?? 0
-            cgsPostFocusRecord(to: front, windowID: wid, activate: false)
-            cgsPostFocusRecord(to: target, windowID: wid, activate: true)
+            guard cgsPostFocusRecord(to: front, windowID: wid, activate: false),
+                  cgsPostFocusRecord(to: target, windowID: wid, activate: true) else {
+                cgsPostFocusRecord(to: front, windowID: frontWindow, activate: true)
+                return false
+            }
             undoFocus = {
                 cgsPostFocusRecord(to: target, windowID: wid, activate: false)
                 cgsPostFocusRecord(to: front, windowID: frontWindow, activate: true)
