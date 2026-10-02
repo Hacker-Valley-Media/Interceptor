@@ -92,6 +92,10 @@ describe("os_click on a ref inside an iframe", () => {
     const result = await handleOsInputActions({ type: "os_type", backgroundOk: true, ref: "e3", frameId: 7, text: "hello" }, 42)
     expect(result.success).toBe(true)
     expect(sent.map(s => [s.frameId, s.action.type, s.action.ref])).toEqual([[7, "focus", "e3"]])
+    // An index target with --frame goes to that frame too.
+    sent.length = 0
+    await handleOsInputActions({ type: "os_type", backgroundOk: true, index: 3, frameId: 7, text: "hello" }, 42)
+    expect(sent.map(s => [s.frameId, s.action.index])).toEqual([[7, 3]])
     // No ref: the already-focused element is used, and the request stays on the top frame.
     sent.length = 0
     await handleOsInputActions({ type: "os_type", backgroundOk: true, sensitive: true, frameId: 7, text: "hello" }, 42)

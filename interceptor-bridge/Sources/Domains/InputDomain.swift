@@ -20,6 +20,12 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        // The browser path always names its window. Without one, every verb
+        // below would fall back to the frontmost app.
+        if (action["type"] as? String)?.hasPrefix("macos_\(Self.browserDomainKey)_") == true, windowRequest(action).bounds == nil {
+            completion(WireFormat.error("the daemon named no window to address (nothing was delivered)"))
+            return
+        }
         switch command {
         case "click":
             handleClick(action, completion: completion)
@@ -99,7 +105,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     // `windowBounds` come from the daemon for a browser tab's window.
     private func windowRequest(_ action: [String: Any]) -> WindowRequest {
         var request = WindowRequest()
-        if let id = action["window"] as? Int, id > 0 { request.windowID = CGWindowID(id) }
+        if let id = action["window"] as? Int, id > 0 { request.windowID = CGWindowID(clamping: id) }
         request.title = action["windowTitle"] as? String
         if let b = action["windowBounds"] as? [String: Any],
            let left = (b["left"] as? NSNumber)?.doubleValue, let top = (b["top"] as? NSNumber)?.doubleValue,
@@ -116,9 +122,6 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     private func addressed(_ action: [String: Any], pid: pid_t?, point: CGPoint?, refKeys: [String], mustResolve: Bool) -> Addressed {
         var request = windowRequest(action)
         let explicit = request.isExplicit
-        if (action["type"] as? String)?.hasPrefix("macos_\(Self.browserDomainKey)_") == true, request.bounds == nil {
-            return .problem("the daemon named no window to address (nothing was delivered)")
-        }
         guard pid != nil || explicit else { return .none }
         guard cgsWindowInputAvailable else {
             // Without a pid there is no safe unaddressed fallback: the HID tap
@@ -361,14 +364,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         }
 
         DispatchQueue.global().async {
-            if session != nil { BackgroundInputSession.gate.lock() }
-            defer { if session != nil { BackgroundInputSession.gate.unlock() } }
-            if let session = session, !session.focus() {
+            guard let posted = BackgroundInputSession.gesture(session, { Self.postUnicodeKeystrokes(text, to: postTarget) }) else {
                 completion(WireFormat.error(Self.deliveryFailed))
                 return
             }
-            let posted = Self.postUnicodeKeystrokes(text, to: postTarget)
-            session?.restore()
             guard posted else {
                 completion(WireFormat.error("failed to create event source"))
                 return
@@ -464,14 +463,8 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             postTarget = .cghidEventTap
         }
 
-        DispatchQueue.global().async { [self] in
-            if session != nil { BackgroundInputSession.gate.lock() }
-            defer { if session != nil { BackgroundInputSession.gate.unlock() } }
-            if let session = session, !session.focus() {
-                completion(WireFormat.error(Self.deliveryFailed))
-                return
-            }
-            defer { session?.restore() }
+        DispatchQueue.global().async { [self, flags] in
+            let delivered: Void? = BackgroundInputSession.gesture(session) {
             // Press modifiers
             let modKeyCodes: [(String, CGKeyCode)] = [
                 ("shift", 56), ("control", 59), ("ctrl", 59), ("alt", 58), ("option", 58),
@@ -504,6 +497,11 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
                         post(event, on: postTarget)
                     }
                 }
+            }
+            }
+            guard delivered != nil else {
+                completion(WireFormat.error(Self.deliveryFailed))
+                return
             }
 
             let routing: String

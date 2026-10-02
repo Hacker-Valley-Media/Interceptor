@@ -2189,7 +2189,7 @@ function withWindow(action: Action, args: string[]): void {
   const raw = flagVal(args, "--window")
   // Strict digits: a dropped or half-parsed id would send the input to the
   // frontmost window instead.
-  if (raw === undefined || !/^[1-9]\d*$/.test(raw)) {
+  if (raw === undefined || !/^[1-9]\d{0,9}$/.test(raw) || Number(raw) > 0xffffffff) {
     console.error(`error: --window takes a numeric window id (the windowId field of 'interceptor macos windows'), got '${raw ?? ""}'`)
     process.exit(1)
   }

@@ -147,6 +147,19 @@ final class BackgroundInputSession: @unchecked Sendable {
     // events to the other window.
     static let gate = NSLock()
 
+    /// Runs `body` as one keyboard gesture on `session`'s window: takes the
+    /// gate, gives the window focus, hands focus back, and releases the gate
+    /// before returning, so the caller answers outside the lock. nil when the
+    /// window could not be given focus; `body` did not run. With no session
+    /// there is nothing to address and `body` runs as is.
+    static func gesture<T>(_ session: BackgroundInputSession?, _ body: () -> T) -> T? {
+        guard let session = session else { return body() }
+        gate.lock(); defer { gate.unlock() }
+        guard session.focus() else { return nil }
+        defer { session.restore() }
+        return body()
+    }
+
     var routing: String { "pid=\(pid) window=\(window.id)" }
 
     // MARK: Focus

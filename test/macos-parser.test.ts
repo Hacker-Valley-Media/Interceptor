@@ -84,7 +84,7 @@ describe("macos parser", () => {
     process.exit = ((code?: number) => { throw new Error(`__exit_${code}`) }) as never
     console.error = (...args: unknown[]) => { errors.push(args.join(" ")) }
     try {
-      for (const bad of ["e5", "12abc", "0", "-3", "4.2"]) {
+      for (const bad of ["e5", "12abc", "0", "-3", "4.2", "4294967296"]) {
         expect(() => parseMacosCommand(["macos", "click", "100,200", "--window", bad])).toThrow("__exit_1")
       }
       expect(() => parseMacosCommand(["macos", "keys", "Meta+A", "--app", "TextEdit", "--window"])).toThrow("__exit_1")
@@ -92,7 +92,7 @@ describe("macos parser", () => {
       process.exit = realExit
       console.error = realError
     }
-    expect(errors).toHaveLength(6)
+    expect(errors).toHaveLength(7)
     expect(errors[0]).toContain("--window takes a numeric window id")
   })
 

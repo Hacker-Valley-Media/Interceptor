@@ -701,7 +701,7 @@ async function targetForAction(action: Record<string, unknown>, actionType: stri
       }
       // --window alone delivers to that window's app, which is not
       // necessarily the frontmost one the check below reads.
-      if (action.window !== undefined) throw new Error("--secret with --window also needs --app or --pid, so the target check names the app that receives the secret")
+      if (action.window !== undefined || action.windowBounds !== undefined) throw new Error("--secret with --window also needs --app or --pid, so the target check names the app that receives the secret")
       const fm = await bridgeCall({ type: "macos_frontmost" }, 10_000)
       const bid = (fm.data as { bundleId?: unknown } | undefined)?.bundleId
       if (!fm.success || typeof bid !== "string" || !bid) throw new Error(`could not read the frontmost app for the target check: ${fm.error ?? "no bundle id"}`)
