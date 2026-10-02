@@ -44,13 +44,14 @@ interceptor monitor task quality "Teach Slack triage"        # name or task-<id>
 ## Use replay plans correctly
 
 - Prefer the exported semantic replay commands over raw event streams.
-- The replay plan emits `interceptor macos app activate "X"` lines around app switches, then `act`/`click`/`type`/`keys` against AX selectors that re-resolve at replay time. Refs are not preserved verbatim.
+- The replay plan never takes focus. Where the recording changed apps it emits `interceptor macos open "X"` (a no-op on a running app, a background launch otherwise), and every `click` / `type` / `keys` / `scroll` / `menu` line carries `--app "X"`, so the replay runs against each app in the background while the user keeps working. Refs are not preserved verbatim.
 - Treat `--plan` output as the highest-value artifact. A 2-minute recorded native workflow turns into ~30–60 lines of `interceptor macos ...` commands that survive UI churn.
 
 ## Verify what was really captured
 
 - Check whether the exported plan includes the actions you care about, not just background churn.
-- Check whether app-switch events landed where you expect — if the user briefly tabbed to a different app mid-flow, the plan will activate that app before continuing.
+- Check whether app-switch events landed where you expect — if the user briefly tabbed to a different app mid-flow, the plan has lines addressed to that app. Delete them if they are not part of the workflow.
+- Do not add `app activate` lines to a plan. If a step only works with the app in front, say so to the user instead.
 - Save proven plans as live recipes; treat them as documentation of the workflow.
 
 ## Note on the browser monitor

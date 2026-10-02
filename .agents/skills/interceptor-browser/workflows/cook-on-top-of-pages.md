@@ -189,12 +189,14 @@ interceptor eval --main "
 "
 ```
 
-Optional: if your environment has a trusted OS-input path, you can also hide the browser chrome after takeover:
+Optional, on a full install: when the window is already in full screen, toggle the browser's toolbar off. Address the keys to the window; do not activate the browser.
 
 ```bash
-interceptor macos app activate "Brave Browser"
-interceptor macos keys "Meta+Shift+F"    # Brave / Chrome full-screen toggle
+interceptor macos windows --app "Brave Browser"                                  # read the windowId of the page's window
+interceptor macos keys "Meta+Shift+F" --app "Brave Browser" --window <windowId>  # "Always Show Toolbar in Full Screen" on/off
 ```
+
+`Meta+Shift+F` is a persistent browser setting, not a full-screen toggle: send it again when you are done to put it back. Putting a window into full screen takes over the user's display, so do that only when the user asked for a full-screen show.
 
 `Meta+Shift+F` (⌘⇧F) triggers Chromium's actual full-screen mode — the whole screen is yours, no tabs, no URL bar. `Esc` or the same shortcut exits.
 
@@ -266,7 +268,7 @@ This is the literal sequence I ran for the demo:
 
 5. **Plus-up pass 3** — confetti-style dramatic reveal with screen shake (`body { animation: shake .25s infinite }`) + glitch-clip reveal card.
 
-6. **Optional full-screen cook** — nuke the page, repaint as pure roses + headline. If trusted OS input is available, activate Brave and send `Meta+Shift+F` through `interceptor macos keys`.
+6. **Optional full-screen cook** — nuke the page, repaint as pure roses + headline. On a full install, hide the toolbar with `interceptor macos keys "Meta+Shift+F" --app "Brave Browser" --window <windowId>` (no activation; send it again afterwards to restore the setting).
 
 7. **Exit** — `Esc` or reload the tab. Page restores cleanly.
 

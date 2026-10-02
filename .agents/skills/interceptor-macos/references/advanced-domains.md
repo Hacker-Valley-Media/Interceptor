@@ -6,7 +6,7 @@ The macOS bridge supports more than the daily-driver set. These domains are full
 
 ```bash
 interceptor macos apps                           # All running apps with name, pid, bundle ID
-interceptor macos app activate "Finder"          # Bring app to front
+interceptor macos app activate "Finder"          # FOCUS CHANGE: only when the user asks for the app to come forward
 interceptor macos app hide "Finder"              # Hide
 interceptor macos app quit "Finder"              # Quit
 interceptor macos app launch "com.apple.finder"  # Launch by bundle ID
