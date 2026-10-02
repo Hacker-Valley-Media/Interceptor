@@ -973,7 +973,7 @@ async function handleOsInputActions(action, tabId) {
       if (!fg.ok)
         return fg.result;
       if (action.index !== undefined || action.ref || action.sensitive === true) {
-        const frameId = action.ref && typeof action.frameId === "number" ? action.frameId : undefined;
+        const frameId = (action.ref || action.index !== undefined) && typeof action.frameId === "number" ? action.frameId : undefined;
         const focused = await sendToContentScript(tabId, {
           type: "focus",
           index: action.index,
