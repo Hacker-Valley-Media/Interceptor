@@ -48,7 +48,7 @@ Use it from any agent that can run shell commands, or through its built-in [Mode
 
 ## Get started
 
-Download an installer from [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest). Start with Browser for web tasks, or Full for native Mac and iPhone work.
+Download an installer from [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest). Start with Browser for web tasks, or Full for native Mac and iPhone work. The macOS packages are built for Apple silicon. On an Intel Mac, build from source (see [Development and contributions](#development-and-contributions)).
 
 | Host / package | What it enables |
 |---|---|
@@ -258,7 +258,7 @@ macOS package removal: `sudo bash "/Library/Application Support/Interceptor/unin
 
 The CLI, daemon, and browser extension use TypeScript and Bun. The native Mac bridge and iPhone runner use Swift. A local daemon routes commands to the selected browser, bridge, app runtime, or device.
 
-For a source install, use Bun and an installed Chrome or Brave browser. The default build on macOS also builds the native bridge and requires macOS 15+ and a Swift 6.2 toolchain:
+For a source install, use Bun and an installed Chrome or Brave browser. The default build on macOS also builds the native bridge and requires macOS 15+ and a Swift 6.2 toolchain. Source builds work on Apple silicon and Intel Macs. The `interceptor macos vm` commands require Apple silicon.
 
 ```bash
 git clone https://github.com/Hacker-Valley-Media/Interceptor.git
