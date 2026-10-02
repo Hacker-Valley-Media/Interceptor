@@ -68,10 +68,12 @@ enum MonitorReplayPlanner {
             let role = (event["r"] as? String) ?? ""
             let name = (event["n"] as? String) ?? ""
 
-            // The recording changed apps here. A replay must not take the
+            // The recording changed apps here. A replay must not ask for the
             // user's focus the way the recorded user did: `open` is a no-op on
             // a running app and a background launch otherwise, and every verb
-            // below is pinned to its app with --app.
+            // below is pinned to its app with --app. A cold launch is the one
+            // case macOS can still bring forward: an app may activate itself
+            // while it starts, whatever the launch asked for.
             if !app.isEmpty && app != lastApp {
                 lines.append("interceptor macos open \(escapeArg(app))")
                 lastApp = app

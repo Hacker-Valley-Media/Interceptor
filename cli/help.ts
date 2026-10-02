@@ -376,7 +376,7 @@ Capture:
   interceptor screenshot --element N         Capture element by ref (off-screen elements supported)
   interceptor screenshot --region X,Y,W,H   Capture page region (rendered + cropped)
   interceptor screenshot --scale 2           Override pixel ratio (e.g. retina from 1x display)
-  interceptor screenshot --pixel             Pixel-true compositor capture (captureVisibleTab — the tab's window must be on screen and not covered; Chrome need not be focused)
+  interceptor screenshot --pixel             Pixel-true compositor capture (captureVisibleTab — the tab's window must be on screen; the browser need not be focused; a fully covered Chrome window can return a stale frame)
   interceptor screenshot --save              Save one auto-named file in cwd; takes no path value
   interceptor screenshot --format png        Output format: png (default), jpeg, or webp
   interceptor screenshot --quality 80        Encode quality 0-100 (defaults: png 92, jpeg 92, webp 85)

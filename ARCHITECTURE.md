@@ -181,7 +181,7 @@ Caps: 64 KiB per entry, JSON / text / XML / JS content types only, conservative 
 - masked password `input` → `# TODO` line
 - correlated `fetch` / `xhr` with no persisted body → `# interceptor net log --filter ...` cue line
 
-The macOS monitor has its own planner, [`MonitorReplayPlanner`](interceptor-bridge/Sources/Domains/MonitorReplayPlanner.swift), behind `interceptor macos monitor export <sid> --plan`. Its plans never take focus. A recorded app change becomes `interceptor macos open "<app>"`, once per app (a no-op on a running app, a background launch otherwise), never `app activate` or `app launch`. Every `click`, `type`, `keys`, `scroll`, and `menu` line carries `--app "<app>"`, so the plan replays against each app in the background through the window-addressed delivery described under *macOS bridge*. Pinned by `MonitorReplayPlannerTests`.
+The macOS monitor has its own planner, [`MonitorReplayPlanner`](interceptor-bridge/Sources/Domains/MonitorReplayPlanner.swift), behind `interceptor macos monitor export <sid> --plan`. Its plans never ask for focus. A recorded app change becomes `interceptor macos open "<app>"`, once per app (a no-op on a running app, a background launch otherwise), never `app activate` or `app launch`. The one case that can still change the frontmost app is a cold launch: an app may activate itself while it starts, whatever the launch asked for. Every `click`, `type`, `keys`, `scroll`, and `menu` line carries `--app "<app>"`, so the plan replays against each app in the background through the window-addressed delivery described under *macOS bridge*. Pinned by `MonitorReplayPlannerTests`.
 
 ---
 

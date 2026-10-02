@@ -44,7 +44,7 @@ interceptor monitor task quality "Teach Slack triage"        # name or task-<id>
 ## Use replay plans correctly
 
 - Prefer the exported semantic replay commands over raw event streams.
-- The replay plan never takes focus. Where the recording changed apps it emits `interceptor macos open "X"` (a no-op on a running app, a background launch otherwise), and every `click` / `type` / `keys` / `scroll` / `menu` line carries `--app "X"`, so the replay runs against each app in the background while the user keeps working. Refs are not preserved verbatim.
+- The replay plan never asks for focus. Where the recording changed apps it emits `interceptor macos open "X"` (a no-op on a running app, a background launch otherwise; an app that is not running can still come forward while it starts, so replay against apps that are already open), and every `click` / `type` / `keys` / `scroll` / `menu` line carries `--app "X"`, so the replay runs against each app in the background while the user keeps working. Refs are not preserved verbatim.
 - Treat `--plan` output as the highest-value artifact. A 2-minute recorded native workflow turns into ~30–60 lines of `interceptor macos ...` commands that survive UI churn.
 
 ## Verify what was really captured

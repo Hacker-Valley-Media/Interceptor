@@ -198,9 +198,7 @@ interceptor macos keys "Meta+Shift+F" --app "Brave Browser" --window <windowId> 
 
 `Meta+Shift+F` is a persistent browser setting, not a full-screen toggle: send it again when you are done to put it back. Putting a window into full screen takes over the user's display, so do that only when the user asked for a full-screen show.
 
-`Meta+Shift+F` (⌘⇧F) triggers Chromium's actual full-screen mode — the whole screen is yours, no tabs, no URL bar. `Esc` or the same shortcut exits.
-
-> `interceptor macos keys` produces OS-level CGEvents, so shortcuts the browser normally intercepts (like full-screen toggle) actually fire. Web-level `interceptor keys` will **not** work for browser-chrome shortcuts — they only reach the page.
+> `interceptor macos keys` produces OS-level CGEvents, so shortcuts the browser normally intercepts (like the toolbar toggle) actually fire. Web-level `interceptor keys` will **not** work for browser-chrome shortcuts — they only reach the page.
 
 If you do **not** have the macOS path available, the cook still works. Full-screen browser chrome hiding is optional polish, not the core technique.
 

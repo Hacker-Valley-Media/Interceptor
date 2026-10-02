@@ -35,7 +35,7 @@
       <li><code>--trusted</code> clicks, typing, and keys now work on a browser window that is not focused, on a full install. The tab has to be the one showing in its window. The result says the input was delivered in the background.</li>
       <li>A <code>--trusted</code> click on an element inside an iframe now lands on that element. It used to click a different element in the top page.</li>
       <li><code>interceptor window new</code> moves your tab group into the new background window, so the new tab stays there and keeps painting. On the shared default group the result carries a <code>groupWarning</code>.</li>
-      <li>Replay plans from <code>macos monitor export --plan</code> no longer bring apps forward. An app change is written as <code>interceptor macos open</code>, and typed text is addressed to its app.</li>
+      <li>Replay plans from <code>macos monitor export --plan</code> no longer ask apps to come forward. An app change is written as <code>interceptor macos open</code>, and typed text is addressed to its app. An app that is not running is launched in the background, and macOS can still bring it forward while it starts.</li>
       <li>The bundled agent skills now put background work first: use a background verb, then <code>tab keepalive</code>, then your own window with <code>window new</code>, and take focus only when nothing else works.</li>
     </ul>
   </section>

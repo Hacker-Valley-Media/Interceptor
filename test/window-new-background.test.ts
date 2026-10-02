@@ -93,6 +93,7 @@ describe("window_create — the caller's group follows it into the new window", 
     }
     try {
       const result = await handleWindowActions({ type: "window_create", ...action }, 0)
+      expect(result.success).toBe(true)
       return { data: result.data as { windowId: number; groupWarning?: string }, moves, tabWindow }
     } finally {
       globals.chrome = originalChrome
