@@ -421,6 +421,8 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
             let ref = refRegistry.register(win, pid: app.processIdentifier)
             let title = getStringAttribute(win, kAXTitleAttribute as CFString) ?? ""
             var entry: [String: Any] = ["ref": ref, "title": title]
+            // The id `--window` takes on the input verbs.
+            if let windowId = cgsWindowID(of: win) { entry["windowId"] = Int(windowId) }
             if let frame = getFrame(win) {
                 entry["frame"] = ["x": frame.origin.x, "y": frame.origin.y,
                                  "width": frame.size.width, "height": frame.size.height]

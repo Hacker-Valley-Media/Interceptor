@@ -246,8 +246,9 @@ Compound (agent-optimized):
   interceptor style remove <handle>          Remove a previously injected stylesheet
   interceptor act <ref>                      Click + wait + return updated tree + diff
   interceptor act <ref> "value"              Type into field + wait + return updated tree
-  interceptor act <ref> --trusted            HID-sourced trusted input (isTrusted: true); requires the target tab
-                                             active in the OS-focused window — refuses otherwise, never moves focus
+  interceptor act <ref> --trusted            HID-sourced trusted input (isTrusted: true); the target tab must be the
+                                             active tab of a non-minimized window. A window that is not OS-focused is
+                                             reached in the background on a full install; never moves focus
   interceptor act <ref> --keys "Enter"       Send keyboard shortcut instead
   interceptor act <ref> --no-read            Skip post-action tree read
   interceptor inspect                        Tree + text + network log + headers
@@ -358,7 +359,7 @@ Tabs:
   interceptor tab close [id]                 Close tab
   interceptor tab keepalive <id> [--off]     Make a hidden managed tab read as visible and run its animation frames (no focus change)
   interceptor tab switch <id>                Switch to tab (explicit focus move; 'tab switch' back to the tab that was showing is allowed)
-  interceptor window new [url]               Open a new browser window in the background
+  interceptor window new [url]               Open a background window and move your tab group into it (your own window: its tabs paint, and 'tab switch' there never touches the user's view)
   interceptor window new [url] --activate    Open a new browser window and focus it (explicit opt-in)
   interceptor window list                    List all browser windows
   interceptor window close <id>              Close a browser window
@@ -577,7 +578,9 @@ macOS Bridge (full install only):
   'macos app activate', 'macos open --activate', 'open --activate',
   'tab new --activate', 'window new --activate', 'tab switch <id>', and 'window focus <id>'.
   Every other 'macos *' verb and every routine 'open'/'tab new'/'window new' leaves focus alone.
-  A page that will not render in a background tab: 'tab keepalive <id>', not 'tab switch'.
+  The user is usually working on this Mac: never take focus to make your own work easier.
+  A page that will not render in a background tab: 'tab keepalive <id>'. If it needs a real paint,
+  'window new [url]' gives your tab group its own background window; 'tab switch' only inside that window.
 
   Compound (agent-optimized):
   interceptor macos open <app>               Tree + windows + app info (no foregrounding)
@@ -596,24 +599,27 @@ macOS Bridge (full install only):
   interceptor macos value <ref> ["<text>"]   Read or set element value
   interceptor macos action <ref> press|increment|decrement|...
   interceptor macos focused [--app <name>]   Currently focused element
-  interceptor macos windows [--app <name>]   All windows with frames
+  interceptor macos windows [--app <name>]   All windows with frames and window ids
   interceptor macos move <ref> --x N --y N
   interceptor macos resize <ref> --width N --height N
 
   Input (AX-first, PID-routed CGEvent fallback):
-    Refs route through AX. --app/--pid route via CGEvent.postToPid (no focus change).
+    Refs route through AX. --app/--pid/--window deliver to one window of that app in the
+    background (no focus change, cursor stays put) and refuse when no window resolves.
     Bare coordinates fall back to system HID tap (legacy: follows frontmost).
+    --window <id> names the window (ids: interceptor macos windows) when another
+    window of the same app covers the point.
   interceptor macos click <ref>              AX press
-  interceptor macos click X,Y --app <name>   Coordinate click via postToPid
+  interceptor macos click X,Y --app <name> [--window <id>]   Coordinate click in that app's window
   interceptor macos click X,Y                Coordinate click via system HID (legacy)
   interceptor macos click <ref> --double|--right
   interceptor macos type <ref> "<text>"      AX value-set on text-bearing role
-  interceptor macos type "<text>" --app <name>   Type via postToPid keys
+  interceptor macos type "<text>" --app <name> [--window <id>]   Type into that app's window
   interceptor macos type [<ref>] --secret <name> Type a vault secret by name (allowlisted per app)
-  interceptor macos keys "Meta+A" [--app <name>|--pid N]
-  interceptor macos scroll up|down|left|right N [--app <name>] [--times N] [--interval-ms N]
+  interceptor macos keys "Meta+A" [--app <name>|--pid N] [--window <id>]
+  interceptor macos scroll up|down|left|right N [--app <name>] [--ref <ref>] [--window <id>] [--times N] [--interval-ms N]
   interceptor macos drag <fromRef> <toRef> [--app <name>]
-  interceptor macos drag X1,Y1 X2,Y2 [--app <name>]
+  interceptor macos drag X1,Y1 X2,Y2 [--app <name>] [--window <id>]
 
   Apps & Windows:
   interceptor macos apps                     List running apps with PIDs

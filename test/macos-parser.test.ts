@@ -56,6 +56,25 @@ describe("macos parser", () => {
     expect(action.app).toBe("TextEdit")
   })
 
+  test("--window names the delivery window on every input verb", () => {
+    const cases: string[][] = [
+      ["macos", "click", "100,200", "--app", "TextEdit", "--window", "4242"],
+      ["macos", "type", "hello", "--app", "TextEdit", "--window", "4242"],
+      ["macos", "type", "--secret", "admin", "--app", "TextEdit", "--window", "4242"],
+      ["macos", "keys", "Meta+A", "--pid", "1234", "--window", "4242"],
+      ["macos", "scroll", "down", "300", "--app", "TextEdit", "--window", "4242"],
+      ["macos", "drag", "10,20", "30,40", "--app", "TextEdit", "--window", "4242"],
+    ]
+    for (const argv of cases) {
+      const action = parseMacosCommand(argv) as Record<string, unknown>
+      expect(action.window).toBe(4242)
+    }
+    // No flag, no field: the bridge then picks the window itself.
+    expect((parseMacosCommand(["macos", "click", "100,200", "--app", "TextEdit"]) as Record<string, unknown>).window).toBeUndefined()
+    // The id is not swallowed as typed text or as a secret positional.
+    expect((parseMacosCommand(["macos", "type", "hello", "--window", "4242"]) as Record<string, unknown>).text).toBe("hello")
+  })
+
   test("type --app carries the app target through to the bridge", () => {
     const action = parseMacosCommand(["macos", "type", "hello", "--app", "TextEdit"]) as Record<string, unknown>
     expect(action.type).toBe("macos_type")

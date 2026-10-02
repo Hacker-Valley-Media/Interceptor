@@ -458,6 +458,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       const clickPid = flagInt(filtered, "--pid")
       if (clickApp) action.app = clickApp
       if (clickPid !== undefined) action.pid = clickPid
+      withWindow(action, filtered)
       return action
     }
 
@@ -469,7 +470,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       if (filtered.includes("--secret")) {
         const secretName = flagVal(filtered, "--secret")
         if (!secretName || secretName.startsWith("--")) { console.error("error: --secret requires a secret name"); process.exit(1) }
-        const positionals = collectPositionals(filtered, 2, new Set(["--secret", "--app", "--pid"]))
+        const positionals = collectPositionals(filtered, 2, new Set(["--secret", "--app", "--pid", "--window"]))
         const ref = positionals[0] && /^e\d+$/.test(positionals[0]) ? positionals[0] : undefined
         const literal = ref ? positionals.slice(1) : positionals
         if (literal.length) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
@@ -477,6 +478,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         if (ref) action.ref = ref
         if (typeApp) action.app = typeApp
         if (typePid !== undefined) action.pid = typePid
+        withWindow(action, filtered)
         return action
       }
       const refOrText = filtered[2]
@@ -486,6 +488,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         : { type: "macos_type", text: refOrText }
       if (typeApp) action.app = typeApp
       if (typePid !== undefined) action.pid = typePid
+      withWindow(action, filtered)
       return action
     }
 
@@ -497,6 +500,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       const keysPid = flagInt(filtered, "--pid")
       if (keysApp) action.app = keysApp
       if (keysPid !== undefined) action.pid = keysPid
+      withWindow(action, filtered)
       return action
     }
 
@@ -520,6 +524,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       if (targetApp) action.app = targetApp
       if (times !== undefined) action.times = times
       if (intervalMs !== undefined) action.intervalMs = intervalMs
+      withWindow(action, filtered)
       return action
     }
 
@@ -564,6 +569,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       const dragPid = flagInt(filtered, "--pid")
       if (dragApp) action.app = dragApp
       if (dragPid !== undefined) action.pid = dragPid
+      withWindow(action, filtered)
       return action
     }
 
@@ -2174,6 +2180,13 @@ function flagInt(args: string[], flag: string): number | undefined {
   if (val === undefined) return undefined
   const n = parseInt(val)
   return isNaN(n) ? undefined : n
+}
+
+// `--window <id>`: the window id (from `macos windows`) an input verb should
+// reach, for when another window of the same app covers the point.
+function withWindow(action: Action, args: string[]): void {
+  const id = flagInt(args, "--window")
+  if (id !== undefined) action.window = id
 }
 
 // Collect every value that follows a repeated --flag occurrence.
