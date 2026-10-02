@@ -20,6 +20,12 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        // The browser path always names its window. Without one, every verb
+        // below would fall back to the frontmost app.
+        if (action["type"] as? String)?.hasPrefix("macos_\(Self.browserDomainKey)_") == true, windowRequest(action).bounds == nil {
+            completion(WireFormat.error("the daemon named no window to address (nothing was delivered)"))
+            return
+        }
         switch command {
         case "click":
             handleClick(action, completion: completion)
@@ -72,7 +78,90 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         for ref in refs {
             if let problem = selector.explicitTargetProblem(ref: ref, appName: appName, pid: pid) { return problem }
         }
+        // A ref and --window must name the same window. The AX press and
+        // value-set paths act on the ref before any window is picked, so a
+        // mismatch would change the ref's window while reporting the other.
+        if let wanted = windowRequest(action).windowID {
+            for ref in refs {
+                guard let element = refRegistry.resolve(ref),
+                      let owner = BackgroundInput.windowID(owning: element, transport: transport), owner != wanted else { continue }
+                return "ref \(ref) is in window \(owner), not window \(wanted); drop --window or use a ref from that window (nothing was delivered)"
+            }
+        }
         return nil
+    }
+
+    // MARK: - Window-addressed delivery
+
+    private enum Addressed {
+        /// Nothing to address (or the private symbols are missing): the
+        /// caller keeps its plain per-pid / HID-tap delivery.
+        case none
+        case problem(String)
+        case session(BackgroundInputSession)
+    }
+
+    private static let windowInputUnavailable =
+        "window-addressed input is not available on this macOS build (nothing was delivered)"
+    private static let deliveryFailed =
+        "could not deliver to the window: no event source, or the window could not be given focus (nothing was delivered)"
+
+    /// The daemon's browser path. It arrives under its own domain key so a
+    /// bridge that predates window-addressed input answers "no handler"
+    /// instead of posting the event to the frontmost app.
+    static let browserDomainKey = "bginput"
+
+    // `window` is a CGWindowID from `macos windows`; `windowTitle` +
+    // `windowBounds` come from the daemon for a browser tab's window.
+    private func windowRequest(_ action: [String: Any]) -> WindowRequest {
+        var request = WindowRequest()
+        if let id = action["window"] as? Int, id > 0 { request.windowID = CGWindowID(clamping: id) }
+        request.title = action["windowTitle"] as? String
+        if let b = action["windowBounds"] as? [String: Any],
+           let left = (b["left"] as? NSNumber)?.doubleValue, let top = (b["top"] as? NSNumber)?.doubleValue,
+           let width = (b["width"] as? NSNumber)?.doubleValue, let height = (b["height"] as? NSNumber)?.doubleValue {
+            request.bounds = CGRect(x: left, y: top, width: width, height: height)
+        }
+        return request
+    }
+
+    // Finds the one window an app-targeted verb should reach. Mouse verbs
+    // (`mustResolve`) refuse when no window resolves, because an unaddressed
+    // per-pid mouse event is dropped by a background app. Keyboard and scroll
+    // fall back to plain per-pid delivery for apps with no listed window.
+    private func addressed(_ action: [String: Any], pid: pid_t?, point: CGPoint?, refKeys: [String], mustResolve: Bool) -> Addressed {
+        var request = windowRequest(action)
+        let explicit = request.isExplicit
+        guard pid != nil || explicit else { return .none }
+        guard cgsWindowInputAvailable else {
+            // Without a pid there is no safe unaddressed fallback: the HID tap
+            // would hit whatever is frontmost.
+            return pid == nil ? .problem(Self.windowInputUnavailable) : .none
+        }
+        if !explicit {
+            for key in refKeys {
+                guard let ref = action[key] as? String, let element = refRegistry.resolve(ref) else { continue }
+                request.windowID = BackgroundInput.windowID(owning: element, transport: transport)
+                break
+            }
+            if request.windowID == nil, point == nil, let pid = pid {
+                request.windowID = BackgroundInput.focusedWindow(of: pid, transport: transport)?.id
+            }
+        }
+        switch BackgroundInput.pick(from: BackgroundInput.onScreenWindows(), pid: pid, request: request, point: point) {
+        case .found(let window): return .session(BackgroundInputSession(window: window))
+        case .problem(let message): return (mustResolve || explicit) ? .problem(message) : .none
+        case nil: return .none
+        }
+    }
+
+    // Keyboard flavor: a session to focus around the key events, or a refusal.
+    private func keyboardSession(_ action: [String: Any], pid: pid_t?) -> (session: BackgroundInputSession?, refusal: String?) {
+        switch addressed(action, pid: pid, point: nil, refKeys: ["ref"], mustResolve: false) {
+        case .session(let session): return (session, nil)
+        case .problem(let message): return (nil, message)
+        case .none: return (nil, nil)
+        }
     }
 
     // Posts a single CGEvent through the right layer for the resolved
@@ -155,6 +244,34 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             else { resolvedPostTarget = .cghidEventTap }
         default:
             resolvedPostTarget = target
+        }
+
+        // An app target (or a named window) gets window-addressed delivery:
+        // it reaches a background window, and refuses when none resolves.
+        var appPid: pid_t? = nil
+        if case .postToPid(let pid) = resolvedPostTarget { appPid = pid }
+        if appPid != nil || windowRequest(action).isExplicit {
+            let point: CGPoint
+            switch resolvePoint(action) {
+            case .success(let p): point = p
+            case .failure(.message(let msg)): completion(WireFormat.error(msg)); return
+            }
+            switch addressed(action, pid: appPid, point: point, refKeys: ["ref"], mustResolve: true) {
+            case .problem(let message):
+                completion(WireFormat.error(message))
+                return
+            case .session(let session):
+                DispatchQueue.global().async {
+                    guard session.click(at: point, right: right, count: clickCount) else {
+                        completion(WireFormat.error(Self.deliveryFailed))
+                        return
+                    }
+                    completion(WireFormat.success("clicked at (\(Int(point.x)), \(Int(point.y))) → \(session.routing)"))
+                }
+                return
+            case .none:
+                break
+            }
         }
 
         resolveCoordinates(action) { [self] result in
@@ -241,22 +358,33 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
 
         // Pick a delivery target for synthesized key events: prefer
         // postToPid (ref → owning PID, or explicit pid/app), else fall
-        // through to cghidEventTap.
+        // through to cghidEventTap. With an app target, the window is told
+        // it has focus first so the keys land there and not in whichever
+        // window the app last had key.
+        let (session, refusal) = keyboardSession(action, pid: targetPid(action))
+        if let refusal = refusal {
+            completion(WireFormat.error(refusal))
+            return
+        }
         let postTarget: InputTarget
-        if let pid = targetPid(action) {
+        if let pid = session?.pid ?? targetPid(action) {
             postTarget = .postToPid(pid)
         } else {
             postTarget = .cghidEventTap
         }
 
         DispatchQueue.global().async {
-            guard Self.postUnicodeKeystrokes(text, to: postTarget) else {
+            guard let posted = BackgroundInputSession.gesture(session, { Self.postUnicodeKeystrokes(text, to: postTarget) }) else {
+                completion(WireFormat.error(Self.deliveryFailed))
+                return
+            }
+            guard posted else {
                 completion(WireFormat.error("failed to create event source"))
                 return
             }
             let routing: String
             switch postTarget {
-            case .postToPid(let pid): routing = "pid=\(pid)"
+            case .postToPid(let pid): routing = session?.routing ?? "pid=\(pid)"
             case .cghidEventTap: routing = "frontmost"
             case .axPress: routing = "ax"
             }
@@ -333,14 +461,20 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         }
         // Same routing rule as click/type: ref → owning PID, else
         // explicit pid/app, else cghidEventTap.
+        let (session, refusal) = keyboardSession(action, pid: targetPid(action))
+        if let refusal = refusal {
+            completion(WireFormat.error(refusal))
+            return
+        }
         let postTarget: InputTarget
-        if let pid = targetPid(action) {
+        if let pid = session?.pid ?? targetPid(action) {
             postTarget = .postToPid(pid)
         } else {
             postTarget = .cghidEventTap
         }
 
-        DispatchQueue.global().async { [self] in
+        DispatchQueue.global().async { [self, flags] in
+            let delivered: Void? = BackgroundInputSession.gesture(session) {
             // Press modifiers
             let modKeyCodes: [(String, CGKeyCode)] = [
                 ("shift", 56), ("control", 59), ("ctrl", 59), ("alt", 58), ("option", 58),
@@ -374,10 +508,15 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
                     }
                 }
             }
+            }
+            guard delivered != nil else {
+                completion(WireFormat.error(Self.deliveryFailed))
+                return
+            }
 
             let routing: String
             switch postTarget {
-            case .postToPid(let pid): routing = "pid=\(pid)"
+            case .postToPid(let pid): routing = session?.routing ?? "pid=\(pid)"
             case .cghidEventTap: routing = "frontmost"
             case .axPress: routing = "ax"
             }
@@ -415,7 +554,30 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         default: dy = -amount; dx = 0
         }
 
-        // when targeting a backgrounded process, wake its event
+        // With an app target, stamp the scroll for one window at a known
+        // point (the ref's center, else the window's center). An unstamped
+        // scroll carries the real cursor position and a background app
+        // drops it.
+        if pidFromAction != nil || windowRequest(action).isExplicit {
+            let refPoint = (action["ref"] as? String).flatMap { refRegistry.resolve($0) }.flatMap { centerPoint(of: $0) }
+            switch addressed(action, pid: pidFromAction, point: refPoint, refKeys: ["ref"], mustResolve: false) {
+            case .problem(let message):
+                completion(WireFormat.error(message))
+                return
+            case .session(let session):
+                let at = refPoint ?? CGPoint(x: session.window.bounds.midX, y: session.window.bounds.midY)
+                guard session.scroll(at: at, dy: dy, dx: dx, times: times, intervalMs: intervalMs) else {
+                    completion(WireFormat.error("failed to create event source"))
+                    return
+                }
+                completion(WireFormat.success("scrolled \(direction) \(amount)x\(times) → \(session.routing)"))
+                return
+            case .none:
+                break
+            }
+        }
+
+        // No window resolved (the app lists none on screen): wake its event
         // loop first via the SLPS make-key trick so Chromium / Electron
         // actually processes the scroll. The window stays where it is in
         // z-order; the user's focused app is preserved.
@@ -454,51 +616,58 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             completion(WireFormat.error(problem))
             return
         }
-        let postTarget: InputTarget
-        if let pid = targetPid(action) {
-            postTarget = .postToPid(pid)
-        } else {
-            postTarget = .cghidEventTap
-        }
+        var pid = targetPid(action)
+        let fromPoint: CGPoint
+        let toPoint: CGPoint
 
-        guard let fromRef = action["from"] as? String, let toRef = action["to"] as? String else {
-            // Try coordinate-based drag
-            if let fromCoords = action["fromCoords"] as? String, let toCoords = action["toCoords"] as? String {
-                let fromParts = fromCoords.split(separator: ",").compactMap { Double($0) }
-                let toParts = toCoords.split(separator: ",").compactMap { Double($0) }
-                if fromParts.count == 2 && toParts.count == 2 {
-                    performDrag(from: CGPoint(x: fromParts[0], y: fromParts[1]), to: CGPoint(x: toParts[0], y: toParts[1]), target: postTarget, completion: completion)
-                    return
-                }
+        if let fromRef = action["from"] as? String, let toRef = action["to"] as? String {
+            guard let fromElement = refRegistry.resolve(fromRef),
+                  let toElement = refRegistry.resolve(toRef) else {
+                completion(WireFormat.error("could not resolve refs"))
+                return
             }
-            completion(WireFormat.error("drag requires from and to refs or coordinates"))
-            return
+            guard let from = centerPoint(of: fromElement),
+                  let to = centerPoint(of: toElement) else {
+                completion(WireFormat.error("could not get element positions"))
+                return
+            }
+            fromPoint = from
+            toPoint = to
+            // Refs were given but no app/pid was; pick up the owning PID
+            // from the ref so the drag still routes correctly.
+            if pid == nil { pid = refRegistry.resolvePID(fromRef) }
+        } else {
+            // Coordinate-based drag
+            let fromParts = (action["fromCoords"] as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            let toParts = (action["toCoords"] as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            guard fromParts.count == 2, toParts.count == 2 else {
+                completion(WireFormat.error("drag requires from and to refs or coordinates"))
+                return
+            }
+            fromPoint = CGPoint(x: fromParts[0], y: fromParts[1])
+            toPoint = CGPoint(x: toParts[0], y: toParts[1])
         }
 
-        guard let fromElement = refRegistry.resolve(fromRef),
-              let toElement = refRegistry.resolve(toRef) else {
-            completion(WireFormat.error("could not resolve refs"))
-            return
+        if pid != nil || windowRequest(action).isExplicit {
+            switch addressed(action, pid: pid, point: fromPoint, refKeys: ["from"], mustResolve: true) {
+            case .problem(let message):
+                completion(WireFormat.error(message))
+                return
+            case .session(let session):
+                DispatchQueue.global().async {
+                    guard session.drag(from: fromPoint, to: toPoint) else {
+                        completion(WireFormat.error(Self.deliveryFailed))
+                        return
+                    }
+                    completion(WireFormat.success("dragged from (\(Int(fromPoint.x)),\(Int(fromPoint.y))) to (\(Int(toPoint.x)),\(Int(toPoint.y))) → \(session.routing)"))
+                }
+                return
+            case .none:
+                break
+            }
         }
 
-        guard let fromPoint = centerPoint(of: fromElement),
-              let toPoint = centerPoint(of: toElement) else {
-            completion(WireFormat.error("could not get element positions"))
-            return
-        }
-
-        // Refs were given but no app/pid was; pick up the owning PID
-        // from the ref so the drag still routes correctly.
-        let dragTarget: InputTarget
-        switch postTarget {
-        case .cghidEventTap:
-            if let pid = refRegistry.resolvePID(fromRef) { dragTarget = .postToPid(pid) }
-            else { dragTarget = .cghidEventTap }
-        default:
-            dragTarget = postTarget
-        }
-
-        performDrag(from: fromPoint, to: toPoint, target: dragTarget, completion: completion)
+        performDrag(from: fromPoint, to: toPoint, target: pid.map { .postToPid($0) } ?? .cghidEventTap, completion: completion)
     }
 
     private func performDrag(from: CGPoint, to: CGPoint, target: InputTarget, completion: @escaping @Sendable ([String: Any]) -> Void) {
@@ -549,33 +718,30 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     // MARK: - Helpers
 
     private func resolveCoordinates(_ action: [String: Any], completion: @escaping @Sendable (Swift.Result<CGPoint, InputError>) -> Void) {
+        completion(resolvePoint(action))
+    }
+
+    private func resolvePoint(_ action: [String: Any]) -> Swift.Result<CGPoint, InputError> {
         // Direct coordinates: "500,300"
         if let coords = action["coords"] as? String {
             let parts = coords.split(separator: ",").compactMap { Double($0) }
-            if parts.count == 2 {
-                completion(.success(CGPoint(x: parts[0], y: parts[1])))
-                return
-            } else {
-                completion(.failure(.message("invalid coordinates: \(coords)")))
-                return
-            }
+            return parts.count == 2
+                ? .success(CGPoint(x: parts[0], y: parts[1]))
+                : .failure(.message("invalid coordinates: \(coords)"))
         }
 
         // Ref-based
         if let ref = action["ref"] as? String {
             guard let element = refRegistry.resolve(ref) else {
-                completion(.failure(.message("ref \(ref) not found")))
-                return
+                return .failure(.message("ref \(ref) not found"))
             }
             guard let point = centerPoint(of: element) else {
-                completion(.failure(.message("could not get position for \(ref)")))
-                return
+                return .failure(.message("could not get position for \(ref)"))
             }
-            completion(.success(point))
-            return
+            return .success(point)
         }
 
-        completion(.failure(.message("click requires ref or coords")))
+        return .failure(.message("click requires ref or coords"))
     }
 
     private func centerPoint(of element: AXUIElement) -> CGPoint? {

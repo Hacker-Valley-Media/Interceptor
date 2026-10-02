@@ -1,4 +1,4 @@
-import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE } from "../tab-group"
+import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE, moveNamedGroupToWindow } from "../tab-group"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -82,18 +82,35 @@ export async function handleWindowActions(
         if (!win) return { success: false, error: "window creation returned no window" }
         const firstTab = win.tabs?.[0]
         let groupId: number | undefined
+        let groupWarning: string | undefined
         if (firstTab?.id && !action.incognito) {
           // honor the caller's named group; default group otherwise.
           const group = typeof action.group === "string" && GROUP_LABEL_RE.test(action.group)
             ? action.group
             : undefined
+          // A group lives in one window: adding this tab to a group that sits
+          // elsewhere pulls the tab there and leaves the new window empty. A
+          // named group is the caller's own, so it moves here with its tabs.
+          // The shared default group stays put, and the result says so.
+          if (group && typeof win.id === "number") await moveNamedGroupToWindow(group, win.id)
           groupId = group
             ? await addTabToNamedGroup(firstTab.id, group, action.groupColor)
             : await addTabToInterceptorGroup(firstTab.id)
+          try {
+            const landed = await chrome.tabs.get(firstTab.id)
+            if (landed.windowId !== win.id) {
+              groupWarning = group
+                ? `group '${group}' could not be moved, so the tab joined it in window ${landed.windowId} and has no window of its own`
+                : `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`
+            }
+          } catch {}
         }
         return {
           success: true,
-          data: { windowId: win.id, groupId, tabs: win.tabs?.map(t => ({ id: t.id, url: t.url })) },
+          data: {
+            windowId: win.id, groupId, tabs: win.tabs?.map(t => ({ id: t.id, url: t.url })),
+            ...(groupWarning ? { groupWarning } : {}),
+          },
         }
       }
 

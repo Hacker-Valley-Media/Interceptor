@@ -3146,12 +3146,49 @@ async function handleSelectionSet(action) {
 init_input_simulation();
 init_element_discovery();
 init_a11y_tree();
+init_deep_query();
+function frameHost(frameId, url) {
+  const frames = queryAllDeep("iframe, frame");
+  const getFrameId = chrome.runtime.getFrameId;
+  if (typeof getFrameId === "function") {
+    const exact = frames.find((f) => {
+      try {
+        return getFrameId(f) === frameId;
+      } catch {
+        return false;
+      }
+    });
+    if (exact)
+      return exact;
+  }
+  const bySrc = typeof url === "string" ? frames.filter((f) => f.src === url) : [];
+  return bySrc.length === 1 ? bySrc[0] : null;
+}
 async function handleRect(action) {
-  const el = resolveElementOrSelector(action);
+  const host = typeof action.hostOfFrame === "number";
+  const el = host ? frameHost(action.hostOfFrame, action.hostUrl) : resolveElementOrSelector(action);
   if (!el)
-    return { success: false, error: "element not found" };
-  const r = el.getBoundingClientRect();
-  return { success: true, data: { top: r.top, left: r.left, width: r.width, height: r.height, bottom: r.bottom, right: r.right } };
+    return { success: false, error: host ? "iframe not found" : "element not found" };
+  const box = el.getBoundingClientRect();
+  const style = host ? getComputedStyle(el) : null;
+  const r = {
+    left: box.left + (style ? el.clientLeft + (parseFloat(style.paddingLeft) || 0) : 0),
+    top: box.top + (style ? el.clientTop + (parseFloat(style.paddingTop) || 0) : 0),
+    width: box.width,
+    height: box.height,
+    bottom: box.bottom,
+    right: box.right
+  };
+  return { success: true, data: {
+    top: r.top,
+    left: r.left,
+    width: r.width,
+    height: r.height,
+    bottom: r.bottom,
+    right: r.right,
+    viewportHeight: window.innerHeight,
+    pageHidden: document.visibilityState === "hidden"
+  } };
 }
 async function handleRegions(_action) {
   const regionElements = getInteractiveElements();

@@ -37,6 +37,10 @@ Treat `eN` refs as short-lived. AX state can change between calls; re-read befor
 
 **Only two commands move focus:** `interceptor macos app activate <app>` and `interceptor macos open <app> --activate`. Everything else is background-first by contract — `open` (without `--activate`), all input verbs, all reads, capture, AX, menu, intent dispatch, scroll, drag, vision, overlays. If you call any other command and the user's frontmost app changes, that is a bug — file it.
 
+**The user is on this Mac too.** Assume the person is working while you work. Never run either focus command to make your own work easier or to test something. Use one only when the user asks for the app to come forward, or when the action truly cannot be done in the background, and then say so first, keep it to one fast batch, and put back the frontmost app and the cursor.
+
+What is truly foreground-only today: launching an app that is not running (it can come forward even from `open` without `--activate`, and an app updater can raise a password prompt), and a click or drag on a minimized window or hidden app. Everything else has a background route: refs, `--app` / `--pid` / `--window`, and `interceptor click <ref> --trusted` for a page in an unfocused browser window.
+
 Full contract + verb inventory + worked examples + pitfalls: [`references/background-first.md`](references/background-first.md).
 
 ## Workflows
@@ -46,12 +50,12 @@ Each workflow is a complete self-contained "you are doing X" procedure. Open the
 | Workflow | When to invoke |
 |---|---|
 | [`workflows/capture-backgrounded-app.md`](workflows/capture-backgrounded-app.md) | Screenshot an occluded / minimized / cross-Space window — without activating it |
-| [`workflows/drive-backgrounded-app.md`](workflows/drive-backgrounded-app.md) | Click / type / keys / drag against a non-frontmost app via AX + `postToPid` |
+| [`workflows/drive-backgrounded-app.md`](workflows/drive-backgrounded-app.md) | Click / type / keys / drag / scroll against a non-frontmost app via AX refs or window-addressed delivery (`--app`, `--window`) |
 | [`workflows/dispatch-apple-event.md`](workflows/dispatch-apple-event.md) | Apple Events to a named bundle id — open URL in Brave, read active tab, etc. |
 | [`workflows/read-ax-tree.md`](workflows/read-ax-tree.md) | `tree --app` of any app, with automatic Electron wake-up |
 | [`workflows/record-and-replay-mac-flow.md`](workflows/record-and-replay-mac-flow.md) | `macos monitor` record + export + replay native UI flows |
 | [`workflows/trusted-input-gate.md`](workflows/trusted-input-gate.md) | Satisfy an OS-level trusted-input gate that filters synthetic CGEvents |
-| [`workflows/clear-human-verification-gate.md`](workflows/clear-human-verification-gate.md) | Clear a CAPTCHA / human-verification gate (reCAPTCHA, Turnstile, hCaptcha, generic) in the user's own signed-in session via cross-origin widget coordinate mapping + trusted `--os` click |
+| [`workflows/clear-human-verification-gate.md`](workflows/clear-human-verification-gate.md) | Clear a CAPTCHA / human-verification gate (reCAPTCHA, Turnstile, hCaptcha, generic) in the user's own signed-in session with a trusted click delivered to the browser window in the background |
 
 ## References
 

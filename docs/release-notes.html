@@ -26,6 +26,19 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="1.0.24">
+    <h2>Interceptor 1.0.24</h2>
+    <time datetime="2026-10-02">October 2, 2026</time>
+    <ul>
+      <li><code>interceptor macos click</code>, <code>drag</code>, <code>scroll</code>, <code>type</code>, and <code>keys</code> with <code>--app</code> or <code>--pid</code> now reach a window that is in the background. The frontmost app and the cursor stay where they are. They used to report success while a background app dropped the events.</li>
+      <li>New <code>--window &lt;id&gt;</code> on those verbs names the exact window. <code>interceptor macos windows</code> lists the ids. A click or drag aimed at a minimized window, a hidden app, or a point outside the app's windows is refused and says nothing was delivered.</li>
+      <li><code>--trusted</code> clicks, typing, and keys now work on a browser window that is not focused, on a full install. The tab has to be the one showing in its window. The result says the input was delivered in the background.</li>
+      <li>A <code>--trusted</code> click on an element inside an iframe now lands on that element. It used to click a different element in the top page.</li>
+      <li><code>interceptor window new</code> moves your tab group into the new background window, so the new tab stays there and keeps painting. On the shared default group the result carries a <code>groupWarning</code>.</li>
+      <li>Replay plans from <code>macos monitor export --plan</code> no longer ask apps to come forward. An app change is written as <code>interceptor macos open</code>, and typed text is addressed to its app. An app that is not running is launched in the background, and macOS can still bring it forward while it starts.</li>
+      <li>The bundled agent skills now put background work first: use a background verb, then <code>tab keepalive</code>, then your own window with <code>window new</code>, and take focus only when nothing else works.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="1.0.21">
     <h2>Interceptor 1.0.21</h2>
     <time datetime="2026-09-28">September 28, 2026</time>

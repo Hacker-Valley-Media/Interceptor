@@ -7,6 +7,7 @@ import { createHash } from "node:crypto"
 import { dirname } from "node:path"
 import { validateBinarySinkPath, binarySinkIntegrityError } from "./binary-sink"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
+import { BACKGROUND_OS_ACTIONS, deliverInBackground } from "./os-background"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOCK_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, MAX_UPLOAD_FRAME_BYTES, transportLabel } from "../shared/platform"
 import {
   MONITOR_EVENT_NAMES,
@@ -465,6 +466,15 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
     sensitiveText,
   })
 
+  // Trusted input for an unfocused browser window goes through the bridge,
+  // which addresses the window by id. The extension only relaxes its
+  // foreground gate when told a bridge is here to do that.
+  if (process.platform === "darwin" && BACKGROUND_OS_ACTIONS.has(actionType)
+      && request.action && typeof request.action === "object"
+      && readBridgeRecoveryLayout().mode !== "browser-only") {
+    (request.action as Record<string, unknown>).backgroundOk = true
+  }
+
   sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
 }
 
@@ -689,6 +699,9 @@ async function targetForAction(action: Record<string, unknown>, actionType: stri
         if (!match || !match.bundleId) throw new Error(`could not resolve the bundle id of ${app ?? `pid ${pid}`} for the target check`)
         return { kind: "macos", id: match.bundleId }
       }
+      // --window alone delivers to that window's app, which is not
+      // necessarily the frontmost one the check below reads.
+      if (action.window !== undefined || action.windowBounds !== undefined) throw new Error("--secret with --window also needs --app or --pid, so the target check names the app that receives the secret")
       const fm = await bridgeCall({ type: "macos_frontmost" }, 10_000)
       const bid = (fm.data as { bundleId?: unknown } | undefined)?.bundleId
       if (!fm.success || typeof bid !== "string" || !bid) throw new Error(`could not read the frontmost app for the target check: ${fm.error ?? "no bundle id"}`)
@@ -1328,6 +1341,7 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
             enrichedAction.windowBounds = data.windowBounds
             enrichedAction.chromeUiHeight = data.chromeUiHeight
           }
+          if (data.background) enrichedAction.background = data.background
           if (pending.actionType === "os_click") {
             enrichedAction.button = data.button || "left"
             enrichedAction.clickCount = data.clickCount || 1
@@ -1802,6 +1816,15 @@ async function handleOsAction(
 ): Promise<{ success: boolean; error?: string; data?: unknown } | null> {
   if (!action) return null
   const startTime = Date.now()
+
+  // The tab is visible in a window that is not OS-focused: the HID tap below
+  // would hit whatever is frontmost, so the bridge delivers to that window.
+  if (action.background) {
+    log(`[${id.slice(0, 8)}] ${action.type} → bridge (window not OS-focused)`)
+    const result = await deliverInBackground(action, (bridgeAction) => bridgeCall(bridgeAction))
+    emitEvent("os_action", { requestId: id, action: action.type, duration: Date.now() - startTime, success: result.success, background: true })
+    return result
+  }
 
   switch (action.type) {
     case "os_click": {

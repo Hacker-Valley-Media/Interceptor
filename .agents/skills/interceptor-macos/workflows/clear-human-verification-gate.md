@@ -1,8 +1,10 @@
 # ClearHumanVerificationGate
 
-You are clearing a **human-verification / CAPTCHA gate** that is blocking a page in the user's signed-in browser — reCAPTCHA, Cloudflare Turnstile, hCaptcha, or a generic "I'm not a robot" / "press & hold" widget. These gates render their interactive control inside a **cross-origin iframe**, which defeats every page-level automation path: the checkbox has no browser-surface DOM ref, `eval --main` cannot reach into the iframe (cross-origin), and the macOS AX tree exposes only the tab title, not the web-area control. The one thing that works is a **real OS-level trusted click** placed at the widget's screen coordinates — which is what this surface is for.
+You are clearing a **human-verification / CAPTCHA gate** that is blocking a page in the user's signed-in browser — reCAPTCHA, Cloudflare Turnstile, hCaptcha, or a generic "I'm not a robot" / "press & hold" widget. These gates render their interactive control inside a **cross-origin iframe**, which defeats synthetic page input: `eval --main` cannot reach into the iframe (cross-origin) and the widget ignores dispatched events. What works is a **trusted OS click** on the control. Interceptor delivers that click to the browser window **in the background**: the browser does not need to be frontmost, the window can be covered, and the cursor does not move.
 
-This is the sibling of [`trusted-input-gate.md`](trusted-input-gate.md): same `--os` HID-input primitive, but the target is a cross-origin widget you must locate by **coordinate mapping** rather than by ref.
+This is the sibling of [`trusted-input-gate.md`](trusted-input-gate.md): the same trusted-input delivery, aimed at a control inside a cross-origin iframe.
+
+**Do not bring the browser forward for this.** The person is usually working on this Mac. No `app activate`, no `window focus`, and no bare `--os` click (a bare `--os` click goes to whatever window is on top, which is the user's).
 
 ## Authorization first — read this
 
@@ -30,92 +32,105 @@ interceptor eval --main 'JSON.stringify([].map.call(document.querySelectorAll("i
 | **reCAPTCHA v3 / invisible** | nothing | Pure score — no click to make; a clean signed-in session usually passes. Reload, don't fight it |
 | **Cloudflare Turnstile** | single checkbox (managed) | Usually a brief verify spinner; rarely interactive beyond the checkbox |
 | **hCaptcha** | checkbox → image grid ("select all …") | Grid almost always appears |
-| **Generic** | checkbox / "press & hold" button | Hold = use `drag` start≈end with a dwell, or `--os` mousedown/up |
+| **Generic** | checkbox / "press & hold" button | Hold = `interceptor macos drag X,Y X,Y --app <browser> --window <id>` (start and end on the button) |
 
 Invisible/score gates (v3, Turnstile managed-pass) have **no target to click** — a reload from the real session is the move, not a coordinate click.
 
-## The technique — locate, map, trusted-click
+## The technique: find the control, click it in the background
 
-The robust, DPI- and scale-independent method maps a **screenshot pixel** to a **screen point** through the window's AX frame. It needs no assumptions about chrome height or `devicePixelRatio`.
+The gate tab must be the active tab of a window that is not minimized. If it is a hidden tab in a window the user is working in, do not switch to it there: run `interceptor window new` (it moves your tab group into its own background window), then `interceptor tab switch <id>` inside that window.
 
-### 1. Confirm the gate window and keep focus stable
+### 1. Prefer the framed ref
 
-```bash
-interceptor macos frontmost                       # is the browser already frontmost?
-interceptor macos windows --app "Brave Browser"   # find the gate window's frame {x,y,width,height}
-```
-
-- `--os` clicks land on whatever window is **topmost at those screen points**, so the browser must be frontmost and the gate tab visible.
-- **`app activate` can trigger a tiling reflow that MOVES the window.** Activate **once**, let it settle, then re-read the frame. Do not re-activate between locate and click.
-- Stay on the **macOS surface** for the whole sequence. Browser-surface commands (`eval`, `tab`) can let another app steal focus mid-flow.
-
-### 2. Capture the gate to a real image and find the control
+The browser surface reads into cross-origin iframes. The checkbox has a ref:
 
 ```bash
-interceptor macos screenshot --app "Brave Browser" --save --target-max-long-edge 1568
-# -> returns { filePath, width(W), height(H), originalWidth, originalHeight }
+interceptor read --tab <id> --tree-only --include-frames
+# frame 18343 (parent=0): https://www.google.com/recaptcha/api2/anchor?...
+# [e18343_1] checkbox "I'm not a robot" role="checkbox"
+
+interceptor click e18343_1 --trusted --tab <id>
+# delivered in the background, focus unchanged: clicked at (61, 509) → pid=4321 window=7247
 ```
 
-`--save` writes a file and returns its `filePath`. (The browser-surface `screenshot --out` returns a data-URL to stdout instead of writing a file — use `macos screenshot --save` here.) Read the file with vision to find the control's pixel center `(px, py)` in the `W×H` image. For tiny or ambiguous image-grid tiles, crop the grid region and upscale ~2× before reading, so identification is accurate.
+`--trusted` on a framed ref (`e<frame>_<n>`) places the click through the iframe's position in the page. The result line says whether it was delivered in the background. Needs a full install.
 
-Optional precise rect (when CSP allows eval): `document.querySelector('iframe[title="reCAPTCHA"]').getBoundingClientRect()` gives the widget rect in viewport CSS px — but the screenshot+frame method below is what you actually click through, because it survives DPI scaling and chrome offsets.
+### 2. No ref: click by screen point, addressed to the window
 
-### 3. Map image pixel → screen point through the frame
-
-For window frame `{fx, fy, fw, fh}` and screenshot `W×H`:
-
-```
-screen_x = fx + (px / W) * fw
-screen_y = fy + (py / H) * fh
-```
-
-This ratio mapping is exact regardless of Retina backing scale or "more space" display modes (which produce odd `devicePixelRatio` like 2.5). Re-fetch the frame before each click batch in case the window moved.
-
-### 4. Trusted click
+For a control with no ref (an image-grid tile, a canvas widget), work out the screen point and address the click to the browser window by id.
 
 ```bash
-interceptor macos click <screen_x>,<screen_y> --os
+# The window: match the tab title, read its windowId and frame {x, y, width, height}
+interceptor macos windows --app "Brave Browser"
+
+# The page's viewport height, and where the widget sits in the page
+interceptor eval --tab <id> --main --no-reload 'JSON.stringify({innerHeight, r: document.querySelector("iframe[title=reCAPTCHA]").getBoundingClientRect()})'
 ```
 
-`--os` posts through `CGEvent.post(.cghidEventTap)` with HID source state — the gate sees real-hardware input, which synthetic events fail. Coordinates are comma-separated, no space. (There is **no** coordinate cursor-move primitive — `move` is ref-only — so you cannot simulate cursor travel; rely on the session's reputation.)
+For a point `(cx, cy)` in the page's viewport (CSS px, browser zoom 100%) and the window `frame` from `macos windows`:
 
-## Image challenges — accuracy AND speed
+```
+screen_x = frame.x + cx
+screen_y = frame.y + (frame.height - innerHeight) + cy
+```
+
+Take the frame from `macos windows`, not from the page. `screenX`, `screenY`, and `outerHeight` read wrong in a window that is not focused (measured: `outerHeight` 736 and `screenY` 2 for a window whose real frame was y 74, height 811).
+
+Then:
+
+```bash
+interceptor macos click <screen_x>,<screen_y> --app "Brave Browser" --window <windowId>
+# clicked at (61, 509) → pid=4321 window=7247
+```
+
+Always pass `--window`. Several browser windows often share one frame, and without it the click goes to the front one, which is usually the user's. A result that ends `(nothing was delivered)` means the window is minimized, hidden, or the id is wrong: nothing was clicked.
+
+To find a point visually, capture the tab, not the app: `interceptor screenshot --tab <id> --pixel --save` works on an unfocused, covered window and its image maps 1:1 onto the viewport (`cx = px / imageWidth * innerWidth`). `interceptor macos screenshot --app` captures one window of the app, which may not be the gate's.
+
+Verified in a fully covered Brave window with another app frontmost: the reCAPTCHA v2 checkbox issued its token with no image grid, hCaptcha reported verified, and a forced-interactive Turnstile widget issued its token.
+
+## Image challenges: accuracy and speed
 
 If a 3×3 grid appears ("Select all images with a **bus**"):
 
-1. **Read the grid type.** "Click verify once there are none left" = **dynamic** (each correct tile fades and is replaced — re-capture after each click and keep solving until none remain). No such line = **static** (select all matching, then verify once).
-2. **Identify accurately.** Crop the grid region, upscale ~2×, read it, list the matching tile centers.
-3. **Map every target tile center + the VERIFY button** through the frame (step 3).
-4. **Solve FAST — this is the part that fails.** Image challenges **expire in ~1–2 minutes.** Batch *all* tile clicks **and** VERIFY into **one** call (≈10 s end-to-end). A correct-but-slow solve (lots of crop/read/confirm round-trips) will return "Verification challenge expired" even though every tile was right. For static grids, skip the intermediate confirmation screenshot.
+1. **Read the grid type.** "Click verify once there are none left" = **dynamic** (each correct tile fades and is replaced: re-capture after each click and keep solving until none remain). No such line = **static** (select all matching, then verify once).
+2. **Identify accurately.** `interceptor screenshot --tab <id> --pixel --save`, crop the grid region, upscale about 2×, read it, list the matching tile centers.
+3. **Map every target tile center and the VERIFY button** to screen points (step 2 above). `read --include-frames` often gives VERIFY a framed ref, which `click <ref> --trusted` can take.
+4. **Solve fast. This is the part that fails.** Image challenges expire in about 1 to 2 minutes. Batch all tile clicks and VERIFY into one call (about 10 s end to end). A correct but slow solve returns "Verification challenge expired" even though every tile was right. For static grids, skip the intermediate confirmation screenshot.
 
 ```bash
-# static grid: click matching tiles + VERIFY in one fast batch
-for xy in "589,513" "907,513" "748,673"; do interceptor macos click $xy --os; done
-interceptor macos click 920,957 --os   # VERIFY
+# static grid: click matching tiles + VERIFY in one fast batch, all addressed to the gate window
+W=75845
+for xy in "589,513" "907,513" "748,673"; do interceptor macos click $xy --app "Brave Browser" --window $W; done
+interceptor macos click 920,957 --app "Brave Browser" --window $W   # VERIFY
 ```
 
 ## Verify it cleared
 
 ```bash
-interceptor macos screenshot --app "Brave Browser" --save --target-max-long-edge 1568
+interceptor read --tab <id> --tree-only --include-frames   # checkbox reads "You are verified" / the page moved on
+interceptor screenshot --tab <id> --pixel --save            # when you need to see it
 ```
 
-Read it. **Pass** = the URL leaves the challenge path (e.g. `/nocaptcha` → real content) or the checkbox shows a green check. **Expired** ("check the checkbox again") = you were too slow — re-trigger and solve faster. **New grid** = loop back to the image-challenge steps. If it keeps escalating after 2–3 honest, fast attempts, the session is flagged — stop automating and hand the single click to the user.
+**Pass** = the URL leaves the challenge path (e.g. `/nocaptcha` → real content), the checkbox reads checked, or the response field has a token. **Expired** ("check the checkbox again") = you were too slow: re-trigger and solve faster. **New grid** = loop back to the image-challenge steps. If it keeps escalating after 2 or 3 honest, fast attempts, the session is flagged. Stop automating and hand the single click to the user.
 
 ## Pitfalls
 
-- **Window moved between locate and click.** Re-fetch the frame after any `app activate`; map and click against the *current* frame.
-- **Frontmost stolen.** Another app (often the previous frontmost) grabs focus around browser-surface calls — verify `frontmost` is the browser immediately before each `--os` click.
-- **Slow solve expires.** The #1 cause of "I solved it correctly and it still failed." Compress to one batched action.
-- **Fighting an invisible/score gate.** reCAPTCHA v3 / Turnstile managed pass have nothing to click — reload from the clean session instead.
-- **Sensitive frontmost gate.** The bridge rejects `--os` input when frontmost is a denylisted bundle (password managers, banking, System Settings). Surface the rejection; do not work around it.
+- **Bringing the browser forward.** Not needed, and it interrupts the person using the Mac. If you find yourself reaching for `app activate` or a bare `--os` click, go back to step 1.
+- **No `--window`.** The click lands on the app's front window at that point. Read the id from `macos windows` and pass it.
+- **Wrong window id after a tab change.** The window's title is its active tab's title. Re-read `macos windows` after any `tab switch`.
+- **Gate tab is not the active tab of its window.** A trusted click reaches only the tab that is showing. Move your group to its own window (`interceptor window new`) and switch there.
+- **Browser zoom is not 100%.** `innerHeight` is then in zoomed CSS px and the point formula is off. Use the framed ref, or reset zoom on that tab.
+- **`warning: the page reports hidden`.** Chrome pauses a fully covered window. If nothing changed, part of the window has to be uncovered. Ask the user before moving anything.
+- **Slow solve expires.** The top cause of "I solved it correctly and it still failed." Compress to one batched action.
+- **Fighting an invisible/score gate.** reCAPTCHA v3 and a Turnstile managed pass have nothing to click. Reload from the clean session instead.
 - **Endless escalation.** If correct fast solves keep producing new grids, the session reputation is the problem, not your aim. Defer to a human click rather than looping.
 
 ## Output format
 
 Report:
 - Which provider/gate (detected from URL/title/iframe)
-- The locate→map→click path used, with the frame and the computed screen points
+- The path used (framed ref or screen point), the window id, and the computed points
 - For image grids: the challenge prompt, tiles selected, and end-to-end solve time
 - The verification result (URL left the challenge path / green check / expired / new grid)
 - Whether you cleared it or handed off to the user, and why

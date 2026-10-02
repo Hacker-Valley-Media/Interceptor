@@ -2,6 +2,8 @@
 
 You are completing a flow that requires OS-level trusted input — a native app or web page that filters synthesized `CGEvents` and only accepts events from real hardware (real HID source state). This is the bench S8 workflow and the rare case where the synthetic-first default fails by design.
 
+**Stay in the background.** The person is usually working on this Mac. Nothing in this workflow needs an app brought forward: a browser page takes `--trusted` input in an unfocused window, and a native app takes input addressed with `--app` / `--window`. Do not run `app activate`, `window focus`, or `tab switch` in the user's window to set up a trusted click.
+
 **Try the default path first.** Synthetic events (the bridge's standard `click`/`type`/`keys`) work on almost everything. The browser-side equivalent — dispatched DOM events with `event.__interceptor_trust = true` — handles most `isTrusted`-checking webapps. Only escalate to `--os` after you've observed synthetic input failing.
 
 ## When `--os` is the answer
@@ -13,6 +15,18 @@ Look for these symptoms:
 - A banking, payment, or anti-automation page rejects standard input.
 
 In those cases, `--os` flips the bridge to post events through `CGEvent.post(.cghidEventTap)` with `kCGEventSourceStateHIDSystemState`. The OS treats it as real hardware input.
+
+## A browser page in a window that is not in front
+
+A page that needs a trusted click does not need its window brought forward. On a full install:
+
+```bash
+interceptor click <ref> --trusted --tab <id>     # result: "delivered in the background, focus unchanged: …"
+interceptor type <ref> "text" --trusted --tab <id>
+interceptor keys Enter --trusted --tab <id>
+```
+
+The tab must be the active tab of its window and the window must not be minimized. The frontmost app and the cursor stay where they are. If the result carries `warning: the page reports hidden`, the browser has paused a fully covered window (Chrome does this, Brave does not): uncover part of it and retry. Read the page afterwards to confirm the effect.
 
 ## Verify permissions first
 
@@ -30,14 +44,17 @@ If accessibility is `denied`, surface the deep link from `trust --walkthrough` s
 ## The recipe
 
 ```bash
-# Type with HID source state — looks like real keyboard input
-interceptor macos type "..." --os
+# A web page: trusted input to the tab, delivered in the background
+interceptor click <ref> --trusted --tab <id>
+interceptor type <ref> "..." --trusted --tab <id>
+interceptor keys "Enter" --trusted --tab <id>
 
-# Send keystrokes with HID source state
-interceptor macos keys "Meta+S" --os
+# A native app: address the app (and the window when it has several)
+interceptor macos type "..." --app "<App>" [--window <id>]
+interceptor macos keys "Meta+S" --app "<App>" [--window <id>]
 ```
 
-These follow the user's current frontmost app (legacy HID semantics — that's how real keyboards work). For per-PID delivery, prefer the AX path with refs, or `--app`/`--pid` flagged input.
+A bare `interceptor macos type "..." --os` or `keys "..." --os` (no ref, no `--app`) goes to whatever app is frontmost, the way a real keyboard does. Use it only when the target is already frontmost by the user's own choice. Never activate an app to make it the target. If addressed delivery is rejected by a gate, stop and tell the user instead of taking focus.
 
 ## Worked example: the bench fixture
 
@@ -48,9 +65,10 @@ interceptor open <trusted-input-fixture-url>
 # 2. Identify the gate (read the page)
 interceptor read --tree-only
 
-# 3. If standard `type` doesn't satisfy the gate, escalate:
-interceptor macos keys "Tab" --os                  # focus the input
-interceptor macos type "expected text" --os        # HID-level keystrokes
+# 3. If standard `type` doesn't satisfy the gate, escalate on the same ref.
+#    The tab stays where it is; the result says "delivered in the background".
+interceptor click <ref> --trusted                  # focus the input
+interceptor type <ref> "expected text" --trusted   # OS-level keystrokes to that window
 
 # 4. Verify the page accepted the input
 interceptor read --text-only
@@ -72,7 +90,8 @@ Combined with the pre-load `userActivation` override (already installed via `inj
 
 ## Pitfalls
 
-- **`--os` follows current frontmost.** It's legacy "drive whatever's visible" semantics. If the user clicked away mid-flow, your keys go to the wrong app. Verify with `interceptor macos frontmost` immediately before each `--os` call.
+- **A bare `--os` call follows the frontmost app.** Your keys go to whatever the user is working in. Address the input instead (`--trusted` on a browser ref, `--app` / `--window` on a native app). Bare `--os` is only for a target the user already has in front.
+- **Bringing the target forward to make `--os` work.** That takes the user's focus for something the addressed forms do in the background.
 - **Reaching for `--os` reflexively.** The historical reflex "site checks `isTrusted` → use `--os`" is no longer correct on most sites. The pre-load `userActivation` override + `__interceptor_trust` marker handles the vast majority of webapps. Measure first.
 - **Forgetting Accessibility consent.** `CGEvent.post` silently no-ops without it. If a `--os` call returns success but nothing happens, check `trust` first.
 - **Sensitive frontmost-app gate.** The bridge rejects `type` / `keys` / `click x,y` / `drag` when frontmost is a denylisted bundle (Keychain, 1Password, Dashlane, LastPass, Bitwarden, System Settings, Chase, Bank of America, Wells Fargo). Surface the rejection to the user — do not try to bypass.
@@ -81,7 +100,7 @@ Combined with the pre-load `userActivation` override (already installed via `inj
 
 Report:
 - Why `--os` was needed (the observed symptom of synthetic failing)
-- The exact call (`type` / `keys` / `--os`)
-- `frontmost` before and after each `--os` call (proof of correct targeting)
+- The exact call (`--trusted`, `--app` / `--window`, or bare `--os`)
+- `frontmost` before and after (it must not change)
 - The success indicator from the gate (banner text, new element, response status)
 - Whether Accessibility TCC was granted before the call

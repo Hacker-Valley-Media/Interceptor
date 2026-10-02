@@ -39,7 +39,7 @@ This writes a small WebP to disk (~50–100 KB for a typical full page) and retu
 - `--element <ref>` — capture a refRegistry-tracked element (`e5`, `e2_7`).
 - `--region X,Y,W,H` — capture an arbitrary page rectangle.
 - `--scale <n>` — override pixel ratio. `--target-max-long-edge` wins when both are set.
-- `--pixel` — pixel-true compositor capture via `chrome.tabs.captureVisibleTab`. Requires the browser window visible and focused. Use only when DOM-render fidelity is insufficient (compositor effects, hardware video frames, the browser chrome itself).
+- `--pixel` — pixel-true compositor capture via `chrome.tabs.captureVisibleTab`. The browser does not need to be the focused app and the window does not need focus: the capture switches the window's active tab to the target and back by itself, and it worked on an unfocused, fully covered Brave window. Do not `tab switch` or `window focus` for it. To keep even that brief tab borrow out of the user's window, put the page in your own window first (`interceptor window new <url>`). Use `--pixel` only when DOM-render fidelity is insufficient (compositor effects, hardware video frames, canvas apps).
 - `--pixel --full` — scroll-and-stitch full page. Throttled to clear Chrome's 2/sec `captureVisibleTab` quota; expect ~1.1s per viewport strip.
 
 Default DOM-render works from a backgrounded Chrome on a different macOS Space — no focus required.

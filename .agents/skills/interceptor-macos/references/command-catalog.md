@@ -55,11 +55,16 @@ interceptor macos menu --app "X"
 
 ## Input (click / type / keys / scroll / drag)
 
-Refs route to AX first (no focus change). `--app`/`--pid` flagged input routes via `CGEvent.postToPid`. Bare positional input follows frontmost.
+Refs route to AX first (no focus change). `--app`/`--pid`/`--window` flagged input is delivered to one window of that app while it stays in the background: the frontmost app and the cursor do not change. Bare positional input follows frontmost.
+
+Window choice: `--window <id>` (ids come from `interceptor macos windows`), else the window that owns the ref, else the app's frontmost window under the point (mouse) or its focused window (keys, scroll). A click or drag that resolves no window fails with "(nothing was delivered)": the window is minimized, the app is hidden, or the point is outside it. Scroll lands at `--ref`'s center, else the window's center.
+
+Limits: a minimized window and a hidden app receive no mouse input. Menus, popups, and file panels are separate windows and are not addressed. A web page sees `buttons=0` on drag moves.
 
 ```bash
 interceptor macos click <ref>                       # AX press
-interceptor macos click 100,200 --app "TextEdit"    # postToPid
+interceptor macos click 100,200 --app "TextEdit"    # background click in TextEdit's window
+interceptor macos click 100,200 --app "Brave Browser" --window 7247   # a covered window, by id
 interceptor macos type <ref> "..."                  # AX value-set (text roles)
 interceptor macos type "..." --app "X"
 interceptor macos keys "Meta+S" --app "X"

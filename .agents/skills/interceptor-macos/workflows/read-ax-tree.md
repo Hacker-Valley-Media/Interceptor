@@ -21,7 +21,9 @@ That call:
 
 The bridge uses `AXManualAccessibility` exclusively. **`AXEnhancedUserInterface` was removed** because it foregrounded AppKit apps (it's the "VoiceOver is active" flag, which AppKit interprets as "raise main window"). Don't expect or set it. If you see code anywhere telling you to set `AXEnhancedUserInterface` from a background-first reader, that's stale guidance.
 
-For apps that gate AX on visibility (Signal is the classic example), `AXManualAccessibility` may not be enough. The bridge cannot beat a deliberately-paused process loop. In that case: brief-raise the app, capture `frontmost` first, do the read, then `app activate <previous-frontmost>` to restore. Surface the focus change to the user.
+**Read twice before you conclude the tree is empty.** An Electron app builds its tree after the wake-up signal, so the first read can return only the menu bar. Wait a second and read again. Signal 8.28 returned 215 nodes (all menu items) on the first read and its buttons, table, and text field on the second, in the background and again while hidden.
+
+Do not raise an app to read it. If a second read still has no content, check that the app has a window at all (`interceptor macos windows --app "X"`); a menu-bar-only or never-shown app has nothing to read. Tell the user what you found instead of activating it.
 
 ## Filter options
 
@@ -57,6 +59,8 @@ interceptor macos inspect e7
 
 - **Reading too deep on a chatty app.** A `--depth 20 --filter all` tree on VS Code returns thousands of nodes. Start narrow.
 - **Refs from a stale tree.** AXObserver invalidates refs when the app rebuilds part of its tree. If `act <ref>` returns "stale ref", re-run `tree`.
+- **Stopping after one thin read.** A first read that is all `menuitem` is the wake-up still in progress, not the app's real tree. Read again.
+- **Launching the app to read it.** A launch can take the user's focus and raise an updater prompt. Read apps that are already running.
 - **Assuming "no visible windows" means "not running".** A menu-bar-only app (tray app, Discord-in-tray) has no AX window but is still running. Use `interceptor macos apps` to confirm.
 
 ## Output format

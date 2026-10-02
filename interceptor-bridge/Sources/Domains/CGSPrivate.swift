@@ -23,6 +23,7 @@
 //     and `CGDisplayStream` but `CGSHWCaptureWindowList` (private SkyLight)
 //     remains stable across all current macOS releases.
 
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -76,19 +77,88 @@ private typealias SLPSPostEventRecordToType = @convention(c) (
     UnsafeMutableRawPointer, UnsafeMutablePointer<UInt8>
 ) -> CGError
 
+private typealias SLEventSetIntegerValueFieldType = @convention(c) (UnsafeMutableRawPointer, UInt32, Int64) -> Void
+private typealias CGEventSetWindowLocationType = @convention(c) (UnsafeMutableRawPointer, CGPoint) -> Void
+private typealias SLPSGetFrontProcessType = @convention(c) (UnsafeMutableRawPointer) -> CGError
+private typealias AXUIElementGetWindowType = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+
 private final class SkyLightLoader: @unchecked Sendable {
     static let shared = SkyLightLoader()
     let setFront: SLPSSetFrontProcessWithOptionsType?
     let postEventRecord: SLPSPostEventRecordToType?
+    let setIntegerField: SLEventSetIntegerValueFieldType?
+    let setWindowLocation: CGEventSetWindowLocationType?
+    let getFrontProcess: SLPSGetFrontProcessType?
+    let axWindowID: AXUIElementGetWindowType?
     private init() {
         let path = "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"
-        if let h = dlopen(path, RTLD_LAZY) {
-            setFront = dlsym(h, "_SLPSSetFrontProcessWithOptions").map { unsafeBitCast($0, to: SLPSSetFrontProcessWithOptionsType.self) }
-            postEventRecord = dlsym(h, "SLPSPostEventRecordTo").map { unsafeBitCast($0, to: SLPSPostEventRecordToType.self) }
-        } else {
-            setFront = nil; postEventRecord = nil
+        let h = dlopen(path, RTLD_LAZY)
+        // RTLD_DEFAULT covers symbols re-exported through CoreGraphics / HIServices.
+        let anyImage = UnsafeMutableRawPointer(bitPattern: -2)
+        func sym(_ name: String) -> UnsafeMutableRawPointer? {
+            h.flatMap { dlsym($0, name) } ?? dlsym(anyImage, name)
         }
+        setFront = sym("_SLPSSetFrontProcessWithOptions").map { unsafeBitCast($0, to: SLPSSetFrontProcessWithOptionsType.self) }
+        postEventRecord = sym("SLPSPostEventRecordTo").map { unsafeBitCast($0, to: SLPSPostEventRecordToType.self) }
+        setIntegerField = sym("SLEventSetIntegerValueField").map { unsafeBitCast($0, to: SLEventSetIntegerValueFieldType.self) }
+        setWindowLocation = sym("CGEventSetWindowLocation").map { unsafeBitCast($0, to: CGEventSetWindowLocationType.self) }
+        getFrontProcess = sym("_SLPSGetFrontProcess").map { unsafeBitCast($0, to: SLPSGetFrontProcessType.self) }
+        axWindowID = sym("_AXUIElementGetWindow").map { unsafeBitCast($0, to: AXUIElementGetWindowType.self) }
     }
+}
+
+// MARK: - Window-addressed input (events stamped for one window + focus records)
+
+@_silgen_name("GetProcessPID")
+func GetProcessPID(_ psn: UnsafePointer<ProcessSerialNumber>, _ pid: UnsafeMutablePointer<pid_t>) -> OSStatus
+
+/// True when every private symbol the window-addressed delivery needs resolved.
+var cgsWindowInputAvailable: Bool {
+    let l = SkyLightLoader.shared
+    return l.setIntegerField != nil && l.setWindowLocation != nil && l.getFrontProcess != nil && l.postEventRecord != nil
+}
+
+/// Writes raw event fields and the window-relative location. WindowServer
+/// routes a per-pid event by these, not by screen position.
+func cgsStampEvent(_ event: CGEvent, fields: [(UInt32, Int64)], windowLocation: CGPoint) {
+    let l = SkyLightLoader.shared
+    guard let setField = l.setIntegerField, let setLocation = l.setWindowLocation else { return }
+    let raw = Unmanaged.passUnretained(event).toOpaque()
+    for (field, value) in fields { setField(raw, field, value) }
+    setLocation(raw, windowLocation)
+}
+
+/// The process WindowServer currently treats as frontmost.
+func cgsFrontProcess() -> ProcessSerialNumber? {
+    guard let get = SkyLightLoader.shared.getFrontProcess else { return nil }
+    var psn = ProcessSerialNumber()
+    let status = withUnsafeMutablePointer(to: &psn) { get(UnsafeMutableRawPointer($0)) }
+    return status == .success ? psn : nil
+}
+
+/// Tells `psn` that `windowID` gained (`activate`) or lost focus. The window
+/// is not raised and the frontmost process does not change.
+@discardableResult
+func cgsPostFocusRecord(to psn: ProcessSerialNumber, windowID: CGWindowID, activate: Bool) -> Bool {
+    guard let post = SkyLightLoader.shared.postEventRecord else { return false }
+    var bytes = [UInt8](repeating: 0, count: 0xF8)
+    bytes[0x04] = 0xF8
+    bytes[0x08] = 0x0D
+    withUnsafeBytes(of: UInt32(windowID).littleEndian) { src in
+        for i in 0..<4 { bytes[0x3C + i] = src[i] }
+    }
+    bytes[0x8A] = activate ? 0x01 : 0x02
+    var target = psn
+    return withUnsafeMutablePointer(to: &target) { psnPtr in
+        bytes.withUnsafeMutableBufferPointer { post(UnsafeMutableRawPointer(psnPtr), $0.baseAddress!) == .success }
+    }
+}
+
+/// The window-server id behind an accessibility window element.
+func cgsWindowID(of element: AXUIElement) -> CGWindowID? {
+    guard let get = SkyLightLoader.shared.axWindowID else { return nil }
+    var wid: CGWindowID = 0
+    return get(element, &wid) == .success && wid != 0 ? wid : nil
 }
 
 // MARK: - SkyLight (SLS) display configuration — activate virtual displays
