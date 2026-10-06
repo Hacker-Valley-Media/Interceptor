@@ -8,12 +8,17 @@
         customize="never"  → no UI for choosing components; install all three
         require-scripts="true" → installer waits for postinstall before declaring success
         rootVolumeOnly="true"  → install on the boot volume only (standard for system tools)
+        hostArchitectures="arm64" → the CLI and daemon are built for Apple silicon
+                                    only; Installer refuses the package on an Intel
+                                    Mac instead of installing binaries that cannot
+                                    run there. Add x86_64 only when every executable
+                                    in the payload is universal.
     -->
     <options
         customize="never"
         require-scripts="true"
         rootVolumeOnly="true"
-        hostArchitectures="arm64,x86_64"/>
+        hostArchitectures="arm64"/>
 
     <!--
         Browser-only mode has no Swift bridge, so the macOS 14 SDK floor that
