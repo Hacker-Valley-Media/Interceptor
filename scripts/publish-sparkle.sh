@@ -317,18 +317,45 @@ resolve_min_sys_ver() {
   esac
 }
 
+# Prints "arm64" when the pkg's Distribution does not let Installer run on
+# x86_64, else nothing. Intel Macs that installed a release.sh --universal pkg
+# update from this same feed; Sparkle 2.9+ skips an item whose
+# hardwareRequirements they do not meet, instead of handing Installer a pkg it
+# will refuse. ElementTree drops comments, so only the attribute on <options>
+# counts (the comment above it names hostArchitectures too).
+resolve_hardware_requirements() {
+  local signed_pkg="$1" tmpdir archs
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/interceptor-sparkle-dist.XXXXXX")"
+  if ! pkgutil --expand "$signed_pkg" "$tmpdir/pkg" >/dev/null || [[ ! -f "$tmpdir/pkg/Distribution" ]]; then
+    echo "ERROR: could not read the Distribution of $signed_pkg" >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! archs="$(python3 -c 'import sys, xml.etree.ElementTree as ET; o = ET.parse(sys.argv[1]).getroot().find("options"); print("" if o is None else o.get("hostArchitectures", ""))' "$tmpdir/pkg/Distribution")"; then
+    echo "ERROR: could not parse the Distribution of $signed_pkg" >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  rm -rf "$tmpdir"
+  case ",$archs," in
+    *,x86_64,*) ;;
+    *) echo "arm64" ;;
+  esac
+}
+
 publish_to_sparkle() {
-  local mode="$1" signed_pkg="$2" pkg_basename min_sys_ver title sig_line
+  local mode="$1" signed_pkg="$2" pkg_basename min_sys_ver hardware_requirements title sig_line
   pkg_basename="$(basename "$signed_pkg")"
   case "$mode" in
     browser-only) title="Interceptor (Browser-Only) ${VERSION}" ;;
     full)         title="Interceptor (Full) ${VERSION}" ;;
   esac
   min_sys_ver="$(resolve_min_sys_ver "$mode" "$signed_pkg")"
+  hardware_requirements="$(resolve_hardware_requirements "$signed_pkg")"
 
   if (( DRY_RUN )); then
     echo "    DRY: cp $signed_pkg → $HOST_PUBLIC/$pkg_basename"
-    echo "    DRY: sign_update + append appcast item ($mode, minSysVer $min_sys_ver, title \"$title\")"
+    echo "    DRY: sign_update + append appcast item ($mode, minSysVer $min_sys_ver, hardwareRequirements ${hardware_requirements:-none}, title \"$title\")"
     return 0
   fi
 
@@ -346,6 +373,7 @@ publish_to_sparkle() {
   PKG_SIG_LINE="$sig_line" \
   PKG_TITLE="$title" \
   PKG_MIN_SYS_VER="$min_sys_ver" \
+  PKG_HARDWARE_REQUIREMENTS="$hardware_requirements" \
   PKG_MODE="$mode" \
   RELEASE_NOTES_URL="${DOWNLOAD_URL_PREFIX}${RELEASE_NOTES_BASENAME}" \
   RELEASE_NOTES_SIG_LINE="$RELEASE_NOTES_SIG_LINE" \
@@ -363,6 +391,7 @@ url = os.environ["PKG_URL"]
 sig_line = os.environ["PKG_SIG_LINE"].strip()
 title = os.environ["PKG_TITLE"]
 min_sys_ver = os.environ["PKG_MIN_SYS_VER"]
+hardware_requirements = os.environ["PKG_HARDWARE_REQUIREMENTS"]
 mode = os.environ["PKG_MODE"]
 release_notes_url = os.environ["RELEASE_NOTES_URL"]
 release_notes_sig_line = os.environ["RELEASE_NOTES_SIG_LINE"].strip()
@@ -410,6 +439,8 @@ ET.SubElement(item, "pubDate").text = datetime.now(timezone.utc).strftime("%a, %
 ET.SubElement(item, f"{SP}version").text = version
 ET.SubElement(item, f"{SP}shortVersionString").text = version
 ET.SubElement(item, f"{SP}minimumSystemVersion").text = min_sys_ver
+if hardware_requirements:
+    ET.SubElement(item, f"{SP}hardwareRequirements").text = hardware_requirements
 ET.SubElement(item, f"{SP}installationType").text = "package"
 ET.SubElement(item, f"{SP}channel").text = mode
 ET.SubElement(item, f"{SP}releaseNotesLink", {

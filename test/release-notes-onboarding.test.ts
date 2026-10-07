@@ -67,7 +67,7 @@ type PublishFixture = {
   root: string
   host: string
   signLog: string
-  run: (version: string) => ReturnType<typeof spawnSync>
+  run: (version: string, env?: Record<string, string>) => ReturnType<typeof spawnSync>
 }
 
 function writeExecutable(path: string, source: string): void {
@@ -100,7 +100,9 @@ function makePublishFixture(versions: string[], retainedVersion = "1.0.0"): Publ
   writeFileSync(join(host, "public/appcast.xml"), appcast(retainedVersion))
   writeExecutable(join(fakeBin, "spctl"), "#!/bin/sh\nexit 0\n")
   writeExecutable(join(fakeBin, "xcrun"), "#!/bin/sh\nexit 0\n")
-  writeExecutable(join(fakeBin, "pkgutil"), "#!/bin/sh\nif [ \"$1\" = \"--expand-full\" ]; then mkdir -p \"$3/Interceptor-Bridge.pkg/Payload/Applications/interceptor-bridge.app/Contents\"; : > \"$3/Interceptor-Bridge.pkg/Payload/Applications/interceptor-bridge.app/Contents/Info.plist\"; fi\nexit 0\n")
+  // --expand writes a Distribution whose comment names arm64 the way the real
+  // files do, so the publisher has to read the attribute on <options>.
+  writeExecutable(join(fakeBin, "pkgutil"), "#!/bin/sh\nif [ \"$1\" = \"--expand-full\" ]; then mkdir -p \"$3/Interceptor-Bridge.pkg/Payload/Applications/interceptor-bridge.app/Contents\"; : > \"$3/Interceptor-Bridge.pkg/Payload/Applications/interceptor-bridge.app/Contents/Info.plist\"; fi\nif [ \"$1\" = \"--expand\" ]; then mkdir -p \"$3\"; printf '<installer-gui-script><!-- hostArchitectures=\"arm64\" --><options hostArchitectures=\"%s\"/></installer-gui-script>\\n' \"${FAKE_HOST_ARCHITECTURES:-arm64}\" > \"$3/Distribution\"; fi\nexit 0\n")
   writeExecutable(join(fakeBin, "plutil"), "#!/bin/sh\necho 13.0\n")
   writeExecutable(join(tools, "bin/sign_update"), "#!/bin/sh\nprintf '%s\\n' \"$(basename \"$1\")\" >> \"$SIGN_LOG\"\nsize=$(wc -c < \"$1\" | tr -d ' ')\nlength=length\ncase \"$1\" in *.html) length=sparkle:length ;; esac\nprintf 'sparkle:edSignature=\"sig-%s\" %s=\"%s\"\\n' \"$(basename \"$1\")\" \"$length\" \"$size\"\n")
 
@@ -113,7 +115,7 @@ function makePublishFixture(versions: string[], retainedVersion = "1.0.0"): Publ
     root,
     host,
     signLog,
-    run: (version: string) => spawnSync("bash", ["scripts/publish-sparkle.sh", `--version=${version}`, "--no-deploy", "--no-tag"], {
+    run: (version: string, env: Record<string, string> = {}) => spawnSync("bash", ["scripts/publish-sparkle.sh", `--version=${version}`, "--no-deploy", "--no-tag"], {
       cwd: root,
       encoding: "utf8",
       env: {
@@ -123,6 +125,7 @@ function makePublishFixture(versions: string[], retainedVersion = "1.0.0"): Publ
         INTERCEPTOR_SPARKLE_HOST_DIR: host,
         INTERCEPTOR_SPARKLE_TOOLS_DIR: tools,
         INTERCEPTOR_DOWNLOAD_URL_PREFIX: "https://updates.example.test/",
+        ...env,
       },
     }),
   }
@@ -202,6 +205,26 @@ describe("Sparkle release-note publisher", () => {
     expect(second.status, output(second)).toBe(0)
     expect(readFileSync(join(fixture.host, "public/release-notes-2.0.0.html"))).toEqual(oldSnapshot)
     expect(readFileSync(feedPath, "utf8")).toContain(oldLink ?? "missing-old-link")
+  })
+
+  // Intel Macs that installed a universal release update from the same feed.
+  // Sparkle 2.9+ skips an item whose hardwareRequirements the Mac does not
+  // meet, so an arm64-only package never reaches an Intel Mac's Installer.
+  test("marks arm64-only packages so Intel Macs skip them", () => {
+    const fixture = makePublishFixture(["2.0.0", "1.0.0"])
+    const result = fixture.run("2.0.0")
+    expect(result.status, output(result)).toBe(0)
+    const feed = readFileSync(join(fixture.host, "public/appcast.xml"), "utf8")
+    expect(feed.match(/<sparkle:hardwareRequirements>arm64<\/sparkle:hardwareRequirements>/g)).toHaveLength(2)
+  })
+
+  test("leaves universal packages open to Intel Macs", () => {
+    const fixture = makePublishFixture(["2.0.0", "1.0.0"])
+    const result = fixture.run("2.0.0", { FAKE_HOST_ARCHITECTURES: "arm64,x86_64" })
+    expect(result.status, output(result)).toBe(0)
+    const feed = readFileSync(join(fixture.host, "public/appcast.xml"), "utf8")
+    expect(feed).toContain("Interceptor (Full) 2.0.0")
+    expect(feed).not.toContain("hardwareRequirements")
   })
 })
 

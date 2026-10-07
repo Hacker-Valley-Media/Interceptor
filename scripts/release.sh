@@ -7,6 +7,9 @@
 #   dist/release/Interceptor-Full-<version>.pkg     (+ bridge .app + LaunchAgent)
 #
 # Pass --browser-only or --full to build just one. Default is both.
+# Pass --universal to build every binary for arm64 + x86_64 so the packages
+# also install on Intel Macs. Without it the binaries are built for the release
+# host, which must be Apple silicon, and Installer refuses Intel Macs.
 # Pass --dry-run to print steps without invoking Apple-side commands; useful
 # for the bun-test release-modes harness that asserts payload contents per
 # mode without requiring keychain credentials or notarization.
@@ -14,6 +17,8 @@
 # What this does, in order:
 #   1.  Verify signing identities, notary profile, entitlements, host arch.
 #   2.  bash scripts/build.sh — extension, CLI, daemon, bridge .app (full only).
+#       Then check that every binary carries each architecture the packages
+#       declare to Installer.
 #   3.  Codesign CLI + daemon with hardened runtime, timestamp, entitlements.
 #       (Bridge .app is signed by build-bridge.sh.)
 #   4.  Stage payload + extension + manifest template under dist/release/staging/.
@@ -24,7 +29,8 @@
 #       in browser-only mode. Daemon component differs per mode (LaunchAgent
 #       payload + which postinstall is attached).
 #   8.  productbuild combines components per mode (Browser uses
-#       distribution-browser.xml, Full uses distribution.xml).
+#       distribution-browser.xml, Full uses distribution.xml; with
+#       --universal, copies of them that add x86_64 to hostArchitectures).
 #   9.  productsign signs the combined pkg(s) with the Installer cert.
 #   10. Round 2 notarize each signed pkg.
 #   11. Staple each pkg.
@@ -77,6 +83,7 @@ ALLOW_UNSTAPLED="${INTERCEPTOR_ALLOW_UNSTAPLED:-0}"
 # ── Parse flags ───────────────────────────────────────────────────────────────
 VERSION=""
 MODE_FLAG=""   # "" | "browser-only" | "full"
+UNIVERSAL=0
 DRY_RUN="${INTERCEPTOR_DRY_RUN:-0}"
 
 i=1
@@ -95,6 +102,7 @@ while [[ $i -le $# ]]; do
         exit 1
       fi
       MODE_FLAG="full" ;;
+    --universal) UNIVERSAL=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --version=*) VERSION="${arg#--version=}" ;;
     --version)
@@ -103,7 +111,7 @@ while [[ $i -le $# ]]; do
     *)
       echo "Unknown flag: $arg" >&2
       echo ""
-      echo "Usage: bash scripts/release.sh [MODE] [--version=X.Y.Z] [--dry-run]"
+      echo "Usage: bash scripts/release.sh [MODE] [--universal] [--version=X.Y.Z] [--dry-run]"
       echo ""
       echo "Modes (mutually exclusive; default builds both):"
       echo "  --browser-only   Build only Interceptor-Browser-<v>.pkg"
@@ -111,6 +119,8 @@ while [[ $i -le $# ]]; do
       echo "  (no mode flag)   Build both pkgs"
       echo ""
       echo "Options:"
+      echo "  --universal      Build arm64 + x86_64 binaries so the pkgs also"
+      echo "                   install on Intel Macs (needs Xcode)"
       echo "  --version=X.Y.Z  Override version (else read from package.json)"
       echo "  --dry-run        Print steps without executing them. Skips"
       echo "                   Apple-keychain prerequisite checks."
@@ -137,6 +147,23 @@ for m in "${MODES[@]}"; do
   esac
 done
 
+# ── Resolve architectures ─────────────────────────────────────────────────────
+# HOST_ARCHS is what the packages promise Installer (hostArchitectures) and
+# what Step 2c checks every binary for. The default build compiles for the
+# release host; --universal compiles both slices on any Mac with Xcode.
+if [[ "$UNIVERSAL" == "1" ]]; then
+  HOST_ARCHS=(arm64 x86_64)
+  BUILD_TARGET="macos-universal"
+  if [[ "$INCLUDE_AGENT_DYLIBS" == "1" ]]; then
+    echo "ERROR: --universal cannot bundle the research agent dylibs (INTERCEPTOR_INCLUDE_AGENT_DYLIBS=1);" >&2
+    echo "       interceptor-agent builds them for arm64 and arm64e only." >&2
+    exit 1
+  fi
+else
+  HOST_ARCHS=(arm64)
+  BUILD_TARGET="host"
+fi
+
 # ── Resolve version ───────────────────────────────────────────────────────────
 if [[ -z "$VERSION" ]]; then
   if [[ -n "${INTERCEPTOR_VERSION:-}" ]]; then
@@ -157,6 +184,7 @@ STAGING_DIR="$RELEASE_DIR/staging"
 COMPONENTS_DIR="$RELEASE_DIR/components"
 SCRIPTS_BROWSER_DIR="$RELEASE_DIR/_scripts-browser"
 SCRIPTS_FULL_DIR="$RELEASE_DIR/_scripts-full"
+UNIVERSAL_DIST_DIR="$RELEASE_DIR/_distribution-universal"
 PAYLOAD_ZIP="$RELEASE_DIR/payload.zip"
 
 UNSIGNED_BROWSER_PKG="$RELEASE_DIR/Interceptor-Browser-${VERSION}-unsigned.pkg"
@@ -181,6 +209,33 @@ run() {
   else
     "$@"
   fi
+}
+
+# `verify_archs`: stop the release when a binary lacks a slice that the
+# packages promise Installer through hostArchitectures.
+verify_archs() {
+  local binary="$1"
+  run lipo "$binary" -verify_arch "${HOST_ARCHS[@]}" && return 0
+  echo "ERROR: $binary has $(lipo -archs "$binary" 2>/dev/null || echo "no readable slices"); the packages need ${HOST_ARCHS[*]}." >&2
+  exit 1
+}
+
+# `write_universal_dist_xml`: copy a distribution file into UNIVERSAL_DIST_DIR
+# with x86_64 added to hostArchitectures. The checked-in files declare arm64
+# only, matching the default host build.
+write_universal_dist_xml() {
+  local src="$1"
+  local dest="$UNIVERSAL_DIST_DIR/$(basename "$src")"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "    DRY: write $dest from $src with hostArchitectures=\"arm64,x86_64\""
+    return 0
+  fi
+  sed 's/hostArchitectures="arm64"\/>/hostArchitectures="arm64,x86_64"\/>/' "$src" > "$dest"
+  if ! grep -q 'hostArchitectures="arm64,x86_64"/>' "$dest"; then
+    echo "ERROR: $src has no hostArchitectures=\"arm64\"/> to extend for --universal." >&2
+    exit 1
+  fi
+  echo "    Wrote $dest with hostArchitectures=\"arm64,x86_64\""
 }
 
 # `staple_or_fail`: staple + validate a target. A failure aborts the release
@@ -232,6 +287,20 @@ if [[ "$DRY_RUN" != "1" ]]; then
     echo "           --apple-id <your-apple-id> --team-id <your-team-id> --password <app-specific-password>" >&2
     exit 1
   fi
+  # A host build carries only this Mac's architecture, and the packages
+  # declare arm64. Under Rosetta, uname -m reports x86_64 as well.
+  if [[ "$UNIVERSAL" != "1" && "$(uname -m)" != "arm64" ]]; then
+    echo "ERROR: this host is $(uname -m); the packages declare arm64 only." >&2
+    echo "       Release from a native shell on Apple silicon, or pass --universal." >&2
+    exit 1
+  fi
+  # swift build with more than one --arch goes through Xcode's build system,
+  # which the Command Line Tools do not include.
+  if [[ "$UNIVERSAL" == "1" ]] && ! xcodebuild -version >/dev/null 2>&1; then
+    echo "ERROR: --universal needs Xcode (xcodebuild -version failed)." >&2
+    echo "       Install Xcode and point xcode-select at it." >&2
+    exit 1
+  fi
 fi
 
 if [[ ! -f "$ENT" ]]; then
@@ -266,6 +335,7 @@ fi
 
 echo "    Version:           $VERSION"
 echo "    Modes:             ${MODES[*]}"
+echo "    Architectures:     ${HOST_ARCHS[*]}$([[ "$UNIVERSAL" == "1" ]] && echo " (universal)")"
 echo "    Signing identity:  $SIGNING_IDENTITY"
 echo "    Installer cert:    $INSTALLER_IDENTITY"
 echo "    Notary profile:    $NOTARY_PROFILE"
@@ -283,7 +353,7 @@ run env \
   INTERCEPTOR_BRIDGE_VERSION="$VERSION" \
   INTERCEPTOR_ENABLE_PLATFORM_TARGETS="$ENABLE_PLATFORM_TARGETS" \
   INTERCEPTOR_INCLUDE_AGENT_DYLIBS="$INCLUDE_AGENT_DYLIBS" \
-  bash "$REPO_ROOT/scripts/build.sh"
+  bash "$REPO_ROOT/scripts/build.sh" --target="$BUILD_TARGET"
 echo ""
 
 # Runtime Agent surface: build the in-process agent dylib(s) shipped in
@@ -296,6 +366,14 @@ elif [[ "$BUILD_FULL" == "1" ]]; then
   echo "==> Step 2b: Skipped InterceptorAgent dylib build (public Full package requires BYO dylib)"
   echo ""
 fi
+
+echo "==> Step 2c: Checking binaries for ${HOST_ARCHS[*]}"
+verify_archs "$REPO_ROOT/dist/interceptor"
+verify_archs "$REPO_ROOT/daemon/interceptor-daemon"
+if [[ "$BUILD_FULL" == "1" ]]; then
+  verify_archs "$REPO_ROOT/dist/interceptor-bridge.app/Contents/MacOS/interceptor-bridge"
+fi
+echo ""
 
 # ── Step 3: Codesign CLI + daemon ─────────────────────────────────────────────
 echo "==> Step 3: Codesigning CLI and daemon (hardened runtime + timestamp)"
@@ -340,7 +418,7 @@ echo ""
 echo "==> Step 4: Staging payload tree under dist/release/staging/"
 
 run mkdir -p "$RELEASE_DIR"
-run rm -rf "$STAGING_DIR" "$COMPONENTS_DIR" "$SCRIPTS_BROWSER_DIR" "$SCRIPTS_FULL_DIR"
+run rm -rf "$STAGING_DIR" "$COMPONENTS_DIR" "$SCRIPTS_BROWSER_DIR" "$SCRIPTS_FULL_DIR" "$UNIVERSAL_DIST_DIR"
 run rm -f "$PAYLOAD_ZIP"
 if [[ "$BUILD_BROWSER" == "1" ]]; then
   run rm -f "$UNSIGNED_BROWSER_PKG" "$SIGNED_BROWSER_PKG"
@@ -639,6 +717,21 @@ if [[ "$DRY_RUN" != "1" ]]; then
   ls -la "$COMPONENTS_DIR"
 fi
 echo ""
+
+# ── Step 7b: universal distribution files ─────────────────────────────────────
+if [[ "$UNIVERSAL" == "1" ]]; then
+  echo "==> Step 7b: Distribution files that let Installer run on Intel Macs too"
+  run mkdir -p "$UNIVERSAL_DIST_DIR"
+  if [[ "$BUILD_BROWSER" == "1" ]]; then
+    write_universal_dist_xml "$DIST_XML_BROWSER"
+    DIST_XML_BROWSER="$UNIVERSAL_DIST_DIR/$(basename "$DIST_XML_BROWSER")"
+  fi
+  if [[ "$BUILD_FULL" == "1" ]]; then
+    write_universal_dist_xml "$DIST_XML_FULL"
+    DIST_XML_FULL="$UNIVERSAL_DIST_DIR/$(basename "$DIST_XML_FULL")"
+  fi
+  echo ""
+fi
 
 # ── Steps 8-11: per-mode productbuild → productsign → notarize → staple ──────
 build_pkg_for_mode() {

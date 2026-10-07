@@ -10,7 +10,8 @@ describe("macOS release contract", () => {
   // built on Apple silicon, so the CLI, daemon, and bridge they install are
   // arm64-only. hostArchitectures is what Installer checks before it installs:
   // with x86_64 listed, an Intel Mac installs binaries that cannot run there.
-  // Add x86_64 back only when every executable in the payload is universal.
+  // release.sh --universal adds x86_64 to copies of these files, after
+  // checking that every binary carries both slices.
   test.each(["scripts/release/distribution.xml", "scripts/release/distribution-browser.xml"])(
     "%s lets Installer run only on Apple silicon",
     (path) => {
@@ -18,6 +19,17 @@ describe("macOS release contract", () => {
       const xml = read(path).replace(/<!--[\s\S]*?-->/g, "")
       const hostArchitectures = xml.match(/<options\b[^>]*\bhostArchitectures="([^"]*)"/)?.[1]
       expect(hostArchitectures).toBe("arm64")
+    },
+  )
+
+  // XML forbids "--" inside a comment; productbuild and Installer would get a
+  // Distribution that does not parse. Flags like --universal are easy to slip in.
+  test.each(["scripts/release/distribution.xml", "scripts/release/distribution-browser.xml"])(
+    "%s keeps double hyphens out of its comments",
+    (path) => {
+      const comments = [...read(path).matchAll(/<!--([\s\S]*?)-->/g)].map((match) => match[1] ?? "")
+      expect(comments.length).toBeGreaterThan(0)
+      for (const comment of comments) expect(comment).not.toContain("--")
     },
   )
 })
