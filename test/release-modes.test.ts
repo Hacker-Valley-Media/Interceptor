@@ -262,7 +262,9 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
       "interceptor",
       "interceptor-daemon",
       "interceptor-bridge",
+      "Sparkle",
     ])
+    expect(lipoLines[3]).toContain("/interceptor-bridge.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle ")
     for (const line of lipoLines) expect(line).toEndWith("-verify_arch arm64")
 
     // The checked-in distribution files go to productbuild unchanged.
@@ -277,7 +279,7 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
     expect(stdout).toContain("scripts/build.sh --target=macos-universal")
 
     const lipoLines = stdout.split("\n").filter((l) => l.includes("DRY: lipo"))
-    expect(lipoLines).toHaveLength(3)
+    expect(lipoLines).toHaveLength(4)
     for (const line of lipoLines) expect(line).toEndWith("-verify_arch arm64 x86_64")
 
     // Both packages are built from copies that add x86_64 to hostArchitectures.

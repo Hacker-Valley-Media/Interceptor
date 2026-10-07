@@ -17,8 +17,9 @@
 # What this does, in order:
 #   1.  Verify signing identities, notary profile, entitlements, host arch.
 #   2.  bash scripts/build.sh — extension, CLI, daemon, bridge .app (full only).
-#       Then check that every binary carries each architecture the packages
-#       declare to Installer.
+#       Then check that the CLI, the daemon, the bridge, and the Sparkle
+#       framework it loads carry each architecture the packages declare to
+#       Installer.
 #   3.  Codesign CLI + daemon with hardened runtime, timestamp, entitlements.
 #       (Bridge .app is signed by build-bridge.sh.)
 #   4.  Stage payload + extension + manifest template under dist/release/staging/.
@@ -149,7 +150,7 @@ done
 
 # ── Resolve architectures ─────────────────────────────────────────────────────
 # HOST_ARCHS is what the packages promise Installer (hostArchitectures) and
-# what Step 2c checks every binary for. The default build compiles for the
+# what Step 2c checks the binaries for. The default build compiles for the
 # release host; --universal compiles both slices on any Mac with Xcode.
 if [[ "$UNIVERSAL" == "1" ]]; then
   HOST_ARCHS=(arm64 x86_64)
@@ -372,6 +373,9 @@ verify_archs "$REPO_ROOT/dist/interceptor"
 verify_archs "$REPO_ROOT/daemon/interceptor-daemon"
 if [[ "$BUILD_FULL" == "1" ]]; then
   verify_archs "$REPO_ROOT/dist/interceptor-bridge.app/Contents/MacOS/interceptor-bridge"
+  # Sparkle arrives prebuilt from its xcframework; its updater helpers come
+  # from the same slice as this binary, so one check covers the framework.
+  verify_archs "$REPO_ROOT/dist/interceptor-bridge.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"
 fi
 echo ""
 

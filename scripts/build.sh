@@ -270,6 +270,8 @@ compile_macos_universal() {
   rm -f "$slice-arm64" "$slice-x64"
 }
 
+# --target=macos-universal: the CLI and daemon that release.sh --universal
+# packages. The bridge follows through build_bridge universal.
 build_macos_universal() {
   echo "Building CLI (macOS arm64 + x64)..."
   compile_macos_universal cli/index.ts dist/interceptor
