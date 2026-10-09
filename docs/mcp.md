@@ -106,3 +106,34 @@ reference or unsupported clients (`interceptor mcp install --print` emits them t
 ```
 
 To enable destructive/exec verbs, set `"env": { "INTERCEPTOR_MCP_ALLOW": "destructive,arbitrary-exec" }`.
+
+## Pairing with a remote search MCP
+
+Interceptor's tools drive your actual signed-in browser, apps, and devices. Some
+clients also want a general web-search tool for open-web source discovery, and
+the two compose in one config: discover candidate sources remotely, then open
+and verify each cited page in the managed browser session with
+`interceptor_browser`, so claims are checked against the real page.
+
+For example, You.com publishes a remote MCP server with a keyless search-only
+profile (`https://api.you.com/mcp?profile=free` — no API key), so the Claude
+Desktop config above can run both servers side by side:
+
+```json
+{
+  "mcpServers": {
+    "interceptor": {
+      "command": "interceptor",
+      "args": ["mcp", "serve"]
+    },
+    "you-web": {
+      "url": "https://api.you.com/mcp?profile=free"
+    }
+  }
+}
+```
+
+Remote servers sit outside Interceptor's permission tiers:
+`INTERCEPTOR_MCP_ALLOW` gates only the `interceptor` tools, so review any
+second server's own access, auth, and data story before adding it to the same
+config.
