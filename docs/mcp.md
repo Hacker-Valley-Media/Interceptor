@@ -115,9 +115,10 @@ the two compose in one config: discover candidate sources remotely, then open
 and verify each cited page in the managed browser session with
 `interceptor_browser`, so claims are checked against the real page.
 
-For example, You.com publishes a remote MCP server with a keyless search-only
-profile (`https://api.you.com/mcp?profile=free` — no API key), so the Claude
-Desktop config above can run both servers side by side:
+For example, You.com publishes a remote MCP server with a keyless profile
+(`https://api.you.com/mcp?profile=free` — no API key; it exposes the
+`you-search` and `you-discover` tools), so a client that accepts remote MCP
+URLs in config can run both servers side by side:
 
 ```json
 {
@@ -132,6 +133,11 @@ Desktop config above can run both servers side by side:
   }
 }
 ```
+
+Claude Desktop is the exception: `claude_desktop_config.json` only starts local
+stdio servers, so keep the `interceptor` entry there and add remote servers
+such as You.com through **Settings > Connectors** rather than declaring them
+in that file.
 
 Remote servers sit outside Interceptor's permission tiers:
 `INTERCEPTOR_MCP_ALLOW` gates only the `interceptor` tools, so review any
