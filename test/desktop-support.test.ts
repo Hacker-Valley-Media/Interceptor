@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { families } from "../scripts/desktop-parity/cases/index"
 import { expectationFor, type Case, type Host } from "../scripts/desktop-parity/types"
 import { SUPPORT_ROWS, desktopFamilyUnavailable, filterDesktopHelp, type DesktopOs } from "../shared/desktop-support"
-import { renderSkill, supportTable, type Os } from "../scripts/gen-skills"
+import { renderSkill, renderText, supportTable, type Os } from "../scripts/gen-skills"
 import { helpForCommand } from "../cli/help"
 import { buildServer } from "../cli/mcp/server"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
@@ -169,4 +169,11 @@ describe("generated skills", () => {
     expect(win).not.toMatch(/\bLinux\b|Hyprland/)
     expect(linux).not.toMatch(/\bWindows\b/)
   })
+})
+
+test("a CRLF checkout (Windows) renders the same skill text as an LF one", async () => {
+  // Start from LF so a checkout that is already CRLF does not become \r\r\n.
+  const source = (await Bun.file(new URL("../.agents/skills/interceptor/SKILL.md", import.meta.url)).text()).replace(/\r\n/g, "\n")
+  for (const os of ["darwin", "win32", "linux"] as Os[])
+    expect(renderText(source.replace(/\n/g, "\r\n"), os, "interceptor/SKILL.md")).toBe(renderText(source, os, "interceptor/SKILL.md"))
 })

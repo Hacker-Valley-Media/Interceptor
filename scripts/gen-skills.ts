@@ -72,7 +72,8 @@ function generated(name: string, os: Os, file: string): string {
 
 /** Selects one OS's lines from a source Markdown file. */
 export function renderText(source: string, os: Os, file = "<text>"): string {
-  const lines = source.split("\n")
+  // A Windows checkout has CRLF line endings; markers and the frontmatter fence are matched per LF line.
+  const lines = source.replace(/\r\n/g, "\n").split("\n")
   const out: string[] = []
   let start = 0
   if (lines[0] === "---") {
