@@ -74,7 +74,8 @@ if (target === "windows") {
   const exe = join(work, "parity-runner.exe")
   compile(`bun-windows-${arch}`, exe)
   // The scheduled task runs as the console user, so its scripts use the ssh account's absolute folder.
-  const profile = retry([...ssh, "echo %USERPROFILE%"]).trim().split(/\r?\n/).pop() ?? ""
+  // ssh can print warnings (for example about the key exchange) around the answer; take the path line.
+  const profile = retry([...ssh, "echo %USERPROFILE%"]).split(/\r?\n/).map(line => line.trim()).find(line => /^[A-Za-z]:\\\S/.test(line)) ?? ""
   if (!/^[A-Za-z]:\\\S/.test(profile)) throw new Error(`could not read the Windows profile folder on ${host}: ${profile}`)
   const remote = `${profile}\\interceptor-dev\\parity`, runs = `${remote}\\runs\\${stamp}`
   const cmd = join(work, "run-parity.cmd"), ps = join(work, "run-parity.ps1")
