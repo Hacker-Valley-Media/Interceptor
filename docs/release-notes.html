@@ -26,6 +26,22 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.0.0">
+    <h2>Interceptor 2.0.0</h2>
+    <time datetime="2026-10-12">October 12, 2026</time>
+    <ul>
+      <li>New <code>interceptor desktop</code> drives native apps on Windows and Linux with the same verbs, flags, and JSON replies as <code>interceptor macos</code>: element trees, background click, type, keys, scroll, and drag, window screenshots and streams, clipboard, files, PDF, OCR and local vision, speech, calendar, reminders, contacts, notifications, monitor and replay, overlays, and vault secrets. On a Mac, <code>interceptor desktop</code> is the same as <code>interceptor macos</code>.</li>
+      <li>New Windows Full installers and Linux Full archives carry the native provider and its bundled engines (OCR, hand, body, and scene vision, sound classification, text embeddings, and speech recognition on Linux). The local AI model behind <code>ai</code>, <code>translate</code>, and <code>detect</code> downloads once, on first use.</li>
+      <li><code>interceptor desktop capabilities</code> lists every operation and says whether it works on this computer and, when it does not, why.</li>
+      <li>Each operating system now ships only its own agent skills, help, and MCP menu. Windows and Linux get a new <code>interceptor-desktop</code> skill, and the Linux archives now install the skills too.</li>
+      <li>MCP tool calls are classified on the arguments the CLI will actually run. A global flag's value can no longer make a destructive or exec verb look like a read.</li>
+      <li>Element refs from <code>interceptor macos</code> reads stay valid after a later <code>find</code> or <code>tree</code>. <code>type</code> into a read-only field refuses instead of typing into another field.</li>
+      <li>Calendar: <code>--span future</code> on a recurring event no longer deletes past occurrences, and one occurrence can be updated or deleted on its own. An event whose end equals its start no longer fails the whole list.</li>
+      <li>New on the Mac: <code>stream record --media</code> writes an H.264 MP4, <code>type --keycodes-us</code> types into virtual machines that ignore text events, <code>music now-playing --include-system</code> reads Music.app, and <code>contacts list --keys</code> picks the fields returned. OCR runs in a helper process, so a stuck Vision call no longer hangs the bridge.</li>
+      <li>A notification attachment is copied before it is posted, so your original file stays where it was.</li>
+      <li>The Browser and Full packages find the signed-in user even when the console belongs to the login window, so their post-install steps (native messaging links, and the bridge restart on Full) run for that user.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="1.0.24">
     <h2>Interceptor 1.0.24</h2>
     <time datetime="2026-10-02">October 2, 2026</time>
