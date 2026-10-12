@@ -172,7 +172,8 @@ describe("generated skills", () => {
 })
 
 test("a CRLF checkout (Windows) renders the same skill text as an LF one", async () => {
-  const source = await Bun.file(new URL("../.agents/skills/interceptor/SKILL.md", import.meta.url)).text()
+  // Start from LF so a checkout that is already CRLF does not become \r\r\n.
+  const source = (await Bun.file(new URL("../.agents/skills/interceptor/SKILL.md", import.meta.url)).text()).replace(/\r\n/g, "\n")
   for (const os of ["darwin", "win32", "linux"] as Os[])
     expect(renderText(source.replace(/\n/g, "\r\n"), os, "interceptor/SKILL.md")).toBe(renderText(source, os, "interceptor/SKILL.md"))
 })
