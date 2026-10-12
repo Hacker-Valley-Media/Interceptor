@@ -19,6 +19,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import {nativeSecretExecutable} from '../shared/native-secret-target'
 
 export type SecretGate = "none" | "touchid" | "biometry"
 
@@ -34,7 +35,7 @@ export type SecretMeta = {
 
 export type SecretsFile = { version: 1; secrets: Record<string, SecretMeta> }
 
-export type SecretTargetKind = "sudo" | "macos" | "browser" | "ios" | "any" | "reveal"
+export type SecretTargetKind = "sudo" | "macos" | "browser" | "ios" | "any" | "reveal" | "windows" | "linux"
 export type SecretTarget = { kind: SecretTargetKind; id?: string }
 
 export interface Vault {
@@ -103,6 +104,8 @@ export function parseTargets(raw: unknown): string[] {
     if (lower === "sudo" || lower === "ios" || lower === "any") { out.push(lower); continue }
     if (lower.startsWith("macos:") && t.length > 6) { out.push("macos:" + t.slice(6)); continue }
     if (lower.startsWith("browser:") && t.length > 8) { out.push("browser:" + t.slice(8).toLowerCase()); continue }
+    const nativeHost=lower.startsWith('windows:')?'windows':lower.startsWith('linux:')?'linux':undefined
+    if(nativeHost){try{out.push(nativeHost+':'+nativeSecretExecutable(nativeHost,t.slice(nativeHost.length+1)));continue}catch{throw new SecretError('invalid_target','native target requires an exact absolute executable path')}}
     throw new SecretError("invalid_target", `unknown target '${t}' (sudo | macos:<bundleId> | browser:<host> | ios | any)`)
   }
   return [...new Set(out)]
@@ -142,6 +145,11 @@ export function targetAllowed(targets: string[], target: SecretTarget): boolean 
       const host = (target.id || "").toLowerCase()
       return targets.some((t) => t.startsWith("browser:") && hostMatches(t.slice(8), host))
     }
+    case 'windows':
+    case 'linux': {
+      const host=target.kind
+      try { const id=nativeSecretExecutable(host,target.id);return targets.some(t=>t.startsWith(host+':')&&nativeSecretExecutable(host,t.slice(host.length+1))===id) } catch { return false }
+    }
     default: return false
   }
 }
@@ -152,6 +160,8 @@ export function describeTarget(target: SecretTarget): string {
     case "macos": return `macOS app ${target.id || "(unknown)"}`
     case "browser": return `browser page on ${target.id || "(unknown host)"}`
     case "ios": return "iPhone"
+    case 'windows': return `Windows executable ${target.id || '(unknown)'}`
+    case 'linux': return `Linux executable ${target.id || '(unknown)'}`
     case "reveal": return "the terminal (reveal)"
     default: return "any target"
   }
@@ -193,7 +203,7 @@ export function openUnlocks(now = Date.now()): Array<{ name: string; until: numb
 // ── Bun.secrets backend ──────────────────────────────────────────────────────
 
 export class BunSecretsVault implements Vault {
-  readonly backend = "login-keychain"
+  readonly backend = process.platform === "win32" ? "windows-credential-manager" : process.platform === "linux" ? "linux-secret-service" : "login-keychain"
   constructor(private service = SECRET_SERVICE) {}
   async set(name: string, value: string): Promise<void> {
     await Bun.secrets.set({ service: this.service, name, value })
@@ -203,7 +213,7 @@ export class BunSecretsVault implements Vault {
     return typeof v === "string" ? v : null
   }
   async delete(name: string): Promise<boolean> {
-    try { return await Bun.secrets.delete({ service: this.service, name }) } catch { return false }
+    return await Bun.secrets.delete({ service: this.service, name })
   }
 }
 
@@ -263,6 +273,8 @@ export type ResolveOptions = {
   metaPath?: string
   /** Force the OS prompt even for ungated secrets (used by reveal + unlock). */
   alwaysGate?: boolean
+  /** Revalidate a retained native target after approval, before any vault read. */
+  beforeRead?: () => Promise<void>
 }
 
 export function gateReason(name: string, target: SecretTarget, session?: string): string {
@@ -296,6 +308,7 @@ export async function resolveSecret(vault: Vault, name: string, target: SecretTa
     gated = true
   }
   let value: string | null
+  await opts.beforeRead?.()
   try { value = await vault.get(name) } catch (err) { throw new SecretError("vault_error", `keychain read failed for '${name}': ${(err as Error).message}`) }
   if (value === null) throw new SecretError("not_found", `secret '${name}' has metadata but no keychain item (re-register it)`)
   meta.lastReleasedAt = Date.now()

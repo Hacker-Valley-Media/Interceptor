@@ -13,13 +13,13 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../shared/subprocess-sync"
 import { resolve } from "node:path"
 
 import { rewriteCspEvalError } from "../cli/format"
 import { helpForCommand } from "../cli/help"
 import { parseMacosCommand } from "../cli/commands/macos"
-import { formatStatus, type StatusSnapshot } from "../cli/lib/status-renderer"
+import { formatStatus, snapshotToJson, type StatusSnapshot } from "../cli/lib/status-renderer"
 
 const REPO_ROOT = resolve(import.meta.dir, "..")
 const CLI_ENTRY = resolve(REPO_ROOT, "cli/index.ts")
@@ -229,6 +229,23 @@ describe("formatStatus (#49 + #52)", () => {
     expect(out).toContain("daemon (long-lived host process bridging CLI and the browser extension)")
     expect(out).toContain("socket (Unix socket the CLI uses to reach the daemon)")
     expect(out).toContain("transport (how the CLI reaches the daemon)")
+  })
+
+  test("native installation and authenticated session health stay distinct", () => {
+    const snap = fakeSnapshot({ mode: "full", nativeDesktop: { binary: "/owned/interceptor-desktop" } })
+    const out = formatStatus(snap, {})
+    expect(out).toContain("mode: full")
+    expect(out).toContain("desktop provider: installed")
+    expect(out).toContain("session provider: not probed")
+    expect(out).not.toContain("launchctl")
+    expect(out).not.toContain("native macOS")
+    Object.assign(snap.nativeDesktop!, { reachable: false, code: "no_interactive_session", error: "Session 0 is not supported" })
+    expect(formatStatus(snap, { verbose: true })).toContain("error (no_interactive_session): Session 0 is not supported")
+    expect(snapshotToJson(snap).nativeDesktop).toEqual(snap.nativeDesktop)
+    snap.mode = "browser-only"
+    snap.nativeDesktop = { binary: null }
+    expect(formatStatus(snap, {})).toContain("desktop provider: not installed")
+    expect(formatStatus(snap, {})).not.toContain("upgrade --full")
   })
 
   test("renders browser-config block when present", () => {

@@ -22,9 +22,10 @@ invariants; extend `test/mcp-*.test.ts` whenever you touch this surface.
    injection, daemon auto-spawn, and result formatting are inherited. Never speak
    the daemon socket directly from the MCP layer.
 
-2. **Six tools, verb enums from the binary.** `interceptor_browser/macos/ios/read/
+2. **Seven tools, verb enums from the binary.** `interceptor_browser/macos/desktop/ios/read/
    local/raw` (`server.ts`). Browser/local enums come from `COMMAND_SPECS`; macOS/
-   iOS menus are maintained lists; sub-verbs + flags ride in the `args` array and
+   iOS menus are maintained lists; desktop reuses the macOS menu and tier rules
+   with negotiated platform capabilities. Sub-verbs + flags ride in the `args` array and
    are documented in the `interceptor://…` discovery resources. Add a new verb →
    it appears automatically for browser/local; update the macOS/iOS menu lists.
 

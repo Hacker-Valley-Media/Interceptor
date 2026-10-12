@@ -25,9 +25,17 @@ let package = Package(
         .package(url: "https://github.com/apple/containerization.git", exact: Version(stringLiteral: "0.31.0")),
     ],
     targets: [
+        .target(name: "GuestWire", dependencies: ["NativeAX"], path: "GuestWire"),
+        .target(name: "NativeAX", path: "NativeAX"),
+        .target(name: "InputKeycodes", path: "InputKeycodes"),
+        .target(name: "ShareNative", path: "ShareNative", publicHeadersPath: "include"),
         .executableTarget(
             name: "interceptor-bridge",
             dependencies: [
+                "ShareNative",
+                "InputKeycodes",
+                "GuestWire",
+                "NativeAX",
                 .product(name: "Sparkle", package: "Sparkle"),
                 // : Containerization product imports. LinuxContainer
                 // + VZVirtualMachineManager + BootLog + Hosts + ContainerConfiguration
@@ -138,6 +146,7 @@ let package = Package(
         // no Sparkle, no AppKit on the Linux build path.
         .executableTarget(
             name: "InterceptorD",
+            dependencies: ["InputKeycodes", "GuestWire", "NativeAX"],
             path: "InterceptorD",
             linkerSettings: [
                 .linkedFramework("Foundation"),
@@ -150,8 +159,18 @@ let package = Package(
         ),
         .testTarget(
             name: "InterceptorBridgeTests",
-            dependencies: ["interceptor-bridge"],
+            dependencies: ["interceptor-bridge", "InputKeycodes", "GuestWire", "NativeAX"],
             path: "Tests/InterceptorBridgeTests"
+        ),
+        .testTarget(
+            name: "InterceptorDTests",
+            dependencies: ["InterceptorD", "InputKeycodes", "GuestWire", "NativeAX"],
+            path: "Tests/InterceptorDTests"
+        ),
+        .testTarget(
+            name: "GuestWireTests",
+            dependencies: ["GuestWire"],
+            path: "Tests/GuestWireTests"
         )
     ]
 )

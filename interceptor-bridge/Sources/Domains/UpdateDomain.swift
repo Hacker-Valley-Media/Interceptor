@@ -24,7 +24,10 @@ final class UpdateDomain: DomainHandler, @unchecked Sendable {
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let sub = action["sub"] as? String ?? command
+        var canonical=action;canonical["type"]="desktop_update";canonical["sub"]=action["sub"] as? String ?? "status"
+        if let error=DesktopUpdateShape.validationError(canonical){completion(WireFormat.failure("invalid_request",error));return}
+        for key in ["group","groupColor"]{if let text=canonical[key] as? String,text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty||text.utf8.count>256||text.contains("\0"){completion(WireFormat.failure("invalid_request","invalid update group metadata"));return}}
+        let sub = canonical["sub"] as! String
         switch sub {
         case "check":
             handleCheck(completion: completion)
@@ -85,6 +88,7 @@ final class UpdateDomain: DomainHandler, @unchecked Sendable {
         payload["checkInterval"] = updater.updateCheckInterval
         payload["canCheckForUpdates"] = updater.canCheckForUpdates
         payload["sessionInProgress"] = updater.sessionInProgress
+        if let version=Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String{payload["currentVersion"]=version}
         if let last = updater.lastUpdateCheckDate {
             payload["lastCheck"] = ISO8601DateFormatter().string(from: last)
         }

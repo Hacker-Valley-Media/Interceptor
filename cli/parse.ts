@@ -3,6 +3,7 @@
  */
 
 import { createHash } from "node:crypto"
+import { globalGroupFlagIndex } from "./global-flags"
 
 export function parseElementTarget(arg: string): { index?: number; ref?: string; frameId?: number; semantic?: { role: string; name: string } } {
   // Every caller that allows an absent target guards before calling (focus,
@@ -135,7 +136,7 @@ export function resolveSessionId(env: Record<string, string | undefined>): strin
 export function resolveGroupScope(args: string[], env: Record<string, string | undefined> = process.env): GroupScope {
   const optionTerminator = args.indexOf("--")
   const scopeArgs = optionTerminator === -1 ? args : args.slice(0, optionTerminator)
-  const idx = scopeArgs.indexOf("--group")
+  const idx = globalGroupFlagIndex(scopeArgs)
   if (scopeArgs.includes("--shared-group")) {
     if (idx !== -1) {
       console.error("error: --shared-group conflicts with --group")

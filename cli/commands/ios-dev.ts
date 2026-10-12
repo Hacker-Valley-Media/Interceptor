@@ -6,7 +6,7 @@
  * cli/commands/ios.ts. (oslog/pcap temporarily removed — see shared/ios-dev.ts.)
  */
 
-import { sendCommand, type DaemonResponse, type DaemonResult } from "../transport"
+import { sendCommand, jsonFailure, type DaemonResponse, type DaemonResult } from "../transport"
 
 type Action = { type: string; [key: string]: unknown }
 
@@ -35,9 +35,7 @@ async function send(action: Action, contextId?: string): Promise<DaemonResult> {
 
 function emit(result: DaemonResult, jsonMode: boolean, plain?: (d: unknown) => string | undefined): void {
   if (jsonMode) {
-    const errPayload = result.data && typeof result.data === "object" && !Array.isArray(result.data)
-      ? { error: result.error, ...(result.data as Record<string, unknown>) } : { error: result.error }
-    console.log(JSON.stringify(result.success ? (result.data ?? null) : errPayload)); return
+        console.log(JSON.stringify(result.success ? (result.data ?? null) : jsonFailure(result))); return
   }
   if (!result.success) {
     const code = (result.data as { code?: string; next?: string } | undefined)?.code

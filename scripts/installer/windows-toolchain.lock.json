@@ -32,6 +32,13 @@
     "publisher": "Pyrsys B.V.",
     "commercialLicenseEvidenceRequired": true
   },
+  "jsign": {
+    "version": "7.5",
+    "url": "https://github.com/ebourg/jsign/releases/download/7.5/jsign-7.5.jar",
+    "sha256": "602a51c3545a6dc4fb99bd2ea7152b26d1345916d0c93ddfbd5936cb735af91c",
+    "size": 2195398,
+    "use": "Local Authenticode with the same Azure Artifact Signing account; Java 11 or newer"
+  },
   "windowsSdkBuildTools": {
     "package": "Microsoft.Windows.SDK.BuildTools",
     "version": "10.0.26100.8249",

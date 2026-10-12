@@ -6,26 +6,17 @@ final class Transport: @unchecked Sendable {
     private let socketPath: String
     private var serverFD: Int32 = -1
     private var running = true
+    static let requestIdWindow = 4096
 
     init(router: Router) throws {
         self.router = router
         self.socketPath = Platform.bridgeSocketPath
-
+        var addr = try Self.socketAddress(socketPath)
         Platform.cleanupSocket()
 
         serverFD = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverFD >= 0 else {
             throw NSError(domain: "Transport", code: 1, userInfo: [NSLocalizedDescriptionKey: "failed to create socket"])
-        }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(socketPath.utf8CString)
-        withUnsafeMutablePointer(to: &addr.sun_path) { sunPathPtr in
-            let raw = UnsafeMutableRawPointer(sunPathPtr)
-            pathBytes.withUnsafeBufferPointer { buf in
-                raw.copyMemory(from: buf.baseAddress!, byteCount: min(buf.count, 104))
-            }
         }
 
         let bindResult = withUnsafePointer(to: &addr) { ptr in
@@ -38,10 +29,29 @@ final class Transport: @unchecked Sendable {
             throw NSError(domain: "Transport", code: 2, userInfo: [NSLocalizedDescriptionKey: "bind failed: \(String(cString: strerror(errno)))"])
         }
 
-        guard Darwin.listen(serverFD, 5) == 0 else {
+        guard Darwin.listen(serverFD, SOMAXCONN) == 0 else {
             Darwin.close(serverFD)
             throw NSError(domain: "Transport", code: 3, userInfo: [NSLocalizedDescriptionKey: "listen failed"])
         }
+    }
+
+    // Validate before cleanup or bind. Truncation creates a different socket
+    // from the advertised endpoint, leaving every client unable to connect.
+    static func socketAddress(_ path: String) throws -> sockaddr_un {
+        var address = sockaddr_un()
+        let bytes = Array(path.utf8CString)
+        let capacity = MemoryLayout.size(ofValue: address.sun_path)
+        guard !path.isEmpty, !path.utf8.contains(0), bytes.count <= capacity else {
+            throw NSError(domain: "Transport", code: 4, userInfo: [NSLocalizedDescriptionKey:
+                "bridge socket path requires 1...\(capacity - 1) UTF-8 bytes without NUL; use a shorter runtime directory"])
+        }
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutablePointer(to: &address.sun_path) { target in
+            bytes.withUnsafeBufferPointer { source in
+                UnsafeMutableRawPointer(target).copyMemory(from: source.baseAddress!, byteCount: bytes.count)
+            }
+        }
+        return address
     }
 
     func start() {
@@ -93,6 +103,15 @@ final class Transport: @unchecked Sendable {
     /// Exposed at module-internal access so `@testable import interceptor_bridge`
     /// can drive a `socketpair`-backed handleClient in tests.
     static func handleClient(fd: Int32, router: Router) {
+        var noSignal: Int32 = 1
+        let flags = Darwin.fcntl(fd, F_GETFL)
+        guard flags >= 0,
+              Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0,
+              setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout.size(ofValue: noSignal))) == 0 else {
+            Platform.log("failed to configure client socket: \(String(cString: strerror(errno)))")
+            Darwin.close(fd)
+            return
+        }
         var buffer = Data()
         let readBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: 65536)
 
@@ -100,6 +119,17 @@ final class Transport: @unchecked Sendable {
         let workQueue = DispatchQueue.global(qos: .userInitiated)
         let inflightGroup = DispatchGroup()
         let inflightCounter = InflightCounter()
+        // Duplicate detection covers the newest `requestIdWindow` ids. The
+        // daemon keeps one connection for its lifetime, so the oldest id is
+        // forgotten instead of refusing the connection at a fixed count.
+        var requestIds = Set<String>(), requestOrder: [String] = [], oldest = 0
+        func remember(_ id: String) {
+            requestIds.insert(id)
+            if requestOrder.count < requestIdWindow { requestOrder.append(id); return }
+            requestIds.remove(requestOrder[oldest])
+            requestOrder[oldest] = id
+            oldest = (oldest + 1) % requestIdWindow
+        }
 
         defer {
             readBuf.deallocate()
@@ -119,6 +149,12 @@ final class Transport: @unchecked Sendable {
 
         while true {
             let bytesRead = Darwin.read(fd, readBuf, 65536)
+            if bytesRead < 0 && errno == EINTR { continue }
+            if bytesRead < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                var readable = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let ready = Darwin.poll(&readable, 1, -1)
+                if ready >= 0 || errno == EINTR { continue }
+            }
             if bytesRead <= 0 { break }
             buffer.append(readBuf, count: bytesRead)
 
@@ -148,9 +184,40 @@ final class Transport: @unchecked Sendable {
                     continue
                 }
 
-                let requestId = json["id"] as? String ?? UUID().uuidString
                 let action = json["action"] as? [String: Any] ?? [:]
                 let actionType = action["type"] as? String ?? "unknown"
+                let neutral = actionType.hasPrefix("desktop_") || actionType == "macos_desktop" || actionType.hasPrefix("macos_desktop_")
+                let requestId = json["id"] as? String ?? (neutral ? "" : UUID().uuidString)
+                let protocolNumber = json["protocolVersion"] as? NSNumber
+                let malformedProtocol = json["protocolVersion"] != nil && !(protocolNumber.map {
+                    CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue.isFinite
+                } ?? false)
+                let malformedToken = json["token"] != nil && !(json["token"] is String)
+
+                // Reject repeats in the read loop before dispatch, including
+                // when the original request's callback is still in flight.
+                let refusal: String?
+                var refusalCode = "invalid_request"
+                if neutral && (malformedProtocol || malformedToken) {
+                    refusal = "malformed desktop request"
+                } else if requestId.utf8.count > 128 || requestId.isEmpty {
+                    refusal = "id must contain 1..128 bytes"
+                } else if requestIds.contains(requestId) {
+                    refusal = "duplicate request id on this connection"
+                } else if neutral && protocolNumber.map({ $0.doubleValue != Double(DESKTOP_PROTOCOL_VERSION) }) == true {
+                    remember(requestId)
+                    refusalCode = "version_mismatch"
+                    refusal = "desktop protocol version \(DESKTOP_PROTOCOL_VERSION) required"
+                } else {
+                    refusal = nil
+                }
+                if let refusal = refusal {
+                    if let frame = Transport.encodeFrame(response: ["id": requestId, "result": ["success": false, "code": refusalCode, "error": refusal]]) {
+                        writeQueue.sync { Transport.writeFrame(fd: fd, frame: frame) }
+                    }
+                    continue
+                }
+                remember(requestId)
 
                 let inflight = inflightCounter.increment()
                 Platform.log("request \(requestId.prefix(8)) \(actionType) inflight=\(inflight)")
@@ -220,8 +287,30 @@ final class Transport: @unchecked Sendable {
     /// caller MUST already be running on the per-fd writeQueue so
     /// frame bytes cannot interleave with a concurrent in-flight write.
     fileprivate static func writeFrame(fd: Int32, frame: Data) {
-        frame.withUnsafeBytes { ptr in
-            _ = Darwin.write(fd, ptr.baseAddress!, frame.count)
+        let deadline = DispatchTime.now().uptimeNanoseconds + 15_000_000_000
+        let complete = frame.withUnsafeBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress else { return true }
+            var written = 0
+            while written < frame.count {
+                let now = DispatchTime.now().uptimeNanoseconds
+                guard now < deadline else { return false }
+                let count = Darwin.write(fd, base.advanced(by: written), frame.count - written)
+                if count > 0 { written += count; continue }
+                if count < 0 && errno == EINTR { continue }
+                guard count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) else { return false }
+                var pending = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                let milliseconds = Int32(min(1000, (deadline - now + 999_999) / 1_000_000))
+                let ready = Darwin.poll(&pending, 1, milliseconds)
+                if ready < 0 && errno != EINTR { return false }
+                if ready > 0 && pending.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 { return false }
+            }
+            return true
+        }
+        if !complete {
+            // No subsequent frame may follow a truncated one. Wake the reader
+            // and leave client-side mutation outcomes unknown, without replay.
+            Platform.log("client frame delivery failed or exceeded 15s (fd: \(fd))")
+            _ = Darwin.shutdown(fd, SHUT_RDWR)
         }
     }
 }

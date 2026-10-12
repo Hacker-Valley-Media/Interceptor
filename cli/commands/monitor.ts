@@ -506,12 +506,12 @@ export function renderSession(sid: string, includeBodies = false): string {
 }
 
 export function escapeArg(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+  return s.replace(/[\\"$`]/g, "\\$&")
 }
 
 export function buildPlan(sid: string, includeSynthetic = false, includeBodies = false): string {
   const events = readMonEvents(sid)
-  if (events.length === 0) return `# (no events for session ${sid})`
+  if (events.length === 0) return `# (no events for session ${sid.replace(/[\r\n\u0085\u2028\u2029]+/g, " ")})`
   const start = events.find((e) => e.event === "mon_start")
   const lines: string[] = []
   lines.push(`# Replay plan for session ${sid}`)
@@ -579,7 +579,7 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
         } else if (ev.ref) {
           const cmd = k === "click" ? "click" : k === "dblclick" ? "dblclick" : "rightclick"
           lines.push(`# ref ${ev.ref} (no accessible name) — falling back to ref id, may be stale`)
-          lines.push(`interceptor ${cmd} ${ev.ref}`)
+          lines.push(`interceptor ${cmd} "${escapeArg(ev.ref)}"`)
         } else {
           lines.push(`# ${k} with no ref or name — skipped`)
         }
@@ -598,7 +598,7 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
           lines.push(`interceptor type "${escapeArg(role)}:${escapeArg(name)}" "${escapeArg(value)}"`)
         } else if (ev.ref) {
           lines.push(`# ref ${ev.ref} (no accessible name)`)
-          lines.push(`interceptor type ${ev.ref} "${escapeArg(value)}"`)
+          lines.push(`interceptor type "${escapeArg(ev.ref)}" "${escapeArg(value)}"`)
         }
         break
       }
@@ -642,14 +642,14 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
           lines.push(`# handoff to child tab ${ev.tid || "?"}`)
           lines.push(`interceptor tab new "${escapeArg(ev.u)}"`)
           lines.push(`interceptor wait-stable`)
-        } else if (ev.reason === "focus_switch" && ev.tid) {
+        } else if (ev.reason === "focus_switch" && Number.isSafeInteger(ev.tid) && ev.tid! > 0) {
           // A recorded focus switch is where the person looked, not a step the
           // replay reproduces: a replayed `tab switch` would take over the
           // user's view, so the commands that follow carry --tab instead.
           // Foregrounding stays a deliberate choice for a trusted click.
           closeReplayTab()
           lines.push(`# focus-switch to tab ${ev.tid}${ev.u ? ` (${ev.u})` : ""}: the commands below target it with --tab; foreground only for a trusted click, then switch back`)
-          replayTab = { tid: ev.tid, from: lines.length }
+          replayTab = { tid: ev.tid!, from: lines.length }
         }
         break
       }
@@ -676,7 +676,7 @@ export function buildPlan(sid: string, includeSynthetic = false, includeBodies =
   }
 
   closeReplayTab()
-  return lines.join("\n")
+  return lines.map(line => line.startsWith("#") ? line.replace(/[\r\n\u0085\u2028\u2029]+/g, " ") : line).join("\n")
 }
 
 function withBodies(planText: string, sid: string): string {

@@ -14,7 +14,7 @@ run_inner() {
   if command -v container >/dev/null 2>&1 && container system status >/dev/null 2>&1; then
     local arch="arm64" rosetta=()
     if [[ "$platform" == "linux/amd64" ]]; then arch="amd64"; rosetta=(--rosetta); fi
-    container run --rm --arch "$arch" "${rosetta[@]}" --volume "$RELEASE_DIR:/release:ro" docker.io/library/ubuntu:24.04 bash -lc "$command"
+    container run --rm --arch "$arch" ${rosetta[@]+"${rosetta[@]}"} --volume "$RELEASE_DIR:/release:ro" docker.io/library/ubuntu:24.04 bash -lc "$command"
   elif command -v docker >/dev/null 2>&1; then
     docker run --rm --platform "$platform" -v "$RELEASE_DIR:/release:ro" ubuntu:24.04 bash -lc "$command"
   else

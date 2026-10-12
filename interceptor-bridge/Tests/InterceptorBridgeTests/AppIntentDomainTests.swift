@@ -1,4 +1,4 @@
-// PRD-66 — AppIntentDomain runtime tests.
+// AppIntentDomain runtime tests.
 
 import XCTest
 @testable import interceptor_bridge

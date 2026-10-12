@@ -11,6 +11,27 @@ final class OverlayEmitterView: NSView, OverlayControllable {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { interactive }
 
     private let emitter = CAEmitterLayer()
+    private var stopped = false
+    private var paused = false
+    private var burstGeneration = UUID()
+
+    var nativeStatus: [String: Any] {
+        ["paused": paused, "stopped": stopped, "density": cfg.density, "lifetime": cfg.lifetime,
+         "direction": cfg.direction, "emojis": cfg.emojis, "scale": Double(cfg.sizeScale)]
+    }
+
+    var hasPendingNativeWork: Bool { false }
+
+    func shutdown() {
+        stopped = true
+        paused = true
+        burstGeneration = UUID()
+        emitter.birthRate = 0
+        emitter.emitterCells = nil
+        emitter.removeAllAnimations()
+        emitter.removeFromSuperlayer()
+        layer?.removeAllAnimations()
+    }
 
     // MARK: - OverlayControllable
 
@@ -21,6 +42,17 @@ final class OverlayEmitterView: NSView, OverlayControllable {
 
     @MainActor
     func perform(verb: String, args: [String: Any]) -> [String: Any] {
+        guard !stopped else { return ["ok": false, "code": "target_gone", "error": "particle renderer retired"] }
+        do { _ = try DesktopOverlayValidation.controlArgs(args, mode: "particles", verb: verb) }
+        catch { return ["ok": false, "code": "invalid_request", "error": error.localizedDescription] }
+        let density = verb == "set-density" ? (args["value"] as! NSNumber).doubleValue : cfg.density
+        let lifetime = verb == "set-lifetime" ? (args["value"] as! NSNumber).doubleValue : Double(cfg.lifetime)
+        guard density * lifetime <= 4096 else { return ["ok": false, "code": "resource_limit", "error": "live particle budget exceeded"] }
+        let bump = (args["count"] as? NSNumber)?.doubleValue ?? 40
+        if verb == "burst", cfg.density * bump > 512 { return ["ok": false, "code": "resource_limit", "error": "burst emission budget exceeded"] }
+        burstGeneration = UUID()
+        let generation = burstGeneration
+        emitter.birthRate = paused ? 0 : 1
         switch verb {
         case "set-density":
             if let v = (args["value"] as? Double) ?? (args["value"] as? Int).map({ Double($0) }) {
@@ -71,7 +103,7 @@ final class OverlayEmitterView: NSView, OverlayControllable {
                          sizeRange: cfg.sizeRange, lifetime: cfg.lifetime, sway: cfg.sway,
                          velocity: v, sizeScale: cfg.sizeScale)
             rebuildCells()
-            return ["ok": true, "velocity": v as Any]
+            return ["ok": true, "velocity": v.map { Double($0) as Any } ?? NSNull()]
 
         case "set-scale":
             if let v = (args["value"] as? Double) ?? (args["value"] as? Int).map({ Double($0) }) {
@@ -85,19 +117,22 @@ final class OverlayEmitterView: NSView, OverlayControllable {
 
         case "burst":
             // Temporarily crank density, then restore
-            let bump = (args["count"] as? Double) ?? (args["count"] as? Int).map { Double($0) } ?? 40
+            guard !paused else { return ["ok": false, "code": "resource_busy", "error": "particle renderer is paused"] }
             let originalRate = emitter.birthRate
             emitter.birthRate = max(1.0, Float(bump))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.emitter.birthRate = originalRate
+                guard let self, !self.stopped, !self.paused, self.burstGeneration == generation else { return }
+                self.emitter.birthRate = originalRate
             }
             return ["ok": true, "burst": bump]
 
         case "pause":
+            paused = true
             emitter.birthRate = 0
             return ["ok": true]
 
         case "resume":
+            paused = false
             emitter.birthRate = 1
             return ["ok": true]
 

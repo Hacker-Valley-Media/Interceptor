@@ -102,3 +102,46 @@ describe("background trusted input → result", () => {
     expect(result).toEqual({ success: false, error: TARGET.error, data: { hint: TARGET.hint } })
   })
 })
+
+describe('portable browser background routing and outcomes',()=>{
+  const click={type:'os_click',background:TARGET,windowBounds:BOUNDS,pageX:400,pageY:300,chromeUiHeight:81}
+  for(const platform of ['win32','linux']){
+    test(`${platform} targets the desktop provider with mandatory background-only delivery`,()=>{
+      expect(bridgeActionFor(click,platform)).toEqual({type:'desktop_click',coords:'400,411',right:false,double:false,backgroundOnly:true,windowTitle:TARGET.title,windowBounds:BOUNDS})
+      expect(bridgeActionFor({...click,type:'os_type',text:'🙂 文件'},platform)).toMatchObject({type:'desktop_type',text:'🙂 文件',backgroundOnly:true})
+      expect(bridgeActionFor({...click,type:'os_key',key:'Enter'},platform)).toMatchObject({type:'desktop_keys',keys:'Enter',backgroundOnly:true})
+    })
+    test(`${platform} preserves actual receipt fields without claiming page acceptance`,async()=>{
+      const receipt={method:'owned native receipt fixture',background:true,foregroundUsed:false,focusUnchanged:true,cursorUnchanged:true,targetPid:42,windowId:'84',delivered:2,effectRequiresObservation:true}
+      const result=await deliverInBackground(click,async()=>({success:true,data:receipt}),platform)
+      expect(result).toEqual({success:true,data:receipt})
+    })
+    test(`${platform} preserves an unknown outcome and never resends`,async()=>{
+      let calls=0
+      const details={dispatched:true,delivered:1,verified:false,effectRequiresObservation:true}
+      const result=await deliverInBackground(click,async()=>{calls++;return{success:false,code:'timeout_unknown_outcome',error:'native window changed after press',details}},platform)
+      expect(calls).toBe(1)
+      expect(result).toMatchObject({success:false,code:'timeout_unknown_outcome',details})
+      expect(result.error).toContain('native window changed after press')
+    })
+    test(`${platform} treats missing or contradictory receipt fields as unknown outcomes`,async()=>{
+      const receipt={method:'owned native receipt fixture',background:true,foregroundUsed:false,targetPid:42,effectRequiresObservation:true}
+      for(const data of ['delivered',{...receipt,background:false},{...receipt,foregroundUsed:true},{...receipt,foregroundUsed:undefined},{...receipt,targetPid:undefined},{...receipt,effectRequiresObservation:false}]){
+        const result=await deliverInBackground(click,async()=>({success:true,data}),platform)
+        expect(result).toMatchObject({success:false,code:'timeout_unknown_outcome',details:{dispatched:true,verified:false,effectRequiresObservation:true}})
+      }
+    })
+  }
+  test('zero browser UI inset and negative monitor origins retain their coordinates',()=>{
+    expect(bridgeActionFor({...click,windowBounds:{left:-1920,top:-10,width:1920,height:1080},pageX:10.5,pageY:20.5,chromeUiHeight:0},'win32')).toMatchObject({coords:'-1910,10'})
+  })
+  test('invalid frames, unmapped coordinates, unsupported clicks and NUL text refuse before provider invocation',async()=>{
+    for(const action of [{...click,pageX:NaN},{...click,pageX:-1},{...click,pageX:BOUNDS.width},{...click,pageY:BOUNDS.height},{...click,chromeUiHeight:-1},{...click,button:'middle'},{...click,clickCount:3},{...click,windowBounds:{...BOUNDS,width:0}},{...click,background:{...TARGET,title:'\0'}},{...click,type:'os_type',text:'x\0y'},{...click,type:'os_key',key:'Enter',modifiers:['Ctrl',3]}]){
+      let called=false
+      const result=await deliverInBackground(action,async()=>{called=true;return{success:true}},'win32')
+      expect(result.success).toBe(false)
+      expect(called).toBe(false)
+    }
+    expect(bridgeActionFor(click,'unsupported-host')).toBeNull()
+  })
+})

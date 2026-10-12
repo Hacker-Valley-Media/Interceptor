@@ -34,6 +34,11 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
         return "no running app matches '\(appName)' — names are case-insensitive and accept the .app name or bundle id; 'interceptor macos apps' lists them"
     }
 
+    // Nothing was pressed yet, so the neutral reply is a refusal, not an unknown outcome.
+    private func refusal(_ message: String, code: String) -> [String: Any] {
+        ["success": false, "code": code, "error": message, "details": ["dispatched": false]]
+    }
+
     private func targetPid(_ action: [String: Any]) -> pid_t {
         if let pid = action["pid"] as? Int32 { return pid }
         if let appName = action["app"] as? String,
@@ -45,7 +50,11 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
 
     private func listMenu(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         if let problem = explicitAppProblem(action) {
-            completion(WireFormat.error(problem))
+            completion(refusal(problem, code: "target_gone"))
+            return
+        }
+        if let pid = action["pid"] as? Int32, NSRunningApplication(processIdentifier: pid)?.isTerminated ?? true {
+            completion(refusal("no target app found", code: "target_gone"))
             return
         }
         let pid = targetPid(action)
@@ -57,7 +66,7 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
         let appElement = transport.createApplication(pid: pid)
         let (menuBarResult, menuBarValue) = transport.copyAttributeValue(appElement, kAXMenuBarAttribute as String)
         guard menuBarResult == .success, let menuBar = AXValueCodec.asElement(menuBarValue) else {
-            completion(WireFormat.error("could not read menu bar"))
+            completion(refusal("could not read menu bar", code: "unsupported_target"))
             return
         }
 
@@ -95,7 +104,11 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
 
     private func invokeMenu(items: [String], action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         if let problem = explicitAppProblem(action) {
-            completion(WireFormat.error(problem))
+            completion(refusal(problem, code: "target_gone"))
+            return
+        }
+        if let pid = action["pid"] as? Int32, NSRunningApplication(processIdentifier: pid)?.isTerminated ?? true {
+            completion(refusal("no target app found", code: "target_gone"))
             return
         }
         let pid = targetPid(action)
@@ -107,7 +120,7 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
         let appElement = transport.createApplication(pid: pid)
         let (menuBarResult, menuBarValue) = transport.copyAttributeValue(appElement, kAXMenuBarAttribute as String)
         guard menuBarResult == .success, let menuBar = AXValueCodec.asElement(menuBarValue) else {
-            completion(WireFormat.error("could not read menu bar"))
+            completion(refusal("could not read menu bar", code: "unsupported_target"))
             return
         }
 
@@ -118,7 +131,7 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
             let target = path.removeFirst()
             let (childrenResult, childrenValue) = transport.copyAttributeValue(currentElement, kAXChildrenAttribute as String)
             guard childrenResult == .success, let children = childrenValue as? [AXUIElement] else {
-                completion(WireFormat.error("could not traverse menu to: \(target)"))
+                completion(refusal("could not read the menu items on the way to \(target); nothing was invoked", code: "unsupported_target"))
                 return
             }
 
@@ -145,11 +158,11 @@ final class MenuDomain: DomainHandler, @unchecked Sendable {
                 }
             }
             if !found {
-                completion(WireFormat.error("menu item not found: \(target)"))
+                completion(refusal("menu item not found: \(target); nothing was invoked", code: "target_gone"))
                 return
             }
         }
 
-        completion(WireFormat.error("menu path exhausted without finding target"))
+        completion(refusal("menu path exhausted without finding the target; nothing was invoked", code: "target_gone"))
     }
 }

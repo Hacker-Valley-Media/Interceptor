@@ -1,4 +1,4 @@
-// PRD-66 — shared Sendable result holder for the new domain tests.
+// Shared Sendable result holder for the new domain tests.
 // Swift 6 strict concurrency rejects capturing `var` of a non-Sendable type
 // across `@Sendable` closures, so test bodies wrap their result in this class.
 

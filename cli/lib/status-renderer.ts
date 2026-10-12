@@ -12,6 +12,8 @@ import { IS_WIN, SOCKET_PATH, PID_PATH, transportLabel } from "../../shared/plat
 import { bridgePidPathForDetection, bridgeSocketPathForDetection } from "../../shared/bridge-paths"
 import { skillsStatusSummary } from "../commands/skills"
 import { consoleUser, currentUserName, missingGuiSessionLines, probeGuiSession, type GuiSession } from "../../shared/gui-session"
+import { desktopProviderBinary } from "../../shared/desktop-provider"
+import type { DesktopErrorCode } from "../../shared/desktop-contract"
 
 export type StatusSnapshot = {
   mode: "browser-only" | "full" | "unknown"
@@ -35,6 +37,15 @@ export type StatusSnapshot = {
   // would help. `consoleUser` then names who owns the screen.
   guiSession?: GuiSession
   consoleUser?: string | null
+  nativeDesktop?: {
+    binary: string | null
+    reachable?: boolean
+    version?: string
+    pid?: number
+    session?: string
+    error?: string
+    code?: DesktopErrorCode
+  }
   // #52 browser-config block — populated only on macOS in verbose mode
   browser?: {
     configured: ("chrome" | "brave")[]   // browsers with NMH manifest installed
@@ -187,8 +198,11 @@ export function readStatusSnapshot(): StatusSnapshot {
   }
 
   let mode: "browser-only" | "full" | "unknown"
-  if (IS_WIN) {
-    mode = "browser-only"
+  const nativeDesktop = process.platform === "win32" || process.platform === "linux"
+    ? { binary: desktopProviderBinary() ?? null }
+    : undefined
+  if (nativeDesktop) {
+    mode = nativeDesktop.binary ? "full" : "browser-only"
   } else if (launchAgentInstalled) {
     mode = "full"
   } else if (bridgeAlive) {
@@ -224,6 +238,7 @@ export function readStatusSnapshot(): StatusSnapshot {
     launchAgentLoaded,
     guiSession,
     consoleUser: consoleOwner,
+    nativeDesktop,
     skills,
   }
 }
@@ -384,7 +399,20 @@ export function formatStatus(snap: StatusSnapshot, opts: { verbose?: boolean }):
   }
 
   // bridge block (only when in full or unknown mode)
-  if (snap.mode !== "browser-only") {
+  if (snap.nativeDesktop) {
+    const native = snap.nativeDesktop
+    lines.push("")
+    lines.push(`desktop provider: ${native.binary ? "installed" : "not installed"}`)
+    if (native.binary) {
+      lines.push(`  binary: ${native.binary}`)
+      lines.push(`  session provider: ${native.reachable === undefined ? "not probed (run 'interceptor status --verbose')" : native.reachable ? "reachable" : "unavailable"}`)
+      if (native.version) lines.push(`  version: ${native.version}`)
+      if (native.pid) lines.push(`  pid: ${native.pid}`)
+      if (native.session) lines.push(`  session: ${native.session}`)
+      if (native.error) lines.push(`  error${native.code ? ` (${native.code})` : ""}: ${native.error}`)
+      lines.push("  operation support: interceptor desktop capabilities")
+    }
+  } else if (snap.mode !== "browser-only") {
     lines.push("")
     if (v) {
       lines.push(`bridge (separate macOS native automation bridge — only needed for 'interceptor macos *'): ${snap.bridge ? "running" : "not running"}`)
@@ -518,5 +546,6 @@ export function snapshotToJson(snap: StatusSnapshot): Record<string, unknown> {
   if (snap.contexts) base.contexts = snap.contexts
   if (snap.tabLifecycle) base.tabLifecycle = snap.tabLifecycle
   if (snap.skills) base.skills = snap.skills
+  if (snap.nativeDesktop) base.nativeDesktop = snap.nativeDesktop
   return base
 }

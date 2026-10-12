@@ -10,7 +10,7 @@ interceptor macos open "Finder" --activate     # Explicit foregrounding
 interceptor macos read --app "Mail"            # AX tree; another app stays focused
 interceptor macos act <ref>                    # Click + wait + updated tree (AX press)
 interceptor macos act <ref> "hello"            # AX value-set (no focus change)
-interceptor macos inspect                      # Tree + apps + frontmost info
+interceptor macos inspect                      # Tree + apps + target (the inspected app) + frontmost (the app the user is in)
 ```
 
 ### Self-update rules
@@ -67,6 +67,7 @@ interceptor macos click 100,200 --app "TextEdit"    # background click in TextEd
 interceptor macos click 100,200 --app "Brave Browser" --window 7247   # a covered window, by id
 interceptor macos type <ref> "..."                  # AX value-set (text roles)
 interceptor macos type "..." --app "X"
+interceptor macos type "Aa9!" --app UTM --window <id> --keycodes-us
 interceptor macos keys "Meta+S" --app "X"
 interceptor macos keys "Meta+A" --pid 1234
 interceptor macos scroll down 400 --app "Mail" --times 5 --interval-ms 80
@@ -79,6 +80,8 @@ OS-level escalation (for HID-source-state checks; follows frontmost):
 interceptor macos type "..." --os
 interceptor macos keys "..." --os
 ```
+
+`type --keycodes-us` sends physical US keyboard codes for VM keyboard devices that ignore Unicode text events. Both the host key mapping and guest keyboard layout must be US. It accepts printable ASCII, tab and newline, and refuses unsupported text before typing anything. It works with `--secret <name>` and retains the named credential's target check. Normal `type` keeps its Unicode and AX behavior.
 
 ## Secret vault + admin prompts
 
@@ -111,10 +114,14 @@ interceptor macos screenshot --window <ref>
 interceptor macos screenshot --region X,Y,W,H
 interceptor macos capture start | status | frame | stop
 interceptor macos stream start | list | frame | stop
+interceptor macos stream record start --sid <sid> --media [--record-audio none|system]
+interceptor macos stream record status | stop --sid <sid>
 interceptor macos display
 ```
 
 CGS captures occluded / minimized / cross-Space windows. Avoid `--mode display` for app-specific captures.
+
+Media recording (`stream record --media`): Mac15+ uses native H264/MP4 timestamps and returns the private file and SHA256 after native finalization and movie inspection. `--record-audio system` requires an explicitly selected display. Without `--media`, record retains the existing counter behavior.
 
 ## OSA Scripts + Apple Events
 
@@ -190,7 +197,8 @@ interceptor macos reminders status|all|incomplete|completed|create|complete|unco
 interceptor macos contacts status|list|find|create|update|delete|vcard|changes
 interceptor macos photos status|albums|assets|export|thumbnail|favorite|delete|import|changes
 interceptor macos location status|current|geocode|reverse|distance|monitor
-interceptor macos music search|library|play|pause|now-playing|...
+interceptor macos music library|library-search|play|pause|now-playing|...
+interceptor macos music search "<term>" | search-suggest "<term>" | charts | recommendations | song|album|artist|playlist <catalog id>   # Apple Music catalog; Mac only, needs the MusicKit App Service on App ID com.interceptor.bridge (permission_required until then)
 interceptor macos maps search|directions|eta|complete|reverse|mapitem-open
 interceptor macos share services|airdrop|email|message|named|text|url
 ```

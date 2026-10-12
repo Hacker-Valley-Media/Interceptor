@@ -20,7 +20,7 @@ import { skillsStatusSummary } from "./commands/skills"
 export type FlagSpec = { name: string; value?: string; description: string }
 export type CommandSpec = {
   name: string
-  surface: "browser" | "macos" | "ios" | "local"
+  surface: "browser" | "macos" | "desktop" | "ios" | "local"
   usage: string
   summary: string
   returns: string
@@ -229,6 +229,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "research", surface: "local", usage: "interceptor research [init|log|status|…]", summary: "Deep-research methodology + on-disk source ledger", returns: "Playbook guidance / ledger state." },
   { name: "upgrade", surface: "local", usage: "interceptor upgrade --full", summary: "Promote browser-only install to full computer-use mode (macOS)", returns: "Installer output." },
   // ── other surfaces (verbs enumerated via their own --help) ──────────────────
+  { name: "desktop", surface: "desktop", usage: "interceptor desktop <verb> …", summary: "Shared desktop commands backed by the host native provider", returns: "Per operation. desktop capabilities reports current provider, permissions, limits and availability." },
   { name: "macos", surface: "macos", usage: "interceptor macos <verb> … (see: interceptor help macos)", summary: "Native macOS control: AX trees, background input, windows, screenshots, Apple Events, Electron CDP, app runtime", returns: "Per-verb; background-first — only 'app activate'/'open --activate' move focus." },
   { name: "ios", surface: "ios", usage: "interceptor ios <verb> … (see: interceptor help ios)", summary: "iPhone automation via on-device XCUITest runner over WiFi", returns: "Per-verb: element trees, taps, typing, screenshots, app lifecycle. NOTE: 'ios devices' → connected:false means the runner is not dialed in; the next drive verb auto-connects ('ios unlock' needs it already connected). Keep the phone unlocked & awake." },
 ]
@@ -236,7 +237,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
 export function runManifestCommand(argv: string[]): null {
   const surfaces = detectSurfaces(argv)
   const commands = COMMAND_SPECS.filter(c =>
-    c.surface === "browser" || c.surface === "local" ||
+    c.surface === "browser" || c.surface === "local" || c.surface === "desktop" ||
     (c.surface === "macos" && surfaces.macos) || (c.surface === "ios" && surfaces.ios))
   let skills: ReturnType<typeof skillsStatusSummary> | { packDir: null } = { packDir: null }
   try { skills = skillsStatusSummary() } catch {}

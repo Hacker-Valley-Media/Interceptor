@@ -27,7 +27,7 @@ import {
 } from "./tree"
 import {
   detectToolchain, listDeviceApps, listPhysicalDevices, listSimulators,
-  resizePngToBudget, run, runJson, spawnLongLived, killChild,
+  resizePngToBudget, runAsync, spawnLongLived, killChild,
   prepareXctestrunWithEnv, stageRunner, findXctestrun, findRunnerApp, inspectRunnerIdentity,
   installRunnerApp, isRunnerInstalled,
   RUNNER_BUNDLE_ID, preferNoXcodeIosPath, buildRunnerWithXcode,
@@ -416,8 +416,8 @@ export class IosManager {
 
   async executeVerb(contextId: string, action: { type: string; [k: string]: unknown }): Promise<IosResult> {
     // Resolve alias/udid/ios: → canonical ios:<udid> (or the single ready device).
-    const canonical = this.canonicalContextId(contextId)
-    if (!canonical) return { success: false, error: this.noDeviceHint() }
+    const canonical = await this.canonicalContextId(contextId)
+    if (!canonical) return { success: false, error: await this.noDeviceHint() }
     let ctx = this.contexts.get(canonical)
     if (ctx?.grace) {
       // The runner's socket just closed. Give its re-dial the grace window
@@ -482,12 +482,12 @@ export class IosManager {
 
   // ── discover ─────────────────────────────────────────────────────────────────
 
-  private discover(): IosResult {
-    const tc = detectToolchain()
+  private async discover(): Promise<IosResult> {
+    const tc = await detectToolchain()
     const descriptors: IosDeviceDescriptor[] = []
 
     if (tc.simctl) {
-      for (const sim of listSimulators()) {
+      for (const sim of await listSimulators()) {
         if (sim.isAvailable === false) continue
         descriptors.push(describeIosDevice({
           udid: sim.udid, name: `${sim.name} (Simulator)`, kind: "simulator",
@@ -495,7 +495,7 @@ export class IosManager {
         }))
       }
     }
-    const phys = tc.devicectl ? listPhysicalDevices() : []
+    const phys = tc.devicectl ? await listPhysicalDevices() : []
     const transportByUdid = new Map(phys.map((d) => [d.udid, d.transport]))
     for (const dev of phys) {
       descriptors.push(describeIosDevice({
@@ -536,9 +536,9 @@ export class IosManager {
   /** Install an already Xcode-signed staged agent, refusing the unsigned release input. */
   private async install(action: { [k: string]: unknown }): Promise<IosResult> {
     const ref = typeof action.device === "string" ? action.device : typeof action.udid === "string" ? action.udid : undefined
-    const udid = this.pickDeviceUdid(ref)
-    if (!udid) return { success: false, error: this.noDeviceHint() }
-    const descriptor = this.resolveDescriptor(udid)
+    const udid = await this.pickDeviceUdid(ref)
+    if (!udid) return { success: false, error: await this.noDeviceHint() }
+    const descriptor = await this.resolveDescriptor(udid)
     if (!descriptor) return { success: false, error: `device not found — plug the iPhone in, unlock it, and tap "Trust This Computer", then re-run 'interceptor ios install'` }
     if (descriptor.wayIn === "unsupported") return { success: false, error: `'${descriptor.name}' is not ready: ${missingSetup(descriptor)}` }
 
@@ -561,12 +561,12 @@ export class IosManager {
   }
 
   /** Progressive disclosure: only devices with the agent installed (or connected). */
-  private devices(): IosResult {
-    const phys = listPhysicalDevices()
+  private async devices(): Promise<IosResult> {
+    const phys = await listPhysicalDevices()
     const known = new Set(knownInstalledUdids())
-    const out = phys
-      .filter((d) => known.has(d.udid.toUpperCase()) || isRunnerInstalled(d.udid, this.runnerBundleId(d.udid)))
-      .map((d) => ({
+    const installed = []
+    for (const d of phys) if (known.has(d.udid.toUpperCase()) || await isRunnerInstalled(d.udid, this.runnerBundleId(d.udid))) installed.push(d)
+    const out = installed.map((d) => ({
         name: d.name,
         alias: aliasForUdid(d.udid),
         udid: d.udid,
@@ -591,12 +591,12 @@ export class IosManager {
     }
   }
 
-  private name(action: { [k: string]: unknown }): IosResult {
+  private async name(action: { [k: string]: unknown }): Promise<IosResult> {
     const ref = typeof action.device === "string" ? action.device : typeof action.udid === "string" ? action.udid : undefined
     const alias = typeof action.alias === "string" ? action.alias : typeof action.name === "string" ? action.name : undefined
     if (!alias) return { success: false, error: "usage: interceptor ios name <device> <alias>" }
-    const udid = this.pickDeviceUdid(ref)
-    if (!udid) return { success: false, error: this.noDeviceHint() }
+    const udid = await this.pickDeviceUdid(ref)
+    if (!udid) return { success: false, error: await this.noDeviceHint() }
     setAlias(alias, udid)
     return { success: true, data: { alias, udid, note: `named — use it: interceptor ios tree --on ${alias}` } }
   }
@@ -615,7 +615,7 @@ export class IosManager {
   /** Build, sign, install, and launch through Xcode's configured developer team. */
   private async setup(action: { [k: string]: unknown }): Promise<IosResult> {
     const ref = typeof action.device === "string" ? action.device : typeof action.udid === "string" ? action.udid : undefined
-    const udid = this.pickDeviceUdid(ref)
+    const udid = await this.pickDeviceUdid(ref)
     if (!udid) {
       return { success: false, error: "no device — plug your iPhone in over USB and tap \"Trust This Computer\" (enter the passcode), then re-run." }
     }
@@ -625,9 +625,9 @@ export class IosManager {
   private async setupWithXcode(action: { [k: string]: unknown }, udid: string): Promise<IosResult> {
     const teamId = typeof action.team === "string" ? action.team : undefined
     const projectPath = typeof action.project === "string" ? action.project : undefined
-    let built: ReturnType<typeof buildRunnerWithXcode>
+    let built: Awaited<ReturnType<typeof buildRunnerWithXcode>>
     try {
-      built = buildRunnerWithXcode(udid, { teamId, projectPath })
+      built = await buildRunnerWithXcode(udid, { teamId, projectPath })
     } catch (err) {
       return { success: false, error: (err as Error).message }
     }
@@ -687,8 +687,8 @@ export class IosManager {
     // Bring up the CoreDeviceProxy utun tunnel (root helper) and verify RSD is
     // reachable over it via plain node:net — the M3 end-to-end proof.
     const ref = typeof action.device === "string" ? action.device : typeof action.udid === "string" ? action.udid : undefined
-    const udid = this.pickDeviceUdid(ref)
-    if (!udid) return { success: false, error: this.noDeviceHint() }
+    const udid = await this.pickDeviceUdid(ref)
+    if (!udid) return { success: false, error: await this.noDeviceHint() }
     const { getTunnel } = await import("./tunnel")
     let tunnel
     try { tunnel = await getTunnel(udid) } catch (e) { return { success: false, error: (e as Error).message } }
@@ -742,9 +742,9 @@ export class IosManager {
   private async enable(action: { [k: string]: unknown }): Promise<IosResult> {
     const wdaUrlOverride = typeof action.wdaUrl === "string" && action.wdaUrl ? action.wdaUrl : undefined
     const ref = typeof action.udid === "string" ? action.udid : typeof action.device === "string" ? action.device : undefined
-    const udid = this.pickDeviceUdid(ref)
+    const udid = await this.pickDeviceUdid(ref)
     if (wdaUrlOverride && udid) return this.enableViaWda(udid, wdaUrlOverride, action)
-    if (!udid) return { success: false, error: this.noDeviceHint() }
+    if (!udid) return { success: false, error: await this.noDeviceHint() }
     const ensured = await this.ensureRunner(udid)
     if (!ensured.ok) return { success: false, error: ensured.error }
     const ctx = this.contexts.get(ensured.contextId!)!
@@ -755,7 +755,7 @@ export class IosManager {
   /** Legacy escape hatch: drive an already-running WebDriverAgent over HTTP. */
   private async enableViaWda(udid: string, baseUrl: string, action: { [k: string]: unknown }): Promise<IosResult> {
     const bundleId = typeof action.bundleId === "string" ? action.bundleId : undefined
-    const descriptor = this.resolveDescriptor(udid) ?? describeIosDevice({ udid, name: udid, kind: "device", paired: true, developerMode: true })
+    const descriptor = await this.resolveDescriptor(udid) ?? describeIosDevice({ udid, name: udid, kind: "device", paired: true, developerMode: true })
     const wda = new WdaClient({ baseUrl })
     if (!(await pollHealthy(wda, 30_000))) return { success: false, error: `WebDriverAgent did not become healthy at ${baseUrl} within 30s (--wda-url is the deprecated legacy path).` }
     try { await wda.createSession(bundleId) } catch (err) { return { success: false, error: `WDA session failed: ${(err as Error).message}` } }
@@ -789,7 +789,7 @@ export class IosManager {
     }
     // Tolerate transient devicectl gaps for a device we've already installed onto:
     // synthesize a descriptor and let the launch surface a real error if it's gone.
-    let descriptor = this.resolveDescriptor(udid)
+    let descriptor = await this.resolveDescriptor(udid)
     if (!descriptor && knownInstalledUdids().includes(udid.toUpperCase())) {
       // Physical-device UDIDs are canonically upper-case; carry that form so a
       // synthesized descriptor still matches devicectl (`ios apps`, install).
@@ -849,7 +849,7 @@ export class IosManager {
     }, this.runnerBundleId(udid))
     if (!prepared) return { ok: false, error: "could not prepare the agent launch descriptor" }
 
-    if (descriptor.kind === "simulator") run("/usr/bin/xcrun", ["simctl", "boot", udid])
+    if (descriptor.kind === "simulator") await runAsync("/usr/bin/xcrun", ["simctl", "boot", udid])
     const destination = descriptor.kind === "simulator" ? `platform=iOS Simulator,id=${udid}` : `id=${udid}`
     const proc = spawnLongLived("/usr/bin/xcrun", ["xcodebuild", "test-without-building", "-xctestrun", prepared, "-destination", destination], undefined, { stderr: "pipe" })
     procs.push(proc)
@@ -886,36 +886,37 @@ export class IosManager {
   // ── device-ref resolution helpers ────────────────────────────────────────────
 
   /** Resolve a user ref (alias|udid|ios:) to a udid; if omitted, the single ready device. */
-  private pickDeviceUdid(ref?: string): string | undefined {
+  private async pickDeviceUdid(ref?: string): Promise<string | undefined> {
     if (ref && ref.trim()) {
       const u = resolveUdid(ref)
       if (u) {
         // exact udid/alias hit; verify it's a real device when discoverable
-        if (this.resolveDescriptor(u)) return u
+        if (await this.resolveDescriptor(u)) return u
         // alias may point at a device that's temporarily offline — still return it
         if (resolveUdid(ref) !== ref.toUpperCase()) return u
         return u
       }
       return undefined
     }
-    const phys = listPhysicalDevices()
+    const phys = await listPhysicalDevices()
     if (phys.length === 1) return phys[0].udid
     const known = new Set(knownInstalledUdids())
-    const installed = phys.filter((d) => known.has(d.udid.toUpperCase()) || isRunnerInstalled(d.udid, this.runnerBundleId(d.udid)))
+    const installed = []
+    for (const d of phys) if (known.has(d.udid.toUpperCase()) || await isRunnerInstalled(d.udid, this.runnerBundleId(d.udid))) installed.push(d)
     return installed.length === 1 ? installed[0].udid : undefined
   }
 
-  private canonicalContextId(ref: string | undefined): string | undefined {
+  private async canonicalContextId(ref: string | undefined): Promise<string | undefined> {
     if (ref && ref.trim() && ref !== "undefined") {
       const u = resolveUdid(ref)
       return u ? iosContextId(u) : undefined
     }
-    const u = this.pickDeviceUdid(undefined)
+    const u = await this.pickDeviceUdid(undefined)
     return u ? iosContextId(u) : undefined
   }
 
-  private noDeviceHint(): string {
-    const phys = listPhysicalDevices()
+  private async noDeviceHint(): Promise<string> {
+    const phys = await listPhysicalDevices()
     if (phys.length === 0) return 'no iPhone detected — plug it in, unlock it, and tap "Trust This Computer"'
     return "more than one device — pick one: interceptor ios devices, then add --on <name>"
   }
@@ -926,7 +927,7 @@ export class IosManager {
     const ref = typeof action.contextId === "string" ? action.contextId
       : typeof action.udid === "string" ? action.udid
         : typeof action.device === "string" ? action.device : undefined
-    const contextId = this.canonicalContextId(ref)
+    const contextId = await this.canonicalContextId(ref)
     if (!contextId) return { success: false, error: "ios disable: specify a device (--on <name>) — see interceptor ios devices" }
     const ctx = this.contexts.get(contextId)
     if (!ctx) return { success: false, error: `ios context '${contextId}' not found` }
@@ -981,7 +982,7 @@ export class IosManager {
       const contextId = iosContextId(udid)
       if (seen.has(contextId)) continue
       seen.add(contextId)
-      const d = this.resolveDescriptor(udid)
+      const d = await this.resolveDescriptor(udid)
         ?? describeIosDevice({ udid, name: aliasForUdid(udid) ?? udid, kind: "device", paired: true, developerMode: true })
       const dial = await this.resolveDialBack(d.kind, d.udid)
       data.push({
@@ -1212,13 +1213,13 @@ export class IosManager {
     return { success: true, data: (data && typeof data === "object") ? data as Record<string, unknown> : { fingers: (action.fingers as unknown[]).length } }
   }
 
-  private verbApps(ctx: IosDeviceContext): IosResult {
+  private async verbApps(ctx: IosDeviceContext): Promise<IosResult> {
     if (ctx.descriptor.kind === "device") {
-      const apps = listDeviceApps(ctx.descriptor.udid)
+      const apps = await listDeviceApps(ctx.descriptor.udid)
       if (apps) return { success: true, data: apps }
     } else {
-      const apps = runJson<unknown>("/usr/bin/xcrun", ["simctl", "listapps", ctx.descriptor.udid])
-      if (apps) return { success: true, data: apps }
+      const result = await runAsync("/usr/bin/xcrun", ["simctl", "listapps", ctx.descriptor.udid])
+      try { if (result.ok) return { success: true, data: JSON.parse(result.stdout) } } catch {}
     }
     return { success: false, error: "could not list installed apps (xcrun devicectl/simctl unavailable for this device kind)" }
   }
@@ -1247,19 +1248,19 @@ export class IosManager {
     }
   }
 
-  private resolveDescriptor(udid: string): IosDeviceDescriptor | undefined {
+  private async resolveDescriptor(udid: string): Promise<IosDeviceDescriptor | undefined> {
     // Match case-insensitively: an auto-connected device is resolved from its
     // lower-cased context slug, but devicectl/simctl report the canonical udid
     // (upper-case hex for physical devices). Returning the descriptor with the
     // TOOL's udid — not the slug — is what lets devicectl ops (e.g. `ios apps`)
     // match the device; devicectl's --device lookup is case-sensitive.
     const norm = udid.toLowerCase()
-    for (const sim of listSimulators()) {
+    for (const sim of await listSimulators()) {
       if (sim.udid.toLowerCase() === norm) {
         return describeIosDevice({ udid: sim.udid, name: `${sim.name} (Simulator)`, kind: "simulator", productVersion: sim.runtimeVersion })
       }
     }
-    for (const dev of listPhysicalDevices()) {
+    for (const dev of await listPhysicalDevices()) {
       if (dev.udid.toLowerCase() === norm) {
         return describeIosDevice({ udid: dev.udid, name: dev.name, kind: "device", productVersion: dev.productVersion, paired: dev.paired, developerMode: dev.developerMode })
       }
@@ -1281,7 +1282,7 @@ export class IosManager {
 
 // ── module helpers ─────────────────────────────────────────────────────────────
 
-function deviceDiscoveryHint(tc: ReturnType<typeof detectToolchain>): string {
+function deviceDiscoveryHint(tc: Awaited<ReturnType<typeof detectToolchain>>): string {
   const parts: string[] = []
   if (!tc.simctl) parts.push("Xcode/simctl not found (no Simulators)")
   if (!tc.devicectl) parts.push("xcrun devicectl not found — install Xcode to see physical devices")

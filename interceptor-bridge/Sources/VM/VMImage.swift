@@ -16,6 +16,10 @@
 // image content remain colocated under the configured state directory.
 
 import Foundation
+import CryptoKit
+#if canImport(Containerization)
+import Containerization
+#endif
 #if canImport(Virtualization)
 import Virtualization
 #endif
@@ -126,16 +130,32 @@ public struct VMImage: Sendable {
     #endif
 #endif
 
-    /// Resolve an OCI image reference to a local cached path. Linux runtime.
-    /// In v0 we keep this thin — the real pull is delegated to the
-    /// Containerization OCI client inside `LinuxRuntime.prepare(...)`,
-    /// which writes the rootfs into the state dir. This helper exists
-    /// so `vm pull <ref>` has a clear ack path.
+    /// Resolve actual OCI content before returning its cache receipt path.
     public static func resolveOCIImage(ref: String, stateDir: URL) async throws -> URL {
         try ensureImageDirs(stateDir: stateDir)
-        // Sanitize the ref for filesystem use.
-        let safe = ref.replacingOccurrences(of: "/", with: "_")
-                      .replacingOccurrences(of: ":", with: "_")
-        return ociImagesDir(stateDir: stateDir).appendingPathComponent("\(safe)", isDirectory: true)
+        #if canImport(Containerization)
+        guard ref != "latest", !ref.isEmpty, ref.utf8.count <= 4096, !ref.contains("\0") else {
+            throw VMImageError.unsupportedKind("Linux VM images require an explicit OCI registry reference and tag or digest")
+        }
+        let store = try ImageStore(path: ociImagesDir(stateDir: stateDir).appendingPathComponent("store"))
+        #if arch(arm64)
+        let platform = SystemPlatform.linuxArm.ociPlatform()
+        #else
+        let platform = SystemPlatform.linuxAmd.ociPlatform()
+        #endif
+        let image = try await store.get(reference: ref, pull: true)
+        _ = try await image.manifest(for: platform)
+        _ = try await image.config(for: platform)
+        let key = SHA256.hash(data: Data(ref.utf8)).map { String(format: "%02x", $0) }.joined()
+        let path = ociImagesDir(stateDir: stateDir).appendingPathComponent(key, isDirectory: true)
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let record = try JSONSerialization.data(withJSONObject: ["reference": ref, "digest": image.digest, "mediaType": image.mediaType, "store": store.path.path], options: [.sortedKeys])
+        let receipt = path.appendingPathComponent("image.json")
+        try record.write(to: receipt, options: .atomic)
+        guard try Data(contentsOf: receipt) == record else { throw VMImageError.downloadFailed("OCI descriptor receipt readback differs") }
+        return path
+        #else
+        throw VMImageError.unsupportedKind("Containerization package is not linked; OCI content was not pulled")
+        #endif
     }
 }

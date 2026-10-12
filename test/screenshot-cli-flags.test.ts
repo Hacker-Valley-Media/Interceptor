@@ -1,3 +1,4 @@
+import {captureShell} from "./helpers/shell-capture"
 import { describe, expect, test } from "bun:test"
 import { mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -74,8 +75,8 @@ describe("screenshot CLI flag parsing", () => {
   test("positional rejection exits before creating a screenshot file", () => {
     const dir = mkdtempSync(join(tmpdir(), "interceptor-screenshot-arg-"))
     try {
-      const result = Bun.spawnSync(["bun", resolve(import.meta.dir, "../cli/index.ts"), "screenshot", "--save", "named.png"], { cwd: dir })
-      expect(result.exitCode).toBe(1)
+      const result = captureShell(process.execPath, [resolve(import.meta.dir, "../cli/index.ts"), "screenshot", "--save", "named.png"], { cwd: dir })
+      expect(result.status).toBe(1)
       expect(result.stderr.toString()).toContain("--save takes no value")
       expect(readdirSync(dir)).toEqual([])
     } finally {

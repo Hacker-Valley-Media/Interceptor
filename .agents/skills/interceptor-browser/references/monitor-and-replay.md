@@ -37,6 +37,8 @@ interceptor monitor export <session-id> --plan
 - Check whether the session crossed tabs via focus-follow or child-tab handoff when reviewing the replay.
 - Save or copy the plan into a stable workflow doc or repo use-case when it proves reliable.
 
-## Note on the macOS monitor
+## Note on the macOS monitor <!-- os:darwin -->
+## Note on the native monitor <!-- os:win32,linux -->
 
-`interceptor macos monitor *` is the parallel surface for native-app sessions. It uses the same sparse JSON format and the same `--plan` export pattern, but operates on AX events rather than DOM events. Load the `interceptor-macos` skill when teaching/replaying native-app workflows.
+`interceptor macos monitor *` is the parallel surface for native-app sessions. It uses the same sparse JSON format and the same `--plan` export pattern, but operates on AX events rather than DOM events. Load the `interceptor-macos` skill when teaching/replaying native-app workflows. <!-- os:darwin -->
+`interceptor desktop monitor *` is the parallel surface for native-app sessions. It uses the same sparse JSON format and the same `--plan` export pattern, but operates on accessibility events rather than DOM events. Load the `interceptor-desktop` skill when teaching/replaying native-app workflows. <!-- os:win32,linux -->

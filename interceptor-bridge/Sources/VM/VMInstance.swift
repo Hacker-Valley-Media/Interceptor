@@ -47,7 +47,7 @@ public actor VMInstance {
     public private(set) var lastError: String?
     public private(set) var ipAddress: String?
 
-    // Held only when running. Cleared on stop.
+    // Retained through native failures. Cleared only after confirmed shutdown.
     private var linuxRuntime: LinuxRuntimeHandle?
     private var guestAgent: (any GuestAgent)?
     private var portForwarders: [String: VMPortForwarder] = [:]
@@ -55,6 +55,13 @@ public actor VMInstance {
 #if canImport(Virtualization)
     private var macVM: MacRunningVM?
 #endif
+
+    public var ownsRuntime: Bool {
+        #if canImport(Virtualization)
+        if macVM != nil { return true }
+        #endif
+        return linuxRuntime != nil || guestAgent != nil || !portForwarders.isEmpty
+    }
 
     public init(spec: VMSpec, bundle: VMBundle, status: VMStatus = .ready) {
         self.spec = spec
@@ -66,6 +73,10 @@ public actor VMInstance {
     /// `waitForAgent` blocks the start call until the guest agent connects.
     public func start(headless: Bool, waitForAgent: Bool) async throws -> VMStartResult {
         let begin = Date()
+        try VMSnapshot.requireStableStorage(bundle: bundle)
+        guard !ownsRuntime else {
+            throw VMInstanceError.alreadyStarted("VM '\(spec.name)' retains native ownership; confirm shutdown first")
+        }
         switch status {
         case .running, .paused, .starting, .stopping, .savingSnapshot, .restoringSnapshot:
             throw VMInstanceError.alreadyStarted("VM '\(spec.name)' is in state .\(status.rawValue)")
@@ -77,14 +88,18 @@ public actor VMInstance {
             switch spec.kind {
             case .linux:
                 let rt = try await LinuxRuntime.prepare(spec: spec, bundle: bundle)
+                linuxRuntime = rt
                 try await rt.create()
                 try await rt.start()
-                linuxRuntime = rt
                 ipAddress = await rt.ipAddress()
+                if waitForAgent {
+                    throw VMInstanceError.runtimeUnavailable("the native Linux boot agent is ready, but InterceptorD guest transport is not configured; native VM ownership retained")
+                }
             case .macos:
                 #if canImport(Virtualization)
                 if #available(macOS 13.0, *) {
                     let mvm = try await MacRuntime.run(spec: spec, bundle: bundle, headless: headless)
+                    macVM = mvm
                     // Bridge start(completionHandler:) into async.
                     try await withCheckedThrowingContinuation { (cc: CheckedContinuation<Void, Error>) in
                         mvm.queue.async {
@@ -98,7 +113,6 @@ public actor VMInstance {
                             }
                         }
                     }
-                    macVM = mvm
                     ipAddress = await Self.waitForBridge100IPAddress(macAddress: mvm.macAddress, timeout: waitForAgent ? 30 : 3)
                     let fallbackIPAddress = ipAddress
                     let agentSpec = spec.agent
@@ -124,7 +138,7 @@ public actor VMInstance {
                     if agentEnabled, let agent {
                         if waitForAgent {
                             do {
-                                try await agent.connect(timeout: 60)
+                                try await agent.connect(timeout: 58)  // GuestWire.Deadline caps a budget at 58 s
                                 self.guestAgent = agent
                             } catch {
                                 self.guestAgent = agent
@@ -159,31 +173,33 @@ public actor VMInstance {
     /// `vm stop` — graceful (requestStop / container.stop) or forceful
     /// (VZVirtualMachine.stop / container.kill SIGKILL).
     public func stop(force: Bool, timeout: TimeInterval) async throws {
-        let begin = Date()
-        guard status == .running || status == .paused else {
-            // already stopped — no-op
-            if status == .stopped { return }
-            throw VMInstanceError.notStarted("VM '\(spec.name)' is in state .\(status.rawValue)")
+        guard timeout.isFinite, timeout > 0, timeout <= 300 else {
+            throw VMInstanceError.invalidTransition("stop timeout must be in (0, 300] seconds")
         }
+        guard ownsRuntime else { status = .stopped; ipAddress = nil; return }
         status = .stopping
-        if force {
-            try await forceStop()
-        } else {
-            try await gracefulStop(timeout: timeout)
+        do {
+            if force {
+                try await forceStop()
+            } else {
+                try await gracefulStop(timeout: timeout)
+            }
+            await guestAgent?.disconnect()
+            guestAgent = nil
+            for forwarder in portForwarders.values { forwarder.stop() }
+            portForwarders.removeAll()
+            linuxRuntime = nil
+            #if canImport(Virtualization)
+            macVM = nil
+            #endif
+            ipAddress = nil
+            status = .stopped
+            lastError = nil
+        } catch {
+            status = .error
+            lastError = "shutdown not confirmed; native ownership retained: \(error)"
+            throw error
         }
-        // tear down agent
-        await guestAgent?.disconnect()
-        guestAgent = nil
-        for forwarder in portForwarders.values {
-            forwarder.stop()
-        }
-        portForwarders.removeAll()
-        linuxRuntime = nil
-        #if canImport(Virtualization)
-        macVM = nil
-        #endif
-        status = .stopped
-        let _ = Date().timeIntervalSince(begin)
     }
 
     public func pause() async throws {
@@ -206,9 +222,12 @@ public actor VMInstance {
             return
         }
         #endif
-        // Linux: Containerization exposes pause via container API once
-        // the package resolves; until then return clean error.
-        throw VMInstanceError.invalidTransition("pause for Linux guests pending Containerization 0.31.0 resolution")
+        if let rt = linuxRuntime {
+            try await rt.pause()
+            status = .paused
+            return
+        }
+        throw VMInstanceError.runtimeUnavailable("no native Linux VM is owned")
     }
 
     public func resume() async throws {
@@ -231,7 +250,12 @@ public actor VMInstance {
             return
         }
         #endif
-        throw VMInstanceError.invalidTransition("resume for Linux guests pending Containerization 0.31.0 resolution")
+        if let rt = linuxRuntime {
+            try await rt.resume()
+            status = .running
+            return
+        }
+        throw VMInstanceError.runtimeUnavailable("no native Linux VM is owned")
     }
 
     public func exec(argv: [String], env: [String: String], workdir: String?, tty: Bool, timeout: TimeInterval) async throws -> (exitCode: Int32, stdout: String, stderr: String, durationMs: Int) {
@@ -242,8 +266,11 @@ public actor VMInstance {
             return try await agent.exec(argv, env: env, workdir: workdir, tty: tty, timeout: timeout)
         }
         if let rt = linuxRuntime {
-            let r = try await rt.execve(argv, env: env, workdir: workdir, tty: tty)
-            return (r.exitCode, r.stdout, r.stderr, 0)
+            let clock = ContinuousClock(), begin = clock.now
+            let r = try await rt.execve(argv, env: env, workdir: workdir, tty: tty, timeout: timeout)
+            let elapsed = begin.duration(to: clock.now).components
+            let ms = elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000
+            return (r.exitCode, r.stdout, r.stderr, Int(ms))
         }
         throw VMInstanceError.runtimeUnavailable("no guest agent or runtime to exec into")
     }
@@ -267,7 +294,6 @@ public actor VMInstance {
             }
         }
         #endif
-        try await agent.connect(timeout: min(timeout, 30))
         return try await agent.request(action, timeout: timeout)
     }
 
@@ -277,13 +303,17 @@ public actor VMInstance {
             guard status == .paused || mode == .diskOnly else {
                 throw VMInstanceError.invalidTransition("paused-state snapshots require the VM to be paused")
             }
-            return try await VMSnapshot.create(vm: mvm.vm, bundle: bundle, tag: tag, mode: mode)
+            return try await VMSnapshot.create(vm: mvm.vm, queue: mvm.queue, bundle: bundle, tag: tag, mode: mode)
         }
         #endif
         throw VMInstanceError.runtimeUnavailable("paused-state snapshots require macOS 14+ and a running macOS VM")
     }
 
     public func restoreSnapshot(tag: String, diskOnly: Bool, pausedStateOnly: Bool, headless: Bool) async throws -> VMSnapshotManifest {
+        try VMSnapshot.requireStableStorage(bundle: bundle)
+        guard !ownsRuntime else {
+            throw VMInstanceError.invalidTransition("restore requires confirmed native shutdown")
+        }
         guard status != .running && status != .paused && status != .starting && status != .stopping else {
             throw VMInstanceError.invalidTransition("restore requires VM '\(spec.name)' to be stopped")
         }
@@ -314,8 +344,8 @@ public actor VMInstance {
             #if canImport(Virtualization)
             if #available(macOS 14.0, *) {
                 let mvm = try await MacRuntime.run(spec: spec, bundle: bundle, headless: headless)
-                _ = try await VMSnapshot.restorePausedState(vm: mvm.vm, bundle: bundle, tag: tag)
                 macVM = mvm
+                _ = try await VMSnapshot.restorePausedState(vm: mvm.vm, queue: mvm.queue, bundle: bundle, tag: tag)
                 status = .paused
                 return manifest
             }
@@ -485,22 +515,35 @@ public actor VMInstance {
     private func gracefulStop(timeout: TimeInterval) async throws {
         #if canImport(Virtualization)
         if let mvm = macVM {
-            // VZVirtualMachine.requestStop() asks the guest OS to shutdown.
-            // We then poll the delegate's stop callback up to `timeout`.
-            let result: Error? = try? await withCheckedThrowingContinuation { (cc: CheckedContinuation<Error?, Error>) in
-                mvm.delegate.onStop { err in cc.resume(returning: err) }
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(timeout))
+            try await withCheckedThrowingContinuation { (cc: CheckedContinuation<Void, Error>) in
                 mvm.queue.async {
+                    if mvm.vm.state == .stopped { cc.resume(returning: ()); return }
+                    guard mvm.vm.canRequestStop else {
+                        cc.resume(throwing: VMInstanceError.invalidTransition("guest cannot accept requestStop in its current native state")); return
+                    }
                     do {
                         try mvm.vm.requestStop()
+                        cc.resume(returning: ())
                     } catch {
                         cc.resume(throwing: VMInstanceError.invalidTransition("requestStop: \(error.localizedDescription)"))
                     }
                 }
             }
-            if let err = result {
-                throw VMInstanceError.invalidTransition("guest stop error: \(err.localizedDescription)")
+            while true {
+                let nativeState = await withCheckedContinuation { cc in
+                    mvm.queue.async { cc.resume(returning: mvm.vm.state) }
+                }
+                if nativeState == .stopped { return }
+                if nativeState == .error {
+                    throw VMInstanceError.invalidTransition("guest entered native error state during shutdown")
+                }
+                if clock.now >= deadline {
+                    throw VMInstanceError.timeout("guest has not reached native stopped state; ownership retained")
+                }
+                try await clock.sleep(until: min(deadline, clock.now.advanced(by: .milliseconds(50))))
             }
-            return
         }
         #endif
         if let rt = linuxRuntime {
@@ -516,9 +559,15 @@ public actor VMInstance {
             // by checking the optional.
             try await withCheckedThrowingContinuation { (cc: CheckedContinuation<Void, Error>) in
                 mvm.queue.async {
+                    if mvm.vm.state == .stopped { cc.resume(returning: ()); return }
+                    guard mvm.vm.canStop else {
+                        cc.resume(throwing: VMInstanceError.invalidTransition("cannot force stop in the current native state")); return
+                    }
                     mvm.vm.stop { err in
                         if let err = err {
                             cc.resume(throwing: VMInstanceError.invalidTransition("force stop: \(err.localizedDescription)"))
+                        } else if mvm.vm.state != .stopped {
+                            cc.resume(throwing: VMInstanceError.invalidTransition("native stop completion did not confirm stopped state"))
                         } else {
                             cc.resume(returning: ())
                         }
@@ -529,7 +578,9 @@ public actor VMInstance {
         }
         #endif
         if let rt = linuxRuntime {
-            try await rt.kill(signal: 9)
+            // Containerization.stop terminates processes and then the actual
+            // native VM. Killing only its init process leaves the VM running.
+            try await rt.stop()
         }
     }
 }

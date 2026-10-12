@@ -2,7 +2,7 @@ import XCTest
 import CoreGraphics
 @testable import interceptor_bridge
 
-// PRD-63 Spec 2: VisionDomain.acquireImage previously constructed a fresh
+// VisionDomain.acquireImage previously constructed a fresh
 // SCStreamConfiguration with default zero width/height, which produced
 // degenerate frames for downstream Vision requests (OCR/faces/hands/bodies
 // returning count:0 even on text-rich UIs). The fix derives buffer
@@ -44,7 +44,7 @@ final class VisionConfigTests: XCTestCase {
 
     func testDegenerateRectClampsToOne() {
         // A zero-sized contentRect would produce 0×0 and recreate the
-        // pre-PRD-63 defect. The helper clamps to 1×1 so the buffer is
+        // old defect. The helper clamps to 1×1 so the buffer is
         // always at least minimally well-formed.
         let dims = VisionDomain.dimensionsForCaptureBuffer(
             contentRect: CGRect(x: 0, y: 0, width: 0, height: 0),
@@ -54,7 +54,7 @@ final class VisionConfigTests: XCTestCase {
     }
 
     func testPositiveDimensionsAfterFix() {
-        // The headline regression assertion: under the PRD-63 contract the
+        // The headline regression assertion: under the current contract the
         // computed width/height are always positive, so SCStreamConfiguration
         // never receives the broken (0,0) defaults that produced empty
         // Vision results.

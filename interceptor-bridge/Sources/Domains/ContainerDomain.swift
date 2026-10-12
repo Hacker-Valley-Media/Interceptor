@@ -16,13 +16,13 @@ import Foundation
 import Darwin
 
 final class ContainerDomain: DomainHandler, @unchecked Sendable {
-    private let candidatePaths: [String] = [
+    private static let candidatePaths: [String] = [
         "/opt/homebrew/bin/container",       // Apple silicon Homebrew (default)
         "/usr/local/bin/container",          // Intel Homebrew / direct .pkg install
         "/Applications/container.app/Contents/MacOS/container", // future GUI wrapper
     ]
 
-    private func resolveBinary() -> String? {
+    static func resolveBinary() -> String? {
         if let envOverride = ProcessInfo.processInfo.environment["INTERCEPTOR_CONTAINER_BIN"],
            FileManager.default.isExecutableFile(atPath: envOverride) {
             return envOverride
@@ -43,9 +43,15 @@ final class ContainerDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func handleRun(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let containerBinary = resolveBinary() else {
+        if action["type"] as? String == "desktop_container_run" {
+            if let error = DesktopContainerValidation.validate(action) { completion(error); return }
+            let request = UncheckedSendableBox(action)
+            DispatchQueue.global(qos: .userInitiated).async { completion(self.neutralRun(request.value)) }
+            return
+        }
+        guard let containerBinary = Self.resolveBinary() else {
             completion(WireFormat.error(
-                "container_run: Apple's `container` runtime not found. Searched: \(candidatePaths.joined(separator: ", ")). " +
+                "container_run: Apple's `container` runtime not found. Searched: \(Self.candidatePaths.joined(separator: ", ")). " +
                 "Install via `brew install container` (macOS 26+ required), then `container system start`."
             ))
             return
@@ -202,7 +208,7 @@ final class ContainerDomain: DomainHandler, @unchecked Sendable {
                     "command": command,
                     "network": network
                 ]
-                // PRD-65 Spec 9 / PRD-64 Spec 9: when the container daemon
+                // When the container daemon
                 // isn't running, surface the recovery as a structured
                 // setup_required field so callers don't have to scrape
                 // stderr to learn what to do.
@@ -228,6 +234,90 @@ final class ContainerDomain: DomainHandler, @unchecked Sendable {
                 completion(WireFormat.error("container_run: failed to spawn `\(containerBinary)`: \(error.localizedDescription)"))
             }
             return
+        }
+    }
+    enum ExecutionError: Error { case failed(String), timeout, limit }
+
+    static func capture(_ binary: String, _ args: [String], deadline: UInt64, limit: Int) -> Result<(Int32, Data, Data), ExecutionError> {
+        guard DispatchTime.now().uptimeNanoseconds < deadline else { return .failure(.timeout) }
+        let task = Process(), out = Pipe(), err = Pipe()
+        task.executableURL = URL(fileURLWithPath: binary); task.arguments = args
+        task.standardInput = FileHandle.nullDevice; task.standardOutput = out; task.standardError = err
+        defer {
+            if task.isRunning { _ = Darwin.kill(task.processIdentifier, SIGKILL) }
+            try? out.fileHandleForReading.close(); try? err.fileHandleForReading.close()
+        }
+        do { try task.run() } catch { return .failure(.failed(error.localizedDescription)) }
+        let fds = [out.fileHandleForReading.fileDescriptor, err.fileHandleForReading.fileDescriptor]
+        for fd in fds { let flags = fcntl(fd, F_GETFL); if flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 { return .failure(.failed("container pipe cannot be made nonblocking")) } }
+        var buffers = [Data(), Data()], eof = [false, false], chunk = [UInt8](repeating: 0, count: 8192)
+        while true {
+            if DispatchTime.now().uptimeNanoseconds >= deadline { return .failure(.timeout) }
+            for i in 0...1 where !eof[i] {
+                let count = Darwin.read(fds[i], &chunk, chunk.count)
+                if count == 0 { eof[i] = true }
+                else if count > 0 {
+                    if buffers[0].count + buffers[1].count + count > limit { return .failure(.limit) }
+                    buffers[i].append(contentsOf: chunk.prefix(count))
+                } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { return .failure(.failed("container pipe read failed")) }
+            }
+            if !task.isRunning && eof.allSatisfy({ $0 }) { return .success((task.terminationStatus, buffers[0], buffers[1])) }
+            Thread.sleep(forTimeInterval: 0.002)
+        }
+    }
+
+    private func neutralRun(_ action: [String: Any]) -> [String: Any] {
+        func failed(_ error: ExecutionError) -> [String: Any] {
+            switch error {
+            case .timeout: return DesktopContainerValidation.failure("timeout_unknown_outcome", "container deadline expired; observe effects before retrying")
+            case .limit: return DesktopContainerValidation.failure("resource_limit", "container combined output exceeded its byte limit")
+            case .failed(let text): return DesktopContainerValidation.failure("provider_failed", text)
+            }
+        }
+        guard let binary = Self.resolveBinary() else { return DesktopContainerValidation.failure("not_installed", "Apple container is not installed; configure its native runtime") }
+        let network = action["network"] as? String ?? "off"
+        guard network != "host" else { return DesktopContainerValidation.failure("unsupported_operation", "Apple container0.11 has no qualified host network namespace") }
+        let started = DispatchTime.now().uptimeNanoseconds
+        let deadline = started + UInt64((action["timeoutMs"] as? NSNumber)?.intValue ?? 60000) * 1_000_000
+        let versionResult = Self.capture(binary, ["--version"], deadline: min(deadline, started + 5_000_000_000), limit: 128)
+        let version: String
+        switch versionResult {
+        case .failure(let error): return failed(error)
+        case .success(let (code, bytes, _)):
+            guard code == 0, let text = String(data: bytes, encoding: .utf8), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return DesktopContainerValidation.failure("provider_failed", "Apple container omitted its version") }
+            version = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var mountArgs: [String] = []
+        for mount in action["mounts"] as? [[String: Any]] ?? [] {
+            let host = URL(fileURLWithPath: mount["hostPath"] as! String).resolvingSymlinksInPath()
+            guard let values = try? host.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey]), values.isRegularFile == true || values.isDirectory == true, !host.path.contains(",") else { return DesktopContainerValidation.failure("target_gone", "container bind source must be an existing regular file or directory") }
+            mountArgs += ["--mount", "type=bind,source=\(host.path),target=\(mount["mountPath"] as! String)\(mount["mode"] as? String == "ro" ? ",readonly" : "")"]
+        }
+        let name = "interceptor-" + UUID().uuidString.lowercased()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true), cid = root.appendingPathComponent("cid")
+        do { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
+        catch { return DesktopContainerValidation.failure("provider_failed", "container private run directory could not be created") }
+        var args = ["run", "--rm", "--name", name, "--cidfile", cid.path, "--network", network == "off" ? "none" : "default", "--progress", "none"]
+        for (key, value) in (action["env"] as? [String: String] ?? [:]).sorted(by: { $0.key < $1.key }) { args += ["--env", "\(key)=\(value)"] }
+        args += mountArgs + [action["image"] as! String] + (action["command"] as! [String])
+        let result = Self.capture(binary, args, deadline: deadline, limit: (action["maxOutputBytes"] as? NSNumber)?.intValue ?? DESKTOP_CONTAINER_MAX_OUTPUT_BYTES)
+        let cleanupDeadline = DispatchTime.now().uptimeNanoseconds + UInt64(DESKTOP_CONTAINER_CLEANUP_MS) * 1_000_000
+        _ = Self.capture(binary, ["delete", "--force", name], deadline: cleanupDeadline, limit: 16384)
+        let inventory = Self.capture(binary, ["list", "--all", "--format", "json"], deadline: cleanupDeadline, limit: 65536)
+        let absent: Bool
+        if case .success(let (code, bytes, _)) = inventory, code == 0, let rows = (try? JSONSerialization.jsonObject(with: bytes)) as? [[String: Any]] {
+            absent = rows.allSatisfy { row in
+                let id = row["id"] as? String ?? (row["configuration"] as? [String: Any])?["id"] as? String
+                return id != nil && id != name
+            }
+        } else { absent = false }
+        guard absent else { return ["success": false, "code": "timeout_unknown_outcome", "error": "owned container cleanup could not be established; observe before retrying", "details": ["container": name, "engine": binary, "cidfile": cid.path]] }
+        try? FileManager.default.removeItem(at: cid); try? FileManager.default.removeItem(at: root)
+        switch result {
+        case .failure(let error): return failed(error)
+        case .success(let (code, out, err)):
+            guard let stdout = String(data: out, encoding: .utf8), let stderr = String(data: err, encoding: .utf8) else { return DesktopContainerValidation.failure("unsupported_target", "container output is not UTF8; no text result was synthesized") }
+            return WireFormat.success(["exitCode": code, "stdout": stdout, "stderr": stderr, "durationMs": (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000, "image": action["image"]!, "command": action["command"]!, "network": network, "provider": "apple-container", "engineVersion": version, "engineHost": ProcessInfo.processInfo.hostName])
         }
     }
 }
@@ -264,6 +354,15 @@ final class LockedData: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Keep existing unrestricted callers unchanged. Native VM output uses
+    /// this atomic admission so an oversized chunk cannot enter the buffer.
+    func appendBounded(_ chunk: Data, maxBytes: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard maxBytes >= 0, data.count <= maxBytes, chunk.count <= maxBytes - data.count else { return false }
+        data.append(chunk)
+        return true
+    }
+
     func snapshot() -> Data {
         lock.lock()
         let copy = data
@@ -286,4 +385,6 @@ final class AtomicFlag: @unchecked Sendable {
         lock.unlock()
         return first
     }
+
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return fired }
 }

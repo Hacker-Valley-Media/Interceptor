@@ -1,0 +1,1989 @@
+{
+  "valid": [
+    {
+      "event": "mon_start",
+      "surface": "macos",
+      "scope": {
+        "mode": "apps",
+        "apps": [
+          "Owned fixture"
+        ]
+      },
+      "includes": [
+        "files"
+      ],
+      "speechMode": "off",
+      "tap": false,
+      "ins": "Owned fixture"
+    },
+    {
+      "event": "mon_stop",
+      "duration": 1.5,
+      "evt": 2,
+      "mut": 0,
+      "net": 0,
+      "nav": 0,
+      "ax": 0,
+      "reason": "user"
+    },
+    {
+      "event": "mon_pause"
+    },
+    {
+      "event": "mon_resume"
+    },
+    {
+      "event": "mon_attach",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "ax": [
+        "AXValueChanged"
+      ]
+    },
+    {
+      "event": "scope_warning",
+      "reason": "Owned reason"
+    },
+    {
+      "event": "tap_unavailable",
+      "reason": "Owned reason"
+    },
+    {
+      "event": "log_unavailable",
+      "reason": "Owned reason"
+    },
+    {
+      "event": "speech_unavailable",
+      "reason": "Owned reason"
+    },
+    {
+      "event": "capture_backpressure",
+      "note": "Owned note"
+    },
+    {
+      "event": "clipboard",
+      "changeCount": 3,
+      "types": [
+        "public.utf8-plain-text"
+      ],
+      "preview": "Owned"
+    },
+    {
+      "event": "file_change",
+      "path": "/tmp/owned-fixture"
+    },
+    {
+      "event": "video_stop",
+      "path": "/tmp/owned-fixture"
+    },
+    {
+      "event": "speech_audio_done",
+      "path": "/tmp/owned-fixture"
+    },
+    {
+      "event": "network_path",
+      "status": "satisfied",
+      "isExpensive": false,
+      "isConstrained": false,
+      "supportsIPv4": true,
+      "supportsIPv6": true,
+      "supportsDNS": true,
+      "interfaces": [
+        "en0"
+      ]
+    },
+    {
+      "event": "log",
+      "level": "info",
+      "subsystem": "com.interceptor.owned",
+      "category": "fixture",
+      "message": "Owned log",
+      "process": "Owned fixture"
+    },
+    {
+      "event": "log_error",
+      "error": "Owned error"
+    },
+    {
+      "event": "frame_error",
+      "error": "Owned error"
+    },
+    {
+      "event": "notification",
+      "name": "com.interceptor.owned",
+      "source": "distributed"
+    },
+    {
+      "event": "video_start",
+      "path": "/tmp/owned-fixture.mp4",
+      "fps": 1
+    },
+    {
+      "event": "speech_audio",
+      "path": "/tmp/owned-fixture.caf",
+      "kind": "offline_caf"
+    },
+    {
+      "event": "speech_segment",
+      "text": "Owned speech",
+      "isFinal": true,
+      "source": "live"
+    },
+    {
+      "event": "speech_restart",
+      "replayBuffers": 0
+    },
+    {
+      "event": "rotation",
+      "archived": "/tmp/owned-fixture/events.jsonl.1",
+      "index": 1
+    },
+    {
+      "event": "frame_encode_error",
+      "format": "jpeg",
+      "quality": 80,
+      "w": 1,
+      "h": 1
+    },
+    {
+      "event": "frame",
+      "path": "/tmp/owned-fixture.jpeg",
+      "w": 1,
+      "h": 1,
+      "bytes": 20,
+      "format": "jpeg",
+      "quality": 80
+    },
+    {
+      "event": "frame_budget_reached",
+      "frames": 1,
+      "bytes": 20,
+      "frameBudget": 1,
+      "diskCapBytes": 0
+    },
+    {
+      "event": "video_recording",
+      "path": "/tmp/owned-fixture.mp4",
+      "state": "started"
+    },
+    {
+      "event": "video_error",
+      "path": "/tmp/owned-fixture.mp4",
+      "error": "Owned error"
+    },
+    {
+      "event": "video_finished",
+      "path": "/tmp/owned-fixture.mp4",
+      "bytes": 20,
+      "durationSec": 1.5
+    },
+    {
+      "event": "ocr_text",
+      "frame": "/tmp/owned-fixture.jpeg",
+      "blocks": [
+        {
+          "text": "Owned text",
+          "confidence": 0.5,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1
+          }
+        }
+      ]
+    },
+    {
+      "event": "input",
+      "pid": 123,
+      "r": "AXTextField",
+      "n": "Owned field",
+      "v": "Owned value",
+      "coalesced": 2
+    },
+    {
+      "event": "focus",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "window_focus",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "selection",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "title_change",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "menu_open",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "menu_close",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "menu_select",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "sheet",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "layout_change",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "selection_rows",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "ax_app_activated",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "ax_app_deactivated",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "window_min",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "window_demin",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "ax_create",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "ax_destroy",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field"
+    },
+    {
+      "event": "window_create",
+      "pid": 123,
+      "r": "AXWindow",
+      "frame": {
+        "x": -10,
+        "y": 0,
+        "w": 0,
+        "h": 10
+      }
+    },
+    {
+      "event": "window_move",
+      "pid": 123,
+      "r": "AXWindow",
+      "frame": {
+        "x": -10,
+        "y": 0,
+        "w": 0,
+        "h": 10
+      }
+    },
+    {
+      "event": "window_resize",
+      "pid": 123,
+      "r": "AXWindow",
+      "frame": {
+        "x": -10,
+        "y": 0,
+        "w": 0,
+        "h": 10
+      }
+    },
+    {
+      "event": "ax_other",
+      "pid": 123,
+      "notification": "OwnedNotification"
+    },
+    {
+      "event": "frontmost",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned"
+    },
+    {
+      "event": "app_deactivate",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned"
+    },
+    {
+      "event": "app_launch",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned"
+    },
+    {
+      "event": "app_terminate",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned"
+    },
+    {
+      "event": "app_hide",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned"
+    },
+    {
+      "event": "app_unhide",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned"
+    },
+    {
+      "event": "space"
+    },
+    {
+      "event": "mount"
+    },
+    {
+      "event": "unmount"
+    },
+    {
+      "event": "volume_rename"
+    },
+    {
+      "event": "wake"
+    },
+    {
+      "event": "sleep"
+    },
+    {
+      "event": "session_active"
+    },
+    {
+      "event": "session_inactive"
+    },
+    {
+      "event": "click",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "event": "dblclick",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "event": "rclick",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "event": "mouseup",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "event": "move",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "event": "key",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "kc": "Meta+A"
+    },
+    {
+      "event": "mods",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "mods": ""
+    },
+    {
+      "event": "scroll",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "sx": 0.5,
+      "sy": -1.5,
+      "samples": 2
+    },
+    {
+      "event": "input",
+      "pid": 123,
+      "r": "AXSecureTextField",
+      "n": "Owned field",
+      "v": "***SECURE***",
+      "coalesced": 2
+    },
+    {
+      "event": "key",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "kc": "Meta+A",
+      "tap": true,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "event": "input",
+      "pid": 123
+    },
+    {
+      "event": "selection",
+      "pid": 123,
+      "sl": 0
+    },
+    {
+      "event": "mount",
+      "path": "/mnt/owned",
+      "name": "Owned"
+    },
+    {
+      "event": "speech_unavailable",
+      "reason": "Owned",
+      "fallback": "offline_caf",
+      "remediation": "Owned remediation"
+    },
+    {
+      "event": "owned_extension",
+      "nested": {
+        "opaque": [
+          null,
+          true,
+          17
+        ]
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "event": "mon_start",
+      "surface": "desktop",
+      "scope": {
+        "mode": "apps",
+        "apps": [
+          "Owned fixture"
+        ]
+      },
+      "includes": [
+        "files"
+      ],
+      "speechMode": "off",
+      "tap": false,
+      "ins": "Owned fixture"
+    },
+    {
+      "event": "mon_start",
+      "surface": "macos",
+      "scope": {
+        "mode": "apps",
+        "apps": []
+      },
+      "includes": [
+        "files"
+      ],
+      "speechMode": "off",
+      "tap": false,
+      "ins": "Owned fixture"
+    },
+    {
+      "event": "mon_start",
+      "surface": "macos",
+      "scope": {
+        "mode": "apps",
+        "apps": [
+          "Owned fixture"
+        ]
+      },
+      "includes": [
+        "files"
+      ],
+      "speechMode": "invented",
+      "tap": false,
+      "ins": "Owned fixture"
+    },
+    {
+      "event": "mon_start",
+      "surface": "macos",
+      "scope": {
+        "mode": "apps",
+        "apps": [
+          "Owned fixture"
+        ]
+      },
+      "includes": null,
+      "speechMode": "off",
+      "tap": false,
+      "ins": "Owned fixture"
+    },
+    {
+      "event": "mon_stop",
+      "duration": 1.5,
+      "evt": -1,
+      "mut": 0,
+      "net": 0,
+      "nav": 0,
+      "ax": 0,
+      "reason": "user"
+    },
+    {
+      "event": "mon_pause",
+      "unexpected": true
+    },
+    {
+      "event": "mon_attach",
+      "pid": 123,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "ax": [
+        true
+      ]
+    },
+    {
+      "event": "input",
+      "pid": 123,
+      "r": "AXTextField",
+      "n": "Owned field",
+      "v": true,
+      "coalesced": 2
+    },
+    {
+      "event": "input",
+      "pid": 123,
+      "r": "AXSecureTextField",
+      "n": "Owned field",
+      "v": "Owned clear value",
+      "coalesced": 2
+    },
+    {
+      "event": "input",
+      "pid": 0,
+      "r": "AXTextField",
+      "n": "Owned field",
+      "v": "Owned value",
+      "coalesced": 2
+    },
+    {
+      "event": "input",
+      "pid": 123,
+      "r": "AXTextField",
+      "n": "Owned field",
+      "v": "Owned value",
+      "coalesced": 1.5
+    },
+    {
+      "event": "window_create",
+      "pid": 123,
+      "r": "AXWindow",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1
+      }
+    },
+    {
+      "event": "window_resize",
+      "pid": 123,
+      "r": "AXWindow",
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": -1,
+        "h": 1
+      }
+    },
+    {
+      "event": "selection",
+      "pid": 123,
+      "r": "AXTextField",
+      "sr": "AXTextField",
+      "n": "Owned field",
+      "sl": -1
+    },
+    {
+      "event": "ax_other",
+      "pid": 123,
+      "notification": null
+    },
+    {
+      "event": "scroll",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "sx": true,
+      "sy": -1.5,
+      "samples": 2
+    },
+    {
+      "event": "scroll",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "sx": 0.5,
+      "sy": -1.5,
+      "samples": 0
+    },
+    {
+      "event": "click",
+      "tr": true,
+      "app": "Owned",
+      "bundleId": "",
+      "y": 0
+    },
+    {
+      "event": "click",
+      "tr": false,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "event": "key",
+      "tr": true,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned",
+      "kc": "Meta+A",
+      "tap": true
+    },
+    {
+      "event": "clipboard",
+      "changeCount": 1.5,
+      "types": [
+        "public.utf8-plain-text"
+      ],
+      "preview": "Owned"
+    },
+    {
+      "event": "file_change",
+      "path": "\u0000"
+    },
+    {
+      "event": "network_path",
+      "status": "invented",
+      "isExpensive": false,
+      "isConstrained": false,
+      "supportsIPv4": true,
+      "supportsIPv6": true,
+      "supportsDNS": true,
+      "interfaces": [
+        "en0"
+      ]
+    },
+    {
+      "event": "video_finished",
+      "path": "/tmp/owned-fixture.mp4",
+      "bytes": -1,
+      "durationSec": 1.5
+    },
+    {
+      "event": "frame",
+      "path": "/tmp/owned-fixture.jpeg",
+      "w": 1,
+      "h": 1,
+      "bytes": 20,
+      "format": "jpeg",
+      "quality": 101
+    },
+    {
+      "event": "ocr_text",
+      "frame": "/tmp/owned-fixture.jpeg",
+      "blocks": [
+        {
+          "text": "Owned",
+          "confidence": 2,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1
+          }
+        }
+      ]
+    },
+    {
+      "event": "notification",
+      "name": "com.interceptor.owned",
+      "source": "invented"
+    },
+    {
+      "event": "rotation",
+      "archived": "/tmp/owned-fixture/events.jsonl.1",
+      "index": 0
+    },
+    {
+      "event": "speech_restart",
+      "replayBuffers": -1
+    },
+    {
+      "event": "frontmost",
+      "pid": 0,
+      "app": "Owned fixture",
+      "bundleId": "com.interceptor.owned"
+    },
+    {
+      "event": "video_start",
+      "path": "/tmp/owned-fixture.mp4",
+      "fps": 0
+    },
+    {
+      "event": "speech_segment",
+      "text": "Owned speech",
+      "isFinal": "true",
+      "source": "live"
+    }
+  ],
+  "metadataValid": [
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "active",
+      "paused": false,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "active",
+      "paused": true,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "apps",
+        "apps": [
+          "Owned"
+        ]
+      },
+      "includes": [
+        "ax"
+      ],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": true,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [
+        {
+          "key": "pid:123",
+          "pid": 123,
+          "attachedAt": 1000,
+          "detachedAt": 2000,
+          "axNotifications": [
+            "AXValueChanged"
+          ],
+          "appName": "Owned",
+          "bundleIdentifier": "com.interceptor.owned",
+          "reason": "scope_attach"
+        }
+      ],
+      "tcc": {
+        "accessibility": true,
+        "screenRecording": false,
+        "microphone": false
+      },
+      "scope": {
+        "mode": "all"
+      },
+      "includes": [],
+      "excludes": [],
+      "rootPid": 123,
+      "rootApp": "Owned",
+      "stopReason": "manual"
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "taskId": "owned_task",
+      "taskModeAtAttach": "agent-record",
+      "taskActorAtAttach": "agent",
+      "taskAttachedAt": 1000,
+      "taskDetachedAt": 2000,
+      "taskSourceSnapshotRoot": "/tmp/owned-snapshot"
+    }
+  ],
+  "metadataInvalid": [
+    {
+      "artifactVersion": true,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 2,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": -1,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1.5,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 9007199254740992,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 999,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 1.5,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": null,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "invented",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": 1,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": -1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 2
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1.5,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": true,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "apps",
+        "apps": []
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "apps"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "all",
+        "apps": [
+          "Owned"
+        ]
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "apps",
+        "apps": [
+          "Owned",
+          "Owned"
+        ]
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "apps",
+        "apps": [
+          "\u0000"
+        ]
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [
+        "ax",
+        "ax"
+      ],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [
+        ""
+      ]
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "rootPid": 0
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [
+        {
+          "key": "pid:123",
+          "pid": 0,
+          "attachedAt": 1000,
+          "detachedAt": 2000,
+          "axNotifications": [
+            "AXValueChanged"
+          ],
+          "appName": "Owned",
+          "bundleIdentifier": "com.interceptor.owned",
+          "reason": "scope_attach"
+        }
+      ],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [
+        {
+          "key": "pid:999",
+          "pid": 123,
+          "attachedAt": 1000,
+          "detachedAt": 2000,
+          "axNotifications": [
+            "AXValueChanged"
+          ],
+          "appName": "Owned",
+          "bundleIdentifier": "com.interceptor.owned",
+          "reason": "scope_attach"
+        }
+      ],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [
+        {
+          "key": "pid:123",
+          "pid": 123,
+          "attachedAt": 1000,
+          "detachedAt": 999,
+          "axNotifications": [
+            "AXValueChanged"
+          ],
+          "appName": "Owned",
+          "bundleIdentifier": "com.interceptor.owned",
+          "reason": "scope_attach"
+        }
+      ],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [
+        {
+          "key": "pid:123",
+          "pid": 123,
+          "attachedAt": 1.5,
+          "detachedAt": 2000,
+          "axNotifications": [
+            "AXValueChanged"
+          ],
+          "appName": "Owned",
+          "bundleIdentifier": "com.interceptor.owned",
+          "reason": "scope_attach"
+        }
+      ],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [
+        {
+          "key": "pid:123",
+          "pid": 123,
+          "attachedAt": 1000,
+          "detachedAt": 2000,
+          "axNotifications": [
+            "AXValueChanged",
+            "AXValueChanged"
+          ],
+          "appName": "Owned",
+          "bundleIdentifier": "com.interceptor.owned",
+          "reason": "scope_attach"
+        }
+      ],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": "yes"
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "unexpected": true
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "instruction": "\u0000"
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "taskAttachedAt": -1
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "taskAttachedAt": 2000,
+      "taskDetachedAt": 1000
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "taskSourceSnapshotRoot": "\u0000"
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "stopReason": ""
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "stopped",
+      "paused": false,
+      "endedAt": 2000,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "includes": [],
+      "excludes": []
+    },
+    {
+      "artifactVersion": 1,
+      "surface": "macos",
+      "sessionId": "owned_meta",
+      "startedAt": 1000,
+      "status": "active",
+      "paused": false,
+      "counts": {
+        "evt": 1,
+        "mut": 0,
+        "net": 0,
+        "nav": 0,
+        "ax": 0
+      },
+      "attachments": [],
+      "tcc": {
+        "accessibility": false
+      },
+      "scope": {
+        "mode": "frontmost"
+      },
+      "includes": [],
+      "excludes": [],
+      "endedAt": 2000
+    }
+  ]
+}

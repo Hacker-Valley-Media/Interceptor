@@ -11,8 +11,8 @@ interceptor macos monitor export <sid> --plan   # Replayable interceptor macos c
 ```
 
 - Use the macOS monitor when the goal is to learn a native-app workflow and replay it later.
-- Same sparse JSON format as the browser monitor: short keys (`t`, `s`, `k`, `app`, `bundle`, `ref`, `r`, `n`, `cause`), session-monotonic `seq` on user actions, `cause: <seq>` on follow-on events.
-- Each event is annotated with the AX element that received it (role, name, identifier when present), so the replay plan can re-resolve targets even when the AX tree changes between record and replay.
+- Mac recordings use a flat header: `sid`, increasing `s`, nondecreasing elapsed milliseconds `t`, `event`, and optional `timestamp`/`taskId`. Payload fields depend on the source. AX observations carry `pid` and available `r`, `sr`, `n` attributes; input may carry `v`, and secure input values are masked. Global pointer/key events carry `app`/`bundleId` and their input fields. These are Mac fields, distinct from browser payloads.
+- Tail and every export route validate known Mac payloads before selecting or rendering events. A malformed archive is refused without rewriting its original bytes. Unknown extension event names retain opaque data within the existing header, row and archive limits. Optional AX values and missing workspace notification userInfo remain compatible.
 
 ## Session lifecycle
 
@@ -27,7 +27,8 @@ interceptor macos monitor tail                  # Live event stream (pretty)
 interceptor macos monitor tail --raw            # Raw JSONL
 ```
 
-- A session captures clicks, keystrokes, scrolls, and app switches. App switches generate `app_change` events so the replay plan knows which app each subsequent event belongs to.
+- `pause`, `resume`, `stop`, and `status` honor an explicit `--sid` exactly. An unknown ID returns `no_active_session` and never acts on another recording. Missing, empty, flag-valued, and repeated `--sid` arguments are refused before dispatch. Without `--sid`, lifecycle commands select the sole active session and refuse an ambiguous selection; `status` lists active sessions or reports idle.
+- A session captures clicks, keystrokes, scrolls, and app switches. Workspace activation emits `frontmost` with available app identity, and deactivation emits `app_deactivate`. Replay uses those identities when they are available.
 - Input Monitoring permission is required for global key/click capture. Run `interceptor macos trust` before recording.
 
 ## Task envelopes and speech
@@ -44,6 +45,7 @@ interceptor monitor task quality "Teach Slack triage"        # name or task-<id>
 ## Use replay plans correctly
 
 - Prefer the exported semantic replay commands over raw event streams.
+- Both native and browser replay exports preserve shell-sensitive characters as literal arguments. Captured instruction, menu, network and other comment text stays inside comments, and browser ref fallbacks are quoted. A recorded focus-switch target must be a positive safe integer before it can become `--tab`.
 - The replay plan never asks for focus. Where the recording changed apps it emits `interceptor macos open "X"` (a no-op on a running app, a background launch otherwise; an app that is not running can still come forward while it starts, so replay against apps that are already open), and every `click` / `type` / `keys` / `scroll` / `menu` line carries `--app "X"`, so the replay runs against each app in the background while the user keeps working. Refs are not preserved verbatim.
 - Treat `--plan` output as the highest-value artifact. A 2-minute recorded native workflow turns into ~30–60 lines of `interceptor macos ...` commands that survive UI churn.
 

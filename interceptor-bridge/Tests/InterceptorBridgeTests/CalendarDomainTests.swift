@@ -1,6 +1,7 @@
-// PRD-66 — CalendarDomain unit tests. Live tests gated behind LIVE_EVENTKIT=1.
+// CalendarDomain unit tests. Live tests gated behind LIVE_EVENTKIT=1.
 
 import XCTest
+import EventKit
 @testable import interceptor_bridge
 
 final class CalendarDomainTests: XCTestCase {
@@ -47,7 +48,9 @@ final class CalendarDomainTests: XCTestCase {
 
     func testRefreshSources_succeeds() {
         let r = runVerb("refresh-sources")
-        XCTAssertEqual(r["success"] as? Bool, true)
+        let auth = EKEventStore.authorizationStatus(for: .event)
+        XCTAssertEqual(r["success"] as? Bool, auth == .fullAccess || auth == .authorized)
+        if auth != .fullAccess && auth != .authorized { XCTAssertEqual(r["code"] as? String, "permission_denied") }
     }
 
     func testReset_succeeds() {
@@ -57,7 +60,9 @@ final class CalendarDomainTests: XCTestCase {
 
     func testTail_succeeds() {
         let r = runVerb("tail")
-        XCTAssertEqual(r["success"] as? Bool, true)
+        let auth = EKEventStore.authorizationStatus(for: .event)
+        XCTAssertEqual(r["success"] as? Bool, auth == .fullAccess || auth == .authorized)
+        if auth != .fullAccess && auth != .authorized { XCTAssertEqual(r["code"] as? String, "permission_denied") }
     }
 
     func testUnknownVerb_errors() {
@@ -73,13 +78,19 @@ final class CalendarDomainTests: XCTestCase {
 
     func testCreateRoundtrip_live() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_EVENTKIT"] == "1")
+        guard let calendar = ProcessInfo.processInfo.environment["INTERCEPTOR_TEST_EVENT_CALENDAR"] else { throw XCTSkip("fixture-only calendar identity required") }
         let now = Date()
         let f = ISO8601DateFormatter()
         let r = runVerb("create", action: [
-            "title": "PRD-66 test event",
+            "title": "Interceptor test event",
             "start": f.string(from: now),
             "end": f.string(from: now.addingTimeInterval(1800)),
+            "calendar": calendar,
         ])
         XCTAssertEqual(r["success"] as? Bool, true)
+        guard let data = r["data"] as? [String: Any], let id = data["id"] as? String else { return }
+        XCTAssertEqual(data["calendarId"] as? String, calendar)
+        let removed = runVerb("delete", action: ["id": id])
+        XCTAssertEqual(removed["success"] as? Bool, true)
     }
 }

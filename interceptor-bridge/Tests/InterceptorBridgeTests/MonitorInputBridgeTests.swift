@@ -5,7 +5,7 @@ import AppKit
 // MonitorInputBridge unit tests. These exercise the pure helpers
 // (key-combo string formation, modifier-string formation). The full NSEvent
 // global-monitor path requires Accessibility TCC and a live screen; that's
-// covered by the Phase-1 integration script, not here.
+// covered by the live integration script, not here.
 
 final class MonitorInputBridgeTests: XCTestCase {
     func testKeyComboStringWithoutModifiers() {

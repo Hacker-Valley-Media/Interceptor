@@ -131,7 +131,7 @@ export const BUILTIN_BRIDGE_PREFIXES: ReadonlySet<string> = new Set([
   "overlay", "fs", "url", "log", "script", "intent", "container", "native",
   "vm", "pdf", "detect", "translate", "thumbnail", "auth", "secrets", "authdialog", "calendar",
   "reminders", "contacts", "appintent", "photos", "maps", "location", "music",
-  "share", "update",
+  "share", "update", "desktop",
 ])
 
 /**

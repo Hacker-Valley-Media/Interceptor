@@ -1,7 +1,7 @@
 import XCTest
 @testable import interceptor_bridge
 
-// PRD-63 Spec 1 regression. NLPDomain.handle previously switched on
+// Regression: NLPDomain.handle previously switched on
 // `command` (which the router passes as the literal "nlp" for two-segment
 // action types) instead of action["sub"], so every NLP call fell through
 // to `notImplemented` despite a fully-implemented NaturalLanguage backend.

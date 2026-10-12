@@ -36,16 +36,32 @@ interceptor mcp uninstall                                   # remove the registr
 |---|---|
 | `interceptor_browser` | the signed-in browser (DOM, network, tabs, editors, screenshots) |
 | `interceptor_macos` | native macOS apps + OS (AX, input, capture, Apple Events, VM, runtime, personal data) |
+| `interceptor_desktop` | neutral desktop commands, with availability reported by the installed platform provider |
 | `interceptor_ios` | an owned, unlocked, Developer-Mode iPhone |
 | `interceptor_read` | read-only observation across surfaces (auto-approvable, `readOnlyHint`) |
 | `interceptor_local` | daemon-free meta (`status`, `manifest`, `diagnose`, `extensions`, …) |
 | `interceptor_raw` | verbatim `interceptor` argv — **off unless** the operator allows `raw` |
 
+On Windows and Linux the server registers five of these: `interceptor_macos`, `interceptor_ios` and their help resources exist only on a Mac. There, the `interceptor_desktop` menu and `interceptor://help/desktop` leave out what that OS's provider does not have (`shared/desktop-support.json`).
+
 Each router takes a `verb` (from a menu folded into the tool description) and an
 `args` string array of sub-verbs/flags passed verbatim to the CLI. Exact flags,
 sub-verbs, and return shapes live in the discovery resources:
-`interceptor://manifest`, `interceptor://help/macos`, `interceptor://help/ios`,
+`interceptor://manifest`, `interceptor://help/macos`, `interceptor://help/desktop`, `interceptor://desktop/capabilities`, `interceptor://help/ios`,
 `interceptor://extensions`, and `interceptor://help/{verb}`.
+
+Neutral `desktop` calls request the CLI's JSON contract after the operator
+permission check. `structuredContent` preserves native refusal codes, delivery
+details and image metadata, including errors marked `isError: true`. An input
+delivery followed by a failed read remains `timeout_unknown_outcome`; the MCP
+adapter does not replay it. This also applies to `interceptor_read` with
+`surface: "desktop"` and authorized `interceptor_raw` desktop calls.
+
+Captured trees returned by compound `act` and `open` calls use the same text
+fence as reads. Native error text is fenced because its details can contain
+target-provided content. Structured values retain the native contract and must
+also be treated as captured data. `INTERCEPTOR_MCP_FENCE=off` remains an operator
+choice. The legacy `macos` CLI output and operator allowlist rules are preserved.
 
 ## Safety — the operator controls the boundary, not the model
 

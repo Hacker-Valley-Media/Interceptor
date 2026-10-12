@@ -32,6 +32,15 @@ describe("version sync", () => {
     }
   })
 
+  test("native desktop provider version matches package.json#version", () => {
+    // The provider reports CARGO_PKG_VERSION, and the installers and release scripts compare it to the package version.
+    type Package = { name: string; version: string }
+    const desktop = (name: string) => Bun.TOML.parse(readFileSync(resolve(import.meta.dir, "../interceptor-desktop", name), "utf8")) as { package: Package | Package[] }
+    expect((desktop("Cargo.toml").package as Package).version).toBe(pkg.version)
+    const locked = (desktop("Cargo.lock").package as Package[]).filter(p => p.name === "interceptor-desktop")
+    expect(locked.map(p => p.version)).toEqual([pkg.version])
+  })
+
   test("iOS runner version matches package.json#version", () => {
     expect(plistValue("CFBundleShortVersionString")).toBe(pkg.version)
     expect(plistValue("CFBundleVersion")).toBe(pkg.version)

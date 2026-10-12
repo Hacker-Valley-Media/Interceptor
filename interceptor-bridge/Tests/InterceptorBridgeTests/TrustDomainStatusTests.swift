@@ -7,6 +7,27 @@ import AVFoundation
 // defense-in-depth, and the deprecated `granted` compat shim.
 final class TrustDomainStatusTests: XCTestCase {
 
+    func testNeutralTrustRefusesMalformedFieldsAndNoPromptOverridesConsent() {
+        let provider = StubMicrophoneProvider(initialStatus: .notDetermined)
+        for action: [String: Any] in [
+            ["type": "desktop_trust", "microphonePrompt": 1],
+            ["type": "desktop_trust", "extra": true],
+            ["type": "desktop_trust", "group": "\0"]
+        ] {
+            let result = runTrust(action: action, provider: provider)
+            XCTAssertEqual(result["success"] as? Bool, false)
+            XCTAssertEqual(provider.requestCalls, 0)
+        }
+        let result = runTrust(action: ["type": "desktop_trust", "noPrompt": true, "prompt": true, "walkthrough": true, "microphonePrompt": true], provider: provider)
+        XCTAssertEqual(result["success"] as? Bool, true)
+        XCTAssertEqual(provider.requestCalls, 0)
+        let data = result["data"] as? [String: Any]
+        XCTAssertEqual(data?["microphone"] as? String, "not_determined")
+        XCTAssertNil(data?["prompted"])
+        XCTAssertNil(data?["opened"])
+        XCTAssertNil(data?["pending_user_action"])
+    }
+
     // MARK: - PermissionStatus rawValue mapping
 
     func testPermissionStatusRawValues() {

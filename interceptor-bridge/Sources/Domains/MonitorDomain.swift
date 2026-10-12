@@ -43,34 +43,81 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     private let lock = NSLock()
     // the accessibility preflight routes through the transport.
     private let axTransport: any AXTransport = LiveAXTransport()
-    // Phase 5 — concurrent multi-session map. Each runtime owns its own AX /
+    // Concurrent multi-session map. Each runtime owns its own AX /
     // workspace / input / tap bridges plus optional source state.
     var runtimes: [String: MonitorRuntime] = [:]
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        // Legacy and neutral routes share the archive guard before any read or
+        // suffix operation. Lifecycle lookup retains its existing target errors.
+        if let error = DesktopMonitorValidation.archiveError(action) {
+            completion(DesktopMonitorValidation.failure(error))
+            return
+        }
         let sub = action["sub"] as? String ?? command
+        let reply: @Sendable ([String: Any]) -> Void = { completion(DesktopMonitorValidation.bounded($0)) }
         switch sub {
-        case "start":   startSession(action, completion: completion)
-        case "stop":    stopSession(action: action, reason: "user_stop", completion: completion)
-        case "pause":   pauseSession(action: action, completion: completion)
-        case "resume":  resumeSession(action: action, completion: completion)
-        case "status":  statusSession(action: action, completion: completion)
-        case "tail":    tailEvents(action, completion: completion)
-        case "list":    listSessions(completion: completion)
-        case "export":  exportSession(action, completion: completion)
-        default:        notImplemented(sub, completion: completion)
+        case "start":   startSession(action, completion: reply)
+        case "stop", "pause", "resume":
+            scheduleLifecycle(sub: sub, action: action, reason: "user_stop", completion: reply)
+        case "status":  statusSession(action: action, completion: reply)
+        case "tail":    tailEvents(action, completion: reply)
+        case "list":    listSessions(action, completion: reply)
+        case "export":  exportSession(action, completion: reply)
+        default:        notImplemented(sub, completion: reply)
         }
     }
 
     // MARK: - lifecycle: start
 
+    private func scheduleLifecycle(sub: String, action: [String: Any], reason: String,
+                                   completion: @escaping @Sendable ([String: Any]) -> Void) {
+        guard let runtime = lookupRuntime(action: action) else {
+            let error = WireFormat.failure("target_gone", "no active recording matches the requested sid")
+            completion(error)
+            return
+        }
+        let actionBox = UncheckedSendableBox(action)
+        runtime.captureLock.lock()
+        guard runtime.pendingLifecycleRequests < 16 else {
+            runtime.captureLock.unlock()
+            completion(["success": false, "code": "resource_limit", "error": "monitor lifecycle queue is full"])
+            return
+        }
+        runtime.pendingLifecycleRequests += 1
+        let previous = runtime.lifecycleTask
+        let (acknowledged, gate) = AsyncStream<Void>.makeStream()
+        let invoke: @Sendable () -> Void = { [self, runtime] in
+            let finish: @Sendable ([String: Any]) -> Void = { result in
+                runtime.captureLock.withLock {
+                    runtime.pendingLifecycleRequests -= 1
+                    if runtime.pendingLifecycleRequests == 0 { runtime.lifecycleTask = nil }
+                }
+                completion(result)
+                gate.finish()
+            }
+            switch sub {
+            case "stop": stopSession(action: actionBox.value, reason: reason, completion: finish)
+            case "pause": pauseSession(action: actionBox.value, completion: finish)
+            default: resumeSession(action: actionBox.value, completion: finish)
+            }
+        }
+        runtime.lifecycleTask = Task {
+            await previous?.value
+            if previous != nil { invoke() }
+            for await _ in acknowledged {}
+        }
+        // Start the first operation while owning the gate. Following operations
+        // wait for its acknowledgment, including asynchronous stream shutdown.
+        if previous == nil { invoke() }
+        runtime.captureLock.unlock()
+    }
+
     private func startSession(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         // Accessibility preflight (shared across sessions).
         let axTrusted = axTransport.isProcessTrusted()
         if !axTrusted {
-            var err = WireFormat.error("missing_tcc:Accessibility")
-            err["remediation"] = "interceptor macos trust --accessibility-prompt"
-            err["exitCode"] = 2
+            let err = WireFormat.failure("permission_required", "monitor needs Accessibility access for interceptor-bridge; run interceptor macos trust --accessibility-prompt", details: ["remediation": "interceptor macos trust --accessibility-prompt"])
             completion(err)
             return
         }
@@ -87,7 +134,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         // is 10-20× larger and was the wrong default — fixed in this revision.
         let frameFormat = (action["frameFormat"] as? String) ?? "jpeg"
         let frameQuality = (action["frameQuality"] as? Int) ?? 80
-        let frameMaxLongEdge = (action["frameMaxLongEdge"] as? Int) ?? 0
+        let frameMaxLongEdge = (action["frameMaxLongEdge"] as? Int) ?? 1600
         let includeMouseMoved = excludes.contains("mouse-moved") == false && includes.contains("mouse-moved")
         let excludeKey = excludes.contains("key")
         let useTap = (action["tap"] as? Bool) ?? false
@@ -96,13 +143,35 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         let speechMode = ((action["speechMode"] as? String) ?? "auto").lowercased()
         let videoFps = action["video"] as? Int            // nil = video off
         let videoMaxBytes = Int64((action["videoMaxBytes"] as? Int) ?? 0)
-        let frameBudget = (action["frameBudget"] as? Int) ?? 7200
-        let frameDiskCapBytes = Int64((action["frameDiskCap"] as? Int) ?? 0)
-        let framePixelScale = max(1, (action["framePixelScale"] as? Int) ?? 2)
+        let frameBudget = max(1, (action["frameBudget"] as? Int).flatMap { $0 == 0 ? nil : $0 } ?? 7200)
+        let frameDiskCapBytes = Int64((action["frameDiskCap"] as? Int).flatMap { $0 == 0 ? nil : $0 } ?? 100 * 1024 * 1024)
+        let framePixelScale = (action["framePixelScale"] as? Int) ?? 0
         let scrollCoalesceMs = (action["scrollCoalesceMs"] as? Int) ?? 100
         let axCoalesceMs = (action["axCoalesceMs"] as? Int) ?? 100
         let includeSystemApps = (action["includeSystemApps"] as? Bool) ?? false
         let excludeApps = parseSet(action["excludeApps"])
+
+        let wantsMedia = framesPerSec > 0 || videoFps != nil
+        var mediaPid: pid_t?
+        if wantsMedia {
+            var validated = action
+            validated["type"] = "desktop_monitor"
+            if let error = DesktopMonitorValidation.validate(validated) { completion(error); return }
+            guard scope.mode == .apps, scope.apps.count == 1 else {
+                completion(["success": false, "code": "unsupported", "error": "monitor media requires one explicit app; no display fallback"])
+                return
+            }
+            guard frameDiskCapBytes <= MonitorRuntime.sessionMaxBytesPerFile else {
+                completion(["success": false, "code": "invalid_request", "error": "monitor frameDiskCap cannot exceed 100 MiB"])
+                return
+            }
+            let matched = resolveInitialPids(scope: scope)
+            guard matched.count == 1 else {
+                completion(["success": false, "code": "target_not_found", "error": "monitor media requires one running app matching the scope"])
+                return
+            }
+            mediaPid = matched[0].0
+        }
 
         // Screen recording preflight if --frames, --video, or --vision-text.
         var screenRecordingTcc: Bool? = nil
@@ -111,9 +180,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
             let granted = CGPreflightScreenCaptureAccess()
             screenRecordingTcc = granted
             if !granted {
-                var err = WireFormat.error("missing_tcc:ScreenRecording")
-                err["remediation"] = "interceptor macos trust --screen-prompt"
-                err["exitCode"] = 3
+                let err = WireFormat.failure("permission_required", "monitor needs Screen Recording access for interceptor-bridge; run interceptor macos trust --screen-prompt", details: ["remediation": "interceptor macos trust --screen-prompt"])
                 completion(err)
                 return
             }
@@ -152,6 +219,21 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         runtime.includeSystemApps = includeSystemApps
         runtime.excludeApps = excludeApps
         runtime.axBridge.setCoalesceMs(axCoalesceMs)
+        if let mediaPid {
+            let app = NSRunningApplication(processIdentifier: mediaPid)
+            guard !isExcludedApp(runtime: runtime, bundleId: app?.bundleIdentifier, name: app?.localizedName) else {
+                completion(["success": false, "code": "unsupported", "error": "monitor media target is excluded; no archive created"])
+                return
+            }
+            #if canImport(ScreenCaptureKit)
+            runtime.capturePid = mediaPid
+            runtime.restartCapture = { [weak self, weak runtime] in
+                guard let self, let runtime else { return }
+                self.startFrameCapture(runtime: runtime, framesPerSec: framesPerSec, videoFps: videoFps,
+                    visionText: visionText, format: frameFormat, quality: frameQuality, maxLongEdge: frameMaxLongEdge)
+            }
+            #endif
+        }
 
         // Wire bridge callbacks to record into THIS session.
         runtime.axBridge.setCallback { [weak self, weak runtime] event, data in
@@ -173,18 +255,27 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
                 runtime?.axBridge.detach(pid: pid)
             }
         )
-        runtime.inputBridge.setCallback { [weak self, weak runtime] event, data in
+        let appFilter: (NSRunningApplication?) -> Bool = { [weak self, weak runtime] app in
+            guard let self, let r = runtime, let app, !r.session.paused else { return false }
+            return !self.isExcludedApp(runtime: r, bundleId: app.bundleIdentifier, name: app.localizedName)
+        }
+        runtime.inputBridge.setCallback({ [weak self, weak runtime] event, data in
             guard let r = runtime else { return }
             self?.recordEvent(runtime: r, event: event, data: data)
-        }
-        runtime.tapBridge.setCallback { [weak self, weak runtime] event, data in
+        }, appFilter: appFilter)
+        runtime.tapBridge.setCallback({ [weak self, weak runtime] event, data in
             guard let r = runtime else { return }
             self?.recordEvent(runtime: r, event: event, data: data)
-        }
+        }, appFilter: appFilter)
 
         // Register the runtime BEFORE kicking off bridges so concurrent
         // events arriving on async queues find the right session.
         lock.lock()
+        guard runtimes.count < DESKTOP_MONITOR_MAX_SESSIONS else {
+            lock.unlock()
+            completion(["success": false, "code": "resource_limit", "error": "at most 16 native recordings may be active"])
+            return
+        }
         runtimes[sid] = runtime
         lock.unlock()
 
@@ -237,6 +328,9 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         // ── async heavy setup ──
         DispatchQueue.global(qos: .userInitiated).async { [weak self, weak runtime] in
             guard let self = self, let runtime = runtime else { return }
+            runtime.captureLock.lock()
+            defer { runtime.captureLock.unlock() }
+            guard runtime.session.endTime == nil else { return }
 
             // Initial AX attachments (scope-hygiene filtered).
             let initialPids = self.resolveInitialPids(scope: scope)
@@ -251,7 +345,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
             runtime.inputBridge.start(includeMouseMoved: includeMouseMoved, excludeKey: excludeKey, scrollCoalesceMs: scrollCoalesceMs)
 
             if useTap {
-                let okTap = runtime.tapBridge.start()
+                let okTap = runtime.tapBridge.start(excludeKey: excludeKey)
                 runtime.tapActive = okTap
                 if !okTap {
                     self.recordEvent(runtime: runtime, event: "tap_unavailable", data: [
@@ -276,15 +370,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
             if includes.contains("notifications") { self.startDistributedNotificationsWatch(runtime: runtime) }
             #if canImport(ScreenCaptureKit)
             if framesPerSec > 0 || videoFps != nil {
-                self.startFrameCapture(
-                    runtime: runtime,
-                    framesPerSec: framesPerSec,
-                    videoFps: videoFps,
-                    visionText: visionText,
-                    format: frameFormat,
-                    quality: frameQuality,
-                    maxLongEdge: frameMaxLongEdge
-                )
+                runtime.restartCapture?()
             }
             #endif
             #if canImport(Speech)
@@ -298,8 +384,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     private func stopSession(action: [String: Any], reason: String, completion: @escaping @Sendable ([String: Any]) -> Void) {
         let runtime = lookupRuntime(action: action)
         guard let r = runtime else {
-            var err = WireFormat.error("no_active_session")
-            err["exitCode"] = 4
+            let err = WireFormat.failure("target_gone", "no active recording matches the requested sid")
             completion(err)
             return
         }
@@ -308,18 +393,26 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         // an in-flight scroll/AX storm stops being written; then flush what was
         // already enqueued. This is what previously had to be done manually
         // (`pause` then `stop`) for the stop ack to land within the deadline.
+        r.captureLock.lock()
+        guard s.endTime == nil else {
+            r.captureLock.unlock()
+            let error = WireFormat.failure("target_gone", "no active recording matches the requested sid")
+            completion(error)
+            return
+        }
         s.paused = true
-        MonitorEventWriter.shared.flush()
         s.endTime = Date()
         s.stopReason = reason
+        r.captureLock.unlock()
+        MonitorEventWriter.shared.flush()
+        let finish: @Sendable (String?) -> Void = { [self] mediaError in
+        if mediaError != nil { s.stopReason = "capture_stop_failed" }
         let summary: [String: Any] = [
             "sid": s.id,
             "duration": s.endTime!.timeIntervalSince(s.startTime),
             "evt": s.evt, "mut": s.mut, "net": s.net, "nav": s.nav, "ax": s.ax,
-            "reason": reason
+            "reason": s.stopReason ?? reason
         ]
-        let metaSnapshot = s.toMetaDict()
-
         stopAutoStopTimer(runtime: r)
         r.axBridge.detachAll()
         r.workspaceBridge.stop()
@@ -330,9 +423,6 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         stopPathMonitor(runtime: r)
         stopLogPolling(runtime: r)
         stopDistributedNotificationsWatch(runtime: r)
-        #if canImport(ScreenCaptureKit)
-        stopFrameCapture(runtime: r)
-        #endif
         #if canImport(Speech)
         stopSpeechRecognition(runtime: r)
         #endif
@@ -341,6 +431,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         // recordEvent can find it and tally counts. (mon_stop is a lifecycle
         // event so it writes through even though the session is now paused.)
         recordEvent(runtime: r, event: "mon_stop", data: summary)
+        let metaSnapshot = s.toMetaDict()
 
         lock.lock()
         runtimes.removeValue(forKey: s.id)
@@ -351,44 +442,85 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         MonitorEventWriter.shared.flush()
         MonitorEventWriter.shared.close(path: Platform.sessionEventsPath(s.id))
         Platform.writeSessionMeta(sid: s.id, meta: metaSnapshot)
-        completion(WireFormat.success(summary))
+        if let mediaError { completion(["success": false, "code": "provider_error", "error": mediaError]) }
+        else { completion(WireFormat.success(summary)) }
+        }
+        #if canImport(ScreenCaptureKit)
+        stopFrameCapture(runtime: r, completion: finish)
+        #else
+        finish(nil)
+        #endif
     }
 
     private func pauseSession(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let r = lookupRuntime(action: action) else {
-            var err = WireFormat.error("no_active_session")
-            err["exitCode"] = 4
+            let err = WireFormat.failure("target_gone", "no active recording matches the requested sid")
             completion(err)
             return
         }
-        r.session.paused = true
-        recordEvent(runtime: r, event: "mon_pause", data: [:])
-        completion(WireFormat.success(["sid": r.session.id, "status": "paused"]))
+        let paused = r.captureLock.withLock {
+            guard r.session.endTime == nil else { return false }
+            r.session.paused = true
+            return true
+        }
+        guard paused else {
+            let error = WireFormat.failure("target_gone", "no active recording matches the requested sid")
+            completion(error)
+            return
+        }
+        let finish: @Sendable (String?) -> Void = { [self] error in
+            recordEvent(runtime: r, event: "mon_pause", data: [:])
+            MonitorEventWriter.shared.flush()
+            if let error { completion(["success": false, "code": "provider_error", "error": error]) }
+            else { completion(WireFormat.success(["sid": r.session.id, "status": "paused"])) }
+        }
+        #if canImport(ScreenCaptureKit)
+        stopFrameCapture(runtime: r, completion: finish)
+        #else
+        finish(nil)
+        #endif
     }
 
     private func resumeSession(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let r = lookupRuntime(action: action) else {
-            var err = WireFormat.error("no_active_session")
-            err["exitCode"] = 4
+            let err = WireFormat.failure("target_gone", "no active recording matches the requested sid")
             completion(err)
             return
         }
-        r.session.paused = false
-        recordEvent(runtime: r, event: "mon_resume", data: [:])
+        let resumed = r.captureLock.withLock {
+            guard r.session.endTime == nil else { return false }
+            let wasPaused = r.session.paused
+            r.session.paused = false
+            recordEvent(runtime: r, event: "mon_resume", data: [:])
+            #if canImport(ScreenCaptureKit)
+            if wasPaused { r.restartCapture?() }
+            #endif
+            return true
+        }
+        guard resumed else {
+            let error = WireFormat.failure("target_gone", "no active recording matches the requested sid")
+            completion(error)
+            return
+        }
         completion(WireFormat.success(["sid": r.session.id, "status": "recording"]))
     }
 
     private func statusSession(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let active = lockedRuntimes()
+        if action["sid"] != nil {
+            guard let r = lookupRuntime(action: action) else {
+                let err = WireFormat.failure("target_gone", "no active recording matches the requested sid")
+                completion(err)
+                return
+            }
+            completion(WireFormat.success(statusDictFor(runtime: r)))
+            return
+        }
         if active.isEmpty {
             completion(WireFormat.success(["status": "idle"]))
             return
         }
-        // If --sid passed, return that one; otherwise return list of active.
-        if let sid = action["sid"] as? String, let r = active[sid] {
-            completion(WireFormat.success(statusDictFor(runtime: r)))
-            return
-        }
+        // Without --sid, return the list of active sessions.
         let rows = active.values.map { statusDictFor(runtime: $0) }
         completion(WireFormat.success(["sessions": rows, "activeCount": rows.count]))
     }
@@ -416,28 +548,38 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         if let s = action["sid"] as? String { sid = s }
         else if let r = lookupRuntime(action: action) { sid = r.session.id }
         else {
-            completion(WireFormat.error("no_active_session"))
+            completion(WireFormat.failure("target_gone", "no active recording matches the requested sid"))
             return
         }
         let limit = (action["limit"] as? Int) ?? 50
-        let events = readSessionEvents(sid: sid)
-        completion(WireFormat.success(Array(events.suffix(limit))))
+        do { completion(WireFormat.success(try readSessionEvents(sid: sid, limit: limit))) }
+        catch let error as DesktopMonitorValidation.ArchiveError { completion(error.reply) }
+        catch { completion(["success": false, "code": "provider_failed", "error": "monitor archive read failed; original was preserved"]) }
     }
 
-    private func listSessions(completion: @escaping @Sendable ([String: Any]) -> Void) {
+    private func listSessions(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let dir = Platform.monitorSessionsDir
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else {
             completion(WireFormat.success([]))
             return
         }
         var rows: [[String: Any]] = []
-        for sid in entries.sorted() {
-            let metaPath = Platform.sessionMetaPath(sid)
-            guard let data = try? Data(contentsOf: URL(fileURLWithPath: metaPath)),
-                  let obj = try? JSONSerialization.jsonObject(with: data),
-                  var meta = obj as? [String: Any] else { continue }
-            meta["sid"] = sid
-            rows.append(meta)
+        guard entries.count <= DESKTOP_MONITOR_MAX_ENTRIES else {
+            completion(["success": false, "code": "resource_limit", "error": "monitor history directory exceeds 1000 entries; originals were preserved"]); return
+        }
+        let limit = (action["limit"] as? Int) ?? DESKTOP_MONITOR_MAX_ENTRIES
+        for sid in entries.sorted().reversed() where DesktopMonitorValidation.safeSessionId(sid) && rows.count < limit {
+            do {
+                let data = try DesktopMonitorValidation.readArchive(sid: sid, file: "session.json", maxBytes: DESKTOP_MONITOR_MAX_RESULT_BYTES)
+                guard var meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive metadata is invalid; original was preserved") }
+                guard meta["surface"] as? String == "macos" else { continue }
+                guard meta["sessionId"] as? String == sid else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive identity differs from its directory") }
+                guard DesktopMonitorValidation.archiveMetadataError(meta, sid: sid) == nil else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive metadata is invalid; original was preserved") }
+                meta["sid"] = sid
+                rows.append(meta)
+            } catch DesktopMonitorValidation.ArchiveError.missing { continue }
+            catch let error as DesktopMonitorValidation.ArchiveError { completion(error.reply); return }
+            catch { completion(["success": false, "code": "provider_failed", "error": "monitor history read failed; originals were preserved"]); return }
         }
         completion(WireFormat.success(rows))
     }
@@ -448,10 +590,15 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
             return
         }
         let format = (action["format"] as? String) ?? "timeline"
-        let events = readSessionEvents(sid: sid)
-        let metaPath = Platform.sessionMetaPath(sid)
-        let metaData = (try? Data(contentsOf: URL(fileURLWithPath: metaPath))) ?? Data()
-        let meta = (try? JSONSerialization.jsonObject(with: metaData)) as? [String: Any] ?? [:]
+        let events: [[String: Any]], meta: [String: Any]
+        do {
+            events = try readSessionEvents(sid: sid)
+            let metaData = try DesktopMonitorValidation.readArchive(sid: sid, file: "session.json", maxBytes: DESKTOP_MONITOR_MAX_RESULT_BYTES)
+            meta = (try JSONSerialization.jsonObject(with: metaData)) as? [String: Any] ?? [:]
+            guard meta["sessionId"] as? String == sid, meta["surface"] as? String == "macos" else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive metadata identity is invalid") }
+            guard DesktopMonitorValidation.archiveMetadataError(meta, sid: sid) == nil else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive metadata is invalid; original was preserved") }
+        } catch let error as DesktopMonitorValidation.ArchiveError { completion(error.reply); return }
+        catch { completion(["success": false, "code": "provider_failed", "error": "monitor export read failed; original was preserved"]); return }
         let instruction = meta["instruction"] as? String
 
         switch format {
@@ -469,9 +616,11 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     /// Resolves the runtime for an action. Honors --sid if present; otherwise
     /// returns the single active runtime when there's exactly one, or nil.
     private func lookupRuntime(action: [String: Any]) -> MonitorRuntime? {
-        let active = lockedRuntimes()
-        if let sid = action["sid"] as? String, let r = active[sid] {
-            return r
+        let active = lockedRuntimes().filter { _, runtime in
+            runtime.captureLock.withLock { runtime.session.endTime == nil }
+        }
+        if action["sid"] != nil {
+            return (action["sid"] as? String).flatMap { active[$0] }
         }
         if active.count == 1 { return active.values.first }
         return nil
@@ -490,9 +639,21 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     static let noisyEvents: Set<String> = ["scroll", "input", "layout_change", "move", "mouseup", "ax_other"]
 
     func recordEvent(runtime: MonitorRuntime, event: String, data: [String: Any]) {
+        runtime.captureLock.lock()
+        defer { runtime.captureLock.unlock() }
         let s = runtime.session
+        if s.endTime != nil, event != "mon_stop" { return }
         let lifecycle = event == "mon_start" || event == "mon_stop" || event == "mon_pause" || event == "mon_resume"
         if s.paused, !lifecycle { return }
+        if !lifecycle {
+            if s.excludes.contains(event) { return }
+            if data["pid"] != nil || data["app"] != nil || data["bundleId"] != nil {
+                let app = data["app"] == nil && data["bundleId"] == nil
+                    ? (data["pid"] as? Int).flatMap { NSRunningApplication(processIdentifier: pid_t($0)) } : nil
+                if isExcludedApp(runtime: runtime, bundleId: data["bundleId"] as? String ?? app?.bundleIdentifier,
+                                 name: data["app"] as? String ?? app?.localizedName) { return }
+            }
+        }
 
         // Backpressure valve: when the disk writer is saturated, drop the
         // noisiest kinds and emit a single capture_backpressure marker so the
@@ -611,6 +772,9 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         // Per-session explicit excludes always apply (match bundle id or name).
         if let b = bundleId, r.excludeApps.contains(b) { return true }
         if let n = name, r.excludeApps.contains(n) { return true }
+        if (bundleId ?? "").isEmpty && (name ?? "").isEmpty { return true }
+        if r.session.scope.mode == .apps,
+           !r.session.scope.apps.contains(bundleId ?? ""), !r.session.scope.apps.contains(name ?? "") { return true }
         if r.includeSystemApps { return false }
         if let b = bundleId, MonitorDomain.systemAppDenylist.contains(b) { return true }
         // WindowServer / loginwindow can appear with empty/odd bundle ids; also
@@ -619,18 +783,29 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         return false
     }
 
-    private func readSessionEvents(sid: String) -> [[String: Any]] {
-        let path = Platform.sessionEventsPath(sid)
-        guard let data = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+    private func readSessionEvents(sid: String, limit: Int? = nil) throws -> [[String: Any]] {
+        let metadata = try DesktopMonitorValidation.readArchive(sid: sid, file: "session.json", maxBytes: DESKTOP_MONITOR_MAX_RESULT_BYTES)
+        guard let meta = try? JSONSerialization.jsonObject(with: metadata) as? [String: Any],
+              DesktopMonitorValidation.archiveMetadataError(meta, sid: sid) == nil else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive metadata is invalid; original was preserved") }
+        let bytes = try DesktopMonitorValidation.readArchive(sid: sid, file: "events.jsonl", maxBytes: DESKTOP_MONITOR_MAX_ARCHIVE_BYTES)
+        guard let data = String(data: bytes, encoding: .utf8), bytes.isEmpty || bytes.last == 10 else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive contains invalid or interrupted events; original was preserved") }
         var out: [[String: Any]] = []
+        var previous = -1
+        var previousTime = -1.0
         for line in data.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
-            if let bytes = trimmed.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: bytes),
-               let row = obj as? [String: Any] {
-                out.append(row)
-            }
+            guard let bytes = trimmed.data(using: .utf8), bytes.count <= DESKTOP_MONITOR_MAX_RESULT_BYTES,
+                  let row = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive event is invalid; original was preserved") }
+            let fields = row.filter { ["sid", "s", "t", "event", "timestamp", "taskId"].contains($0.key) }
+            let header = try JSONDecoder().decode(DesktopMonitorEventHeader.self, from: JSONSerialization.data(withJSONObject: fields))
+            guard header.sid == sid, header.s >= 0, header.s <= 9007199254740991, header.s.rounded() == header.s, header.s > Double(previous), header.t >= 0, header.t <= 9007199254740991, header.t.rounded() == header.t, header.t >= previousTime, !header.event.isEmpty, header.event.utf16.count <= 128 else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive event identity/order is invalid; original was preserved") }
+            guard DesktopMonitorValidation.eventPayloadError(row) == nil else { throw DesktopMonitorValidation.ArchiveError.refused("monitor archive event payload is invalid; original was preserved") }
+            previous = Int(header.s)
+            previousTime = header.t
+            out.append(row)
+            if let limit = limit, out.count > limit { out.removeFirst() }
+            if limit == nil, out.count > DESKTOP_MONITOR_MAX_ENTRIES { throw DesktopMonitorValidation.ArchiveError.limit("monitor export exceeds 1000 events; use the owned archive") }
         }
         return out
     }
@@ -698,7 +873,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
             paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.5,
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagUseCFTypes)
         )
         guard let s = stream else { return }
         FSEventStreamSetDispatchQueue(s, DispatchQueue.global(qos: .utility))
@@ -848,20 +1023,39 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     ) {
         let wantFrames = framesPerSec > 0
         let wantVideo = videoFps != nil
-        Task { [weak r, weak self] in
-            guard let r = r, let self = self else { return }
+        r.captureLock.withLock {
+        guard !r.session.paused, r.session.endTime == nil else { return }
+        let generation = r.captureGeneration
+        let previous = r.captureTask
+        r.captureTask = Task { [self, r] in
+            await previous?.value
+            var created: SCStream?
             do {
                 let content = try await SCShareableContent.current
-                guard let display = content.displays.first else { return }
-                let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+                let stream: SCStream? = try r.captureLock.withLock {
+                guard generation == r.captureGeneration, !r.session.paused, r.session.endTime == nil else { return nil }
+                guard let pid = r.capturePid, let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+                      !self.isExcludedApp(runtime: r, bundleId: app.bundleIdentifier, name: app.localizedName) else {
+                    throw DesktopMonitorValidation.ArchiveError.refused("monitor capture target is gone or excluded; no display fallback")
+                }
+                let windows = content.windows.filter { $0.owningApplication?.processID == pid && $0.isOnScreen && $0.windowLayer == 0 && $0.frame.width > 0 && $0.frame.height > 0 }
+                guard let window = r.captureWindowId.flatMap({ id in windows.first { $0.windowID == id } })
+                    ?? (r.captureWindowId == nil ? windows.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height } : nil) else {
+                    throw DesktopMonitorValidation.ArchiveError.refused("monitor capture has no visible owned window; no display fallback")
+                }
+                r.captureWindowId = window.windowID
+                let filter = SCContentFilter(desktopIndependentWindow: window)
                 let config = SCStreamConfiguration()
                 // correct geometry. Point dims × pixel scale, with
                 // scalesToFit + captureResolution + explicit pixelFormat, mirroring
                 // the working CaptureDomain path. Without this SCK can hand back an
                 // aspect-broken sliver (the 7680×60 bug) or drop frames.
-                let pixelScale = max(1, r.framePixelScale)
-                config.width = Int(display.width) * pixelScale
-                config.height = Int(display.height) * pixelScale
+                let pixelScale = r.framePixelScale == 0 ? max(1, Int(ceil(filter.pointPixelScale))) : r.framePixelScale
+                config.width = Int(ceil(filter.contentRect.width)) * pixelScale
+                config.height = Int(ceil(filter.contentRect.height)) * pixelScale
+                guard config.width > 0, config.height > 0, config.width <= 16384, config.height <= 16384,
+                      config.width <= 33554432 / config.height else { throw DesktopMonitorValidation.ArchiveError.limit("monitor capture exceeds its pixel budget") }
+                config.ignoreShadowsSingleWindow = true
                 config.scalesToFit = true
                 config.showsCursor = true
                 config.captureResolution = .best
@@ -870,31 +1064,22 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
                 config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, effectiveFps)))
                 config.queueDepth = 5
 
-                let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+                let output = MonitorCaptureOutput(domain: self, runtime: r, sid: r.session.id, visionText: visionText,
+                    format: format, quality: quality, maxLongEdge: maxLongEdge, frameBudget: r.frameBudget, diskCapBytes: r.frameDiskCapBytes)
+                let stream = SCStream(filter: filter, configuration: config, delegate: output)
+                r.captureOutput = output
 
                 // Still frames — only when --frames was requested.
                 if wantFrames {
-                    let output = MonitorCaptureOutput(
-                        domain: self,
-                        runtime: r,
-                        sid: r.session.id,
-                        visionText: visionText,
-                        format: format,
-                        quality: quality,
-                        maxLongEdge: maxLongEdge,
-                        frameBudget: r.frameBudget,
-                        diskCapBytes: r.frameDiskCapBytes
-                    )
-                    try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue.global(qos: .userInitiated))
-                    r.captureOutput = output
+                    try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: r.captureQueue)
                 }
 
                 // Continuous video — SCRecordingOutput → recording/screen.mp4.
                 if wantVideo {
                     let dir = Platform.sessionDir(r.session.id) + "/recording"
                     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-                    let mp4 = dir + "/screen.mp4"
-                    try? FileManager.default.removeItem(atPath: mp4)
+                    let mp4 = dir + "/screen-\(generation).mp4"
+                    guard !FileManager.default.fileExists(atPath: mp4) else { throw DesktopMonitorValidation.ArchiveError.refused("monitor video path already exists; original preserved") }
                     let recCfg = SCRecordingOutputConfiguration()
                     recCfg.outputURL = URL(fileURLWithPath: mp4)
                     recCfg.outputFileType = .mp4
@@ -907,32 +1092,50 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
                     self.recordEvent(runtime: r, event: "video_start", data: ["path": mp4, "fps": videoFps ?? 0])
                 }
 
-                try await stream.startCapture()
                 r.captureStream = stream
+                return stream
+                }
+                guard let stream else { return }
+                created = stream
+                try await stream.startCapture()
             } catch {
-                self.recordEvent(runtime: r, event: "frame_error", data: ["error": "\(error.localizedDescription)"])
+                if let created { try? await created.stopCapture() }
+                r.captureLock.withLock {
+                    if generation == r.captureGeneration, !r.session.paused, r.session.endTime == nil {
+                        r.captureStream = nil
+                        r.captureOutput = nil
+                        self.recordEvent(runtime: r, event: "frame_error", data: ["error": error.localizedDescription])
+                    }
+                }
             }
+        }
         }
     }
 
     @available(macOS 12.3, *)
-    private func stopFrameCapture(runtime r: MonitorRuntime) {
-        let path = r.recordingPath
-        Task { [weak r, weak self] in
-            if let stream = r?.captureStream {
-                if let recOutput = r?.recordingOutput {
-                    try? stream.removeRecordingOutput(recOutput)
+    private func stopFrameCapture(runtime r: MonitorRuntime, completion: @escaping @Sendable (String?) -> Void) {
+        r.captureLock.withLock {
+        r.captureGeneration &+= 1
+        let previous = r.captureTask
+        r.captureTask = Task { [r] in
+            await previous?.value
+            let stream = r.captureLock.withLock { r.captureStream }
+            var failure: String?
+            if let stream {
+                do { try await stream.stopCapture() }
+                catch { failure = "monitor capture stop failed: \(error.localizedDescription)" }
+            }
+            r.captureLock.withLock {
+                if failure == nil {
+                    r.captureStream = nil
+                    r.captureOutput = nil
+                    r.recordingOutput = nil
+                    r.recordingDelegate = nil
+                    r.recordingPath = nil
                 }
-                try? await stream.stopCapture()
             }
-            if let p = path, let r = r, let self = self {
-                self.recordEvent(runtime: r, event: "video_stop", data: ["path": p])
-            }
-            r?.captureStream = nil
-            r?.captureOutput = nil
-            r?.recordingOutput = nil
-            r?.recordingDelegate = nil
-            r?.recordingPath = nil
+            completion(failure)
+        }
         }
     }
     #endif
@@ -1268,7 +1471,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
         timer.setEventHandler { [weak self, weak r] in
             guard let self = self, let r = r else { return }
             if Date().timeIntervalSince(r.session.startTime) >= MonitorRuntime.sessionMaxDurationSeconds {
-                self.stopSession(action: ["sid": r.session.id], reason: "session_timeout_24h") { _ in }
+                self.scheduleLifecycle(sub: "stop", action: ["sid": r.session.id], reason: "session_timeout_24h") { _ in }
                 return
             }
             let path = Platform.sessionEventsPath(r.session.id)
@@ -1308,7 +1511,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
     }
 }
 
-// Frame output handler. Saves frames to <session-dir>/frames/ using
+// Frame output handler. Saves frames to <session-dir>/media/ using
 // CaptureDomain's shared encoder so default jpeg q=80 produces 10-20× smaller
 // files than naive PNG. Optional --frame-max-long-edge resizes at capture
 // time, mirroring the existing `--target-max-long-edge` knob on
@@ -1316,7 +1519,7 @@ final class MonitorDomain: DomainHandler, @unchecked Sendable {
 // frame for ocr_text events.
 #if canImport(ScreenCaptureKit)
 @available(macOS 12.3, *)
-final class MonitorCaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable {
+final class MonitorCaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     weak var domain: MonitorDomain?
     weak var runtime: MonitorRuntime?
     let sid: String
@@ -1325,12 +1528,9 @@ final class MonitorCaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable 
     let quality: Int        // 0..100; ignored for png
     let maxLongEdge: Int    // 0 = no resize; otherwise scale so max(w,h) == this
     // bound disk usage so a long session can't fill /tmp.
-    let frameBudget: Int    // 0 = unbounded; else stop writing frames after N
-    let diskCapBytes: Int64 // 0 = uncapped; else stop after this many bytes
-    private var frameCount = 0
-    private var bytesWritten: Int64 = 0
-    private var lastFrameHash = 0
-    private var budgetReached = false
+    let frameBudget: Int
+    let diskCapBytes: Int64
+    let generation: UInt64
 
     init(
         domain: MonitorDomain?,
@@ -1340,8 +1540,8 @@ final class MonitorCaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable 
         format: String = "jpeg",
         quality: Int = 80,
         maxLongEdge: Int = 0,
-        frameBudget: Int = 0,
-        diskCapBytes: Int64 = 0
+        frameBudget: Int = 7200,
+        diskCapBytes: Int64 = 100 * 1024 * 1024
     ) {
         self.domain = domain
         self.runtime = runtime
@@ -1350,18 +1550,30 @@ final class MonitorCaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable 
         self.format = format.lowercased()
         self.quality = max(0, min(100, quality))
         self.maxLongEdge = max(0, maxLongEdge)
-        self.frameBudget = max(0, frameBudget)
-        self.diskCapBytes = max(0, diskCapBytes)
+        self.frameBudget = frameBudget > 0 ? frameBudget : 7200
+        self.diskCapBytes = diskCapBytes > 0 ? min(diskCapBytes, MonitorRuntime.sessionMaxBytesPerFile) : MonitorRuntime.sessionMaxBytesPerFile
+        self.generation = runtime?.captureGeneration ?? 0
     }
 
-    // Runs serially on the sampleHandlerQueue, so the counters below need no
-    // extra locking.
+    // The same gate protects queued samples, private artifacts and lifecycle
+    // acknowledgments. No frame may create bytes after pause or stop.
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, !budgetReached, CMSampleBufferIsValid(sampleBuffer),
+        guard let r = runtime, let d = domain else { return }
+        r.captureLock.lock()
+        defer { r.captureLock.unlock() }
+        guard generation == r.captureGeneration, !r.session.paused, r.session.endTime == nil, !r.session.excludes.contains("frame"), !r.frameBudgetReached,
+              r.captureOutput == nil || r.captureOutput === self,
+              type == .screen, CMSampleBufferIsValid(sampleBuffer),
               let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-        let framesDir = Platform.sessionDir(sid) + "/frames"
-        try? FileManager.default.createDirectory(atPath: framesDir, withIntermediateDirectories: true)
+        if let attachments = (CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]])?.first,
+           let status = attachments[.status] as? Int, status != SCFrameStatus.complete.rawValue { return }
+        let width = CVPixelBufferGetWidth(imageBuffer), height = CVPixelBufferGetHeight(imageBuffer)
+        guard width > 0, height > 0, width <= 16384, height <= 16384, width <= 33554432 / height else {
+            r.frameBudgetReached = true
+            d.recordEvent(runtime: r, event: "frame_error", data: ["error": "monitor frame exceeds its pixel budget"])
+            return
+        }
+        let framesDir = Platform.sessionDir(sid) + "/media"
         let ext = format == "png" ? "png" : (format == "webp" ? "webp" : "jpeg")
 
         let ciImage = CIImage(cvImageBuffer: imageBuffer)
@@ -1374,8 +1586,8 @@ final class MonitorCaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable 
             let longest = max(rawCg.width, rawCg.height)
             if longest > maxLongEdge {
                 let scale = Double(maxLongEdge) / Double(longest)
-                let newW = Int(Double(rawCg.width) * scale)
-                let newH = Int(Double(rawCg.height) * scale)
+                let newW = max(1, Int(Double(rawCg.width) * scale))
+                let newH = max(1, Int(Double(rawCg.height) * scale))
                 cg = CaptureDomain.resize(cgImage: rawCg, width: newW, height: newH) ?? rawCg
             } else {
                 cg = rawCg
@@ -1388,30 +1600,43 @@ final class MonitorCaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable 
             // Surface encoder failures as a structured event instead of silently
             // dropping frames. Most common cause is `--frame-format webp` on a
             // macOS build where CGImageDestination rejects the WebP UTType.
-            if let r = runtime, let d = domain {
-                d.recordEvent(runtime: r, event: "frame_encode_error", data: [
+            r.frameBudgetReached = true
+            d.recordEvent(runtime: r, event: "frame_encode_error", data: [
                     "format": format,
                     "quality": quality,
                     "w": cg.width,
                     "h": cg.height
                 ])
-            }
             return
         }
 
         // dedup: skip a frame byte-identical to the previous one (a still
         // screen at 1fps would otherwise write hundreds of identical frames).
-        let hash = data.hashValue
-        if hash == lastFrameHash { return }
-        lastFrameHash = hash
+        if data == r.lastFrameData { return }
+        guard !data.isEmpty, data.count <= DESKTOP_MAX_RESULT_BYTES else {
+            r.frameBudgetReached = true
+            d.recordEvent(runtime: r, event: "frame_error", data: ["error": "encoded monitor frame exceeds its byte budget"])
+            return
+        }
+        if r.savedFrames >= frameBudget || Int64(data.count) > diskCapBytes - r.savedFrameBytes {
+            reachedBudget(runtime: r, domain: d)
+            return
+        }
 
-        let frameIndex = frameCount
-        let path = framesDir + "/\(String(format: "%06d", frameIndex)).\(ext)"
-        try? data.write(to: URL(fileURLWithPath: path))
-        frameCount += 1
-        bytesWritten += Int64(data.count)
+        let name = "\(String(format: "%06d", r.savedFrames)).\(ext)"
+        let path = framesDir + "/" + name
+        do { try writeFrame(data, name: name, savedBytes: r.savedFrameBytes) }
+        catch DesktopMonitorValidation.ArchiveError.limit { reachedBudget(runtime: r, domain: d); return }
+        catch {
+            r.frameBudgetReached = true
+            d.recordEvent(runtime: r, event: "frame_error", data: ["error": "monitor frame was not saved: \(error.localizedDescription)"])
+            return
+        }
+        r.savedFrames += 1
+        r.savedFrameBytes += Int64(data.count)
+        r.lastFrameData = data
 
-        if let r = runtime, let d = domain {
+        do {
             d.recordEvent(runtime: r, event: "frame", data: [
                 "path": path,
                 "w": cg.width,
@@ -1420,19 +1645,59 @@ final class MonitorCaptureOutput: NSObject, SCStreamOutput, @unchecked Sendable 
                 "format": format,
                 "quality": quality
             ])
-            if visionText { d.runOCROnImage(runtime: r, cg: cg, framePath: path) }
+            if visionText, !r.session.excludes.contains("ocr_text") { d.runOCROnImage(runtime: r, cg: cg, framePath: path) }
 
             // stop ONLY the frame output (not the whole session / video)
             // when a cap is hit, and say so loudly.
-            if (frameBudget > 0 && frameCount >= frameBudget) || (diskCapBytes > 0 && bytesWritten >= diskCapBytes) {
-                budgetReached = true
-                d.recordEvent(runtime: r, event: "frame_budget_reached", data: [
-                    "frames": frameCount,
-                    "bytes": bytesWritten,
-                    "frameBudget": frameBudget,
-                    "diskCapBytes": diskCapBytes,
-                ])
-            }
+            if r.savedFrames >= frameBudget || r.savedFrameBytes >= diskCapBytes { reachedBudget(runtime: r, domain: d) }
+        }
+    }
+
+    private func reachedBudget(runtime r: MonitorRuntime, domain d: MonitorDomain) {
+        r.frameBudgetReached = true
+        d.recordEvent(runtime: r, event: "frame_budget_reached", data: ["frames": r.savedFrames, "bytes": r.savedFrameBytes, "frameBudget": frameBudget, "diskCapBytes": diskCapBytes])
+    }
+
+    private func writeFrame(_ bytes: Data, name: String, savedBytes: Int64) throws {
+        let root = Darwin.open(Platform.monitorSessionsDir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard root >= 0 else { throw DesktopMonitorValidation.ArchiveError.refused("unsafe monitor root") }
+        defer { Darwin.close(root) }
+        let directory = openat(root, sid, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { throw DesktopMonitorValidation.ArchiveError.refused("unsafe monitor session directory") }
+        defer { Darwin.close(directory) }
+        for descriptor in [root, directory] {
+            var info = stat()
+            guard fstat(descriptor, &info) == 0, info.st_uid == geteuid(), fchmod(descriptor, 0o700) == 0 else { throw DesktopMonitorValidation.ArchiveError.refused("monitor directories must be privately owned") }
+        }
+        if mkdirat(directory, "media", 0o700) != 0, errno != EEXIST { throw DesktopMonitorValidation.ArchiveError.refused("cannot create monitor media directory") }
+        let media = openat(directory, "media", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard media >= 0 else { throw DesktopMonitorValidation.ArchiveError.refused("unsafe monitor media directory") }
+        defer { Darwin.close(media) }
+        var info = stat()
+        guard fstat(media, &info) == 0, info.st_uid == geteuid(), fchmod(media, 0o700) == 0 else { throw DesktopMonitorValidation.ArchiveError.refused("monitor media directory must be privately owned") }
+        MonitorEventWriter.shared.flush()
+        let journal = openat(directory, "events.jsonl", O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        var journalBytes: Int64 = 0
+        if journal >= 0 {
+            defer { Darwin.close(journal) }
+            guard fstat(journal, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == geteuid(), info.st_nlink == 1 else { throw DesktopMonitorValidation.ArchiveError.refused("unsafe monitor journal") }
+            journalBytes = info.st_size
+        } else if errno != ENOENT { throw DesktopMonitorValidation.ArchiveError.refused("unsafe monitor journal") }
+        guard savedBytes + journalBytes + Int64(bytes.count) <= MonitorRuntime.sessionMaxBytesPerFile - 2 * 1024 * 1024 else { throw DesktopMonitorValidation.ArchiveError.limit("combined monitor media/journal budget reached") }
+        let descriptor = openat(media, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw DesktopMonitorValidation.ArchiveError.refused("monitor frame path exists or cannot be created; original preserved") }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        do { try handle.write(contentsOf: bytes); try handle.synchronize() }
+        catch { unlinkat(media, name, 0); throw error }
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: any Error) {
+        guard let r = runtime, let d = domain else { return }
+        r.captureLock.withLock {
+            guard r.captureStream === stream else { return }
+            r.frameBudgetReached = true
+            d.recordEvent(runtime: r, event: "frame_error", data: ["error": error.localizedDescription])
         }
     }
 }
@@ -1444,26 +1709,36 @@ final class MonitorRecordingDelegate: NSObject, SCRecordingOutputDelegate, @unch
     weak var domain: MonitorDomain?
     weak var runtime: MonitorRuntime?
     let path: String
+    private let onStart: (@Sendable (SCRecordingOutput) -> Void)?
+    private let onFinish: (@Sendable (SCRecordingOutput) -> Void)?
+    private let onFailure: (@Sendable (Error) -> Void)?
 
-    init(domain: MonitorDomain?, runtime: MonitorRuntime?, path: String) {
+    init(domain: MonitorDomain?, runtime: MonitorRuntime?, path: String,
+         onStart: (@Sendable (SCRecordingOutput) -> Void)? = nil,
+         onFinish: (@Sendable (SCRecordingOutput) -> Void)? = nil,
+         onFailure: (@Sendable (Error) -> Void)? = nil) {
         self.domain = domain
         self.runtime = runtime
         self.path = path
+        self.onStart = onStart; self.onFinish = onFinish; self.onFailure = onFailure
     }
 
     func recordingOutputDidStartRecording(_ recordingOutput: SCRecordingOutput) {
+        onStart?(recordingOutput)
         if let r = runtime, let d = domain {
             d.recordEvent(runtime: r, event: "video_recording", data: ["path": path, "state": "started"])
         }
     }
 
     func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) {
+        onFailure?(error)
         if let r = runtime, let d = domain {
             d.recordEvent(runtime: r, event: "video_error", data: ["path": path, "error": error.localizedDescription])
         }
     }
 
     func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
+        onFinish?(recordingOutput)
         if let r = runtime, let d = domain {
             d.recordEvent(runtime: r, event: "video_finished", data: [
                 "path": path,

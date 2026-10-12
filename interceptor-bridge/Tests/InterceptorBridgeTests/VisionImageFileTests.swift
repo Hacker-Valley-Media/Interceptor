@@ -1,6 +1,7 @@
 import XCTest
 import CoreGraphics
 import ImageIO
+import Darwin
 @testable import interceptor_bridge
 
 // `macos vision --image <path>` runs Vision over a saved file. ImageIO decodes
@@ -60,6 +61,19 @@ final class VisionImageFileTests: XCTestCase {
         let text = dir.appendingPathComponent("notes.txt")
         try "not an image".write(to: text, atomically: true, encoding: .utf8)
         XCTAssertNil(VisionDomain.loadImage(atPath: text.path))
+    }
+
+    func testSourceValidationRejectsWrongTargetAndDoesNotOpenFifos() throws {
+        XCTAssertNotNil(VisionDomain.sourceError(["app": "Other app", "imagePath": "/fixture.png"]))
+        XCTAssertNotNil(VisionDomain.sourceError(["imagePath": 1]))
+        XCTAssertNotNil(VisionDomain.sourceError(["imagePath": "relative"]))
+        XCTAssertNotNil(VisionDomain.sourceError(["app": "\0"]))
+        let fifo = dir.appendingPathComponent("pipe").path
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        XCTAssertNil(VisionDomain.loadImage(atPath: fifo))
+        let bad = VisionDomain.dimensionsForCaptureBuffer(contentRect: CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 20), pointPixelScale: 2)
+        XCTAssertEqual(bad.width, 0)
+        XCTAssertEqual(bad.height, 0)
     }
 
     func testFailureMessageNamesThePathAndTheReason() throws {

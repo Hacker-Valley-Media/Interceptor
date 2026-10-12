@@ -1,4 +1,4 @@
-// PRD-66 — AuthDomain unit tests. `confirm` requires user interaction so it is
+// AuthDomain unit tests. `confirm` requires user interaction so it is
 // gated behind LIVE_AUTH=1. `status`, `invalidate`, `domain-state` work offline.
 
 import XCTest
@@ -43,7 +43,7 @@ final class AuthDomainTests: XCTestCase {
 
     func testConfirm_live() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_AUTH"] == "1")
-        let r = runVerb("confirm", action: ["reason": "Interceptor PRD-66 live test"])
+        let r = runVerb("confirm", action: ["reason": "Interceptor live test"])
         XCTAssertEqual(r["success"] as? Bool, true)
     }
 }

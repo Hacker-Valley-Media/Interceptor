@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { spawnSync } from "node:child_process"
+import { captureShell } from "./helpers/shell-capture"
 import { resolve } from "node:path"
 
 const REPO_ROOT = resolve(import.meta.dir, "..")
@@ -51,7 +51,7 @@ function browserInstalled(target: "chrome" | "brave" | "edge" | "vivaldi"): bool
       edge: "/Applications/Microsoft Edge.app",
       vivaldi: "/Applications/Vivaldi.app",
     }
-    return spawnSync("test", ["-d", apps[target]]).status === 0
+    return captureShell("test", ["-d", apps[target]]).status === 0
   }
   // Edge / Vivaldi on Linux are out of scope in this revision (a follow-up).
   // Only chrome and brave have Linux install-detection.
@@ -59,7 +59,7 @@ function browserInstalled(target: "chrome" | "brave" | "edge" | "vivaldi"): bool
   const candidates = target === "chrome"
     ? ["google-chrome", "google-chrome-stable"]
     : ["brave-browser", "brave"]
-  return candidates.some(b => spawnSync("command", ["-v", b], { shell: true }).status === 0)
+  return candidates.some(b => captureShell("bash", ["-c", 'command -v "$1"', "interceptor-test-browser", b]).status === 0)
 }
 
 /**
@@ -69,11 +69,9 @@ function browserInstalled(target: "chrome" | "brave" | "edge" | "vivaldi"): bool
  * the filesystem or installs native-messaging manifests during tests.
  */
 function runInstallDryRun(args: string[]): { stdout: string; status: number; stderr: string } {
-  const proc = spawnSync("bash", [INSTALL_SCRIPT, "--dry-run", ...args], {
+  const proc = captureShell("bash", [INSTALL_SCRIPT, "--dry-run", ...args], {
     cwd: REPO_ROOT,
     env: { ...process.env, INSTALL_DRY_RUN: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf-8",
   })
   return {
     stdout: proc.stdout?.toString() ?? "",
@@ -165,10 +163,13 @@ describe("install platform routing — dry-run", () => {
     }
   })
 
-  test.skipIf(IS_DARWIN)("--full mode is rejected on non-Darwin platforms", () => {
-    const { stderr, status } = runInstallDryRun(["--full", "--chrome"])
-    expect(status).not.toBe(0)
-    expect(stderr).toContain("--full mode is macOS only")
+  test.skipIf(IS_DARWIN)("Linux --full plans the native provider and login-session startup", () => {
+    const { stdout, status } = runInstallDryRun(["--full", "--chrome"])
+    expect(status).toBe(0)
+    expect(stdout).toContain("DRY: install owned native provider")
+    expect(stdout).toContain("login-session startup entry")
+    expect(stdout).toContain("DRY-RUN complete (Linux full mode)")
+    expect(stdout).not.toContain("com.interceptor.bridge.plist")
   })
 })
 

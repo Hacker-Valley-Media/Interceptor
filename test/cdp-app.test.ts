@@ -12,7 +12,7 @@ import {
   pickPageTarget,
   redactHeaders,
 } from "../shared/cdp-app"
-import { existingRemoteDebuggingPortFallback } from "../daemon/cdp/manager"
+import { electronAppMatches, existingRemoteDebuggingPortFallback, relaunchPath } from "../daemon/cdp/manager"
 
 describe("parseJsonTargets", () => {
   test("normalizes and filters /json entries", () => {
@@ -143,5 +143,22 @@ describe("redactHeaders", () => {
 describe("jsonShape", () => {
   test("preserves keys, types scalars", () => {
     expect(jsonShape({ a: 1, b: "x", c: [{ d: true }] })).toEqual({ a: "<number>", b: "<string>", c: [{ d: "<boolean>" }] })
+  })
+})
+
+describe("Electron app selection and relaunch path", () => {
+  const proc = (pid: number, appName: string) => ({ pid, appName, command: `/apps/${appName}` })
+  test("a unique exact name wins over apps whose names contain it", () => {
+    const procs = [proc(1, "Notion"), proc(2, "Notion Calendar")]
+    expect(electronAppMatches(procs, "notion").map(p => p.pid)).toEqual([1])
+    expect(electronAppMatches(procs, "calendar").map(p => p.pid)).toEqual([2])
+    expect(electronAppMatches(procs, "not").length).toBe(2)
+    expect(electronAppMatches([proc(1, "Notion"), proc(3, "Notion")], "Notion").length).toBe(2)
+  })
+  test("an AppImage relaunches from its image file, not the mount that ends with the app", () => {
+    const target = { pid: 7, executable: "/tmp/.mount_OwnedX1/owned-app" }
+    expect(relaunchPath(target, "HOME=/h\0APPIMAGE=/opt/Owned.AppImage\0APPDIR=/tmp/.mount_OwnedX1\0")).toBe("/opt/Owned.AppImage")
+    expect(relaunchPath(target, "HOME=/h\0APPIMAGE=/opt/Owned.AppImage\0APPDIR=/tmp/.mount_Other\0")).toBe(target.executable)
+    expect(relaunchPath({ pid: 8, executable: "/opt/owned/owned-app" }, "HOME=/h\0")).toBe("/opt/owned/owned-app")
   })
 })

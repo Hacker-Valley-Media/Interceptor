@@ -33,6 +33,7 @@ final class MonitorInputBridge: @unchecked Sendable {
     private let transport: any AXTransport = LiveAXTransport()
     private var monitors: [Any] = []
     private var callback: EventCallback?
+    private var appFilter: ((NSRunningApplication?) -> Bool)?
     private var includeMouseMoved = false
     private var excludeKey = false
 
@@ -47,9 +48,10 @@ final class MonitorInputBridge: @unchecked Sendable {
     private var scrollLatest: [String: Any]?
     private var scrollFlushTimer: DispatchSourceTimer?
 
-    func setCallback(_ cb: @escaping EventCallback) {
+    func setCallback(_ cb: @escaping EventCallback, appFilter: ((NSRunningApplication?) -> Bool)? = nil) {
         lock.lock(); defer { lock.unlock() }
         callback = cb
+        self.appFilter = appFilter
     }
 
     func start(includeMouseMoved: Bool = false, excludeKey: Bool = false, scrollCoalesceMs: Int = 0) {
@@ -148,9 +150,11 @@ final class MonitorInputBridge: @unchecked Sendable {
     // MARK: - dispatch
 
     private func handle(_ event: NSEvent) {
-        guard let cb = (lock.withLock { self.callback }) else { return }
+        let (callback, filter, excludeKey) = lock.withLock { (self.callback, self.appFilter, self.excludeKey) }
+        guard let cb = callback, !(excludeKey && event.type == .keyDown) else { return }
 
         let frontmost = FrontmostResolver.frontmostApplication(transport: transport)
+        guard filter?(frontmost) ?? true else { return }
         var data: [String: Any] = [
             "tr": true,
             "app": frontmost?.localizedName ?? "",

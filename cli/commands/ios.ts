@@ -9,7 +9,7 @@
  * `interceptor ios` works in browser-only mode too.
  */
 
-import { sendCommand, type DaemonResponse, type DaemonResult } from "../transport"
+import { sendCommand, jsonFailure, type DaemonResponse, type DaemonResult } from "../transport"
 import { helpForCommand } from "../help"
 import { runIosWebCommand } from "./ios-web"
 import { runIosSvcCommand } from "./ios-svc"
@@ -165,11 +165,7 @@ async function send(action: Action, contextId?: string): Promise<DaemonResult> {
 
 function emit(result: DaemonResult, jsonMode: boolean): void {
   if (jsonMode) {
-    const errPayload =
-      result.data && typeof result.data === "object" && !Array.isArray(result.data)
-        ? { error: result.error, ...(result.data as Record<string, unknown>) }
-        : { error: result.error }
-    console.log(JSON.stringify(result.success ? (result.data ?? null) : errPayload))
+        console.log(JSON.stringify(result.success ? (result.data ?? null) : jsonFailure(result)))
     return
   }
   if (!result.success) {

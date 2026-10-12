@@ -1,7 +1,7 @@
-// PRD-66 Domain 1 — PDFKit. macOS 10.4+; full read/write/annotation surface.
+// PDFKit. macOS 10.4+; full read/write/annotation surface.
 // References: apple-developer-docs/PDFKit/{PDFDocument,PDFPage,PDFAnnotation,
 // PDFOutline,PDFSelection,PDFDocumentAttribute,PDFAccessPermissions}.md.
-// Dispatch invariant per PRD-63: read action["sub"], not command.
+// Dispatch invariant: read action["sub"], not command.
 
 import Foundation
 import AppKit
@@ -31,6 +31,11 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    // A missing file is target_gone and any other unreadable file unsupported_target, as on Windows and Linux.
+    private func openFailure(_ message: String, _ path: String) -> [String: Any] {
+        WireFormat.failure(FileManager.default.fileExists(atPath: (path as NSString).expandingTildeInPath) ? "unsupported_target" : "target_gone", message)
+    }
 
     private func loadDocument(_ path: String) -> PDFDocument? {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
@@ -68,12 +73,13 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
         if let dest = a.destination, let p = dest.page, let parent = p.document {
             d["destination"] = ["pageIndex": parent.index(for: p), "x": dest.point.x, "y": dest.point.y]
         }
-        // Markup-specific fields
-        d["markupType"] = String(describing: a.markupType)
+        // Markup-specific fields: PDFKit reports markupType 0 (highlight) on every annotation
+        if ["Highlight", "StrikeOut", "Underline", "Redact"].contains(a.type ?? "") { d["markupType"] = NativeNames.name(a.markupType.rawValue, NativeNames.markup) }
         d["color"] = colorString(a.color)
         if let bg = a.backgroundColor { d["backgroundColor"] = colorString(bg) }
         // Widget-specific fields
-        d["widgetFieldType"] = a.widgetFieldType.rawValue
+        let widget = a.type == "Widget"
+        if widget { d["widgetFieldType"] = [PDFAnnotationWidgetSubtype.button: "button", .choice: "choice", .signature: "signature", .text: "text"][a.widgetFieldType] ?? a.widgetFieldType.rawValue }
         if !(a.widgetStringValue?.isEmpty ?? true) { d["widgetStringValue"] = a.widgetStringValue }
         if let fn = a.fieldName { d["fieldName"] = fn }
         d["isReadOnly"] = a.isReadOnly
@@ -83,7 +89,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
         d["hasComb"] = a.hasComb
         if let choices = a.choices, !choices.isEmpty { d["choices"] = choices }
         if let values = a.values, !values.isEmpty { d["values"] = values }
-        d["isListChoice"] = a.isListChoice
+        d["isListChoice"] = widget && a.widgetFieldType == .choice && a.isListChoice
         return d
     }
 
@@ -99,7 +105,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func info(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.info: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.info: cannot open document at \(path)")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.info: cannot open document at \(path)", path)); return }
         var perms: [String] = []
         // PDFAccessPermissions is exposed as an OptionSet-shaped struct on
         // some SDKs and an enum on others. Use the enum-style equality check
@@ -142,7 +148,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func text(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.text: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.text: cannot open document at \(path)")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.text: cannot open document at \(path)", path)); return }
         let attributed = (action["attributed"] as? Bool) ?? false
 
         var pageIndices: [Int] = []
@@ -162,7 +168,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
             guard idx >= 0, idx < doc.pageCount, let page = doc.page(at: idx) else { continue }
             let s = page.string ?? ""
             totalChars += s.count
-            concatenated += s
+            concatenated += (concatenated.isEmpty && pages.isEmpty ? "" : "\n") + s
             var entry: [String: Any] = [
                 "page": idx + 1,
                 "characterCount": page.numberOfCharacters,
@@ -206,7 +212,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func outline(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.outline: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.outline: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.outline: cannot open document", path)); return }
         guard let root = doc.outlineRoot else { completion(WireFormat.success(["path": path, "outline": [Any]()])); return }
         let tree = walkOutline(root, doc: doc)
         completion(WireFormat.success(["path": path, "outline": tree]))
@@ -231,7 +237,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func annotations(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.annotations: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.annotations: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.annotations: cannot open document", path)); return }
         let onlyPage = action["page"] as? Int
         let typeFilter = action["annotation_type"] as? String
         var out: [[String: Any]] = []
@@ -248,7 +254,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func forms(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.forms: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.forms: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.forms: cannot open document", path)); return }
         var out: [[String: Any]] = []
         for i in 0..<doc.pageCount {
             guard let page = doc.page(at: i) else { continue }
@@ -264,7 +270,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
               let field = action["field"] as? String,
               let value = action["value"] as? String
         else { completion(WireFormat.error("pdf.forms_set: requires path, field, value")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.forms_set: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.forms_set: cannot open document", path)); return }
         var matched = false
         for i in 0..<doc.pageCount {
             guard let page = doc.page(at: i) else { continue }
@@ -288,7 +294,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func images(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.images: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.images: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.images: cannot open document", path)); return }
         var imageInventory: [[String: Any]] = []
         for i in 0..<doc.pageCount {
             guard let page = doc.page(at: i) else { continue }
@@ -310,7 +316,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
         guard let path = action["path"] as? String,
               let query = action["query"] as? String
         else { completion(WireFormat.error("pdf.find: requires path and query")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.find: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.find: cannot open document", path)); return }
         let opts: NSString.CompareOptions = (action["case_sensitive"] as? Bool) == true ? [] : .caseInsensitive
         let selections = doc.findString(query, withOptions: opts)
         var results: [[String: Any]] = []
@@ -329,7 +335,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func attributes(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.attributes: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.attributes: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.attributes: cannot open document", path)); return }
         var out: [String: Any] = [:]
         if let raw = doc.documentAttributes {
             for (k, v) in raw { out[String(describing: k)] = describe(v) }
@@ -339,7 +345,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
 
     private func permissions(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("pdf.permissions: missing path")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.permissions: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.permissions: cannot open document", path)); return }
         var perms: [String] = []
         // PDFAccessPermissions is exposed as an OptionSet-shaped struct on
         // some SDKs and an enum on others. Use the enum-style equality check
@@ -373,7 +379,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
         else { completion(WireFormat.error("pdf.annotate: requires path, --page, --rect")); return }
         let parts = rectStr.split(separator: ",").compactMap { Double($0) }
         guard parts.count == 4 else { completion(WireFormat.error("pdf.annotate: --rect must be x,y,w,h")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.annotate: cannot open document")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.annotate: cannot open document", path)); return }
         guard pageNum >= 1, pageNum <= doc.pageCount, let page = doc.page(at: pageNum - 1)
         else { completion(WireFormat.error("pdf.annotate: invalid page \(pageNum)")); return }
         let typeStr = (action["annotation_type"] as? String) ?? "Highlight"
@@ -394,7 +400,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
         guard let path = action["path"] as? String,
               let outPath = action["out"] as? String
         else { completion(WireFormat.error("pdf.strip: requires path and --out")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.strip: cannot open")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.strip: cannot open", path)); return }
         for i in 0..<doc.pageCount {
             guard let page = doc.page(at: i) else { continue }
             for a in page.annotations { page.removeAnnotation(a) }
@@ -410,7 +416,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
         let merged = PDFDocument()
         var pageCount = 0
         for p in paths {
-            guard let d = loadDocument(p) else { completion(WireFormat.error("pdf.merge: cannot open \(p)")); return }
+            guard let d = loadDocument(p) else { completion(openFailure("pdf.merge: cannot open \(p)", p)); return }
             for i in 0..<d.pageCount {
                 if let page = d.page(at: i) {
                     merged.insert(page, at: pageCount)
@@ -428,7 +434,7 @@ final class PdfDomain: DomainHandler, @unchecked Sendable {
               let pages = action["pages"] as? String,
               let outPath = action["out"] as? String
         else { completion(WireFormat.error("pdf.split: requires path, --pages, --out")); return }
-        guard let doc = loadDocument(path) else { completion(WireFormat.error("pdf.split: cannot open")); return }
+        guard let doc = loadDocument(path) else { completion(openFailure("pdf.split: cannot open", path)); return }
         let (lo, hi) = parseRange(pages, max: doc.pageCount)
         let out = PDFDocument()
         var idx = 0

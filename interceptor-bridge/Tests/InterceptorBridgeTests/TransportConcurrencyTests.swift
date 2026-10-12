@@ -1,11 +1,12 @@
-// — verification suite for the per-fd async-dispatch +
+// Verification suite for the per-fd async-dispatch +
 // per-fd write-serialization model in Transport.swift.
 //
-// These tests cover acceptance criteria 1, 2, and 5 from //   1. Two concurrent requests on the same fd both reach `router.route`
+// These tests cover:
+//   1. Two concurrent requests on the same fd both reach `router.route`
 //      before either completes.
 //   2. With one synthetic ~5s slow request in flight, an interleaved fast
 //      request still completes in <500 ms.
-//   5. 100 concurrent requests on one fd produce 100 cleanly-decoded
+//   3. 100 concurrent requests on one fd produce 100 cleanly-decoded
 //      responses (no interleaved frame bytes on the wire).
 //
 // Strategy: each test creates a `socketpair(AF_UNIX, SOCK_STREAM)`, hands
@@ -108,6 +109,22 @@ enum TestFrame {
 }
 
 final class TransportConcurrencyTests: XCTestCase {
+    func testSocketAddressPreservesExactUTF8PathAndRejectsTruncation() throws {
+        for path in ["/tmp/owned.sock", "/" + String(repeating: "x", count: 102), "/tmp/通知.sock"] {
+            var address = try Transport.socketAddress(path)
+            let actual = withUnsafePointer(to: &address.sun_path) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: 104) { String(cString: $0) }
+            }
+            XCTAssertEqual(actual, path)
+            XCTAssertEqual(address.sun_family, sa_family_t(AF_UNIX))
+        }
+        for path in ["", "/tmp/owned\u{0000}other", "/" + String(repeating: "x", count: 103), "/" + String(repeating: "通", count: 35)] {
+            XCTAssertThrowsError(try Transport.socketAddress(path)) { error in
+                XCTAssertEqual((error as NSError).code, 4)
+                XCTAssertTrue(error.localizedDescription.contains("UTF-8 bytes"))
+            }
+        }
+    }
     private var pair: (server: Int32, client: Int32) = (-1, -1)
     private var serverThread: Thread?
     private var router: Router!
@@ -180,6 +197,85 @@ final class TransportConcurrencyTests: XCTestCase {
         }
     }
 
+    func testDuplicateRequestDoesNotReachRouter() throws {
+        domain.arm("original", delay: 0)
+        domain.arm("duplicate", delay: 0)
+        for command in ["original", "duplicate"] {
+            let frame = TestFrame.encode(["id": "repeated", "action": ["type": "macos_test_\(command)"]])
+            _ = frame.withUnsafeBytes { Darwin.write(pair.client, $0.baseAddress!, frame.count) }
+        }
+        let replies = [TestFrame.readFrame(fd: pair.client), TestFrame.readFrame(fd: pair.client)]
+        XCTAssertEqual(replies.compactMap { ($0?["result"] as? [String: Any])?["success"] as? Bool }.sorted { !$0 && $1 }, [false, true])
+        let refused = replies.compactMap { $0?["result"] as? [String: Any] }.first { $0["success"] as? Bool == false }
+        XCTAssertEqual(refused?["code"] as? String, "invalid_request")
+        XCTAssertTrue((refused?["error"] as? String)?.contains("duplicate") == true)
+        XCTAssertNotNil(domain.receivedAt["original"])
+        XCTAssertNil(domain.receivedAt["duplicate"])
+    }
+
+    func testConnectionOutlivesRequestIdWindowAndStillRefusesRecentDuplicates() throws {
+        domain.arm("seq", delay: 0)
+        func write(_ id: String) {
+            let frame = TestFrame.encode(["id": id, "action": ["type": "macos_test_seq"]])
+            _ = frame.withUnsafeBytes { Darwin.write(pair.client, $0.baseAddress!, frame.count) }
+        }
+        func send(_ id: String) -> [String: Any]? {
+            write(id)
+            return TestFrame.readFrame(fd: pair.client, timeoutSeconds: 5)?["result"] as? [String: Any]
+        }
+        for start in stride(from: 0, through: Transport.requestIdWindow, by: 128) {
+            let batch = start..<min(start + 128, Transport.requestIdWindow + 1)
+            for i in batch { write("seq-\(i)") }
+            for _ in batch {
+                guard (TestFrame.readFrame(fd: pair.client, timeoutSeconds: 5)?["result"] as? [String: Any])?["success"] as? Bool == true else {
+                    return XCTFail("a request near \(start) was refused or the connection closed")
+                }
+            }
+        }
+        let duplicate = send("seq-\(Transport.requestIdWindow)")
+        XCTAssertEqual(duplicate?["success"] as? Bool, false)
+        XCTAssertTrue((duplicate?["error"] as? String)?.contains("duplicate") == true)
+        XCTAssertEqual(send("seq-0")?["success"] as? Bool, true, "the oldest id should have left the window")
+    }
+
+    func testNeutralEnvelopeIsValidatedBeforeDispatchWithoutChangingLegacyRequests() throws {
+        router.register("desktop", handler: domain)
+        domain.arm("desktop", delay: 0)
+        let invalid: [([String: Any], String)] = [
+            (["id": "wrong-version", "protocolVersion": 99], "version_mismatch"),
+            (["id": "fraction-version", "protocolVersion": 1.5], "version_mismatch"),
+            (["id": "string-version", "protocolVersion": "1"], "invalid_request"),
+            (["id": "bool-version", "protocolVersion": true], "invalid_request"),
+            (["id": "null-version", "protocolVersion": NSNull()], "invalid_request"),
+            (["id": "null-token", "token": NSNull()], "invalid_request"),
+            (["id": "array-token", "token": []], "invalid_request"),
+            (["protocolVersion": 1], "invalid_request"),
+            (["id": 42, "protocolVersion": 1], "invalid_request"),
+        ]
+        for (fields, code) in invalid {
+            var request = fields; request["action"] = ["type": "macos_desktop"]
+            let frame = TestFrame.encode(request)
+            _ = frame.withUnsafeBytes { Darwin.write(pair.client, $0.baseAddress!, frame.count) }
+            let reply = TestFrame.readFrame(fd: pair.client)
+            let result = reply?["result"] as? [String: Any]
+            XCTAssertEqual(result?["success"] as? Bool, false)
+            XCTAssertEqual(result?["code"] as? String, code)
+        }
+        XCTAssertNil(domain.receivedAt["desktop"], "invalid neutral envelopes reached the handler")
+        for request: [String: Any] in [
+            ["id": "valid", "protocolVersion": 1, "token": "opaque", "action": ["type": "macos_desktop"]],
+            ["id": "omitted-version", "action": ["type": "macos_desktop"]],
+            ["protocolVersion": 99, "action": ["type": "macos_test_legacy"]],
+        ] {
+            let frame = TestFrame.encode(request)
+            _ = frame.withUnsafeBytes { Darwin.write(pair.client, $0.baseAddress!, frame.count) }
+            let reply = TestFrame.readFrame(fd: pair.client)
+            XCTAssertEqual((reply?["result"] as? [String: Any])?["success"] as? Bool, true)
+            XCTAssertFalse((reply?["id"] as? String ?? "").isEmpty)
+        }
+        XCTAssertNotNil(domain.receivedAt["legacy"])
+    }
+
     func testFastRequestNotStarvedBySlowRequest() throws {
         domain.arm("slow", delay: 5.0)
         domain.arm("fast", delay: 0.05)
@@ -201,6 +297,23 @@ final class TransportConcurrencyTests: XCTestCase {
             "expected fast response first, got \(firstResp["id"] ?? "nil")")
         XCTAssertLessThan(firstResponseElapsed, 0.5,
             "fast request took \(firstResponseElapsed)s — should be <500ms")
+    }
+
+    func testBackpressuredResponseIsWrittenInFull() throws {
+        var capacity: Int32 = 4096
+        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
+        XCTAssertEqual(setsockopt(pair.server, SOL_SOCKET, SO_SNDBUF, &capacity, socklen_t(MemoryLayout.size(ofValue: capacity))), 0)
+        XCTAssertEqual(setsockopt(pair.server, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))), 0)
+        let body = String(repeating: "x", count: 524_288)
+        domain.arm("large", delay: 0, payload: ["body": body])
+        let request = TestFrame.encode(["id": "large", "action": ["type": "macos_test_large"]])
+        _ = request.withUnsafeBytes { Darwin.write(pair.client, $0.baseAddress!, request.count) }
+        Thread.sleep(forTimeInterval: 0.3)
+        let response = TestFrame.readFrame(fd: pair.client, timeoutSeconds: 3)
+        XCTAssertEqual(response?["id"] as? String, "large")
+        let data = (response?["result"] as? [String: Any])?["data"] as? [String: Any]
+        XCTAssertEqual((data?["body"] as? String)?.count, body.count)
+        XCTAssertTrue(data?["body"] as? String == body, "large frame body was truncated or corrupted")
     }
 
     func testManyConcurrentRequestsAllDecodeCleanly() throws {
@@ -230,6 +343,91 @@ final class TransportConcurrencyTests: XCTestCase {
             XCTAssertTrue(seenIds.insert(id).inserted, "duplicate response id \(id)")
         }
         XCTAssertEqual(seenIds.count, n)
+    }
+
+    func testDisconnectedReaderCannotSignalTheBridge() throws {
+        domain.arm("disconnect", delay: 0.1, payload: ["body": String(repeating: "x", count: 524_288)])
+        let request = TestFrame.encode(["id": "disconnect", "action": ["type": "macos_test_disconnect"]])
+        _ = request.withUnsafeBytes { Darwin.write(pair.client, $0.baseAddress!, request.count) }
+        let configured = Date().addingTimeInterval(1)
+        var noSignal: Int32 = 0
+        var size = socklen_t(MemoryLayout.size(ofValue: noSignal))
+        repeat {
+            XCTAssertEqual(getsockopt(pair.server, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, &size), 0)
+            if noSignal == 1 { break }
+            Thread.sleep(forTimeInterval: 0.01)
+        } while Date() < configured
+        XCTAssertEqual(noSignal, 1)
+        XCTAssertEqual(Darwin.shutdown(pair.client, SHUT_RDWR), 0)
+        let deadline = Date().addingTimeInterval(3)
+        while serverThread?.isFinished == false && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        XCTAssertTrue(serverThread?.isFinished == true, "disconnected client retained the transport thread")
+    }
+
+    func testUnreadResponseEndsConnectionAtWriteDeadline() throws {
+        var capacity: Int32 = 4096
+        XCTAssertEqual(setsockopt(pair.server, SOL_SOCKET, SO_SNDBUF, &capacity, socklen_t(MemoryLayout.size(ofValue: capacity))), 0)
+        domain.arm("blocked", delay: 0, payload: ["body": String(repeating: "x", count: 524_288)])
+        let request = TestFrame.encode(["id": "blocked", "action": ["type": "macos_test_blocked"]])
+        let start = Date()
+        _ = request.withUnsafeBytes { Darwin.write(pair.client, $0.baseAddress!, request.count) }
+        let deadline = start.addingTimeInterval(18)
+        while serverThread?.isFinished == false && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        XCTAssertTrue(serverThread?.isFinished == true, "unread response exceeded its bounded write deadline")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 14.5)
+    }
+
+    func testNeutralTypesPreserveLegacyRoutingAndAccessibilityDenial() throws {
+        let trusted = Router(axTrustCheck: { true })
+        trusted.register("test", handler: domain)
+        trusted.register("desktop", handler: domain)
+        domain.arm("alias", delay: 0)
+        domain.arm("desktop", delay: 0)
+        for type in ["desktop_test_alias", "macos_test_alias", "desktop_hello", "desktop_capabilities"] {
+            let replied = expectation(description: type)
+            trusted.route(action: ["type": type]) { result in
+                XCTAssertEqual(result["success"] as? Bool, true)
+                let command = (result["data"] as? [String: Any])?["command"] as? String
+                XCTAssertEqual(command, type.hasSuffix("alias") ? "alias" : "desktop")
+                replied.fulfill()
+            }
+            wait(for: [replied], timeout: 1)
+        }
+        let untrusted = Router(axTrustCheck: { false })
+        for key in ["tree", "find", "inspect", "value", "action", "focused", "windows", "resize", "move", "click", "type", "keys", "scroll", "drag", "menu", "text", "bginput", "authdialog"] {
+            untrusted.register(key, handler: domain)
+            let refused = expectation(description: key)
+            var action: [String: Any] = ["type": "desktop_\(key)"]
+            if ["inspect", "value", "action", "click", "type", "text", "resize", "move"].contains(key) { action["ref"] = "e1" }
+            if key == "resize" { action["width"] = 640; action["height"] = 480 }
+            if key == "move" { action["x"] = 0; action["y"] = 0 }
+            if key == "type" { action["text"] = "permission gate fixture" }
+            if key == "find" { action["query"] = "permission gate fixture" }
+            if key == "keys" { action["keys"] = "cmd+a" }
+            if key == "scroll" { action["direction"] = "down"; action["amount"] = 100 }
+            if key == "drag" { action["from"] = "e1"; action["to"] = "e2" }
+            untrusted.route(action: action) { result in
+                XCTAssertEqual(result["success"] as? Bool, false)
+                let neutral = DesktopAccessibilityShape.operations.contains("desktop_\(key)")
+                XCTAssertEqual(result["code"] as? String, neutral ? "permission_required" : "accessibility_unusable")
+                if neutral {
+                    XCTAssertEqual((result["details"] as? [String: Any])?["nativeCode"] as? String, "accessibility_unusable")
+                    XCTAssertEqual(((result["details"] as? [String: Any])?["axError"] as? [String: Any])?["code"] as? Int, -25211)
+                }
+                refused.fulfill()
+            }
+            wait(for: [refused], timeout: 1)
+            XCTAssertNil(domain.receivedAt[key])
+        }
+        for type in ["desktop_test_alias\n", "desktop_", "desktop_🙂"] {
+            let refused = expectation(description: type)
+            trusted.route(action: ["type": type]) { result in
+                XCTAssertEqual(result["success"] as? Bool, false)
+                XCTAssertEqual(result["code"] as? String, "invalid_request")
+                refused.fulfill()
+            }
+            wait(for: [refused], timeout: 1)
+        }
     }
 }
 

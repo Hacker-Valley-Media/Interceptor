@@ -9,11 +9,11 @@ final class IntelligenceDomain: DomainHandler, @unchecked Sendable {
     private var sessionHistory: [[String: String]] = []
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        // PRD-65 Spec 1 / PRD-64 Spec 1: IntelligenceDomain previously
+        // IntelligenceDomain previously
         // switched on `command`, which the Router collapses to "ai" for
         // two-segment action types. The CLI parser passes the verb in
         // action["sub"], matching every peer domain (Speech, Sound, Vision,
-        // Capture, NLP after PRD-63). Same dispatch shape now reaches
+        // Capture, NLP). Same dispatch shape now reaches
         // checkStatus / runPrompt / handleSession instead of falling through
         // to notImplemented.
         let sub = action["sub"] as? String ?? command
@@ -57,7 +57,7 @@ final class IntelligenceDomain: DomainHandler, @unchecked Sendable {
             do {
                 let session = LanguageModelSession()
                 let response = try await session.respond(to: prompt)
-                completion(WireFormat.success(String(describing: response)))
+                completion(WireFormat.success(response.content))
             } catch {
                 completion(WireFormat.error("FoundationModels error: \(error.localizedDescription)"))
             }
@@ -95,7 +95,7 @@ final class IntelligenceDomain: DomainHandler, @unchecked Sendable {
                 Task {
                     do {
                         let response = try await session.respond(to: message)
-                        let text = String(describing: response)
+                        let text = response.content
                         self.sessionHistory.append(["role": "assistant", "content": text])
                         completion(WireFormat.success(["response": text]))
                     } catch {

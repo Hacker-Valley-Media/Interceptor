@@ -10,7 +10,7 @@ import {
   deriveSessionGroupLabel,
   resolveSessionId,
 } from "../cli/parse"
-import { setGlobalGroup, withGroup } from "../cli/transport"
+import { setGlobalGroup, setGlobalFrame, withGroup } from "../cli/transport"
 import { buildFilteredArgs } from "../cli/global-flags"
 import { managedTabGateError, resolveGroupDispatchScope } from "../extension/src/background/message-dispatch"
 
@@ -188,6 +188,28 @@ describe("tab groups: CLI global flags", () => {
       .toEqual({ label: expected, soft: true })
     expect(resolveGroupScope(["type", "e1", "--", "--group", "literal"], env))
       .toEqual({ label: expected, soft: true })
+  })
+
+  test("native Contacts IDs never enter browser label validation or session injection", () => {
+    const env = { INTERCEPTOR_SESSION_ID: "session" }
+    for (const surface of ["macos", "desktop"]) {
+      expect(resolveGroupScope([surface, "contacts", "list", "--group", "native:id-longer-than-a-browser-group-label"], env))
+        .toEqual({ label: deriveSessionGroupLabel("session"), soft: true })
+      expect(resolveGroupScope(["--group", "browser-lane", surface, "contacts", "list", "--group", "native:id"], env))
+        .toEqual({ label: "browser-lane", soft: false })
+      expect(resolveGroupScope([surface, "contacts", "list", "--shared-group", "--group", "native:id"], env))
+        .toEqual({ label: undefined, soft: false })
+    }
+    setGlobalGroup("browser-lane", "blue", true)
+    setGlobalFrame(7)
+    try {
+      for (const type of ["desktop_contacts", "macos_contacts", "desktop_share", "macos_tree", "ios_tree"]) {
+        expect(withGroup({ type, sub: "status" })).toEqual({ type, sub: "status" })
+      }
+      expect(withGroup({ type: "desktop_contacts", sub: "list", group: "native:id" })).toEqual({ type: "desktop_contacts", sub: "list", group: "native:id" })
+      // Browser trusted input still needs its managed tab and frame boundary.
+      expect(withGroup({ type: "os_click" })).toEqual({ type: "os_click", frameId: 7, group: "browser-lane", groupSoft: true, groupColor: "blue" })
+    } finally { setGlobalGroup(undefined); setGlobalFrame(undefined) }
   })
 
   test("wire shape: an automatic label carries groupSoft; explicit and MCP labels do not", () => {

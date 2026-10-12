@@ -40,8 +40,8 @@
   // extension/src/popup.ts
   var exports_popup = {};
   __export(exports_popup, {
-    renderConnectionHealth: () => renderConnectionHealth,
-    terminalConnectionSnapshot: () => terminalConnectionSnapshot
+    terminalConnectionSnapshot: () => terminalConnectionSnapshot,
+    renderConnectionHealth: () => renderConnectionHealth
   });
   var DOWNLOAD_URL = "https://github.com/Hacker-Valley-Media/Interceptor/releases/latest";
   var transportName = (transport) => ({
