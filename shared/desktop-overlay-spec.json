@@ -1,0 +1,284 @@
+{
+  "version": 1,
+  "limits": {
+    "requestBytes": 262144,
+    "resultBytes": 131072,
+    "entities": 128,
+    "operations": 4096,
+    "nodes": 2048,
+    "portableParticles": 1888,
+    "effects": 65536,
+    "overlays": 16,
+    "pixels": 67108864
+  },
+  "selectors": {
+    "start": [
+      "level",
+      "interactive",
+      "single_space",
+      "no_fullscreen_aux",
+      "timeout_seconds",
+      "scene",
+      "scene_script",
+      "scene_script_file",
+      "particles",
+      "emojis",
+      "density",
+      "direction",
+      "lifetime",
+      "velocity",
+      "size_scale",
+      "html_b64",
+      "url",
+      "source",
+      "display_id",
+      "visible",
+      "rect",
+      "anchor",
+      "width",
+      "height"
+    ],
+    "stop": [],
+    "list": [],
+    "status": [],
+    "verbs": [],
+    "eval": [
+      "js",
+      "javascript",
+      "timeout_seconds"
+    ],
+    "ctl": [
+      "verb",
+      "args"
+    ]
+  },
+  "controls": {
+    "particles": {
+      "set-density": [
+        "value"
+      ],
+      "set-direction": [
+        "value"
+      ],
+      "set-emojis": [
+        "value"
+      ],
+      "set-lifetime": [
+        "value"
+      ],
+      "set-velocity": [
+        "value"
+      ],
+      "set-scale": [
+        "value"
+      ],
+      "burst": [
+        "count"
+      ],
+      "pause": [],
+      "resume": []
+    },
+    "scene": {
+      "say": [
+        "text"
+      ],
+      "round": [
+        "n",
+        "text"
+      ],
+      "punch": [
+        "who",
+        "emoji"
+      ],
+      "breathe-fire": [
+        "who",
+        "emoji"
+      ],
+      "throw": [
+        "who",
+        "emoji"
+      ],
+      "taunt": [
+        "who"
+      ],
+      "roar": [
+        "who",
+        "text"
+      ],
+      "bow": [
+        "who"
+      ],
+      "jump": [
+        "who",
+        "height"
+      ],
+      "knockout": [
+        "who"
+      ],
+      "tint": [
+        "who",
+        "color",
+        "amount"
+      ],
+      "reset": [],
+      "pause": [],
+      "resume": []
+    },
+    "scene-script": {
+      "append-ops": [
+        "ops",
+        "relative"
+      ],
+      "append-script": [
+        "json"
+      ],
+      "say": [
+        "text"
+      ],
+      "reset": [],
+      "pause": [],
+      "resume": [],
+      "clear-entities": [],
+      "spawn": [
+        "entity"
+      ],
+      "despawn": [
+        "id"
+      ],
+      "face-track-start": [
+        "fps"
+      ],
+      "face-track-stop": []
+    }
+  },
+  "ops": {
+    "idle-bob": [
+      "target",
+      "amplitude",
+      "duration"
+    ],
+    "move-to": [
+      "target",
+      "x",
+      "y",
+      "duration",
+      "easing"
+    ],
+    "move-by": [
+      "target",
+      "dx",
+      "dy",
+      "duration",
+      "easing"
+    ],
+    "rotate-to": [
+      "target",
+      "angle",
+      "duration"
+    ],
+    "rotate-by": [
+      "target",
+      "angle",
+      "duration"
+    ],
+    "scale-to": [
+      "target",
+      "scale",
+      "duration"
+    ],
+    "fade-to": [
+      "target",
+      "alpha",
+      "duration"
+    ],
+    "tint": [
+      "target",
+      "color",
+      "amount"
+    ],
+    "set-facing": [
+      "target",
+      "dir"
+    ],
+    "throw": [
+      "from",
+      "to",
+      "fromX",
+      "fromY",
+      "toX",
+      "toY",
+      "emoji",
+      "hitColor"
+    ],
+    "impact": [
+      "x",
+      "y",
+      "text"
+    ],
+    "burst": [
+      "x",
+      "y",
+      "emojis",
+      "count",
+      "spread",
+      "lifetime"
+    ],
+    "say": [
+      "text"
+    ],
+    "text": [
+      "text",
+      "x",
+      "y",
+      "fontSize",
+      "color",
+      "duration"
+    ],
+    "label": [
+      "id",
+      "text",
+      "x",
+      "y",
+      "fontSize",
+      "color",
+      "font"
+    ],
+    "rect": [
+      "id",
+      "x",
+      "y",
+      "width",
+      "height",
+      "color",
+      "lineWidth",
+      "cornerRadius"
+    ],
+    "clear-shapes": [],
+    "shake": [
+      "target",
+      "magnitude",
+      "duration"
+    ],
+    "knockout": [
+      "target"
+    ],
+    "roar": [
+      "target",
+      "text"
+    ],
+    "bow": [
+      "target"
+    ],
+    "jump": [
+      "target",
+      "height"
+    ],
+    "spawn": [
+      "entity"
+    ],
+    "despawn": [
+      "target"
+    ],
+    "wait": []
+  }
+}

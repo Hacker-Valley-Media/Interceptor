@@ -43,7 +43,7 @@ describe("daemon outbound transport routing", () => {
     expect(validateContextRouting({
       connectedContexts: [],
       nativeRelayAvailable: false,
-    })).toEqual({ ok: false, error: "no extensions connected" })
+    })).toEqual({ ok: false, code: "target_gone", error: "no extensions connected" })
   })
 
   test("requires explicit context when multiple websocket contexts are connected", () => {
@@ -52,6 +52,7 @@ describe("daemon outbound transport routing", () => {
       nativeRelayAvailable: true,
     })).toEqual({
       ok: false,
+      code: "target_ambiguous",
       error: "multiple extensions connected, use --context <id> (connected: chrome-main, brave-work)",
     })
   })
@@ -63,7 +64,17 @@ describe("daemon outbound transport routing", () => {
       nativeRelayAvailable: true,
     })).toEqual({
       ok: false,
+      code: "target_gone",
       error: "context 'missing' not found (connected: chrome-main)",
     })
+  })
+})
+
+describe("--json failure line", () => {
+  test("always carries success:false and a code; a known code and data fields survive", async () => {
+    const { jsonFailure } = await import("../cli/transport")
+    expect(jsonFailure({ success: false, error: "cdp context 'x' not found" })).toEqual({ success: false, code: "provider_failed", error: "cdp context 'x' not found" })
+    expect(jsonFailure({ success: false, code: "target_gone", error: "gone", data: { hint: "h" } })).toEqual({ success: false, code: "target_gone", error: "gone", hint: "h" })
+    expect(jsonFailure({ success: false, error: "e", data: { code: "not_installed" } }).code).toBe("not_installed")
   })
 })

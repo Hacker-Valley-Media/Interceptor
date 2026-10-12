@@ -1,11 +1,7 @@
 import XCTest
 @testable import interceptor_bridge
 
-// PRD-65 Spec 10 / PRD-64 Spec 2 regression. SensitiveDomain.handle
-// previously switched on `command` ("sensitive") not action["sub"], so
-// `sensitive check` and `sensitive monitor *` fell through to
-// notImplemented despite the SCSensitivityAnalyzer implementation
-// already being correct.
+// Requests must reach strict validation before native policy/capture APIs.
 
 private final class SensitiveResultHolder: @unchecked Sendable {
     private let lock = NSLock()
@@ -37,14 +33,29 @@ final class SensitiveDispatchTests: XCTestCase {
     }
 
     func testCheckIsRoutedFromSub() {
-        let r = dispatch(sub: "check")
+        let r = dispatch(sub: "check", extra: ["imagePath": "relative"])
         XCTAssertFalse(isNotImplemented(r), "check sub must reach checkContent")
-        let data = r["data"] as? [String: Any]
-        XCTAssertNotNil(data?["policyEnabled"], "checkContent must surface analyzer policy state")
+        XCTAssertEqual(r["success"] as? Bool, false)
+        XCTAssertEqual(r["code"] as? String, "invalid_request")
     }
 
     func testMonitorStatusIsRoutedFromSub() {
         let r = dispatch(sub: "monitor", extra: ["op": "status"])
         XCTAssertFalse(isNotImplemented(r), "monitor sub must reach handleMonitor")
+        let data = r["data"] as? [String: Any]
+        XCTAssertEqual(data?["monitoring"] as? Bool, false)
+        XCTAssertEqual(data?["checks"] as? Int, 0)
+        XCTAssertEqual(data?["cleanupPending"] as? Bool, false)
+        XCTAssertTrue(data?["latest"] is NSNull)
+        XCTAssertTrue(data?["lastError"] is NSNull)
+    }
+
+    func testMonitorRejectsMissingSourceAndFieldsBeforeNativePolicy() {
+        let actions: [[String: Any]] = [["op": "start"], ["op": "stop", "app": "Any app"], ["op": "status", "imagePath": "/fixture.png"], ["op": "unknown"], ["unknown": true]]
+        for extra in actions {
+            let r = dispatch(sub: "monitor", extra: extra)
+            XCTAssertEqual(r["success"] as? Bool, false)
+            XCTAssertEqual(r["code"] as? String, "invalid_request")
+        }
     }
 }

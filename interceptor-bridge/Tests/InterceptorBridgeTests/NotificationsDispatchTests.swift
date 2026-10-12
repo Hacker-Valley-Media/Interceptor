@@ -35,14 +35,64 @@ final class NotificationsDispatchTests: XCTestCase {
     }
 
     func testTailIsRoutedFromSub() {
-        let r = dispatch(sub: "tail")
+        let r = dispatch(sub: "tail", extra: ["name": "com.interceptor.fixture.dispatch"])
         XCTAssertFalse(isNotImplemented(r), "tail sub must reach the tail handler")
         XCTAssertEqual(r["success"] as? Bool, true)
+    }
+
+    func testUnfilteredTailDoesNotClaimCapture() {
+        let result = dispatch(sub: "tail")
+        XCTAssertEqual(result["success"] as? Bool, false)
+        XCTAssertEqual(result["code"] as? String, "unsupported_operation")
+    }
+
+    func testTailRejectsUnsafeNamesBeforeObservation() {
+        for name in ["nul\0name", String(repeating: "x", count: 513)] {
+            let result = dispatch(sub: "tail", extra: ["name": name])
+            XCTAssertEqual(result["success"] as? Bool, false)
+            XCTAssertEqual(result["code"] as? String, "invalid_request")
+        }
+    }
+
+    func testNamedTailBoundAndOwnedUnsubscription() {
+        let domain = NotificationsDomain()
+        func run(_ sub: String, _ name: String) -> [String: Any] {
+            let result = NotificationsResultHolder()
+            domain.handle("notifications", action: ["sub": sub, "name": name]) { result.set($0) }
+            return result.value
+        }
+        for index in 0..<32 { XCTAssertEqual(run("tail", "com.interceptor.fixture.bound.\(index)")["success"] as? Bool, true) }
+        XCTAssertEqual(run("tail", "com.interceptor.fixture.bound.0")["success"] as? Bool, true)
+        XCTAssertEqual(run("tail", "com.interceptor.fixture.bound.overflow")["code"] as? String, "invalid_request")
+        XCTAssertEqual((run("untail", "com.interceptor.fixture.bound.0")["data"] as? [String: Any])?["removed"] as? Bool, true)
+        XCTAssertEqual((run("untail", "com.interceptor.fixture.bound.0")["data"] as? [String: Any])?["removed"] as? Bool, false)
+        XCTAssertEqual(run("tail", "com.interceptor.fixture.bound.overflow")["success"] as? Bool, true)
     }
 
     func testLogIsRoutedFromSub() {
         let r = dispatch(sub: "log", extra: ["limit": 5])
         XCTAssertFalse(isNotImplemented(r), "log sub must reach the log handler")
+    }
+
+    func testLogRejectsUnsafeLimitsWithoutTrapping() {
+        for limit in [-1, 1001, Int.max] {
+            let result = dispatch(sub: "log", extra: ["limit": limit])
+            XCTAssertEqual(result["success"] as? Bool, false)
+            XCTAssertTrue((result["error"] as? String ?? "").contains("0...1000"))
+        }
+        let zero = dispatch(sub: "log", extra: ["limit": 0])
+        XCTAssertEqual(zero["success"] as? Bool, true)
+        XCTAssertEqual((zero["data"] as? [[String: Any]])?.count, 0)
+    }
+
+    func testRepeatingIntervalsRejectNativeExceptionBeforeBundleGate() {
+        for seconds in [1, 59] {
+            let result = dispatch(sub: "schedule-after", extra: ["seconds": seconds, "repeats": true])
+            XCTAssertEqual(result["success"] as? Bool, false)
+            XCTAssertTrue((result["error"] as? String ?? "").contains("at least 60 seconds"))
+        }
+        let boundary = dispatch(sub: "schedule-after", extra: ["seconds": 60, "repeats": true])
+        XCTAssertFalse((boundary["error"] as? String ?? "").contains("at least 60 seconds"))
     }
 
     func testUnknownSubReturnsNotImplementedWithSubString() {
@@ -51,7 +101,7 @@ final class NotificationsDispatchTests: XCTestCase {
         XCTAssertTrue(err.contains("unknownop"), "Error should reference the unknown sub")
     }
 
-    // PRD-66 — UNUserNotificationCenter dispatch tests.
+    // UNUserNotificationCenter dispatch tests.
     //
     // The xctest runner has no .app bundle, so UNUserNotificationCenter.current()
     // raises NSInternalInconsistencyException. Production code runs inside the

@@ -1,4 +1,4 @@
-// PRD-66 Domain 8 — AppIntents declarations (build-time, ship in the bundle).
+// AppIntents declarations (build-time, ship in the bundle).
 // Every intent below is discoverable by Spotlight, Siri, and the Shortcuts.app
 // once the .app bundle is installed and registered. References:
 // apple-developer-docs/AppIntents/{AppIntent,AppEntity,AppEnum,EntityQuery,
@@ -12,7 +12,7 @@ import Foundation
 #if canImport(AppIntents)
 import AppIntents
 
-// MARK: - AppEnum types (PRD-66 §Domain 8c)
+// MARK: - AppEnum types
 
 @available(macOS 13, *)
 public enum PriorityEnum: String, AppEnum {
@@ -82,7 +82,7 @@ fileprivate enum InterceptorIntentBridge {
     }
 }
 
-// MARK: - AppEntity types (PRD-66 §Domain 8b)
+// MARK: - AppEntity types
 
 @available(macOS 13, *)
 public struct InstalledAppEntity: AppEntity {
@@ -99,7 +99,7 @@ public struct InstalledAppEntityQuery: EntityQuery {
     public init() {}
     public func entities(for identifiers: [InstalledAppEntity.ID]) async throws -> [InstalledAppEntity] {
         let resp = await InterceptorIntentBridge.dispatch(["type": "macos_apps", "sub": "list"])
-        guard let data = resp["data"] as? [String: Any], let apps = data["apps"] as? [[String: Any]] else { return [] }
+        guard let apps = resp["data"] as? [[String: Any]] else { return [] }
         return apps.compactMap { dict in
             guard let bid = dict["bundleId"] as? String, identifiers.contains(bid) else { return nil }
             return InstalledAppEntity(id: bid, name: (dict["name"] as? String) ?? bid)
@@ -107,7 +107,7 @@ public struct InstalledAppEntityQuery: EntityQuery {
     }
     public func suggestedEntities() async throws -> [InstalledAppEntity] {
         let resp = await InterceptorIntentBridge.dispatch(["type": "macos_apps", "sub": "list"])
-        guard let data = resp["data"] as? [String: Any], let apps = data["apps"] as? [[String: Any]] else { return [] }
+        guard let apps = resp["data"] as? [[String: Any]] else { return [] }
         return apps.prefix(20).compactMap { dict in
             guard let bid = dict["bundleId"] as? String else { return nil }
             return InstalledAppEntity(id: bid, name: (dict["name"] as? String) ?? bid)
@@ -302,7 +302,7 @@ public struct LocaleEntityQuery: EntityQuery {
     }
 }
 
-// MARK: - AppIntent types (PRD-66 §Domain 8a — 23 intents)
+// MARK: - AppIntent types (23 intents)
 
 @available(macOS 13, *)
 public struct ActivateAppIntent: AppIntent {
@@ -643,7 +643,7 @@ public struct GenerateThumbnailIntent: AppIntent {
     }
 }
 
-// MARK: - AppShortcutsProvider (PRD-66 §Domain 8a)
+// MARK: - AppShortcutsProvider
 
 @available(macOS 13, *)
 public struct InterceptorAppShortcuts: AppShortcutsProvider {

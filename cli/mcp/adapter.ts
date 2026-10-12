@@ -1,3 +1,5 @@
+import { captureSubprocess } from "../../daemon/subprocess"
+
 /**
  * cli/mcp/adapter.ts — the subprocess seam.
  *
@@ -27,35 +29,8 @@ export type RunResult = { stdout: string; stderr: string; code: number }
 /** Run `interceptor <args>` and capture stdout/stderr/exit code. Never throws. */
 export async function runInterceptor(args: string[], opts: { timeoutMs?: number } = {}): Promise<RunResult> {
   const cmd = [...selfPrefix(), ...args]
-  let proc: ReturnType<typeof Bun.spawn>
-  try {
-    // INTERCEPTOR_MCP marks the call as model-driven so the CLI can refuse
-    // human-only verbs (issue #244: `macos secret reveal`).
-    proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env, INTERCEPTOR_MCP: "1" } })
-  } catch (err) {
-    return { stdout: "", stderr: `failed to spawn interceptor: ${(err as Error).message}`, code: 127 }
-  }
-
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let timedOut = false
-  if (opts.timeoutMs && opts.timeoutMs > 0) {
-    timer = setTimeout(() => { timedOut = true; try { proc.kill() } catch {} }, opts.timeoutMs)
-  }
-  try {
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout as ReadableStream).text(),
-      new Response(proc.stderr as ReadableStream).text(),
-    ])
-    const code = await proc.exited
-    if (timer) clearTimeout(timer)
-    if (timedOut) {
-      return { stdout, stderr: stderr + `\n[interceptor-mcp] killed after ${opts.timeoutMs}ms`, code: 124 }
-    }
-    return { stdout, stderr, code }
-  } catch (err) {
-    if (timer) clearTimeout(timer)
-    return { stdout: "", stderr: `interceptor run error: ${(err as Error).message}`, code: 1 }
-  }
+  // Preserve the model-driven marker, public result fields and error wording.
+  return captureSubprocess(cmd, { ...opts, name: "interceptor", timeoutLabel: "interceptor-mcp", env: { ...process.env, INTERCEPTOR_MCP: "1" } })
 }
 
 /**
@@ -74,11 +49,12 @@ export function withGlobalFlags(
   opts: { group?: string; context?: string; tab?: number; device?: string; session?: string },
 ): string[] {
   const out = [...args]
+  const end = out.indexOf("--"), literalArgs = end < 0 ? [] : out.splice(end)
   const has = (f: string) => out.includes(f)
   if (opts.group && !has("--group")) out.push("--group", opts.group)
   if (opts.context && !has("--context")) out.push("--context", opts.context)
   if (opts.tab !== undefined && !has("--tab")) out.push("--tab", String(opts.tab))
   if (opts.device && !has("--on") && !has("--context")) out.push("--on", opts.device)
   if (opts.session && !has("--session")) out.push("--session", opts.session)
-  return out
+  return [...out, ...literalArgs]
 }

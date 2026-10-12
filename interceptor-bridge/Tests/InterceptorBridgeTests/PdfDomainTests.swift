@@ -1,4 +1,4 @@
-// PRD-66 — PdfDomain unit tests. Covers dispatch invariant + each verb's
+// PdfDomain unit tests. Covers dispatch invariant + each verb's
 // error path and a roundtrip on a synthesized PDF.
 
 import XCTest
@@ -30,7 +30,7 @@ final class PdfDomainTests: XCTestCase {
                 .font: NSFont.systemFont(ofSize: 24),
                 .foregroundColor: NSColor.black,
             ]
-            ("Page \(i) — interceptor-bridge PRD-66 fixture" as NSString)
+            ("Page \(i) — interceptor-bridge fixture" as NSString)
                 .draw(at: NSPoint(x: 50, y: 700), withAttributes: attrs)
             img.unlockFocus()
             if let page = PDFPage(image: img) {
@@ -38,7 +38,7 @@ final class PdfDomainTests: XCTestCase {
             }
         }
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("prd66-fixture-\(UUID().uuidString).pdf")
+            .appendingPathComponent("interceptor-fixture-\(UUID().uuidString).pdf")
         XCTAssertTrue(doc.write(to: url))
         return url.path
     }
@@ -54,6 +54,16 @@ final class PdfDomainTests: XCTestCase {
         }
         wait(for: [exp], timeout: 5.0)
         return holder.value
+    }
+
+    // An unopenable document refuses with a code, gone vs not-a-PDF.
+    func testOpenFailuresCarryCodes() throws {
+        let missing = NSTemporaryDirectory() + "interceptor-qa-missing-\(UUID().uuidString).pdf"
+        XCTAssertEqual(runVerb("info", action: ["path": missing])["code"] as? String, "target_gone")
+        let notPdf = NSTemporaryDirectory() + "interceptor-qa-notpdf-\(UUID().uuidString).pdf"
+        try Data("not a pdf".utf8).write(to: URL(fileURLWithPath: notPdf))
+        defer { try? FileManager.default.removeItem(atPath: notPdf) }
+        XCTAssertEqual(runVerb("text", action: ["path": notPdf])["code"] as? String, "unsupported_target")
     }
 
     func testDispatchInvariant_unknownSub_errors() {
@@ -108,14 +118,14 @@ final class PdfDomainTests: XCTestCase {
 
     func testSplit_extractsRange() {
         let outURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("prd66-split-\(UUID().uuidString).pdf").path
+            .appendingPathComponent("interceptor-split-\(UUID().uuidString).pdf").path
         let r = runVerb("split", action: ["path": fixturePath as Any, "pages": "1-2", "out": outURL])
         XCTAssertEqual(r["success"] as? Bool, true)
     }
 
     func testMerge_concatenatesDocs() {
         let outURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("prd66-merge-\(UUID().uuidString).pdf").path
+            .appendingPathComponent("interceptor-merge-\(UUID().uuidString).pdf").path
         let r = runVerb("merge", action: ["paths": [fixturePath as Any, fixturePath as Any], "out": outURL])
         XCTAssertEqual(r["success"] as? Bool, true)
     }

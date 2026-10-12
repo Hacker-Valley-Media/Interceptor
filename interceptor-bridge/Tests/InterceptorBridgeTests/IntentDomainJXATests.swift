@@ -84,6 +84,31 @@ final class IntentDomainJXATests: XCTestCase {
         XCTAssertEqual(result?["n"] as? Int32, 7)
     }
 
+    func testOSAEmptyContainersSurviveEveryExecutionRoute() throws {
+        let nested = "({empty: [], record: {}, nested: [[], {}]})"
+        let cases: [([String: Any], String)] = [
+            (["script": "return {}"], "[]"),
+            (["script": "return {} as record"], "[]"),
+            (["script": "return {empty:{}, nested:{{}, {marker:true}}}"],
+             "{\"empty\":[],\"nested\":[[],{\"marker\":true}]}"),
+            (["jxa": "[]"], "[]"),
+            (["jxa": "({})"], "{}"),
+            (["jxa": nested], "{\"empty\":[],\"nested\":[[],{}],\"record\":{}}"),
+            (["jsc": "host.jxa('[]').result", "jscHost": "osa"], "[]"),
+            (["jsc": "host.jxa('({})').result", "jscHost": "osa"], "{}"),
+            (["jsc": "host.jxa('\(nested)').result", "jscHost": "osa"],
+             "{\"empty\":[],\"nested\":[[],{}],\"record\":{}}")
+        ]
+        for (action, expected) in cases {
+            let response = runDispatch(action)
+            XCTAssertEqual(response["success"] as? Bool, true, "\(action): \(response)")
+            let data = try XCTUnwrap(response["data"] as? [String: Any])
+            let result = try XCTUnwrap(data["result"])
+            let bytes = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+            XCTAssertEqual(String(data: bytes, encoding: .utf8), expected, "\(action)")
+        }
+    }
+
     func testBundleJXAPrependsTargetBindingWithoutActivating() {
         let response = runDispatch([
             "bundleId": "com.apple.finder",

@@ -2,7 +2,6 @@ import {
   appendFileSync,
   copyFileSync,
   existsSync,
-  linkSync,
   mkdirSync,
   renameSync,
   rmSync,
@@ -28,7 +27,7 @@ export const MONITOR_TASK_MODES = ["human-observe", "human-teach", "agent-record
 export type MonitorTaskMode = typeof MONITOR_TASK_MODES[number]
 export type MonitorTaskActorKind = "human" | "agent" | "system" | "verifier" | "guard"
 export type MonitorTaskStatus = "active" | "paused" | "stopped" | "blocked" | "failed" | "aborted" | "completed"
-export type MonitorTaskSurface = "browser" | "macos"
+export type MonitorTaskSurface = "browser" | "macos" | "desktop"
 
 export type MonitorTaskPolicyRefs = {
   retentionPolicyId: string
@@ -47,6 +46,7 @@ export type MonitorTaskActor = {
 export type MonitorTaskSourceSession = {
   sid: string
   surface: MonitorTaskSurface
+  host?: "darwin" | "win32" | "linux"
   attachedAt: number
   detachedAt?: number
   rootTabId?: number
@@ -95,7 +95,7 @@ export type MonitorTaskMeta = {
   storageRoot: string
   storageRootSource: "INTERCEPTOR_TASKS_DIR" | "INTERCEPTOR_RUNS_DIR" | "platform-default" | "temporary-fallback"
   durable: boolean
-  createdBy: "browser-monitor" | "macos-monitor" | "task-api"
+  createdBy: "browser-monitor" | "macos-monitor" | "desktop-monitor" | "task-api"
   sourceSessions: MonitorTaskSourceSession[]
   actors: MonitorTaskActor[]
   policyRefs: MonitorTaskPolicyRefs
@@ -855,6 +855,7 @@ export function resolveOrCreateMonitorTask(input: {
 }
 
 function inferSurface(meta: MonitorSessionMeta | null, events: MonitorEvent[]): MonitorTaskSurface {
+  if (meta?.surface === "desktop") return "desktop"
   if (meta?.surface === "macos") return "macos"
   if (events.some((event) => event.surface === "macos" || event.rootPid !== undefined || event.rootApp !== undefined)) return "macos"
   return "browser"
@@ -973,15 +974,7 @@ function sourceArtifactPath(root: string, kind: MonitorTaskSourceArtifactKind): 
 
 function copyFileWithStrategy(from: string, to: string, strategy: MonitorTaskSourceManifestEntry["copyStrategy"]): MonitorTaskSourceManifestEntry["copyStrategy"] {
   ensureDir(join(to, ".."))
-  if (strategy === "hardlink") {
-    try {
-      linkSync(from, to)
-      return "hardlink"
-    } catch {
-      copyFileSync(from, to)
-      return "copy"
-    }
-  }
+  // Finalizing metadata and continued source writes must not share an inode.
   copyFileSync(from, to)
   return strategy === "content_addressed" ? "content_addressed" : "copy"
 }
@@ -1088,6 +1081,7 @@ function sourceFromSession(
   return {
     sid,
     surface,
+    host: meta?.host,
     attachedAt: Date.now(),
     rootTabId: meta?.rootTabId ?? options.rootTabId ?? (typeof start?.tid === "number" ? start.tid : undefined),
     rootPid: meta?.rootPid ?? options.rootPid ?? (typeof start?.rootPid === "number" ? start.rootPid : undefined),
@@ -1351,6 +1345,10 @@ export function snapshotMonitorTaskSources(taskId: string): MonitorTaskSourceMan
       copySourceArtifact(task, source, originalRoot, snapshotDir, "media", false, strategy),
     ]
     updateSnapshotSessionMeta(task, source, snapshotDir)
+    if (entries[0].status === "present") {
+      const saved = entries[0]
+      entries[0] = manifestForExistingFile(task.taskId, source, saved.originalPath!, saved.taskPath!, "session", saved.copyStrategy)
+    }
     const binding = writeTaskBinding(task, source, snapshotDir)
     manifest.push(...entries, binding)
 
@@ -1796,7 +1794,7 @@ function inferIntent(entry: TaskTimelineEntry): string | undefined {
   if (["click", "dblclick", "rclick", "input", "change", "key", "submit"].includes(entry.sourceEventKind)) return "user_interaction"
   if (["fetch", "xhr", "sse"].includes(entry.sourceEventKind) || entry.sourceEventKind.startsWith("ws_")) return "app_communication"
   if (entry.sourceEventKind === "nav") return "navigation"
-  if (entry.surface === "macos") return "native_app_context"
+  if (entry.surface === "macos" || entry.surface === "desktop") return "native_app_context"
   return undefined
 }
 
@@ -2106,7 +2104,7 @@ export function validateSemanticTranscriptEntry(entry: SemanticTranscriptEntry):
   }
   for (const ref of entry.sourceRefs || []) {
     if (!ref.sid) errors.push("sourceRef.sid is required")
-    if (ref.surface !== "browser" && ref.surface !== "macos") errors.push("sourceRef.surface must be browser or macos")
+    if (ref.surface !== "browser" && ref.surface !== "macos" && ref.surface !== "desktop") errors.push("sourceRef.surface must be browser, macos or desktop")
   }
   return errors
 }
@@ -2222,7 +2220,7 @@ export function generateMonitorTaskCaptureQuality(taskId: string): MonitorTaskCa
   const sensitiveHandoffs = segments.filter((entry) => entry.privacyLabels.includes("sensitive_handoff")).length
   const macosRows = timeline.filter((entry) => entry.surface === "macos").length
   const browserRows = timeline.filter((entry) => entry.surface === "browser").length
-  const rawTitleSegments = segments.filter((segment) => /^(browser|macos) event:/i.test(segment.title) || /^(browser|macos) event:/i.test(segment.summary)).length
+  const rawTitleSegments = segments.filter((segment) => /^(browser|macos|desktop) event:/i.test(segment.title) || /^(browser|macos|desktop) event:/i.test(segment.summary)).length
   const compressionRatio = transcript.length === 0 ? 1 : segments.length / Math.max(transcript.length, 1)
   const activeRows = timeline.filter((entry) => entry.boundary === "active").length
   const humanScaleLimit = Math.max(20, Math.min(150, Math.ceil(Math.max(activeRows, 1) * 0.05)))
@@ -2231,11 +2229,18 @@ export function generateMonitorTaskCaptureQuality(taskId: string): MonitorTaskCa
   const semanticTitlesOk = rawTitleSegments === 0
   const compressionOk = segments.length > 0 && ratioOk && humanScaleOk && semanticTitlesOk
   const boundaryOk = outOfBoundsEvents === 0
-  const evidenceOk = missingSourceRefs === 0
+  const incompleteDesktopSources = task.sourceSessions.filter(source => {
+    if (source.surface !== "desktop") return false
+    const metaPath = source.sourceSnapshotRoot ? sourceArtifactPath(source.sourceSnapshotRoot, "session") : undefined
+    const meta = metaPath && existsSync(metaPath) ? safeParse<MonitorSessionMeta>(readFileSync(metaPath, "utf8")) : readSessionMeta(source.sid)
+    return !meta || meta.partial !== false || !meta.coverage?.length || meta.coverage.some(item => !item.available)
+  })
+  const evidenceOk = missingSourceRefs === 0 && incompleteDesktopSources.length === 0
   const scopeOk = reviewRequiredSegments === 0
   const privacyOk = sensitiveHandoffs === 0
   const blueprintOk = durabilityOk && metadataOk && boundaryOk && evidenceOk && compressionOk && scopeOk && privacyOk
   const findings: MonitorTaskCaptureQualityReport["findings"] = []
+  if (incompleteDesktopSources.length) findings.push({ severity: "blocker", code: "desktop_recording_coverage_incomplete", message: "A desktop recording has missing or unqualified requested sources; saved events do not establish complete capture.", recommendedFix: "Inspect the recording coverage metadata and qualify each missing source before using it as a complete recording." })
 
   if (!durabilityOk) findings.push({ severity: "blocker", code: "source_durability_incomplete", message: "One or more task sources are not durably snapshotted under the task root.", recommendedFix: "Run interceptor monitor repair --task <taskId> --snapshot-sources while source artifacts still exist." })
   if (!metadataOk) findings.push({ severity: "error", code: "source_metadata_incomplete", message: "One or more task-attached sources lacks complete taskId or surface metadata." })

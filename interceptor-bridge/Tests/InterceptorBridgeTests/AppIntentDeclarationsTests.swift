@@ -1,4 +1,4 @@
-// PRD-66 — AppIntentDeclarations introspection tests. Validates the
+// AppIntentDeclarations introspection tests. Validates the
 // declared-intent set matches the runtime registry mirror.
 
 import XCTest

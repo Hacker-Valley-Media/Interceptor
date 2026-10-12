@@ -1,7 +1,7 @@
 import XCTest
 @testable import interceptor_bridge
 
-// PRD-65 Spec 10 / PRD-64 Spec 1 regression. IntelligenceDomain.handle
+// Regression: IntelligenceDomain.handle
 // previously switched on `command` (always "ai" for two-segment action
 // types), so every verb fell through to notImplemented despite having
 // FoundationModels-backed implementations. These tests pin the dispatch.

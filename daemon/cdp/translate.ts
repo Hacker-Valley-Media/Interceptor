@@ -12,7 +12,7 @@
 import type { CdpConnection } from "./connection"
 import { jsonShape, redactHeaders } from "../../shared/cdp-app"
 
-export type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+export type ActionResult = { success: boolean; error?: string; code?: string; data?: unknown; tabId?: number }
 
 export type CdpNetEntry = {
   requestId?: string

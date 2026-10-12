@@ -25,13 +25,19 @@ import { bridgePidPath, bridgeSocketPath } from "../shared/bridge-paths"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 import { consoleUser, currentUserName, probeGuiSession, type BridgeLaunchOpts } from "../shared/gui-session"
 import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
+import { callDesktopProvider } from "./desktop-provider"
+import {desktopContainerActionError,desktopContainerDeadline} from "../shared/desktop-container-validation"
+import {callNativeRegistration} from './native-registration'
+import {bindNativeSecretTarget,bindMacAuthDialogTarget,bindNativeAuthDialogTarget} from './native-secret-delivery'
+import { macosAction, isDesktopActionType } from "../shared/desktop-contract"
 import { captureSpinSample, spinWatchdogStep, SPIN_EXIT_TICKS, type SpinWatchdogState } from "./spin-watchdog"
 import { cleanupOwnedRuntimeFiles, clearDaemonRuntimeFiles, constantTimeTokenEquals, decideDaemonStartupRole, decideSingletonGate, defaultLifecycleDeps, generateShutdownToken, parseDaemonPidFile, readLockFile, readPidState, spawnDetachedStandaloneDaemon, writeLockFile } from "./lifecycle"
 import { DAEMON_HEALTH_SERVICE, LEGACY_HEALTH_BODY, probeDaemonHealth } from "../shared/daemon-health"
 import { assertNoInstallMaintenance } from "../shared/install-maintenance"
 import { VERSION } from "../cli/version"
-import { actionLogSummary, inboundLogSummary, outboundLogSummary } from "./redact"
+import { actionLogSummary, inboundLogSummary, outboundLogSummary, isSecretBearing } from "./redact"
 import * as secrets from "./secrets"
+import {desktopSecretActionError,desktopSecretResultError} from "../shared/desktop-secret-validation"
 import * as browserCreds from "./browser-creds"
 import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
 import { CDP_CONTEXT_PREFIX } from "../shared/cdp-app"
@@ -285,7 +291,7 @@ function sendToBridge(id: string, action: Record<string, unknown>, cliSocket: { 
     bridgePending.delete(id)
     log(`bridge request timeout: ${id}`)
     socketWriteFramed(cliSocket, JSON.stringify({ id, result: { success: false, error: "bridge timeout" } }))
-  }, REQUEST_TIMEOUT_MS)
+  }, actionType === 'desktop_container_run' && !desktopContainerActionError(action) ? Math.max(REQUEST_TIMEOUT_MS,desktopContainerDeadline(action)) : REQUEST_TIMEOUT_MS)
   bridgePending.set(id, {
     resolve: (response: string) => {
       clearTimeout(timer)
@@ -343,6 +349,10 @@ function forwardDelegateToBridge(
 
 // Route a macos_ action to the bridge, connecting first when needed.
 function routeToBridge(id: string, action: Record<string, unknown>, socket: { write: (data: Buffer | string) => number }, actionType: string): void {
+  if (process.platform !== "darwin") {
+    callDesktopProvider(action).then(result => socketWriteFramed(socket, JSON.stringify({ id, result })))
+    return
+  }
   if (bridgeSocket) {
     sendToBridge(id, action, socket, actionType)
     return
@@ -370,6 +380,7 @@ type CliRequest = { id?: string; action?: unknown; tabId?: number; contextId?: s
 
 /** Ask the bridge and await its result as a promise (same framing as sendToBridge). */
 function bridgeCall(action: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<DaemonResult> {
+  if (process.platform !== "darwin") return callDesktopProvider(action, timeoutMs).then(result => ({ ...result }))
   return new Promise((resolve) => {
     const id = crypto.randomUUID()
     const actionType = String(action.type ?? "unknown")
@@ -412,7 +423,7 @@ function extensionCall(action: Record<string, unknown>, contextId?: string, tabI
       cdpContexts: cdpManager.contextIds(),
       iosContexts: iosManager.contextIds(),
     })
-    if (!validation.ok) { resolve({ success: false, error: validation.error }); return }
+    if (!validation.ok) { resolve({ success: false, code: validation.code, error: validation.error }); return }
     const id = crypto.randomUUID()
     const timer = setTimeout(() => { pendingRequests.delete(id); resolve({ success: false, error: "timeout" }) }, timeoutMs)
     pendingRequests.set(id, {
@@ -442,7 +453,7 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
     iosContexts: iosManager.contextIds(),
   })
   if (!contextValidation.ok) {
-    socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, error: contextValidation.error } }))
+    socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, code: contextValidation.code, error: contextValidation.error } }))
     return
   }
 
@@ -478,7 +489,7 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
   sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
 }
 
-const SECRET_DELIVERY_TYPES = new Set(["macos_type", "macos_authdialog", "input_text", "find_and_type", "os_type", "ios_type", "ios_keys", "ios_unlock", "macos_sudo"])
+const SECRET_DELIVERY_TYPES = new Set(["desktop_type", "macos_type", "macos_authdialog", "desktop_authdialog", "input_text", "find_and_type", "os_type", "ios_type", "ios_keys", "ios_unlock", "macos_sudo"])
 // issue #248: browser saved-login fills go to browser input legs only.
 const BROWSER_LOGIN_TYPES = new Set(["input_text", "find_and_type", "os_type"])
 
@@ -502,7 +513,9 @@ class BridgeVault implements secrets.Vault {
   }
   async delete(name: string): Promise<boolean> {
     const r = await bridgeCall({ type: "macos_secrets", sub: "delete", name }, 20_000)
-    return r.success
+    if (r.success) return true
+    if (r.error === `secret '${name}' not found`) return false
+    throw new Error(r.error || "bridge keychain delete failed")
   }
 }
 
@@ -537,11 +550,13 @@ async function bridgeDataProtection(force = false): Promise<boolean> {
 }
 
 async function activeVault(): Promise<secrets.Vault> {
+  if (process.platform !== "darwin") return bunVault
   return (await bridgeDataProtection()) ? new LayeredVault(new BridgeVault(), bunVault) : bunVault
 }
 
 const gateViaBridge: secrets.GateFn = async ({ reason, policy, reuseSeconds }) => {
-  const r = await bridgeCall({ type: "macos_auth", sub: "confirm", reason, policy: policy === "biometry" ? "biometry" : "any", reuse_seconds: reuseSeconds }, 180_000)
+  const action={type:process.platform === "darwin"?"macos_auth":"desktop_auth",sub:"confirm",reason,policy:policy === "biometry"?"biometry":"any",reuse_seconds:Math.min(300,reuseSeconds)}
+  const r = process.platform === "darwin"?await bridgeCall(action,180_000):await callDesktopProvider(action,180_000)
   if (!r.success) return { ok: false, error: r.error || "authentication prompt failed" }
   const d = r.data as { ok?: boolean; error?: string } | undefined
   return d?.ok === true ? { ok: true } : { ok: false, error: d?.error || "not approved" }
@@ -552,11 +567,20 @@ function sessionLabel(action: Record<string, unknown>): string | undefined {
 }
 
 async function handleSecretAction(action: Record<string, unknown>, request: CliRequest): Promise<DaemonResult> {
+  const neutral = action.type === "desktop_secret"
+  if (neutral) {
+    const error = desktopSecretActionError(action)
+    if (error) return {success:false,code:"invalid_request",error}
+  }
   const sub = String(action.sub ?? "")
   const session = sessionLabel(action)
   try {
     switch (sub) {
       case "status": {
+        if (process.platform !== "darwin") {
+          const auth=await callDesktopProvider({type:"desktop_auth",sub:"status"},15_000)
+          return {success:true,data:{backend:bunVault.backend,dataProtection:false,bridge:{available:false},auth:auth.success?auth.data:{available:false,error:auth.error,code:auth.code},secrets:secrets.listSecrets().length,unlocked:secrets.openUnlocks().map(u=>({name:u.name,until:new Date(u.until).toISOString()})),metadata:secrets.metadataPath(),runtime:Bun.version,qualification:"Native API backend is identified; status does not prove collection availability or unlock permission."}}
+        }
         const bridgeStatus = await bridgeCall({ type: "macos_secrets", sub: "status" }, 10_000)
         const auth = await bridgeCall({ type: "macos_auth", sub: "status" }, 10_000)
         const dp = await bridgeDataProtection(true)
@@ -579,14 +603,14 @@ async function handleSecretAction(action: Record<string, unknown>, request: CliR
         const name = secrets.assertName(action.name)
         const gate = secrets.parseGate(action.gate)
         const targets = secrets.parseTargets(action.targets)
-        const r = await bridgeCall({
+        const r = process.platform === 'darwin' ? await bridgeCall({
           type: "macos_secrets", sub: "register", name, gate, targets,
           reuse_seconds: typeof action.reuseSeconds === "number" ? action.reuseSeconds : 0,
           session: session ?? "",
-        }, 600_000)
-        if (!r.success) return { success: false, error: r.error }
+        }, 600_000) : await callNativeRegistration({name,gate,targets,session:session??''})
+        if (!r.success) return { success: false, ...(neutral ? {code:r.code??"provider_failed"} : {}), error: r.error }
         const d = r.data as { cancelled?: boolean; value?: unknown; gate?: unknown; targets?: unknown } | undefined
-        if (!d || d.cancelled === true || typeof d.value !== "string") return { success: false, error: "registration cancelled" }
+        if (!d || d.cancelled === true || typeof d.value !== "string") return { success: false, ...(neutral ? {code:"permission_denied"} : {}), error: "registration cancelled" }
         const vault = await activeVault()
         const meta = await secrets.storeSecret(vault, name, d.value, { gate: d.gate ?? gate, targets: d.targets ?? targets, reuseSeconds: action.reuseSeconds })
         emitEvent("secret_stored", { name, gate: meta.gate, targets: meta.targets, via: "register", backend: vault.backend })
@@ -604,20 +628,19 @@ async function handleSecretAction(action: Record<string, unknown>, request: CliR
         const name = secrets.assertName(action.name)
         const removed = await secrets.removeSecret(await activeVault(), name)
         emitEvent("secret_removed", { name, removed })
-        return removed ? { success: true, data: { removed: true, name } } : { success: false, error: `no secret named '${name}'` }
+        return removed ? { success: true, data: { removed: true, name } } : { success: false, ...(neutral ? {code:"target_gone"} : {}), error: `no secret named '${name}'` }
       }
       case "unlock": {
         const name = secrets.assertName(action.name)
         const seconds = secrets.parseDuration(action.forSeconds ?? action.for)
         const meta = secrets.loadMeta().secrets[name]
-        if (!meta) return { success: false, error: `no secret named '${name}'` }
-        const minutes = Math.max(1, Math.round(seconds / 60))
+        if (!meta) return { success: false, ...(neutral ? {code:"target_gone"} : {}), error: `no secret named '${name}'` }
         const res = await gateViaBridge({
-          reason: `Interceptor: unlock "${name}" for ${minutes} min${session ? ` (session ${session})` : ""}`,
+          reason: `Interceptor: unlock "${name}" for ${seconds}s${session ? ` (session ${session})` : ""}`,
           policy: meta.gate === "biometry" ? "biometry" : "any",
           reuseSeconds: 0,
         })
-        if (!res.ok) return { success: false, error: res.error }
+        if (!res.ok) return { success: false, ...(neutral ? {code:"permission_denied"} : {}), error: res.error }
         const until = secrets.openUnlock(name, seconds)
         emitEvent("secret_unlock", { name, seconds })
         return { success: true, data: { unlocked: true, name, until: new Date(until).toISOString(), seconds } }
@@ -639,6 +662,10 @@ async function handleSecretAction(action: Record<string, unknown>, request: CliR
     }
   } catch (err) {
     const e = err as secrets.SecretError
+    if (neutral) {
+      const codes:Record<string,string>={invalid_name:"invalid_request",invalid_target:"invalid_request",invalid_gate:"invalid_request",not_found:"target_gone",target_denied:"permission_denied",gate_denied:"permission_denied",vault_error:"provider_failed"}
+      return {success:false,code:codes[e.code]??"provider_failed",error:e instanceof secrets.SecretError?e.message:"Native credential store operation failed; check the current user's credential service and unlock state."}
+    }
     return { success: false, error: e.message, code: e.code }
   }
 }
@@ -676,13 +703,9 @@ async function handleBrowserCredsAction(action: Record<string, unknown>): Promis
 }
 
 function parseAppsList(data: unknown): Array<{ pid: number; name: string; bundleId: string }> {
-  if (typeof data !== "string") return []
-  const out: Array<{ pid: number; name: string; bundleId: string }> = []
-  for (const line of data.split("\n")) {
-    const m = /^\[(\d+)\]\s+(.*?)(?: \*)?(?: \(hidden\))?\s+—\s+(\S*)$/.exec(line.trim())
-    if (m) out.push({ pid: parseInt(m[1], 10), name: m[2], bundleId: m[3] })
-  }
-  return out
+  if (!Array.isArray(data)) return []
+  return data.filter(row => typeof row?.pid === "number" && typeof row.name === "string")
+    .map(row => ({ pid: row.pid, name: row.name, bundleId: typeof row.bundleId === "string" ? row.bundleId : "" }))
 }
 
 /** Where a delivery lands, for the per-secret allowlist. */
@@ -690,6 +713,7 @@ async function targetForAction(action: Record<string, unknown>, actionType: stri
   switch (actionType) {
     case "macos_sudo": return { kind: "sudo" }
     case "macos_authdialog": return { kind: "macos", id: "com.apple.SecurityAgent" }
+    case "desktop_type":
     case "macos_type": {
       const app = typeof action.app === "string" ? action.app : undefined
       const pid = typeof action.pid === "number" ? action.pid : undefined
@@ -738,12 +762,29 @@ async function deliverWithSecret(id: string, action: Record<string, unknown>, re
   const session = sessionLabel(action)
 
   let target: secrets.SecretTarget
-  try { target = await targetForAction(action, actionType, request) }
-  catch (err) { reply({ success: false, error: (err as Error).message }); return }
+  let nativeBinding: Awaited<ReturnType<typeof bindNativeSecretTarget>> | undefined
+  let macDialogBinding: Awaited<ReturnType<typeof bindMacAuthDialogTarget>> | undefined
+  try {
+    if(actionType==='macos_authdialog'&&process.platform==='darwin') {
+      macDialogBinding=await bindMacAuthDialogTarget(action,async probe=>bridgeCall(probe,10_000))
+      action={...action,bindingToken:macDialogBinding.bindingToken,secretBindingName:name}
+    } else if(['macos_authdialog','desktop_authdialog'].includes(actionType)&&process.platform!=='darwin') {
+      if(process.platform!=='win32'&&process.platform!=='linux')throw new Error('native authentication delivery is unavailable on this host')
+      const binding=await bindNativeAuthDialogTarget(action,process.platform==='win32'?'windows':'linux',callDesktopProvider)
+      nativeBinding=binding
+      action={...action,dialogRef:binding.dialogRef,expectedIdentity:binding.identity,secretBindingName:name,backgroundOnly:true}
+    } else if(actionType==='desktop_type'&&process.platform!=='darwin') {
+      if(process.platform!=='win32'&&process.platform!=='linux')throw new Error('native named-secret delivery is unavailable on this host')
+      nativeBinding=await bindNativeSecretTarget(action,process.platform==='win32'?'windows':'linux',callDesktopProvider)
+      action={...action,expectedIdentity:nativeBinding.identity,secretBindingName:name,backgroundOnly:true}
+    }
+    target=macDialogBinding?.target??nativeBinding?.target??await targetForAction(action,actionType,request)
+  }
+  catch (err) { reply({ success: false, error: (err as Error).message,code:(err as {code?:string}).code }); return }
 
   let value: string
   try {
-    const res = await secrets.resolveSecret(await activeVault(), name, target, { gate: gateViaBridge, session })
+    const res = await secrets.resolveSecret(await activeVault(), name, target, { gate: gateViaBridge, session, beforeRead:macDialogBinding?.beforeRead??nativeBinding?.beforeRead })
     value = res.value
     emitEvent("secret_release", { requestId: id, name, target: secrets.describeTarget(target), action: actionType, outcome: "released", gated: res.gated })
   } catch (err) {
@@ -768,8 +809,13 @@ async function deliverResolvedValue(id: string, action: Record<string, unknown>,
   const delivered: Record<string, unknown> = { ...action, sensitive: true }
   for (const f of stripFields) delete delivered[f]
   switch (actionType) {
+    case 'desktop_type':
+      delivered.text=value
+      routeToBridge(id,delivered,socket,actionType)
+      return
     case "macos_type":
     case "macos_authdialog":
+    case "desktop_authdialog":
       delivered.text = value
       routeToBridge(id, delivered, socket, actionType)
       return
@@ -869,7 +915,7 @@ async function deliverWithBrowserLogin(id: string, action: Record<string, unknow
 }
 
 // Start bridge connection on daemon startup
-setTimeout(() => connectBridge(), 500)
+if (process.platform === "darwin") setTimeout(() => connectBridge(), 500)
 
 function log(msg: string) {
   const mode = process.argv.includes("--standalone") ? "standalone" : "native-messaging"
@@ -1424,6 +1470,11 @@ function resolveMv2ExtDir(): string {
 const cdpManager = new CdpManager({
   emit: (event, data) => emitEvent(event, data || {}),
   hasExtensionContext: (ctxId: string) => extensionWsMap.has(ctxId),
+  dropExtensionContext: (ctxId: string) => {
+    const socket = extensionWsMap.get(ctxId)
+    extensionWsMap.delete(ctxId)
+    socket?.close?.(1000, "app context detached")
+  },
   mv2ExtensionDir: resolveMv2ExtDir,
 })
 
@@ -1821,7 +1872,7 @@ async function handleOsAction(
   // would hit whatever is frontmost, so the bridge delivers to that window.
   if (action.background) {
     log(`[${id.slice(0, 8)}] ${action.type} → bridge (window not OS-focused)`)
-    const result = await deliverInBackground(action, (bridgeAction) => bridgeCall(bridgeAction))
+    const result = await deliverInBackground(action, (nativeAction) => process.platform === "darwin" ? bridgeCall(nativeAction) : callDesktopProvider(nativeAction), process.platform)
     emitEvent("os_action", { requestId: id, action: action.type, duration: Date.now() - startTime, success: result.success, background: true })
     return result
   }
@@ -1918,7 +1969,7 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           const jsonBuf = buf.subarray(4, 4 + msgLen)
           buf = buf.subarray(4 + msgLen)
 
-          let request: { id?: string; action?: unknown; tabId?: number; contextId?: string; type?: string }
+          let request: { id?: string; action?: unknown; tabId?: number; contextId?: string; type?: string; vaultToken?: unknown }
           try {
             request = JSON.parse(jsonBuf.toString("utf-8"))
           } catch {
@@ -1959,7 +2010,36 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           }
 
           const id = request.id ?? crypto.randomUUID()
-          const action = request.action as { type?: string; [key: string]: unknown } | undefined
+          let action = request.action as { type?: string; [key: string]: unknown } | undefined
+          if (isSecretBearing(action) && !constantTimeTokenEquals(request.vaultToken, daemonIdentity.shutdownToken)) {
+            socketWriteFramed(socket, JSON.stringify({id,result:{success:false,code:"permission_denied",error:"authenticated local vault request required"}}))
+            continue
+          }
+          if (process.platform !== "darwin" && action?.type === "macos_secret") {
+            socketWriteFramed(socket, JSON.stringify({id,result:{success:false,code:"unsupported_operation",error:"Use the authenticated desktop secret surface on this host."}}))
+            continue
+          }
+          // sudo is daemon-owned (vault value -> `sudo -S` stdin), like the vault itself. Windows
+          // elevation is UAC consent on the secure desktop, which no process can drive.
+          if (action?.type === "desktop_sudo") { action = { ...action, type: "macos_sudo" }; request.action = action }
+          if (process.platform === "win32" && action?.type === "macos_sudo") {
+            socketWriteFramed(socket, JSON.stringify({id,result:{success:false,code:"unsupported_operation",error:"Windows has no sudo: elevation needs UAC consent on the secure desktop, which cannot be driven"}}))
+            continue
+          }
+          const nativeCredentialDelivery=process.platform!=='darwin'&&(action?.type==='desktop_type'&&typeof action.secret==='string'&&typeof action.secretLease==='string'||action?.type==='macos_sudo')
+          // CDP verbs run in this daemon (its CdpManager has Windows and Linux paths); they carry no
+          // native-provider authority, so the session-authenticated provider rule does not apply.
+          const daemonCdp = !!action?.type && CDP_ACTION_TYPES.has(action.type)
+          if (process.platform !== "darwin" && isDesktopActionType(action?.type) && action?.type !== "desktop_secret"&&!nativeCredentialDelivery&&!daemonCdp) {
+            socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, code: "permission_denied", error: "native desktop control requires direct session-authenticated provider access; daemon IPC cannot proxy native authority" } }))
+            continue
+          }
+          if (action?.type?.startsWith("desktop_") && action.type !== "desktop_secret"&&!nativeCredentialDelivery) {
+            try { action = macosAction(action); request.action = action } catch {
+              socketWriteFramed(socket, JSON.stringify({ id, result: { success: false, code: "invalid_request", error: "invalid desktop action" } }))
+              continue
+            }
+          }
           const actionType = action?.type || "unknown"
           log(`cli request: ${id} ${actionLogSummary(request.action)}`)
           emitEvent("request_received", { requestId: id, action: actionType })
@@ -2007,8 +2087,14 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           // issue #244: vault verbs and secret-bearing deliveries resolve here,
           // before any surface dispatch. The log line above carried the name
           // only (daemon/redact.ts).
-          if (action?.type === "macos_secret") {
-            handleSecretAction(action, request).then((result) => socketWriteFramed(socket, JSON.stringify({ id, result })))
+          if (action?.type === "macos_secret" || action?.type === "desktop_secret") {
+            handleSecretAction(action, request).then((result) => {
+              const message=JSON.stringify({id,result})
+              if(result.success&&desktopSecretResultError(action,JSON.parse(message).result.data)) {
+                const code=['status','list'].includes(String(action.sub))?'provider_failed':'timeout_unknown_outcome'
+                socketWriteFramed(socket,JSON.stringify({id,result:{success:false,code,error:'Native vault returned an invalid reply. The operation may have completed; inspect the vault before retrying.'}}))
+              }else socketWriteFramed(socket,message)
+            })
             continue
           }
           if (action && (action.type === "macos_sudo" || typeof action.secret === "string")) {
@@ -2095,8 +2181,8 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
             continue
           }
 
-          // Route macos_ actions to the native bridge
-          if (action?.type?.startsWith("macos_")) {
+          // Route macos_ actions to the native bridge (desktop_stream keeps its type; see macosAction)
+          if (action?.type?.startsWith("macos_") || action?.type === "desktop_stream") {
             routeToBridge(id, action, socket, actionType)
             continue
           }
@@ -2237,12 +2323,26 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           if (handleBinarySinkFrame(ws, bytes)) return
         }
         const rawStr = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8")
-        log(`ws recv: ${rawStr.slice(0, 300)}`)
+        log(`ws recv: ${rawStr.length} bytes`)
         let request: { id?: string; action?: unknown; tabId?: number; contextId?: string; type?: string; result?: unknown }
         try {
           request = JSON.parse(rawStr)
         } catch {
           ws.send(JSON.stringify({ error: "invalid JSON" }))
+          return
+        }
+
+        const credentialAction = request.action as Record<string, unknown> | undefined
+        const credentialType = typeof credentialAction?.type === "string" ? credentialAction.type : ""
+        // Check before delegation, registration and generic command routing.
+        // A delegate envelope must not turn WebSocket access into vault access.
+        if (isSecretBearing(credentialAction) || credentialAction?.secret !== undefined || /^(?:macos|desktop)_(?:secret|secrets|sudo|authdialog)(?:_|$)/.test(credentialType)) {
+          ws.send(JSON.stringify({ id: request.id, result: { success: false, code: "permission_denied", error: "credential actions require local IPC" } }))
+          return
+        }
+
+        if (process.platform !== "darwin" && isDesktopActionType((request.action as { type?: unknown })?.type)) {
+          ws.send(JSON.stringify({ id: request.id, result: { success: false, code: "permission_denied", error: "native desktop control requires authenticated local IPC in the interactive user session" } }))
           return
         }
 
@@ -2260,6 +2360,11 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
 
         if (request.type === "extension") {
           const ctxId = request.contextId ?? "default"
+          if (!cdpManager.acceptsAppRegistration(ctxId)) {
+            ws.send(JSON.stringify({ type: "context_conflict", contextId: ctxId, error: "app context was detached; explicitly attach it before reconnecting" }))
+            ws.close(1000, "app context detached")
+            return
+          }
           const claim = claimContextId(extensionWsMap, ws as ContextSocket, ctxId)
           ws.send(JSON.stringify(claim.message))
           if (claim.status === "conflict") {
@@ -2372,6 +2477,16 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         log(`ws request: ${id} ${actionLogSummary(request.action)}`)
 
         const actionType = (request.action as { type?: string })?.type || "unknown"
+        if (actionType.startsWith("desktop_") || actionType.startsWith("macos_")) {
+          const action = request.action as Record<string, unknown>
+          let nativeAction: Record<string, unknown>
+          try { nativeAction = macosAction(action) } catch {
+            ws.send(JSON.stringify({ id, result: { success: false, code: "invalid_request", error: "invalid desktop action" } }))
+            return
+          }
+          bridgeCall(nativeAction).then(result => { try { ws.send(JSON.stringify({ id, result })) } catch {} })
+          return
+        }
 
         if (actionType === "daemon_shutdown") {
           ws.send(JSON.stringify({ id, result: { success: false, error: "daemon shutdown is accepted only on the local IPC transport" } }))
@@ -2435,7 +2550,7 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           iosContexts: iosManager.contextIds(),
         })
         if (!contextValidation.ok) {
-          ws.send(JSON.stringify({ id, result: { success: false, error: contextValidation.error } }))
+          ws.send(JSON.stringify({ id, result: { success: false, code: contextValidation.code, error: contextValidation.error } }))
           return
         }
 

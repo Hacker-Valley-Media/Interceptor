@@ -1,28 +1,11 @@
-// LinuxRuntime
-//
-// Wraps the Apple Containerization Swift package's high-level
-// `LinuxContainer` API for in-process Linux guest lifecycle. This is the
-// recipe `apple/container`'s SandboxService uses at
-// `research/container/Sources/Services/ContainerSandboxService/Server/SandboxService.swift:164-261`:
-//
-//     let vmm = VZVirtualMachineManager(kernel:..., initialFilesystem:..., rosetta:..., logger:...)
-//     let container = try LinuxContainer(id, rootfs: rootfs, vmm: vmm, logger: log) { czConfig in
-//         czConfig.interfaces = ...
-//         czConfig.process.stdout = ...
-//         czConfig.hosts = Hosts(entries: ...)
-//         czConfig.bootLog = BootLog.file(path: bundle.bootlog, append: true)
-//     }
-//     try await container.create()      // boot the VM
-//     try await container.start()       // start init process
-//     try await container.exec(id, configuration:) // run new process
-//     try await container.kill(SIGTERM) // signal
-//     try await container.stop()        // graceful stop
-//
-// In v0 we instantiate Containerization types unconditionally, but everything
-// is gated `#if canImport(Containerization)` so the bridge can still build on
-// dev environments where the package hasn't been resolved.
+// Linux VM integration uses the exact Containerization0.31.0 dependency.
+// LinuxRuntime.prepare creates an owned facade; create checks pinned boot
+// assets, resolves actual OCI content and retains the machine before native
+// setup. Lifecycle and exec use typed SDK calls without a host shell.
 
 import Foundation
+import CryptoKit
+import Darwin
 
 #if canImport(Containerization)
 import Containerization
@@ -56,7 +39,9 @@ public protocol LinuxRuntimeHandle: AnyObject, Sendable {
     func stop() async throws
     func kill(signal: Int32) async throws
     func wait() async throws -> Int32
-    func execve(_ argv: [String], env: [String: String], workdir: String?, tty: Bool) async throws -> (exitCode: Int32, stdout: String, stderr: String)
+    func pause() async throws
+    func resume() async throws
+    func execve(_ argv: [String], env: [String: String], workdir: String?, tty: Bool, timeout: TimeInterval) async throws -> (exitCode: Int32, stdout: String, stderr: String)
     func ipAddress() async -> String?
 }
 
@@ -83,64 +68,240 @@ public struct LinuxRuntime: Sendable {
 }
 
 #if canImport(Containerization)
-/// Concrete handle, in-process LinuxContainer wrapper.
-final class LinuxRuntimeImpl: LinuxRuntimeHandle, @unchecked Sendable {
+/// Exact Containerization 0.31.0 integration. The native machine is retained
+/// separately because container setup can fail after the machine has booted.
+actor LinuxRuntimeImpl: LinuxRuntimeHandle {
     private let spec: VMSpec
     private let bundle: VMBundle
-    // We do not store the LinuxContainer here as a typed property because
-    // Containerization's actual public API surface evolves between
-    // releases. Storing it via `Any` plus a few helper closures keeps the
-    // bridge buildable across point releases while we tail Apple's pin.
-    private var container: Any?
+    private var container: LinuxContainer?
+    private var manager: RetainedLinuxVMManager?
+    private var network: (any Network)?
+    private var address: String?
+    private var pending: [String: LinuxProcess] = [:]
+    private var stopped = false
 
     init(spec: VMSpec, bundle: VMBundle) async throws {
         self.spec = spec
         self.bundle = bundle
-        // Eager construction would require us to enumerate the kernel +
-        // initrd inside Containerization's bundle layout, which is
-        // documented but version-sensitive. v0 defers construction to
-        // `create()` so a `vm create` that does not boot doesn't pay the
-        // cost of locating Containerization assets.
     }
 
     func create() async throws {
-        // Real Containerization initialization happens here in v0+. For
-        // the bridge to build cleanly without resolving the package we
-        // gate the body with `if false`-style availability — once
-        // `swift package update` brings in containerization 0.31.0 the
-        // body becomes the SandboxService.swift recipe documented at the
-        // top of this file. Until then we surface a clear error.
-        throw LinuxRuntimeError.prepareFailed(
-            "LinuxRuntime.create() pending Containerization runtime wiring. The package is linked, but the LinuxContainer boot recipe still needs to be mapped to the current Containerization API before Linux guests can boot."
-        )
+        guard container == nil, manager == nil, !stopped else { throw LinuxRuntimeError.lifecycleFailed("create already admitted") }
+        let kernel = try Self.pinnedAsset("INTERCEPTOR_VM_LINUX_KERNEL", maxBytes: 134217728)
+        let initfs = try Self.pinnedAsset("INTERCEPTOR_VM_LINUX_INITFS", maxBytes: 536870912)
+        #if arch(arm64)
+        let platform = SystemPlatform.linuxArm
+        #else
+        let platform = SystemPlatform.linuxAmd
+        #endif
+        _ = try await VMImage.resolveOCIImage(ref: spec.image, stateDir: bundle.stateDir)
+        let store = try ImageStore(path: VMImage.ociImagesDir(stateDir: bundle.stateDir).appendingPathComponent("store"))
+        let image = try await store.get(reference: spec.image)
+        guard let imageConfig = try await image.config(for: platform.ociPlatform()).config else {
+            throw LinuxRuntimeError.prepareFailed("native OCI image lacks a process configuration; no guest filesystem was prepared")
+        }
+        let rootfs = try await prepareRootfs(image: image, platform: platform.ociPlatform())
+        let nativeManager = RetainedLinuxVMManager(VZVirtualMachineManager(
+            kernel: Kernel(path: kernel, platform: platform),
+            initialFilesystem: .block(format: "ext4", source: initfs.path, destination: "/", options: ["ro"]),
+            rosetta: spec.rosetta
+        ))
+        manager = nativeManager
+        var config = LinuxContainer.Configuration()
+        config.cpus = spec.cpu
+        config.memoryInBytes = spec.memorySize
+        config.process = LinuxProcessConfiguration(from: imageConfig)
+        config.bootLog = .file(path: bundle.bundlePath.appendingPathComponent("bootlog.log"))
+        if spec.network == .nat {
+            if #available(macOS 26, *) {
+                var net = try VmnetNetwork()
+                guard let interface = try net.createInterface(spec.id) else { throw LinuxRuntimeError.prepareFailed("native NAT allocation returned no interface") }
+                network = net
+                address = interface.ipv4Address.address.description
+                config.interfaces = [interface]
+            } else {
+                throw LinuxRuntimeError.prepareFailed("Containerization 0.31.0 NAT requires macOS 26; use --network none on older supported hosts")
+            }
+        }
+        for share in spec.shares {
+            config.mounts.append(.share(source: share.hostPath, destination: "/mnt/" + share.tag, options: share.readOnly ? ["ro"] : []))
+        }
+        let instance = try LinuxContainer(spec.id, rootfs: rootfs, vmm: nativeManager, configuration: config)
+        container = instance
+        try await instance.create()
     }
 
     func start() async throws {
-        throw LinuxRuntimeError.lifecycleFailed("start: container not yet created")
+        guard let container, !stopped else { throw LinuxRuntimeError.lifecycleFailed("start: container not created") }
+        try await container.start()
     }
 
     func stop() async throws {
-        throw LinuxRuntimeError.lifecycleFailed("stop: container not yet created")
+        if stopped { return }
+        if await manager?.isPaused == true { try await manager?.resume() }
+        var failure: Error?
+        if let container {
+            do { try await container.stop() } catch { failure = error }
+        }
+        // Even a failed Containerization create can have an owned running VM.
+        try await manager?.stop()
+        if let failure { throw LinuxRuntimeError.lifecycleFailed("native VM stopped; container cleanup failed: \(failure)") }
+        if var net = network {
+            try net.releaseInterface(spec.id)
+            network = nil
+        }
+        pending.removeAll()
+        self.container = nil
+        manager = nil
+        address = nil
+        stopped = true
     }
 
     func kill(signal: Int32) async throws {
-        throw LinuxRuntimeError.lifecycleFailed("kill: container not yet created")
+        guard let container else { throw LinuxRuntimeError.lifecycleFailed("kill: container not created") }
+        try await container.kill(signal)
     }
 
     func wait() async throws -> Int32 {
-        throw LinuxRuntimeError.lifecycleFailed("wait: container not yet created")
+        guard let container else { throw LinuxRuntimeError.lifecycleFailed("wait: container not created") }
+        return try await container.wait().exitCode
     }
 
-    func execve(_ argv: [String], env: [String: String], workdir: String?, tty: Bool) async throws -> (exitCode: Int32, stdout: String, stderr: String) {
-        // Once container is created we use container.exec(id, configuration:)
-        // and capture stdout/stderr through the process's stdio handles.
-        throw LinuxRuntimeError.lifecycleFailed("execve: container not yet created")
+    func pause() async throws {
+        guard let manager, !stopped else { throw LinuxRuntimeError.lifecycleFailed("pause: no owned native VM") }
+        try await manager.pause()
+    }
+
+    func resume() async throws {
+        guard let manager, !stopped else { throw LinuxRuntimeError.lifecycleFailed("resume: no owned native VM") }
+        try await manager.resume()
+    }
+
+    func execve(_ argv: [String], env: [String: String], workdir: String?, tty: Bool, timeout: TimeInterval) async throws -> (exitCode: Int32, stdout: String, stderr: String) {
+        guard let container, !stopped, pending.isEmpty, !argv.isEmpty, timeout.isFinite, timeout > 0, timeout <= 300 else { throw LinuxRuntimeError.lifecycleFailed("exec requires an owned runtime with no unresolved guest process and a bounded deadline") }
+        guard !tty else { throw LinuxRuntimeError.lifecycleFailed("interactive terminal input is not configured; exec --tty refused") }
+        let clock = ContinuousClock(), deadline = clock.now.advanced(by: .seconds(timeout))
+        let output = LinuxVMOutput(), errors = LinuxVMOutput()
+        var config = LinuxProcessConfiguration()
+        config.arguments = argv
+        config.environmentVariables = ["PATH=" + LinuxProcessConfiguration.defaultPath] + env.keys.sorted().map { $0 + "=" + env[$0]! }
+        config.workingDirectory = workdir ?? "/"
+        config.stdout = output
+        config.stderr = errors
+        let id = UUID().uuidString
+        let process = try await container.exec(id, configuration: config)
+        pending[id] = process
+        try await process.start()
+        guard clock.now < deadline else { throw LinuxRuntimeError.lifecycleFailed("exec deadline expired after guest start; outcome unknown; process \(id) retained") }
+        let remaining = clock.now.duration(to: deadline).components
+        let waitSeconds = max(Int64(1), remaining.seconds + (remaining.attoseconds > 0 ? 1 : 0))
+        let result = try await process.wait(timeoutInSeconds: waitSeconds)
+        guard clock.now < deadline else { throw LinuxRuntimeError.lifecycleFailed("exec deadline expired; guest returned exit \(result.exitCode), process \(id) retained for cleanup") }
+        let stdout = try output.text(), stderr = try errors.text()
+        try await process.delete()
+        pending.removeValue(forKey: id)
+        return (result.exitCode, stdout, stderr)
     }
 
     func ipAddress() async -> String? {
-        // Containerization exposes the interfaces via the container config;
-        // we'll wire this once the package resolves.
-        return nil
+        address
+    }
+
+    private func prepareRootfs(image: Containerization.Image, platform: ContainerizationOCI.Platform) async throws -> Containerization.Mount {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: bundle.diskPath.path) {
+            let handle = try FileHandle(forReadingFrom: bundle.diskPath)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: 1080)
+            if try handle.read(upToCount: 2) == Data([0x53, 0xef]) {
+                return .block(format: "ext4", source: bundle.diskPath.path, destination: "/")
+            }
+            throw LinuxRuntimeError.prepareFailed("existing Disk.img is not an EXT4 root filesystem; it was preserved without replacement")
+        }
+        let next = bundle.bundlePath.appendingPathComponent("rootfs-" + UUID().uuidString + ".ext4")
+        _ = try await EXT4Unpacker(blockSizeInBytes: spec.diskSize).unpack(image, for: platform, at: next)
+        if fm.fileExists(atPath: bundle.diskPath.path) {
+            throw LinuxRuntimeError.prepareFailed("Disk.img appeared during root filesystem preparation; both existing and staged files were preserved")
+        }
+        try fm.moveItem(at: next, to: bundle.diskPath)
+        let record = try JSONSerialization.data(withJSONObject: ["reference": image.reference, "digest": image.digest], options: [.sortedKeys])
+        try record.write(to: bundle.bundlePath.appendingPathComponent("rootfs-image.json"), options: .atomic)
+        return .block(format: "ext4", source: bundle.diskPath.path, destination: "/")
+    }
+
+    private static func pinnedAsset(_ key: String, maxBytes: Int64) throws -> URL {
+        let env = ProcessInfo.processInfo.environment
+        guard let path = env[key], path.hasPrefix("/"), !path.contains("\0"), let pin = env[key + "_SHA256"], pin.count == 64, pin.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { throw LinuxRuntimeError.prepareFailed("\(key) and its exact SHA256 are required") }
+        let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { throw LinuxRuntimeError.prepareFailed("cannot open pinned \(key)") }
+        defer { Darwin.close(fd) }
+        var metadata = stat()
+        guard fstat(fd, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG, metadata.st_size > 0, metadata.st_size <= maxBytes else { throw LinuxRuntimeError.prepareFailed("invalid bounded regular boot asset") }
+        var hash = SHA256(), bytes = [UInt8](repeating: 0, count: 65536), total: Int64 = 0
+        while true {
+            let n = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if n == 0 { break }
+            if n < 0 { if errno == EINTR { continue }; throw LinuxRuntimeError.prepareFailed("boot asset read failed") }
+            total += Int64(n)
+            guard total <= maxBytes else { throw LinuxRuntimeError.prepareFailed("boot asset grew past limit") }
+            hash.update(data: Data(bytes.prefix(n)))
+        }
+        let observed = hash.finalize().map { String(format: "%02x", $0) }.joined()
+        guard total == metadata.st_size, observed == pin.lowercased() else { throw LinuxRuntimeError.prepareFailed("boot asset hash differs") }
+        return URL(fileURLWithPath: path)
+    }
+}
+
+private actor RetainedLinuxVMManager: VirtualMachineManager {
+    private let base: VZVirtualMachineManager
+    private var machine: (any VirtualMachineInstance)?
+    private(set) var isPaused = false
+
+    init(_ base: VZVirtualMachineManager) { self.base = base }
+    func create(config: some VMCreationConfig) async throws -> any VirtualMachineInstance {
+        guard machine == nil else { throw LinuxRuntimeError.lifecycleFailed("native VM already owned") }
+        let result = try base.create(config: config)
+        machine = result
+        return result
+    }
+    func stop() async throws {
+        guard let machine else { return }
+        if isPaused { try await machine.resume(); isPaused = false }
+        if machine.state != .stopped { try await machine.stop() }
+        guard machine.state == .stopped else { throw LinuxRuntimeError.lifecycleFailed("native machine shutdown not confirmed") }
+        self.machine = nil
+    }
+    func pause() async throws {
+        guard let machine else { throw LinuxRuntimeError.lifecycleFailed("no owned native VM") }
+        try await machine.pause()
+        isPaused = true
+    }
+    func resume() async throws {
+        guard let machine else { throw LinuxRuntimeError.lifecycleFailed("no owned native VM") }
+        try await machine.resume()
+        isPaused = false
+    }
+}
+
+private final class LinuxVMOutput: Writer, @unchecked Sendable {
+    private let buffer = LockedData()
+    private let lock = NSLock()
+    private var overflow = false
+    private var closed = false
+    func write(_ data: Data) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed, !overflow, buffer.appendBounded(data, maxBytes: 262144) else {
+            overflow = true
+            throw LinuxRuntimeError.lifecycleFailed("guest output exceeds 256KiB per stream")
+        }
+    }
+    func close() throws {
+        lock.lock(); closed = true; lock.unlock()
+    }
+    func text() throws -> String {
+        lock.lock(); defer { lock.unlock() }
+        guard closed, !overflow, let text = String(data: buffer.snapshot(), encoding: .utf8) else { throw LinuxRuntimeError.lifecycleFailed("guest output has no native EOF receipt, exceeded its bound or is not UTF8") }
+        return text
     }
 }
 #endif

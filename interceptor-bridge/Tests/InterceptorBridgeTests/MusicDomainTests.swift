@@ -1,4 +1,4 @@
-// PRD-66 — MusicDomain unit tests. Live tests gated behind LIVE_MUSIC=1.
+// MusicDomain unit tests. Live tests gated behind LIVE_MUSIC=1.
 
 import XCTest
 @testable import interceptor_bridge
@@ -18,6 +18,27 @@ final class MusicDomainTests: XCTestCase {
     func testStatus_returnsAvailability() {
         let r = runVerb("status")
         XCTAssertEqual(r["success"] as? Bool, true)
+    }
+
+    func testMalformedFieldsRefuseBeforeMusicKit(){
+        let cases:[[String:Any]]=[["sub":"seek","time":"3"],["sub":"seek","time":true],["sub":"library","limit":0],["sub":"library","limit":101],["sub":"library","kind":"artist","sort":"title"],["sub":"play","song":"x","album":"y"],["sub":"pause","song":"x"],["sub":"library-search","term":"x","types":"unknown"],["sub":"repeat","mode":"unknown"]]
+        for item in cases{var item=item;item["type"]="desktop_music";XCTAssertNotNil(MusicDomain.validationError(item))}
+        XCTAssertNil(MusicDomain.validationError(["type":"desktop_music","sub":"library","kind":"album","limit":3,"offset":1,"include_tracks":true]))
+    }
+    func testReplyBoundsAndNativeAcceptance(){
+        let item:[String:Any]=["id":"native-id","title":"native title"],action:[String:Any]=["sub":"library","limit":1]
+        XCTAssertNil(MusicDomain.resultError(WireFormat.success(["items":[item]]),action:action))
+        XCTAssertNotNil(MusicDomain.resultError(WireFormat.success(["items":[item,item]]),action:action))
+        XCTAssertNotNil(MusicDomain.resultError(WireFormat.success(["items":[["id":"","title":"x"]]]),action:action))
+        XCTAssertNotNil(MusicDomain.resultError(WireFormat.success(["ok":false]),action:["sub":"pause"]))
+        XCTAssertNotNil(MusicDomain.resultError(WireFormat.success(["available":true]),action:action))
+        XCTAssertNotNil(MusicDomain.resultError(WireFormat.success(["entries":[item],"count":0]),action:["sub":"queue"]))
+    }
+    func testSystemObservationContractAndAbsentMeasurements(){
+        let data:[String:Any]=["status":"stopped","playbackRate":NSNull(),"playbackTime":NSNull(),"repeatMode":"off","shuffleMode":"off","queueLength":0,"system":["running":false]]
+        XCTAssertNil(MusicDomain.resultError(WireFormat.success(data),action:["sub":"now-playing"]))
+        var invalid=data;invalid["system"]=["running":"false"]
+        XCTAssertNotNil(MusicDomain.resultError(WireFormat.success(invalid),action:["sub":"now-playing"]))
     }
 
     func testSearch_missingTerm_errors() {

@@ -1,4 +1,4 @@
-// PRD-66 Domain 8 — AppIntentDomain runtime verbs. Build-time AppIntent
+// AppIntentDomain runtime verbs. Build-time AppIntent
 // declarations live in Sources/Intents/InterceptorAppIntents.swift; this
 // domain surfaces a runtime introspection + donation API. References:
 // apple-developer-docs/AppIntents/{AppIntent,AppShortcut,AppShortcutsProvider}.md.

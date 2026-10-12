@@ -73,6 +73,12 @@ final class TrustDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func preflight(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if action["type"] as? String == "desktop_trust" {
+            if let error = DesktopTrustShape.validationError(action) { completion(WireFormat.error(error)); return }
+            for key in ["group", "groupColor"] {
+                if let text = action[key] as? String, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text.utf8.count > 256 || text.contains("\0") { completion(WireFormat.error("invalid trust group text")); return }
+            }
+        }
         // Defense-in-depth: --no-prompt overrides every other prompt flag so
         // read-only consumers can rely on the call never modifying TCC state
         // even if a future caller-side bug accidentally sets one of the

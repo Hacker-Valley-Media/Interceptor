@@ -7,6 +7,7 @@
 // full CLI → daemon → extension → CLI exit path is exercised.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { spawn } from "bun"
+import { captureShell } from "./helpers/shell-capture"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -44,11 +45,8 @@ function logHas(needle: string): boolean {
   return existsSync(LOG) && readFileSync(LOG, "utf-8").includes(needle)
 }
 async function cli(...args: string[]) {
-  const proc = spawn({ cmd: ["bun", "run", "cli/index.ts", ...args], env: ENV, stdout: "pipe", stderr: "pipe" })
-  const timer = setTimeout(() => proc.kill(), 30_000)
-  const code = await proc.exited
-  clearTimeout(timer)
-  return { code, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() }
+  const proc = captureShell(process.execPath, ["run", "cli/index.ts", ...args], { env: ENV, timeout: 30_000 })
+  return { code: proc.status, stdout: proc.stdout, stderr: proc.stderr }
 }
 
 beforeAll(async () => {

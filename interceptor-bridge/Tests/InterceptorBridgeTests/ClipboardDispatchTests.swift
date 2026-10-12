@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import interceptor_bridge
 
 // Regression: ClipboardDomain.handle was switching on `command`
@@ -6,9 +7,8 @@ import XCTest
 // action types) instead of action["sub"], so every clipboard call fell
 // through to `notImplemented`. These tests pin the dispatch contract.
 //
-// We don't exercise NSPasteboard directly — the regression target is the
-// dispatch path that selects a sub-handler. We assert via "did NOT return
-// the not-implemented sentinel."
+// Use private pasteboards. Dispatch tests must not read, overwrite or clear
+// the user's general clipboard.
 
 private final class ClipboardResultHolder: @unchecked Sendable {
     private let lock = NSLock()
@@ -21,7 +21,7 @@ private final class ClipboardResultHolder: @unchecked Sendable {
 
 final class ClipboardDispatchTests: XCTestCase {
     private func dispatch(sub: String, extra: [String: Any] = [:]) -> [String: Any] {
-        let domain = ClipboardDomain()
+        let domain = ClipboardDomain(pasteboard: .withUniqueName(), emitEvent: { _, _ in })
         var action: [String: Any] = ["type": "macos_clipboard", "sub": sub]
         for (k, v) in extra { action[k] = v }
         let holder = ClipboardResultHolder()
@@ -49,7 +49,7 @@ final class ClipboardDispatchTests: XCTestCase {
     }
 
     func testWriteIsRoutedFromSub() {
-        let r = dispatch(sub: "write", extra: ["text": "prd60-clip"])
+        let r = dispatch(sub: "write", extra: ["text": "fixture-clip"])
         XCTAssertFalse(isNotImplemented(r), "write sub must reach the write handler")
     }
 
@@ -85,7 +85,7 @@ final class ClipboardDispatchTests: XCTestCase {
         // If a future caller (or the router on a hypothetical
         // three-segment routing change) doesn't pass `sub`, the
         // handler should still try `command` as the sub-verb.
-        let domain = ClipboardDomain()
+        let domain = ClipboardDomain(pasteboard: .withUniqueName(), emitEvent: { _, _ in })
         let holder = ClipboardResultHolder()
         let exp = expectation(description: "clipboard fallback")
         domain.handle("read", action: ["type": "macos_clipboard"]) { r in

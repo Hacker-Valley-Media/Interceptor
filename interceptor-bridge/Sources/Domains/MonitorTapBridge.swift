@@ -26,6 +26,8 @@ final class MonitorTapBridge: @unchecked Sendable {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var callback: EventCallback?
+    private var appFilter: ((NSRunningApplication?) -> Bool)?
+    private var excludeKey = false
 
     static let cTapCallback: CGEventTapCallBack = { _, type, eventRef, userInfo in
         guard let userInfo = userInfo else { return Unmanaged.passUnretained(eventRef) }
@@ -34,22 +36,25 @@ final class MonitorTapBridge: @unchecked Sendable {
         return Unmanaged.passUnretained(eventRef)
     }
 
-    func setCallback(_ cb: @escaping EventCallback) {
+    func setCallback(_ cb: @escaping EventCallback, appFilter: ((NSRunningApplication?) -> Bool)? = nil) {
         lock.lock(); defer { lock.unlock() }
         callback = cb
+        self.appFilter = appFilter
     }
 
     /// Returns true if the tap was created and added to the run loop. Returns
     /// false if creation failed (typically Accessibility TCC missing).
     @discardableResult
-    func start() -> Bool {
+    func start(excludeKey: Bool = false) -> Bool {
+        lock.withLock { self.excludeKey = excludeKey }
         // Built piecewise — the compiler times out trying to type-check a
         // 9-term `(1 << x) | (1 << y) | …` chain in a single expression.
-        let types: [CGEventType] = [
+        var types: [CGEventType] = [
             .leftMouseDown, .rightMouseDown, .otherMouseDown,
             .leftMouseUp, .rightMouseUp, .otherMouseUp,
-            .scrollWheel, .keyDown, .flagsChanged
+            .scrollWheel, .flagsChanged
         ]
+        if !excludeKey { types.append(.keyDown) }
         var mask: CGEventMask = 0
         for t in types {
             mask |= CGEventMask(1) << CGEventMask(t.rawValue)
@@ -103,13 +108,15 @@ final class MonitorTapBridge: @unchecked Sendable {
             }
             return
         }
-        guard let cb = (lock.withLock { self.callback }) else { return }
+        let (callback, filter, excludeKey) = lock.withLock { (self.callback, self.appFilter, self.excludeKey) }
+        guard let cb = callback, !(excludeKey && type == .keyDown) else { return }
 
         // Per-event live resolution: one bounded AX IPC (sub-ms) against the
         // tap's ~1s disable threshold, and the timeout branch above re-enables.
         // If sustained-input profiling ever shows pressure, the upgrade path is
         // a bounded-rate async snapshot — not a return to the frozen cache.
         let frontmost = FrontmostResolver.frontmostApplication()
+        guard filter?(frontmost) ?? true else { return }
         let location = event.location
         var data: [String: Any] = [
             "tr": true,

@@ -50,7 +50,11 @@ describe("manifest command specs", () => {
 
   test("every spec has a valid surface", () => {
     for (const s of COMMAND_SPECS) {
-      expect(["browser", "macos", "ios", "local"]).toContain(s.surface)
+      expect(["browser", "macos", "desktop", "ios", "local"]).toContain(s.surface)
     }
+    const desktop = COMMAND_SPECS.find(s => s.name === "desktop")!
+    expect(desktop.surface).toBe("desktop")
+    expect(desktop.usage).toBe("interceptor desktop <verb> …")
+    expect(desktop.returns).toContain("permissions, limits and availability")
   })
 })

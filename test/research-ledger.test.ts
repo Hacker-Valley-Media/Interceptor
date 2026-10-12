@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test"
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../shared/subprocess-sync"
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs"
 import { resolve, join } from "node:path"
 import { tmpdir } from "node:os"

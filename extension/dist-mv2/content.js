@@ -603,9 +603,9 @@ var init_a11y_tree = __esm(() => {
 // extension/src/content/snapshot-diff.ts
 var exports_snapshot_diff = {};
 __export(exports_snapshot_diff, {
-  cacheSnapshot: () => cacheSnapshot,
+  lastSnapshot: () => lastSnapshot,
   computeSnapshotDiff: () => computeSnapshotDiff,
-  lastSnapshot: () => lastSnapshot
+  cacheSnapshot: () => cacheSnapshot
 });
 function cacheSnapshot() {
   const entries = [];
@@ -1012,19 +1012,19 @@ var init_input_simulation = __esm(() => {
 // extension/src/content/scene/ops.ts
 var exports_ops = {};
 __export(exports_ops, {
-  boundingBox: () => boundingBox,
-  clickAtViewport: () => clickAtViewport,
-  clickElementCenter: () => clickElementCenter,
-  dblclickElementCenter: () => dblclickElementCenter,
-  dispatchKeysIn: () => dispatchKeysIn,
-  findAncestorScale: () => findAncestorScale,
-  findElementById: () => findElementById,
-  focusIframeTextbox: () => focusIframeTextbox,
-  isVisibleRect: () => isVisibleRect,
-  parseDocCoord: () => parseDocCoord,
-  parseScale: () => parseScale,
+  scrollElementIntoView: () => scrollElementIntoView,
   parseTranslate: () => parseTranslate,
-  scrollElementIntoView: () => scrollElementIntoView
+  parseScale: () => parseScale,
+  parseDocCoord: () => parseDocCoord,
+  isVisibleRect: () => isVisibleRect,
+  focusIframeTextbox: () => focusIframeTextbox,
+  findElementById: () => findElementById,
+  findAncestorScale: () => findAncestorScale,
+  dispatchKeysIn: () => dispatchKeysIn,
+  dblclickElementCenter: () => dblclickElementCenter,
+  clickElementCenter: () => clickElementCenter,
+  clickAtViewport: () => clickAtViewport,
+  boundingBox: () => boundingBox
 });
 function boundingBox(el) {
   const r = el.getBoundingClientRect();

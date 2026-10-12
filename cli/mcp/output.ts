@@ -17,15 +17,15 @@ type Content =
   | { type: "resource_link"; uri: string; name: string; mimeType?: string; description?: string }
 export type McpResult = { content: Content[]; isError?: boolean; structuredContent?: Record<string, unknown> }
 
-// Verbs whose *successful* output is externally-controlled content → fence it.
+// Verbs whose successful output includes externally-controlled content.
 const FENCE_VERBS = new Set([
   // browser
   "text", "html", "tree", "read", "find", "search", "inspect", "net", "network",
   "headers", "table", "links", "images", "forms", "query", "state", "meta",
   "info", "page_info", "diff", "canvas", "ocr", "storage", "cookies", "downloads",
-  "bookmarks", "history", "monitor",
+  "bookmarks", "history", "monitor", "act", "open",
   // macos
-  "value", "log", "vision", "nlp", "files",
+  "value", "log", "vision", "nlp", "files", "notifications",
   // shared verb names used across surfaces (macos/ios tree/text/find/inspect/read
   // reuse these names) — a macos/ios call passes verb="tree" etc. too.
 ])
@@ -77,19 +77,25 @@ export type ToResultOpts = {
 export async function toResult(o: ToResultOpts): Promise<McpResult> {
   const { stdout, stderr, code } = o.run
   const json = tryJson(stdout)
+  const nativeStructured = o.surface === "desktop" && json
+    ? { structuredContent: Array.isArray(json) ? { items: json } : json }
+    : {}
 
   // Error: non-zero exit, or an explicit success:false envelope.
   const successFalse = json && json.success === false
   if (code !== 0 || successFalse) {
     const msg = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n") || `exit ${code}`
-    return { content: [{ type: "text", text: msg }], isError: true }
+    // Native refusal details can include target-provided names or captured
+    // post-action data. Preserve their contract and mark the text as data.
+    const text = o.fenceEnabled && o.surface === "desktop" ? fence(o.verb, msg) : msg
+    return { ...nativeStructured, content: [{ type: "text", text }], isError: true }
   }
 
   // Image payload — dataUrl in JSON, or a saved image file.
   const dataUrl = findDataUrl(json)
   if (dataUrl) {
     const m = dataUrl.match(IMG_RE)!
-    return { content: [{ type: "image", data: m[2].replace(/\s+/g, ""), mimeType: m[1] }] }
+    return { ...nativeStructured, content: [{ type: "image", data: m[2].replace(/\s+/g, ""), mimeType: m[1] }] }
   }
   const savedPath = findSavedPath(json, stderr)
   if (savedPath && IMG_EXT_RE.test(savedPath) && existsSync(savedPath)) {
@@ -98,15 +104,18 @@ export async function toResult(o: ToResultOpts): Promise<McpResult> {
       const b64 = Buffer.from(bytes).toString("base64")
       const ext = (savedPath.match(IMG_EXT_RE)![1] || "png").toLowerCase()
       const mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`
-      return { content: [{ type: "image", data: b64, mimeType: mime }, { type: "text", text: `saved: ${savedPath}` }] }
+      return { ...nativeStructured, content: [{ type: "image", data: b64, mimeType: mime }, { type: "text", text: `saved: ${savedPath}` }] }
     } catch { /* fall through to text */ }
   }
   // Saved non-image artifact (save / net export) → ResourceLink.
   if (savedPath && existsSync(savedPath)) {
     return {
+      ...nativeStructured,
       content: [
         { type: "resource_link", uri: `file://${savedPath}`, name: savedPath.split("/").pop() || savedPath, description: `artifact from ${o.surface} ${o.verb}` },
-        { type: "text", text: stdout.trim() || `saved: ${savedPath}` },
+        { type: "text", text: o.fenceEnabled && FENCE_VERBS.has(o.verb)
+          ? fence(o.verb, stdout.trim() || `saved: ${savedPath}`)
+          : stdout.trim() || `saved: ${savedPath}` },
       ],
     }
   }

@@ -20,6 +20,8 @@ import {
   type StatusSnapshot,
 } from "../lib/status-renderer"
 import { sendCommand } from "../transport"
+import { callDesktopProvider } from "../../daemon/desktop-provider"
+import type { DesktopHello } from "../../shared/desktop-contract"
 
 type Action = { type: string; [key: string]: unknown }
 
@@ -101,6 +103,15 @@ export async function parseMetaCommand(filtered: string[], jsonMode = false, con
     case "status": {
       const verbose = filtered.includes("--verbose") || filtered.includes("--explain") || filtered.includes("-v")
       const snap: StatusSnapshot = readStatusSnapshot()
+
+      if (verbose && snap.nativeDesktop?.binary) {
+        const result = await callDesktopProvider({ type: "desktop_hello" }, 2000)
+        const hello = result.data as DesktopHello | undefined
+        Object.assign(snap.nativeDesktop, {
+          reachable: result.success,
+          ...(result.success && hello ? { version: hello.version, pid: hello.pid, session: hello.session } : { error: result.error, code: result.code }),
+        })
+      }
 
       // Browser-config block (#52) — verbose-only, macOS-only.
       if (verbose && process.platform === "darwin") {

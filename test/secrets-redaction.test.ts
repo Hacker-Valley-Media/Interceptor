@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { actionLogSummary, inboundLogSummary, isSecretBearing, redactAction } from "../daemon/redact"
+import { actionLogSummary, inboundLogSummary, isSecretBearing, redactAction, redactMessage } from "../daemon/redact"
 
 const VALUE = "hunter2-CORRECT-horse"
 
@@ -20,6 +20,28 @@ describe("actionLogSummary", () => {
     expect(line).not.toContain(VALUE)
     expect(line).toContain('"name":"admin"')
     expect(line).toContain("<redacted>")
+  })
+
+  test("legacy vault and saved-login enumeration use the credential boundary", () => {
+    for (const type of ["macos_secrets", "desktop_secret", "browser_creds"]) {
+      const action = { type, sub: "get", name: "owned", value: VALUE }
+      expect(isSecretBearing(action)).toBe(true)
+      expect(actionLogSummary(action)).not.toContain(VALUE)
+      expect(action.value).toBe(VALUE)
+    }
+  })
+
+  test("credential authentication tokens are masked in request and response envelopes", () => {
+    const token = "c".repeat(64)
+    for (const message of [
+      { id: "owned", vaultToken: token, action: { type: "macos_secrets", sub: "set", value: VALUE } },
+      { id: "owned", vaultToken: token, result: { success: true, data: { name: "owned", value: VALUE } } },
+    ]) {
+      const redacted = JSON.stringify(redactMessage(message))
+      expect(redacted).not.toContain(token)
+      expect(redacted).not.toContain(VALUE)
+      expect(message.vaultToken).toBe(token)
+    }
   })
 
   test("every --secret delivery logs the name only", () => {

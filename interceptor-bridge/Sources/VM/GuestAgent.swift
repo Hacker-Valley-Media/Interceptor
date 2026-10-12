@@ -19,6 +19,7 @@
 
 import Foundation
 import Darwin
+import GuestWire
 #if canImport(Virtualization)
 import Virtualization
 #endif
@@ -47,12 +48,17 @@ final class GuestAgentConnectContinuation: @unchecked Sendable {
         self.continuation = continuation
     }
 
-    func resume(returning value: Int32) {
+    /// Win admission before installing a connection. A timed-out callback
+    /// drops its native connection without changing the current agent fd.
+    @discardableResult
+    func complete(_ operation: () throws -> Int32) -> Bool {
         lock.lock()
-        let cc = continuation
+        guard let cc = continuation else { lock.unlock(); return false }
         continuation = nil
+        let result = Result { try operation() }
         lock.unlock()
-        cc?.resume(returning: value)
+        cc.resume(with: result)
+        return true
     }
 
     func resume(throwing error: Error) {
@@ -110,7 +116,7 @@ public extension GuestAgent {
         return (r["data"] as? [String: Any]) ?? r
     }
 
-    func exec(_ argv: [String], env: [String: String] = [:], workdir: String? = nil, tty: Bool = false, timeout: TimeInterval = 60) async throws -> (exitCode: Int32, stdout: String, stderr: String, durationMs: Int) {
+    func exec(_ argv: [String], env: [String: String] = [:], workdir: String? = nil, tty: Bool = false, timeout: TimeInterval = 50) async throws -> (exitCode: Int32, stdout: String, stderr: String, durationMs: Int) {
         var action: [String: Any] = ["verb": "exec", "argv": argv, "env": env, "tty": tty, "timeout": timeout]
         if let w = workdir { action["workdir"] = w }
         let responseTimeout = timeout > 0 ? timeout + 5 : timeout
@@ -119,12 +125,22 @@ public extension GuestAgent {
         if !success {
             throw GuestAgentError.remote(r["error"] as? String ?? "exec failed")
         }
-        let data = r["data"] as? [String: Any] ?? [:]
-        let exit = (data["exitCode"] as? Int32) ?? Int32((data["exitCode"] as? Int) ?? 0)
-        let out = data["stdout"] as? String ?? ""
-        let err = data["stderr"] as? String ?? ""
-        let durMs = (data["durationMs"] as? Int) ?? 0
-        return (exit, out, err, durMs)
+        guard let payload = r["data"] as? [String: Any], JSONSerialization.isValidJSONObject(payload) else {
+            throw GuestAgentError.framing("exec success omitted its actual result; inspect guest effects before retrying")
+        }
+        let bytes = try JSONSerialization.data(withJSONObject: payload)
+        guard bytes.count <= 1_048_576 else { throw GuestAgentError.framing("exec reply exceeds 1MiB; guest effects were not rolled back") }
+        let data: DesktopVmExecution
+        do { data = try JSONDecoder().decode(DesktopVmExecution.self, from: bytes) }
+        catch { throw GuestAgentError.framing("exec reply needs actual exitCode, stdout, stderr and durationMs: \(error)") }
+        guard data.exitCode.isFinite, data.exitCode.rounded(.towardZero) == data.exitCode,
+              data.exitCode >= Double(Int32.min), data.exitCode <= Double(Int32.max),
+              data.durationMs.isFinite, data.durationMs.rounded(.towardZero) == data.durationMs,
+              data.durationMs >= 0, data.durationMs <= 58_000,
+              data.stdout.utf8.count + data.stderr.utf8.count <= 131_072 else {
+            throw GuestAgentError.framing("exec reply has impossible counters or oversized output; inspect guest effects before retrying")
+        }
+        return (Int32(data.exitCode), data.stdout, data.stderr, Int(data.durationMs))
     }
 
     func getIP(timeout: TimeInterval = 10) async throws -> String? {
@@ -172,43 +188,43 @@ public extension GuestAgent {
         return try await control("logs", params: params, timeout: timeout)
     }
 
-    func copyIn(path: String, data: Data, mode: String? = nil, timeout: TimeInterval = 60) async throws -> [String: Any] {
-        var params: [String: Any] = ["path": path, "dataBase64": data.base64EncodedString()]
-        if let mode { params["mode"] = mode }
-        return try await control("cp_in", params: params, timeout: timeout)
+    func copyIn(path: String, data: Data, mode: String? = nil, timeout: TimeInterval = 50) async throws -> [String: Any] {
+        guard data.count <= 1_048_576 else { throw GuestAgentError.framing("guest copy is capped at1MiB") }
+        guard timeout.isFinite, timeout > 0, timeout <= 50 else { throw GuestAgentError.framing("guest copy budget must be positive and at most 50s") }
+        let deadline = try GuestWire.Deadline(seconds: timeout)
+        let probe = try await request(GuestAgentDict(["verb": "ping"]), timeout: deadline.remaining()).dict
+        try GuestWire.requireExclusiveCopy(probe)
+        var action: [String: Any] = ["verb": "cp_in", "path": path, "dataBase64": data.base64EncodedString(), "timeout": try deadline.remaining()]
+        if let mode { action["mode"] = mode }
+        let reply = try await request(GuestAgentDict(action), timeout: deadline.remaining()).dict
+        try GuestWire.verifyCopied(reply, path: path, data: data)
+        return reply["data"] as! [String: Any]
     }
 
-    func copyOut(path: String, timeout: TimeInterval = 60) async throws -> [String: Any] {
-        try await control("cp_out", params: ["path": path], timeout: timeout)
+    func copyOut(path: String, timeout: TimeInterval = 50) async throws -> [String: Any] {
+        guard timeout.isFinite, timeout > 0, timeout <= 50 else { throw GuestAgentError.framing("guest copy budget must be positive and at most 50s") }
+        let deadline = try GuestWire.Deadline(seconds: timeout)
+        let probe = try await request(GuestAgentDict(["verb": "ping"]), timeout: deadline.remaining()).dict
+        try GuestWire.requireExclusiveCopy(probe)
+        let reply = try await request(GuestAgentDict(["verb": "cp_out", "path": path, "timeout": try deadline.remaining()]), timeout: deadline.remaining()).dict
+        _ = try GuestWire.copyBytes(reply, path: path)
+        return reply["data"] as! [String: Any]
     }
 }
 
 /// Concrete vsock-backed agent. Owns the raw fd from
-/// `VZVirtioSocketConnection.fileDescriptor`. State (fd + pending map) is
-/// serialized through a dedicated dispatch queue, which is async-safe
+/// `VZVirtioSocketConnection.fileDescriptor`. Descriptor and connection state
+/// are serialized through a dedicated dispatch queue, which is async-safe
 /// under Swift 6 strict concurrency where NSLock.lock() is not.
 @available(macOS 11.0, *)
 private actor GuestAgentRequestLock {
     private var locked = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func lock() async {
-        if !locked {
-            locked = true
-            return
-        }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
-        }
+    func acquire() -> Bool {
+        guard !locked else { return false }
+        locked = true
+        return true
     }
-
-    func unlock() {
-        if waiters.isEmpty {
-            locked = false
-        } else {
-            waiters.removeFirst().resume()
-        }
-    }
+    func unlock() { locked = false }
 }
 
 @available(macOS 11.0, *)
@@ -217,16 +233,14 @@ public final class VsockGuestAgent: GuestAgent, @unchecked Sendable {
     private let connectQueue: DispatchQueue?
     private let port: UInt32
     private let stateQueue = DispatchQueue(label: "interceptor.bridge.vsockAgent")
+    // This fd is owned by the client, not borrowed from a VZ connection.
     private var fd: Int32 = -1
     private var tcpFallbackHost: String?
     private var retainedConnection: AnyObject?
-    private var pending: [String: CheckedContinuation<GuestAgentDict, Error>] = [:]
-    private var reader: Task<Void, Never>?
+    private var generation: UInt64 = 0
+    private var quarantine: String?
     private let requestLock = GuestAgentRequestLock()
-
-    private func withState<R>(_ body: (inout Int32, inout [String: CheckedContinuation<GuestAgentDict, Error>]) -> R) -> R {
-        stateQueue.sync { body(&fd, &pending) }
-    }
+    private let connectLock = GuestAgentRequestLock()
 
 #if canImport(Virtualization)
     public init(socketDevice: VZVirtioSocketDevice, connectQueue: DispatchQueue? = nil, port: UInt32 = kInterceptorGuestAgentPort, tcpFallbackHost: String? = nil) {
@@ -237,126 +251,139 @@ public final class VsockGuestAgent: GuestAgent, @unchecked Sendable {
     }
 #endif
 
+    deinit {
+        closeConnection()
+    }
+
     public func setTCPFallbackHost(_ host: String?) {
-        stateQueue.sync {
-            self.tcpFallbackHost = host
+        stateQueue.sync { tcpFallbackHost = host }
+    }
+
+    private func requireAvailable() throws {
+        try stateQueue.sync {
+            if let quarantine {
+                throw GuestAgentError.notConnected(quarantine + "; inspect guest effects and restart the owned VM before another guest request")
+            }
         }
     }
 
-    private func tcpFallbackHostSnapshot() -> String? {
-        stateQueue.sync {
-            tcpFallbackHost
+    private func closeConnection(reason: String? = nil) {
+        let oldConnection: AnyObject? = stateQueue.sync {
+            generation &+= 1
+            if let reason, quarantine == nil { quarantine = reason }
+            if fd >= 0 {
+                _ = Darwin.shutdown(fd, SHUT_RDWR)
+                Darwin.close(fd)
+                fd = -1
+            }
+            let previous = retainedConnection
+            retainedConnection = nil
+            return previous
+        }
+        if let connection = oldConnection as? VZVirtioSocketConnection {
+            let owned = UncheckedSendableBox(connection)
+            if let connectQueue { connectQueue.async { owned.value.close() } }
+            else { connection.close() }
         }
     }
 
-    private func retainConnection(_ connection: AnyObject, fd connectionFd: Int32) {
-        stateQueue.sync {
+    private func retainConnection(_ connection: AnyObject, fd connectionFd: Int32, generation expected: UInt64) throws -> Int32 {
+        try stateQueue.sync {
+            guard generation == expected, quarantine == nil, fd < 0 else {
+                throw GuestAgentError.notConnected("late or replaced guest connection refused")
+            }
+            let owned = Darwin.fcntl(connectionFd, F_DUPFD_CLOEXEC, 0)
+            guard owned >= 0 else { throw GuestAgentError.ioFailure("cannot retain guest connection descriptor: \(errno)") }
             retainedConnection = connection
-            fd = connectionFd
+            fd = owned
+            return owned
         }
     }
 
     public func connect(timeout: TimeInterval = 30) async throws {
-        let existingFd: Int32 = withState { (f, _) in f }
-        if existingFd >= 0 {
-            return
+        let deadline = try GuestWire.Deadline(seconds: timeout)
+        guard await connectLock.acquire() else { throw GuestAgentError.notConnected("another guest connection is being admitted") }
+        do {
+            try await connectUnlocked(deadline: deadline)
+            await connectLock.unlock()
+        } catch {
+            closeConnection()
+            await connectLock.unlock()
+            throw error
         }
-        let deadline = timeout > 0 ? Date().addingTimeInterval(timeout) : nil
-        var lastError: Error?
-
-        while true {
-            if withState({ (f, _) in f }) >= 0 {
-                return
-            }
-
-            let remaining: TimeInterval
-            if let deadline {
-                remaining = deadline.timeIntervalSinceNow
-                if remaining <= 0 {
-                    break
-                }
-            } else {
-                remaining = 0
-            }
-
-            let attemptTimeout = deadline == nil ? timeout : min(5, max(0.5, remaining))
-            let connectedFd: Int32
-            if let host = tcpFallbackHostSnapshot(), !host.isEmpty {
-                do {
-                    connectedFd = try Self.connectTCP(host: host, port: port, timeout: attemptTimeout)
-                    withState { (f, _) in f = connectedFd }
-                    return
-                } catch {
-                    lastError = error
-                    if deadline == nil {
-                        throw GuestAgentError.notConnected("tcp connect \(host):\(port): \(error)")
-                    }
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    continue
-                }
-            }
-            do {
-                connectedFd = try await connectVsockAttempt(timeout: attemptTimeout)
-            } catch {
-                lastError = error
-                if deadline == nil {
-                    throw GuestAgentError.notConnected("\(error); tcp fallback not attempted because no explicit tcp guest-agent transport is configured")
-                } else {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    continue
-                }
-            }
-            withState { (f, _) in f = connectedFd }
-            return
-        }
-
-        let errorText = lastError.map { "\($0)" } ?? "timeout"
-        throw GuestAgentError.notConnected("\(errorText); tcp fallback not attempted because no explicit tcp guest-agent transport is configured")
     }
 
-    private func connectVsockAttempt(timeout: TimeInterval) async throws -> Int32 {
-        // VZVirtioSocketDevice.connect(toPort:completionHandler:) returns a
-        // VZVirtioSocketConnection whose fileDescriptor is a real socket
-        // file descriptor (apple-developer-docs/.../VZVirtioSocketDevice.md:30).
-        // We drive it as a normal POSIX socket.
-        let device = self.socketDevice
-        let connectQueue = self.connectQueue
-        let port = self.port
-        // VZVirtioSocketConnection isn't Sendable; extract the fileDescriptor
-        // (Int32, Sendable) inside the completion closure and retain the
-        // connection object on this agent so the fd remains valid.
+    private func connectUnlocked(deadline: GuestWire.Deadline) async throws {
+        try requireAvailable()
+        let initial = stateQueue.sync { (fd, generation) }
+        if initial.0 >= 0 { return }
+        var lastError: Error?
+        while true {
+            try requireAvailable()
+            let remaining: TimeInterval
+            do { remaining = try deadline.remaining() }
+            catch { throw GuestAgentError.notConnected("guest connection deadline expired: \(lastError.map { "\($0)" } ?? "no successful connection")") }
+            let attemptTimeout = min(5, remaining)
+            do {
+                if let host = stateQueue.sync(execute: { tcpFallbackHost }), !host.isEmpty {
+                    let connected = try Self.connectTCP(host: host, port: port, timeout: attemptTimeout)
+                    try stateQueue.sync {
+                        guard generation == initial.1, fd < 0, quarantine == nil else {
+                            Darwin.close(connected)
+                            throw GuestAgentError.notConnected("late or replaced TCP connection refused")
+                        }
+                        fd = connected
+                    }
+                } else {
+                    _ = try await connectVsockAttempt(timeout: attemptTimeout, generation: initial.1)
+                }
+                _ = try deadline.remaining()
+                return
+            } catch {
+                lastError = error
+                guard stateQueue.sync(execute: { generation == initial.1 }) else { throw error }
+                let pause = min(0.2, try deadline.remaining())
+                try await Task.sleep(nanoseconds: UInt64(pause * 1e9))
+            }
+        }
+    }
+
+    private func connectVsockAttempt(timeout: TimeInterval, generation: UInt64) async throws -> Int32 {
+        let device = socketDevice, queue = connectQueue, port = port
         return try await withCheckedThrowingContinuation { cc in
             let gate = GuestAgentConnectContinuation(cc)
             let startConnect = {
                 device.connect(toPort: port) { result in
                     switch result {
-                    case .success(let conn):
-                        let connectionFd = conn.fileDescriptor
-                        guard connectionFd >= 0 else {
-                            gate.resume(throwing: GuestAgentError.notConnected("vsock connect port \(port): connection closed before fileDescriptor was usable"))
-                            return
+                    case .success(let connection):
+                        let admitted = gate.complete {
+                            do {
+                                guard connection.fileDescriptor >= 0 else {
+                                    throw GuestAgentError.notConnected("vsock connection closed before descriptor admission")
+                                }
+                                return try self.retainConnection(connection, fd: connection.fileDescriptor, generation: generation)
+                            } catch {
+                                connection.close()
+                                throw error
+                            }
                         }
-                        self.retainConnection(conn, fd: connectionFd)
-                        gate.resume(returning: connectionFd)
-                    case .failure(let err):
-                        gate.resume(throwing: GuestAgentError.notConnected("vsock connect port \(port): \(err.localizedDescription)"))
+                        if !admitted { connection.close() }
+                    case .failure(let error):
+                        gate.resume(throwing: GuestAgentError.notConnected("vsock port \(port): \(error.localizedDescription)"))
                     }
                 }
             }
-            if let connectQueue {
-                connectQueue.async(execute: startConnect)
-            } else {
-                startConnect()
-            }
-            if timeout > 0 {
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
-                    gate.resume(throwing: GuestAgentError.timeout("vsock connect port \(port) after \(Int(timeout))s"))
-                }
+            if let queue { queue.async(execute: startConnect) } else { startConnect() }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                gate.resume(throwing: GuestAgentError.timeout("vsock connection deadline expired"))
             }
         }
     }
 
     private static func connectTCP(host: String, port: UInt32, timeout: TimeInterval) throws -> Int32 {
+        guard port > 0, port <= UInt32(UInt16.max), timeout.isFinite, timeout > 0, timeout <= 58 else {
+            throw GuestAgentError.notConnected("TCP guest connection needs a valid port and bounded budget")
+        }
         let sock = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else {
             throw GuestAgentError.ioFailure("tcp socket: \(String(cString: strerror(errno)))")
@@ -436,10 +463,14 @@ public final class VsockGuestAgent: GuestAgent, @unchecked Sendable {
         return sock
     }
 
-    public func request(_ action: GuestAgentDict, timeout: TimeInterval = 60) async throws -> GuestAgentDict {
-        await requestLock.lock()
+
+    public func request(_ action: GuestAgentDict, timeout: TimeInterval = 58) async throws -> GuestAgentDict {
+        let deadline = try GuestWire.Deadline(seconds: timeout)
+        guard await requestLock.acquire() else {
+            throw GuestAgentError.notConnected("another guest request still owns admission; nothing was sent")
+        }
         do {
-            let result = try await requestUnlocked(action, timeout: timeout)
+            let result = try await requestUnlocked(action, deadline: deadline)
             await requestLock.unlock()
             return result
         } catch {
@@ -448,190 +479,43 @@ public final class VsockGuestAgent: GuestAgent, @unchecked Sendable {
         }
     }
 
-    private func requestUnlocked(_ action: GuestAgentDict, timeout: TimeInterval = 60) async throws -> GuestAgentDict {
+    private func requestUnlocked(_ action: GuestAgentDict, deadline: GuestWire.Deadline) async throws -> GuestAgentDict {
+        try requireAvailable()
         let id = UUID().uuidString
-        var payload: [String: Any] = ["id": id, "action": action.dict]
-        if payload["action"] == nil { payload["action"] = action.dict }
-
-        let data: Data
-        do {
-            data = try JSONSerialization.data(withJSONObject: payload, options: [])
-        } catch {
-            throw GuestAgentError.framing("encode request: \(error.localizedDescription)")
+        let payload: [String: Any] = ["id": id, "action": action.dict]
+        _ = try GuestWire.requestID(payload)
+        let frame = try GuestWire.encode(payload)
+        // A connection carries one exchange. Discard a read-only startup
+        // probe connection before sending the first bytes of this request.
+        closeConnection()
+        try await connect(timeout: deadline.remaining())
+        let requestFD: Int32 = try stateQueue.sync {
+            guard fd >= 0, quarantine == nil else { throw GuestAgentError.notConnected("guest connection disappeared before admission") }
+            let owned = Darwin.fcntl(fd, F_DUPFD_CLOEXEC, 0)
+            guard owned >= 0 else { throw GuestAgentError.ioFailure("cannot retain exchange socket: \(errno)") }
+            return owned
         }
-
-        var length = UInt32(data.count).littleEndian
-        var frame = Data(bytes: &length, count: 4)
-        frame.append(data)
-
-        func sendAndRead() throws -> GuestAgentDict {
-            let fdSnapshot: Int32 = withState { (f, _) in f }
-            guard fdSnapshot >= 0 else { throw GuestAgentError.notConnected("no fd") }
-            try Self.writeAll(fd: fdSnapshot, data: frame)
-            let response = try Self.readFrame(fd: fdSnapshot, timeout: timeout)
-            guard let obj = try JSONSerialization.jsonObject(with: response, options: []) as? [String: Any] else {
-                throw GuestAgentError.framing("decode response: expected object")
-            }
-            let result = (obj["result"] as? [String: Any]) ?? [:]
+        defer { Darwin.close(requestFD) }
+        var submitted = false
+        do {
+            _ = try deadline.remaining()
+            submitted = true
+            try GuestWire.write(fd: requestFD, frame: frame, deadline: deadline)
+            let result = try GuestWire.result(GuestWire.read(fd: requestFD, deadline: deadline), for: id)
+            _ = try deadline.remaining()
+            closeConnection()
             return GuestAgentDict(result)
-        }
-
-        do {
-            return try sendAndRead()
         } catch {
-            await disconnect()
-            try await connect(timeout: min(max(timeout, 1), 10))
-            do {
-                return try sendAndRead()
-            } catch {
-                await disconnect()
-                throw error
+            if submitted {
+                closeConnection(reason: "guest request outcome is unknown after submission: \(error)")
+                throw GuestAgentError.timeout("guest request outcome is unknown: \(error); no reconnect or replay was performed")
             }
+            closeConnection()
+            throw error
         }
-    }
-
-    private static func writeAll(fd: Int32, data: Data) throws {
-        try data.withUnsafeBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return }
-            var written = 0
-            while written < data.count {
-                let n = Darwin.write(fd, base.advanced(by: written), data.count - written)
-                if n > 0 {
-                    written += n
-                    continue
-                }
-                if n < 0 && errno == EINTR {
-                    continue
-                }
-                let message = n == 0 ? "zero-byte write" : String(cString: strerror(errno))
-                throw GuestAgentError.ioFailure("write: \(message)")
-            }
-        }
-    }
-
-    private static func readFrame(fd: Int32, timeout: TimeInterval) throws -> Data {
-        let header = try readExact(fd: fd, count: 4, timeout: timeout)
-        let length = header.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-        guard length > 0 && length <= 50_000_000 else {
-            throw GuestAgentError.framing("invalid response length \(length)")
-        }
-        return try readExact(fd: fd, count: Int(length), timeout: timeout)
-    }
-
-    private static func readExact(fd: Int32, count: Int, timeout: TimeInterval) throws -> Data {
-        let deadline = timeout > 0 ? Date().addingTimeInterval(timeout) : nil
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: min(64 * 1024, max(1, count)))
-        while data.count < count {
-            let timeoutMs: Int32
-            if let deadline {
-                let remaining = deadline.timeIntervalSinceNow
-                guard remaining > 0 else {
-                    throw GuestAgentError.timeout("read \(count) bytes after \(Int(timeout))s")
-                }
-                timeoutMs = Int32(min(Double(Int32.max), ceil(remaining * 1000)))
-            } else {
-                timeoutMs = -1
-            }
-            var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let pollResult = Darwin.poll(&pfd, 1, timeoutMs)
-            if pollResult == 0 {
-                throw GuestAgentError.timeout("read \(count) bytes after \(Int(timeout))s")
-            }
-            if pollResult < 0 {
-                if errno == EINTR { continue }
-                throw GuestAgentError.ioFailure("poll: \(String(cString: strerror(errno)))")
-            }
-            if (pfd.revents & Int16(POLLHUP | POLLERR | POLLNVAL)) != 0 {
-                throw GuestAgentError.notConnected("disconnected")
-            }
-            let wanted = min(buffer.count, count - data.count)
-            let n = buffer.withUnsafeMutableBufferPointer {
-                Darwin.read(fd, $0.baseAddress, wanted)
-            }
-            if n > 0 {
-                data.append(buffer, count: n)
-                continue
-            }
-            if n == 0 {
-                throw GuestAgentError.notConnected("disconnected")
-            }
-            if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK {
-                continue
-            }
-            throw GuestAgentError.ioFailure("read: \(String(cString: strerror(errno)))")
-        }
-        return data
     }
 
     public func disconnect() async {
-        reader?.cancel()
-        reader = nil
-        let (f, pendingCopy): (Int32, [String: CheckedContinuation<GuestAgentDict, Error>]) = withState { (fd, pending) in
-            let snapshotPending = pending
-            let snapshotFd = fd
-            fd = -1
-            retainedConnection = nil
-            pending.removeAll()
-            return (snapshotFd, snapshotPending)
-        }
-        for (_, cc) in pendingCopy {
-            cc.resume(throwing: GuestAgentError.notConnected("disconnected"))
-        }
-        if f >= 0 { Darwin.close(f) }
-    }
-
-    // MARK: - read loop
-
-    private func readLoop() async {
-        var buffer = Data()
-        var buf = [UInt8](repeating: 0, count: 64 * 1024)
-        while !Task.isCancelled {
-            let fdSnapshot: Int32 = withState { (f, _) in f }
-            if fdSnapshot < 0 { return }
-            let n = buf.withUnsafeMutableBufferPointer { Darwin.read(fdSnapshot, $0.baseAddress, $0.count) }
-            if n == 0 {
-                await self.disconnect()
-                return
-            }
-            if n < 0 {
-                let readErrno = errno
-                if readErrno == EINTR {
-                    continue
-                }
-                if readErrno == EAGAIN || readErrno == EWOULDBLOCK {
-                    var pfd = pollfd(fd: fdSnapshot, events: Int16(POLLIN), revents: 0)
-                    let pollResult = Darwin.poll(&pfd, 1, 250)
-                    if pollResult < 0 && errno != EINTR {
-                        await self.disconnect()
-                        return
-                    }
-                    continue
-                }
-                await self.disconnect()
-                return
-            }
-            buffer.append(buf, count: n)
-
-            while buffer.count >= 4 {
-                let length: UInt32 = buffer.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-                let totalSize = 4 + Int(length)
-                if length == 0 || length > 50_000_000 {
-                    buffer.removeAll()
-                    break
-                }
-                if buffer.count < totalSize { break }
-                let payload = buffer.subdata(in: 4..<totalSize)
-                buffer.removeSubrange(0..<totalSize)
-
-                guard let obj = try? JSONSerialization.jsonObject(with: payload, options: []) as? [String: Any] else {
-                    continue
-                }
-                guard let id = obj["id"] as? String else { continue }
-                let result = (obj["result"] as? [String: Any]) ?? [:]
-                let cc: CheckedContinuation<GuestAgentDict, Error>? = withState { (_, p) in p.removeValue(forKey: id) }
-                cc?.resume(returning: GuestAgentDict(result))
-            }
-        }
+        closeConnection(reason: "guest agent was disconnected")
     }
 }

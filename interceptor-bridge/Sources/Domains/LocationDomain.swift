@@ -1,4 +1,4 @@
-// PRD-66 Domain 12 — CoreLocation. macOS 10.6+; CLGeocoder/CLPlacemark
+// CoreLocation. macOS 10.6+; CLGeocoder/CLPlacemark
 // deprecated 26.0 — guarded behind #available. References:
 // apple-developer-docs/CoreLocation/{CLLocationManager,CLAuthorizationStatus,
 // CLLocation,CLGeocoder,CLPlacemark}.md.
@@ -8,26 +8,48 @@ import CoreLocation
 import Contacts
 
 final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, @unchecked Sendable {
-    private let manager: CLLocationManager
-    private let geocoder = CLGeocoder()
+    private let makeManager: () -> CLLocationManager
+    private let requestTimeout:TimeInterval
+    private var managerValue: CLLocationManager?
+    private var manager: CLLocationManager {
+        if let managerValue{return managerValue}
+        let value=makeManager();managerValue=value;value.delegate=self;return value
+    }
+    private lazy var geocoder = CLGeocoder()
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
 
-    private var oneShotCompletion: ((CLLocation?) -> Void)?
+    private struct OneShot {
+        let id: UUID
+        let manager: CLLocationManager
+        var cleaning=false
+        var completion: (@Sendable ([String:Any]) -> Void)?
+    }
+    private var oneShot: OneShot?
+    private var geocodeRequest: (id:UUID, completion:(@Sendable ([String:Any])->Void)?)?
     private let lock = NSLock()
-    private var continuous: [CLLocation] = []
+    private var continuous: [[String:Any]] = []
     private var continuousActive = false
+    private var significantActive=false
+    private var visitsActive=false
+    private var monitorError: String?
 
-    override init() {
-        manager = CLLocationManager()
+    init(makeManager: @escaping () -> CLLocationManager = {CLLocationManager()},requestTimeout:TimeInterval=30) {
+        self.makeManager=makeManager
+        self.requestTimeout=requestTimeout
         super.init()
-        manager.delegate = self
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        var canonical=action;canonical["type"]="desktop_location";canonical["sub"]=action["sub"] as? String ?? command
+        if let error=Self.validationError(canonical){completion(WireFormat.failure("invalid_request",error));return}
+        let box=UncheckedSendableBox(canonical)
+        DispatchQueue.main.async{self.dispatch(command,action:box.value,completion:completion)}
+    }
+    private func dispatch(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let sub = action["sub"] as? String ?? command
         switch sub {
         case "status":                          status(completion: completion)
@@ -49,6 +71,33 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
         case "postal-geocode":                  postalGeocode(action, completion: completion)
         default:                                completion(WireFormat.error("location.\(sub) — unknown verb"))
         }
+    }
+
+    static func coordinates(_ value:Any?,region:Bool=false)->[Double]?{
+        guard let text=value as? String,text.utf8.count<=128,text.range(of:"^[0-9+eE.,\\s-]+$",options:.regularExpression) != nil else{return nil}
+        let pieces=text.split(separator:",",omittingEmptySubsequences:false)
+        guard pieces.count==(region ? 3:2) else{return nil}
+        let point=pieces.compactMap{Double($0.trimmingCharacters(in:.whitespacesAndNewlines))}
+        guard point.count==pieces.count,point.allSatisfy(\.isFinite),abs(point[0])<=90,abs(point[1])<=180,!region||(point[2]>0&&point[2]<=10000000)else{return nil};return point
+    }
+    static func validationError(_ a:[String:Any])->String?{
+        if let error=DesktopLocationShape.validationError(a){return error}
+        let sub=a["sub"] as! String
+        let fields:[String:[String]]=["request":["level"],"request-temporary-accuracy":["purpose"],"monitor_start":["accuracy"],"geocode":["address","locale","region"],"reverse":["coords","locale"],"distance":["from","to"],"postal-geocode":["postal","locale"]]
+        let owned=fields[sub] ?? []
+        for key in ["level","purpose","accuracy","address","coords","postal","region","locale","from","to"]{if a[key] != nil && !owned.contains(key){return "field does not belong to location \(sub)"}}
+        func bounded(_ value:Any?,_ max:Int)->Bool{guard let text=value as? String else{return false};return !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && text.utf8.count<=max && !text.contains("\0")}
+        for key in ["group","groupColor"]{if a[key] != nil && !bounded(a[key],256){return "invalid location group metadata"}}
+        if sub=="request-temporary-accuracy" && !bounded(a["purpose"],128){return "temporary accuracy requires a bounded purpose"}
+        if let locale=a["locale"] as? String, !bounded(locale,128)||locale.range(of:"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$",options:.regularExpression)==nil{return "invalid location locale"}
+        if sub=="geocode" && !bounded(a["address"],4096){return "geocode requires a bounded address"}
+        if sub=="reverse" && coordinates(a["coords"])==nil{return "reverse requires finite latitude/longitude"}
+        if sub=="distance" && (coordinates(a["from"])==nil||coordinates(a["to"])==nil){return "distance requires finite latitude/longitude pairs"}
+        if a["region"] != nil && coordinates(a["region"],region:true)==nil{return "geocode region requires latitude/longitude and a positive bounded radius"}
+        if sub=="postal-geocode"{
+            guard bounded(a["postal"],8192),let raw=a["postal"] as? String,let dict=try? JSONSerialization.jsonObject(with:Data(raw.utf8)) as? [String:Any],!dict.isEmpty,dict.allSatisfy({["street","city","state","postalCode","country","isoCountryCode"].contains($0.key)&&bounded($0.value,1024)})else{return "invalid bounded postal address fields"}
+        }
+        return nil
     }
 
     // MARK: - Helpers
@@ -81,9 +130,14 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
         out["floor"] = l.floor?.level as Any? ?? NSNull()
         return out
     }
+    static func validFix(_ l:CLLocation)->Bool{
+        CLLocationCoordinate2DIsValid(l.coordinate) && l.horizontalAccuracy>=0 &&
+        [l.altitude,l.ellipsoidalAltitude,l.horizontalAccuracy,l.verticalAccuracy,l.course,l.courseAccuracy,l.speed,l.speedAccuracy,l.timestamp.timeIntervalSince1970].allSatisfy(\.isFinite)
+    }
 
     private func placemarkDict(_ p: CLPlacemark) -> [String: Any] {
         var out: [String: Any] = ["name": p.name as Any? ?? NSNull()]
+        if let location=p.location,CLLocationCoordinate2DIsValid(location.coordinate){out["coordinate"]=[location.coordinate.latitude,location.coordinate.longitude]}
         if let v = p.thoroughfare { out["thoroughfare"] = v }
         if let v = p.subThoroughfare { out["subThoroughfare"] = v }
         if let v = p.locality { out["locality"] = v }
@@ -108,7 +162,7 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
             "locationServicesEnabled": CLLocationManager.locationServicesEnabled(),
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
         ]
-        resp["accuracyAuthorization"] = String(describing: manager.accuracyAuthorization)
+        resp["accuracyAuthorization"] = NativeNames.name(manager.accuracyAuthorization.rawValue, NativeNames.accuracy)
         completion(WireFormat.success(resp))
     }
 
@@ -152,30 +206,56 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
         guard hasBaseAuth else {
             completion(WireFormat.error("location.request-temporary-accuracy: app lacks base location auth (status=\(authStatusString(baseStatus))). Run `location request` first; system Location Services must be on.")); return
         }
+        let replied=AtomicFlag()
+        DispatchQueue.global().asyncAfter(deadline:.now()+requestTimeout){if replied.set(){completion(WireFormat.failure("timeout_unknown_outcome","temporary accuracy request exceeded its reply deadline; native authorization is not replayed"))}}
         manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: purpose) { error in
+            guard replied.set()else{return}
             if let nsError = error as NSError?, nsError.domain == "kCLErrorDomain" && nsError.code == 18 {
                 completion(WireFormat.error("location.request-temporary-accuracy: kCLErrorPromptDeclined. Apple disallows temporary-accuracy prompts from background-only agents (LSUIElement=true)."))
             } else if let error = error {
                 completion(WireFormat.error("location: \(error.localizedDescription)"))
             } else {
-                completion(WireFormat.success(["accuracyAuthorization": String(describing: self.manager.accuracyAuthorization)]))
+                completion(WireFormat.success(["accuracyAuthorization": NativeNames.name(self.manager.accuracyAuthorization.rawValue, NativeNames.accuracy)]))
             }
         }
     }
 
     private func currentLocation(completion: @escaping @Sendable ([String: Any]) -> Void) {
         lock.lock()
-        oneShotCompletion = { loc in
-            if let loc = loc { completion(WireFormat.success(self.locationDict(loc))) }
-            else { completion(WireFormat.error("location.current: no location available")) }
-        }
+        guard oneShot==nil else{lock.unlock();completion(WireFormat.failure("resource_limit","another current location request or native cleanup is active"));return}
         lock.unlock()
-        DispatchQueue.main.async {
-            self.manager.requestLocation()
+        // Admission and creation are serialized on the main run loop. Never hold
+        // the callback lock while a framework constructor or delegate setter runs.
+        let id=UUID(),native=makeManager()
+        lock.lock()
+        oneShot=OneShot(id:id,manager:native,completion:completion)
+        lock.unlock()
+        native.delegate=self
+        DispatchQueue.global().asyncAfter(deadline:.now()+requestTimeout){
+            self.lock.lock();let callback=self.oneShot?.id==id ? self.oneShot?.completion:nil
+            if self.oneShot?.id==id{self.oneShot?.completion=nil};self.lock.unlock()
+            callback?(WireFormat.failure("timeout_unknown_outcome","current location deadline exceeded; native cleanup remains owned and no request was replayed"))
+            DispatchQueue.main.async{self.finishCurrent(id:id,result:nil)}
         }
+        native.requestLocation()
+    }
+    private func finishCurrent(id:UUID,result:[String:Any]?){
+        lock.lock();guard let request=oneShot,request.id==id,!request.cleaning else{lock.unlock();return};oneShot?.cleaning=true;lock.unlock()
+        request.manager.delegate=nil;request.manager.stopUpdatingLocation()
+        lock.lock();let callback=oneShot?.id==id ? oneShot?.completion:nil
+        if oneShot?.id==id{oneShot=nil};lock.unlock()
+        if let result{callback?(result)}
     }
 
     // MARK: - Monitor
+
+    static let deniedText = "macOS location access is off for Interceptor; turn on Location Services and allow interceptor-bridge in System Settings > Privacy & Security > Location Services"
+    // A monitor that cannot get a fix refuses up front instead of answering monitoring:true.
+    private func monitorRefusal()->[String:Any]?{
+        let status=manager.authorizationStatus
+        guard !CLLocationManager.locationServicesEnabled() || status == .denied || status == .restricted else{return nil}
+        return WireFormat.failure("permission_denied",Self.deniedText)
+    }
 
     private func monitorStart(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let accuracy = (action["accuracy"] as? String) ?? "best"
@@ -185,9 +265,12 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
         case "tenmeters":       manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         case "hundredmeters":   manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         case "kilometer":       manager.desiredAccuracy = kCLLocationAccuracyKilometer
+        case "threekilometers": manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
         default:                manager.desiredAccuracy = kCLLocationAccuracyBest
         }
+        if let refusal=monitorRefusal(){completion(refusal);return}
         DispatchQueue.main.async {
+            self.monitorError=nil
             self.continuousActive = true
             self.manager.startUpdatingLocation()
             completion(WireFormat.success(["monitoring": true, "accuracy": accuracy]))
@@ -204,23 +287,31 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
 
     private func monitorTail(completion: @escaping @Sendable ([String: Any]) -> Void) {
         lock.lock(); let snapshot = continuous; continuous.removeAll(); lock.unlock()
-        completion(WireFormat.success(["locations": snapshot.map(locationDict), "monitoring": continuousActive]))
+        var data:[String:Any]=["locations":snapshot,"monitoring":continuousActive]
+        if let monitorError{data["lastError"]=monitorError};completion(WireFormat.success(data))
     }
 
     private func significantStart(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        DispatchQueue.main.async { self.manager.startMonitoringSignificantLocationChanges() }
+        guard CLLocationManager.significantLocationChangeMonitoringAvailable()else{completion(WireFormat.failure("unsupported_operation","native significant location monitoring is unavailable"));return}
+        if let refusal=monitorRefusal(){completion(refusal);return}
+        manager.startMonitoringSignificantLocationChanges()
+        significantActive=true
         completion(WireFormat.success(["ok": true]))
     }
     private func significantStop(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        DispatchQueue.main.async { self.manager.stopMonitoringSignificantLocationChanges() }
+        manager.stopMonitoringSignificantLocationChanges()
+        significantActive=false
         completion(WireFormat.success(["ok": true]))
     }
     private func visitsStart(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        DispatchQueue.main.async { self.manager.startMonitoringVisits() }
+        if let refusal=monitorRefusal(){completion(refusal);return}
+        manager.startMonitoringVisits()
+        visitsActive=true
         completion(WireFormat.success(["ok": true]))
     }
     private func visitsStop(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        DispatchQueue.main.async { self.manager.stopMonitoringVisits() }
+        manager.stopMonitoringVisits()
+        visitsActive=false
         completion(WireFormat.success(["ok": true]))
     }
     private func headingStart(completion: @escaping @Sendable ([String: Any]) -> Void) {
@@ -234,59 +325,77 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
     // MARK: - Geocoding
 
     private func geocode(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let address = action["address"] as? String else { completion(WireFormat.error("location.geocode: <address> required")); return }
+        guard let id=beginGeocode(completion)else{return}
+        let address = action["address"] as! String
         let locale: Locale? = (action["locale"] as? String).map { Locale(identifier: $0) }
-        if let regionRaw = action["region"] as? String {
-            let parts = regionRaw.split(separator: ",").compactMap { Double($0) }
-            if parts.count == 3 {
+        if let parts=Self.coordinates(action["region"],region:true) {
                 let region = CLCircularRegion(center: CLLocationCoordinate2D(latitude: parts[0], longitude: parts[1]),
                                               radius: parts[2], identifier: "interceptor-bridge")
                 geocoder.geocodeAddressString(address, in: region, preferredLocale: locale) { placemarks, error in
-                    self.completeGeocode(placemarks: placemarks, error: error, completion: completion)
+                    self.completeGeocode(id:id,placemarks:placemarks,error:error)
                 }
                 return
-            }
         }
         geocoder.geocodeAddressString(address, in: nil, preferredLocale: locale) { placemarks, error in
-            self.completeGeocode(placemarks: placemarks, error: error, completion: completion)
+            self.completeGeocode(id:id,placemarks:placemarks,error:error)
         }
     }
 
     private func reverseGeocode(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let coords = action["coords"] as? String else { completion(WireFormat.error("location.reverse: <lat,lng> required")); return }
-        let parts = coords.split(separator: ",").compactMap { Double($0) }
-        guard parts.count == 2 else { completion(WireFormat.error("location.reverse: <lat,lng> must be two doubles")); return }
+        guard let id=beginGeocode(completion)else{return}
+        let parts=Self.coordinates(action["coords"])!
         let loc = CLLocation(latitude: parts[0], longitude: parts[1])
         let locale: Locale? = (action["locale"] as? String).map { Locale(identifier: $0) }
         geocoder.reverseGeocodeLocation(loc, preferredLocale: locale) { placemarks, error in
-            if let error = error { completion(WireFormat.error("location.reverse: \(error.localizedDescription)")); return }
-            completion(WireFormat.success([
-                "coordinate": [parts[0], parts[1]],
-                "placemarks": (placemarks ?? []).map(self.placemarkDict),
-            ]))
+            self.completeGeocode(id:id,placemarks:placemarks,error:error,coordinate:parts)
         }
     }
 
-    private func completeGeocode(placemarks: [CLPlacemark]?, error: Error?, completion: @escaping @Sendable ([String: Any]) -> Void) {
-        if let error = error { completion(WireFormat.error("location.geocode: \(error.localizedDescription)")); return }
-        completion(WireFormat.success(["placemarks": (placemarks ?? []).map(self.placemarkDict)]))
+    static func noMatch(_ error: Error) -> Bool { (error as NSError).domain == kCLErrorDomain && (error as NSError).code == CLError.geocodeFoundNoResult.rawValue }
+
+    private func beginGeocode(_ completion:@escaping @Sendable ([String:Any])->Void)->UUID?{
+        lock.lock();guard geocodeRequest==nil else{lock.unlock();completion(WireFormat.failure("resource_limit","another geocode request or native cleanup is active; no work queued"));return nil}
+        let id=UUID();geocodeRequest=(id,completion);lock.unlock()
+        DispatchQueue.global().asyncAfter(deadline:.now()+requestTimeout){
+            self.lock.lock();let callback=self.geocodeRequest?.id==id ? self.geocodeRequest?.completion:nil
+            if self.geocodeRequest?.id==id{self.geocodeRequest?.completion=nil};self.lock.unlock()
+            callback?(WireFormat.failure("timeout_unknown_outcome","geocode deadline exceeded; native cancellation remains owned and no request was replayed"))
+            DispatchQueue.main.async{self.lock.lock();let active=self.geocodeRequest?.id==id;self.lock.unlock();if active{self.geocoder.cancelGeocode()}}
+        }
+        return id
+    }
+    private func completeGeocode(id:UUID,placemarks:[CLPlacemark]?,error:Error?,coordinate:[Double]?=nil){
+        let box=UncheckedSendableBox((placemarks,error))
+        DispatchQueue.main.async{
+            self.lock.lock();guard self.geocodeRequest?.id==id else{self.lock.unlock();return}
+            let callback=self.geocodeRequest?.completion;self.geocodeRequest=nil;self.lock.unlock()
+            guard let callback else{return}
+            if let error=box.value.1,!Self.noMatch(error){callback(WireFormat.failure("provider_failed",String(error.localizedDescription.prefix(1000))));return}
+            let marks=box.value.0 ?? []
+            guard marks.count<=32 else{callback(WireFormat.failure("resource_limit","geocoder returned more than 32 placemarks"));return}
+            let rows=marks.map(self.placemarkDict)
+            guard rows.allSatisfy({row in row.allSatisfy{key,value in
+                if key=="coordinate" || value is NSNull{return true}
+                if let text=value as? String{return text.utf8.count<=4096 && !text.contains("\0")}
+                if let texts=value as? [String]{return texts.count<=32 && texts.allSatisfy{$0.utf8.count<=4096 && !$0.contains("\0")}}
+                return false
+            }})else{callback(WireFormat.failure("resource_limit","geocoder returned invalid or oversized address fields"));return}
+            var data:[String:Any]=["placemarks":rows]
+            if let coordinate{data["coordinate"]=coordinate}
+            guard let bytes=try? JSONSerialization.data(withJSONObject:data),bytes.count<=65536 else{callback(WireFormat.failure("resource_limit","geocoder output exceeded its bounded JSON contract"));return}
+            callback(WireFormat.success(data))
+        }
     }
 
     private func distance(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let from = action["from"] as? String, let to = action["to"] as? String else {
-            completion(WireFormat.error("location.distance: --from <lat,lng> --to <lat,lng> required")); return
-        }
-        let f = from.split(separator: ",").compactMap { Double($0) }
-        let t = to.split(separator: ",").compactMap { Double($0) }
-        guard f.count == 2, t.count == 2 else {
-            completion(WireFormat.error("location.distance: each must be lat,lng")); return
-        }
+        let f=Self.coordinates(action["from"])!,t=Self.coordinates(action["to"])!
         let a = CLLocation(latitude: f[0], longitude: f[1])
         let b = CLLocation(latitude: t[0], longitude: t[1])
         completion(WireFormat.success(["meters": a.distance(from: b)]))
     }
 
     private func postalGeocode(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        guard let id=beginGeocode(completion)else{return}
         guard let raw = action["postal"] as? String,
               let data = raw.data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String]
@@ -298,29 +407,49 @@ final class LocationDomain: NSObject, DomainHandler, CLLocationManagerDelegate, 
         p.postalCode = dict["postalCode"] ?? ""
         p.country = dict["country"] ?? ""
         p.isoCountryCode = dict["isoCountryCode"] ?? ""
-        geocoder.geocodePostalAddress(p) { placemarks, error in
-            if let error = error { completion(WireFormat.error("location.postal-geocode: \(error.localizedDescription)")); return }
-            completion(WireFormat.success(["placemarks": (placemarks ?? []).map(self.placemarkDict)]))
+        let locale=(action["locale"] as? String).map{Locale(identifier:$0)}
+        geocoder.geocodePostalAddress(p,preferredLocale:locale) { placemarks, error in
+            self.completeGeocode(id:id,placemarks:placemarks,error:error)
         }
     }
 
     // MARK: - Delegate
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        if let cb = oneShotCompletion {
-            oneShotCompletion = nil
-            cb(locations.last)
+        lock.lock();let current=oneShot;lock.unlock()
+        if let request=current,manager===request.manager {
+            if let location=locations.last,Self.validFix(location){
+                finishCurrent(id:request.id,result:WireFormat.success(locationDict(location)))
+            }else{finishCurrent(id:request.id,result:WireFormat.failure("provider_failed","native location callback did not contain a valid fix"))}
             return
         }
-        if continuousActive, let last = locations.last {
-            lock.lock(); continuous.append(last); if continuous.count > 200 { continuous.removeFirst(100) }; lock.unlock()
+        guard let configured=managerValue,manager===configured else{return}
+        if continuousActive||significantActive, let last = locations.last,Self.validFix(last) {
+            retainObservation(locationDict(last))
         }
+    }
+    private func retainObservation(_ point:[String:Any]){
+        lock.lock();if continuous.count==200{continuous.removeFirst()};continuous.append(point);lock.unlock()
+    }
+    func locationManager(_ manager:CLLocationManager,didVisit visit:CLVisit){
+        guard let configured=managerValue,manager===configured,visitsActive,CLLocationCoordinate2DIsValid(visit.coordinate),visit.horizontalAccuracy.isFinite,visit.horizontalAccuracy>=0 else{return}
+        let measured=visit.departureDate == Date.distantFuture ? visit.arrivalDate:visit.departureDate
+        guard measured != Date.distantPast,measured != Date.distantFuture,measured.timeIntervalSince1970.isFinite else{return}
+        retainObservation(["coordinate":[visit.coordinate.latitude,visit.coordinate.longitude],"altitude":NSNull(),"ellipsoidalAltitude":NSNull(),"horizontalAccuracy":visit.horizontalAccuracy,"verticalAccuracy":NSNull(),"course":NSNull(),"courseAccuracy":NSNull(),"speed":NSNull(),"speedAccuracy":NSNull(),"floor":NSNull(),"timestamp":isoFormatter.string(from:measured)])
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        if let cb = oneShotCompletion {
-            oneShotCompletion = nil
-            cb(nil)
+        lock.lock();let current=oneShot;lock.unlock()
+        let nativeError=error as NSError
+        if let request=current,manager===request.manager {
+            let denied=nativeError.domain==kCLErrorDomain&&nativeError.code==CLError.denied.rawValue
+            finishCurrent(id:request.id,result:denied ? WireFormat.failure("permission_denied",Self.deniedText) : WireFormat.failure("provider_failed",String(error.localizedDescription.prefix(1000))))
+            return
+        }
+        if let configured=managerValue,manager===configured,continuousActive||significantActive||visitsActive{
+            continuousActive=false;significantActive=false;visitsActive=false
+            monitorError=nativeError.domain==kCLErrorDomain&&nativeError.code==CLError.denied.rawValue ? Self.deniedText:String(error.localizedDescription.prefix(1000))
+            manager.stopUpdatingLocation();manager.stopMonitoringSignificantLocationChanges();manager.stopMonitoringVisits()
         }
     }
 

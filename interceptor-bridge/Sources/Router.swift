@@ -53,6 +53,11 @@ final class Router: @unchecked Sendable {
         return domains[prefix] != nil || lazyDomains[prefix] != nil
     }
 
+    func registeredPrefixes() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(Set(domains.keys).union(lazyDomains.keys)).sorted()
+    }
+
     private func resolveHandler(for key: String) -> DomainHandler? {
         lock.lock()
         if let handler = domains[key] {
@@ -71,9 +76,82 @@ final class Router: @unchecked Sendable {
     }
 
     func route(action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let type = action["type"] as? String else {
+        guard let originalType = action["type"] as? String else {
             completion(WireFormat.error("missing action type"))
             return
+        }
+
+        var action = action
+        let type: String
+        if originalType.hasPrefix("desktop_") {
+            guard originalType.range(of: "^desktop_[a-z][a-z0-9_]*$", options: .regularExpression) == originalType.startIndex..<originalType.endIndex else {
+                completion(["success": false, "code": "invalid_request", "error": "invalid desktop action type"])
+                return
+            }
+            if let failure = DesktopFilesystemValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopAccessibilityValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopClipboardValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopCaptureValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopDisplayValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopCompoundValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopLogValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopThumbnailValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopAuthValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopContainerValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopFilesValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopNotificationsValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if let failure = DesktopMonitorValidation.validate(action) {
+                completion(failure)
+                return
+            }
+            if DesktopCompoundShape.operations.contains(originalType) {
+                type = "macos_compound_" + (originalType == "desktop_inspect_app" ? "inspect" : String(originalType.dropFirst(8)))
+            } else {
+                type = ["desktop_hello", "desktop_capabilities"].contains(originalType)
+                    ? "macos_desktop" : "macos_" + originalType.dropFirst(8)
+            }
+            // Retain validated discriminators where native handlers enforce
+            // neutral filesystem or geometry constraints. Legacy calls keep
+            // their compatibility action type.
+            action["type"] = originalType.hasPrefix("desktop_fs_") || DesktopDisplayShape.operations.contains(originalType) || DesktopCompoundShape.operations.contains(originalType) || ["desktop_move", "desktop_resize", "desktop_value", "desktop_action", "desktop_inspect", "desktop_clipboard", "desktop_screenshot", "desktop_capture", "desktop_text", "desktop_log_query", "desktop_thumbnail", "desktop_auth", "desktop_container_run", "desktop_files", "desktop_notifications", "desktop_trust", "desktop_stream"].contains(originalType) ? originalType : type
+        } else {
+            type = originalType
         }
 
         let parts = type.split(separator: "_", maxSplits: 2)
@@ -90,16 +168,18 @@ final class Router: @unchecked Sendable {
             command = domainKey
         }
 
-        if Self.axGatedDomains.contains(domainKey), !axTrustCheck() {
-            completion(Self.accessibilityGateError(
+        if (Self.axGatedDomains.contains(domainKey) || originalType == "desktop_open"), !axTrustCheck() {
+            completion(DesktopAccessibilityResult.normalize(Self.accessibilityGateError(
                 verb: domainKey,
                 adhocSigned: LiveSigningInfoProvider.current.adhoc
-            ))
+            ), type: originalType == "desktop_open" ? "desktop_tree" : originalType))
             return
         }
 
         if let handler = resolveHandler(for: domainKey) {
-            handler.handle(command, action: action, completion: completion)
+            handler.handle(command, action: action) { result in
+                completion(originalType.hasPrefix("desktop_fs_") ? DesktopFilesystemValidation.bounded(result) : DesktopAccessibilityResult.normalize(result, type: originalType))
+            }
             return
         }
 
@@ -110,13 +190,17 @@ final class Router: @unchecked Sendable {
         for prefix in allKeys {
             if type.hasPrefix("macos_\(prefix)") {
                 if let handler = resolveHandler(for: prefix) {
-                    handler.handle(command, action: action, completion: completion)
+                    handler.handle(command, action: action) { result in
+                        completion(DesktopAccessibilityResult.normalize(result, type: originalType))
+                    }
                     return
                 }
             }
         }
 
-        completion(WireFormat.error("no handler for domain: \(domainKey)"))
+        var missing = WireFormat.error("no handler for domain: \(domainKey)")
+        if DesktopAccessibilityShape.operations.contains(originalType) || DesktopCompoundShape.operations.contains(originalType) { missing["code"] = "unsupported_operation" }
+        completion(missing)
     }
 
     /// The actionable envelope an AX-gated verb returns when the bridge is

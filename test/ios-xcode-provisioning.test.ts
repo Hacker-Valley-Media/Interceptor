@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { chooseXcodeTeam, parseXcodeTeams, preferNoXcodeIosPath, prepareXctestrunWithEnv, runnerProductBundleId } from "../daemon/ios/tools"
 import { getInstalled, markInstalled } from "../daemon/ios/state"
+import { captureShell } from "./helpers/shell-capture"
 
 describe("ios Xcode provisioning helpers", () => {
   test("uses Xcode launch by default and keeps the userspace launcher opt-in", () => {
@@ -115,9 +116,17 @@ describe("ios Xcode provisioning helpers", () => {
       BundleIdentifiersForCrashReportEmphasis: ["com.interceptor.InterceptorRunner"],
     } }))
     try {
-      const out = prepareXctestrunWithEnv(input, { INTERCEPTOR_WS_TOKEN: "token" }, "com.interceptor.runner.other12345.xctrunner")
+      let out: string | undefined
+      if (process.platform === "darwin") {
+        const script = `import {prepareXctestrunWithEnv} from ${JSON.stringify(resolve("daemon/ios/tools.ts"))}; console.log(JSON.stringify(prepareXctestrunWithEnv(${JSON.stringify(input)}, {INTERCEPTOR_WS_TOKEN:"token"}, "com.interceptor.runner.other12345.xctrunner")));`
+        const prepared = captureShell(process.execPath, ["-e", script], { timeout: 5000 })
+        expect(prepared.status, prepared.stderr).toBe(0)
+        out = JSON.parse(prepared.stdout)
+      } else out = prepareXctestrunWithEnv(input, { INTERCEPTOR_WS_TOKEN: "token" }, "com.interceptor.runner.other12345.xctrunner")
       expect(out).toBeTruthy()
-      const parsed = JSON.parse(Bun.spawnSync(["/usr/bin/plutil", "-convert", "json", "-o", "-", out!]).stdout.toString())
+      const parsed = JSON.parse((process.platform === "darwin"
+        ? captureShell("/usr/bin/plutil", ["-convert", "json", "-o", "-", out!]).stdout
+        : Bun.spawnSync(["/usr/bin/plutil", "-convert", "json", "-o", "-", out!]).stdout).toString())
       expect(parsed.Fixture.TestHostBundleIdentifier).toBe("com.interceptor.runner.other12345.xctrunner")
       expect(parsed.Fixture.BundleIdentifiersForCrashReportEmphasis).toEqual(["com.interceptor.runner.other12345"])
       expect(parsed.Fixture.EnvironmentVariables.INTERCEPTOR_WS_TOKEN).toBe("token")

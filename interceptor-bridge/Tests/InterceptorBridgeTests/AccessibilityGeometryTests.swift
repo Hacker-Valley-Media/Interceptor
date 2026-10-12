@@ -1,4 +1,4 @@
-// PRD-62 Phase Checklist: tests for the resize/move ground-truth response shape.
+// Tests for the resize/move ground-truth response shape.
 //
 // These tests cover the pure geometry-classification helpers
 // (`sizeMatches`, `originMatches`, `axRectFromNSScreenRect`,
@@ -6,7 +6,7 @@
 // AX `Set` / `Copy` calls themselves require full AX entitlement and
 // a real top-level window, which is out of scope for unit tests.
 // Integration coverage of the full bridge round-trip lives in the
-// PRD-57 Phase-3 tiling re-run script.
+// window-tiling integration script.
 
 import XCTest
 import CoreGraphics
@@ -24,7 +24,7 @@ final class AccessibilityGeometryTests: XCTestCase {
     }
 
     func testSizeMatchesWithinOnePixelTolerance() {
-        // Spec 1: 1px tolerance absorbs AX's CGFloat round-trip noise.
+        // 1px tolerance absorbs AX's CGFloat round-trip noise.
         XCTAssertTrue(AccessibilityDomain.sizeMatches(
             CGSize(width: 640.4, height: 960.0),
             CGSize(width: 640.0, height: 960.0)
@@ -32,7 +32,7 @@ final class AccessibilityGeometryTests: XCTestCase {
     }
 
     func testSizeMatchesRejectsOnePixelDrift() {
-        // Real defect 3 from PRD-62: observed 641 vs requested 640 → must register as drift.
+        // Real defect: observed 641 vs requested 640 → must register as drift.
         XCTAssertFalse(AccessibilityDomain.sizeMatches(
             CGSize(width: 641, height: 960),
             CGSize(width: 640, height: 960)
@@ -91,7 +91,7 @@ final class AccessibilityGeometryTests: XCTestCase {
     // MARK: - buildGeometryResponse — clamp classification + clampedTo population
 
     func testBuildResponseRequestSatisfiedExposesNoClampedTo() {
-        // Spec 1: when frame matches request within tolerance, clamped == false
+        // When frame matches request within tolerance, clamped == false
         // and clampedTo is omitted (even if visibleFrame is supplied).
         let resp = AccessibilityDomain.buildGeometryResponse(
             frame: CGRect(x: 0, y: 30, width: 640, height: 960),
@@ -143,7 +143,7 @@ final class AccessibilityGeometryTests: XCTestCase {
     }
 
     func testBuildResponseClampedWithinOnePixelIsNotClamped() {
-        // Spec 1 tolerance: a 0.5px AX float wobble must not register as clamp.
+        // Tolerance: a 0.5px AX float wobble must not register as clamp.
         let resp = AccessibilityDomain.buildGeometryResponse(
             frame: CGRect(x: 0, y: 30, width: 640.4, height: 960.0),
             requested: ["width": 640, "height": 960],

@@ -3,11 +3,19 @@ import HealthKit
 
 final class HealthDomain: DomainHandler, @unchecked Sendable {
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        switch command {
+        let sub = action["sub"] as? String ?? (command == "health" ? "status" : command)
+        var request = action
+        request["type"] = "desktop_health"
+        request["sub"] = action["sub"] ?? sub
+        if let error = DesktopHealthShape.validationError(request) {
+            completion(["success": false, "code": "invalid_request", "error": error])
+            return
+        }
+        switch sub {
         case "status":
             checkAvailability(completion: completion)
         default:
-            completion(WireFormat.error("\(command) not available — HealthKit requires iPhone syncing health data via iCloud. standalone Mac does not have health data. Available commands: status"))
+            completion(WireFormat.error("health: unknown operation '\(sub)'; available operation: status"))
         }
     }
 
@@ -15,7 +23,7 @@ final class HealthDomain: DomainHandler, @unchecked Sendable {
         let available = HKHealthStore.isHealthDataAvailable()
         completion(WireFormat.success([
             "available": available,
-            "note": available ? "HealthKit data accessible" : "HealthKit not available — requires iPhone syncing health data via iCloud"
+            "note": available ? "HealthKit is available on this device." : "HealthKit is not available on this device."
         ]))
     }
 }

@@ -2,14 +2,17 @@ import { expect, test } from "bun:test"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { captureShell } from "./helpers/shell-capture"
 
 test("ios login fails before reading a password or contacting the daemon", () => {
-  const result = Bun.spawnSync([
-    process.execPath,
+  const args = [
     resolve("cli/index.ts"),
     "ios", "login", "--apple-id", "nobody@example.invalid", "--stdin",
-  ], { stdin: Buffer.from("must-not-be-read\n") })
-  expect(result.exitCode).toBe(1)
+  ]
+  const result = process.platform === "darwin"
+    ? captureShell(process.execPath, args, { input: "must-not-be-read\n" })
+    : Bun.spawnSync([process.execPath, ...args], { stdin: Buffer.from("must-not-be-read\n") })
+  expect("status" in result ? result.status : result.exitCode).toBe(1)
   expect(result.stderr.toString()).toContain("ios login is unavailable")
   expect(result.stderr.toString()).toContain("interceptor ios setup")
   expect(result.stderr.toString()).not.toContain("password")
@@ -103,7 +106,13 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
       if (args.includes("install") && readFileSync(join(args.at(-1), "Fixture"), "utf8") !== "xcode-signed") throw new Error("installed unsigned bundle");
       return ok();
     });
-    const built = buildRunnerWithXcode("fixture", { teamId: "FIXTURE", projectPath: source, derivedDataPath: derived });
+    const realSpawn = Bun.spawn;
+    Bun.spawn = ((args, opts) => {
+      const result = Bun.spawnSync(args, opts);
+      const script = 'process.stdout.write(' + JSON.stringify(result.stdout.toString()) + '); process.stderr.write(' + JSON.stringify(result.stderr.toString()) + '); process.exit(' + result.exitCode + ')';
+      return realSpawn([process.execPath, "-e", script], opts);
+    });
+    const built = await buildRunnerWithXcode("fixture", { teamId: "FIXTURE", projectPath: source, derivedDataPath: derived });
     if (!buildArgs.includes("PRODUCT_BUNDLE_IDENTIFIER=com.interceptor.runner.fixture")) throw new Error("derived bundle id was not passed to Xcode");
     if (built.bundleId !== "com.interceptor.runner.fixture.xctrunner") throw new Error("actual bundle id was not returned");
     if (!(await installRunnerApp("fixture", built.bundleId, true)).ok) throw new Error("install failed");
@@ -122,7 +131,7 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
     if (stageRunner().error || readFileSync(staged(), "utf8") !== "xcode-signed") throw new Error("upgrade replaced the setup-built runner");
     if (!existsSync(join(${JSON.stringify(join(root, "home", ".interceptor", "ios", "runner"))}, ".setup-built"))) throw new Error("setup did not mark its stage");
     expiration = new Date(Date.now() + 86_400_000).toISOString();
-    const rebuilt = buildRunnerWithXcode("fixture", { teamId: "FIXTURE", projectPath: source, derivedDataPath: derived });
+    const rebuilt = await buildRunnerWithXcode("fixture", { teamId: "FIXTURE", projectPath: source, derivedDataPath: derived });
     if (readFileSync(staged(), "utf8") !== "xcode-signed" || rebuilt.bundleId !== built.bundleId) throw new Error("rebuild did not restage");
   `
   const child = Bun.spawn([process.execPath, "-e", script], {

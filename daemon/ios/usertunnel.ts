@@ -1,3 +1,4 @@
+import {captureSubprocessSync} from "../../shared/subprocess-sync"
 // xcuitest.ts — launch an already-installed XCUITest runner over the userspace
 // RemoteXPC tunnel, no root / no Xcode / pure Bun.
 //
@@ -606,7 +607,9 @@ function archiveNodeAbs(n: PlistNode, objects: string[]): number {
   return idx
 }
 function plutilToBinary(xml: Buffer): Buffer {
-  return execFileSync("plutil", ["-convert", "binary1", "-o", "-", "-"], { input: xml, maxBuffer: 64 * 1024 * 1024 })
+  const result=captureSubprocessSync("/usr/bin/plutil", ["-convert", "binary1", "-o", "-", "-"], {input:xml,maxBuffer:64*1024*1024,timeout:5000})
+  if(result.error||result.status!==0)throw result.error??new Error("plutil binary conversion failed: "+result.stderr.toString())
+  return result.stdout
 }
 
 /** go-ios appservice UI-test launch flags. An empty dict leaves the runner unable to background (XCTest 10300). */
@@ -618,7 +621,7 @@ export function uiTestPlatformSpecificOptionsXml(): string {
     `</dict></plist>`
 }
 function plutilToXml(bin: Buffer): string {
-  try { return execFileSync("plutil", ["-convert", "xml1", "-o", "-", "-"], { input: bin, maxBuffer: 64 * 1024 * 1024 }).toString("utf8") }
+  try { const result=captureSubprocessSync("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", "-"], {input:bin,maxBuffer:64*1024*1024,timeout:5000});if(result.error||result.status!==0)throw result.error??new Error("plutil XML conversion failed");return result.stdout.toString("utf8") }
   catch { return "<plutil decode failed>" }
 }
 

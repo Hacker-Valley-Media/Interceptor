@@ -15,10 +15,14 @@
 //
 // Each verb returns either `WireFormat.success(payload)` or
 // `WireFormat.error(message)`. Errors include a `setup_required` envelope
-// per Spec 9 when the recovery is well-known (no
+// when the recovery is well-known (no
 // com.apple.security.virtualization entitlement, macOS < 15, etc.).
 
 import Foundation
+import GuestWire
+import CryptoKit
+import Darwin
+import ImageIO
 #if canImport(Virtualization)
 import Virtualization
 #endif
@@ -31,19 +35,29 @@ struct VmActionBox: @unchecked Sendable {
 }
 
 final class VmDomain: DomainHandler, @unchecked Sendable {
-    /// Cache of running VM instances keyed by name. Created on `vm start`,
-    /// dropped on `vm stop` / `vm delete`. The actor inside each entry
-    /// serializes per-VM verbs.
+    /// Ownership is scoped to the canonical registry root and exact name.
+    /// Entries survive native failures until shutdown has been confirmed.
     private let lock = NSLock()
     private var instances: [String: VMInstance] = [:]
+    private var mutationActive = false
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let sub = (action["sub"] as? String ?? command).replacingOccurrences(of: "-", with: "_")
+        if let error = DesktopVmValidation.validationError(action, sub: sub) {
+            completion(WireFormat.error("vm: \(error)")); return
+        }
+        let mutation = !["list", "get", "inspect", "read_ax", "logs"].contains(sub)
+        if mutation && !admitMutation() {
+            completion(WireFormat.error("vm: another native VM operation is still pending; its ownership has been retained")); return
+        }
         // [String: Any] isn't Sendable; wrap in the same UncheckedSendableBox
         // pattern Transport.swift uses (Transport.swift:234).
         let boxed = VmActionBox(action: action)
         Task.detached { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                completion(WireFormat.error("vm: provider is shutting down")); return
+            }
+            defer { if mutation { self.releaseMutation() } }
             await self.dispatch(sub: sub, action: boxed.action, completion: completion)
         }
     }
@@ -53,9 +67,9 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             switch sub {
             case "create":  try await handleCreate(action, completion: completion)
             case "adopt":   try await handleAdopt(action, completion: completion)
-            case "list":    try handleList(action, completion: completion)
-            case "get":     try handleGet(action, completion: completion)
-            case "inspect": try handleInspect(action, completion: completion)
+            case "list":    try await handleList(action, completion: completion)
+            case "get":     try await handleGet(action, completion: completion)
+            case "inspect": try await handleInspect(action, completion: completion)
             case "start":   try await handleStart(action, completion: completion)
             case "stop":    try await handleStop(action, completion: completion)
             case "pause":   try await handlePause(action, completion: completion)
@@ -68,7 +82,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             case "reset":   try await handleReset(action, completion: completion)
             case "snapshot": try await handleSnapshot(action, completion: completion)
             case "restore": try await handleRestore(action, completion: completion)
-            case "screenshot": try await handleGuestVerb("screenshot", action: action, completion: completion)
+            case "screenshot": try await handleGuestScreenshot(action, completion: completion)
             case "type":       try await handleGuestVerb("type", action: action, completion: completion)
             case "click":      try await handleGuestVerb("click", action: action, completion: completion)
             case "keys":       try await handleGuestVerb("keys", action: action, completion: completion)
@@ -147,17 +161,44 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         #endif
     }
 
-    private func instance(for name: String) -> VMInstance? {
+    private func admitMutation() -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return instances[name]
+        guard !mutationActive else { return false }
+        mutationActive = true
+        return true
     }
 
-    private func putInstance(_ inst: VMInstance, name: String) {
-        lock.lock(); instances[name] = inst; lock.unlock()
+    private func releaseMutation() {
+        lock.lock(); mutationActive = false; lock.unlock()
     }
 
-    private func dropInstance(name: String) {
-        lock.lock(); instances.removeValue(forKey: name); lock.unlock()
+    private func instanceKey(name: String, action: [String: Any]) -> String {
+        stateDir(from: action).standardizedFileURL.resolvingSymlinksInPath().path + "\0" + name
+    }
+
+    private func instance(for name: String, action: [String: Any]) -> VMInstance? {
+        let key = instanceKey(name: name, action: action)
+        lock.lock(); defer { lock.unlock() }
+        return instances[key]
+    }
+
+    private func putInstance(_ inst: VMInstance, name: String, action: [String: Any]) {
+        let key = instanceKey(name: name, action: action)
+        lock.lock(); instances[key] = inst; lock.unlock()
+    }
+
+    private func dropInstance(name: String, action: [String: Any]) {
+        let key = instanceKey(name: name, action: action)
+        lock.lock(); instances.removeValue(forKey: key); lock.unlock()
+    }
+
+    private func stopOwnedInstance(name: String, action: [String: Any], timeout: TimeInterval) async throws {
+        guard let inst = instance(for: name, action: action) else { return }
+        try await inst.stop(force: true, timeout: timeout)
+        guard await inst.status == .stopped, !(await inst.ownsRuntime) else {
+            throw VMInstanceError.invalidTransition("shutdown has not been confirmed for '\(name)'")
+        }
+        dropInstance(name: name, action: action)
     }
 
     private func successView(for spec: VMSpec, status: VMStatus, ip: String? = nil) -> [String: Any] {
@@ -253,59 +294,55 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
-    private func handleList(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) throws {
+    private func handleList(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
         let reg = try registry(from: action)
-        Task {
+        do {
             let specs = try await reg.list()
-            let runningNames: Set<String> = {
-                lock.lock(); defer { lock.unlock() }
-                return Set(instances.keys)
-            }()
             var vms: [[String: Any]] = []
             for spec in specs {
-                let st: VMStatus = runningNames.contains(spec.name) ? .running : .stopped
-                vms.append(successView(for: spec, status: st))
+                let inst = instance(for: spec.name, action: action)
+                let st = await inst?.status ?? .stopped
+                let ip = await inst?.ipAddress
+                vms.append(successView(for: spec, status: st, ip: ip))
             }
             completion(WireFormat.success(["vms": vms]))
+        } catch {
+            completion(WireFormat.error("vm list: \(error)"))
         }
     }
 
-    private func handleGet(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) throws {
+    private func handleGet(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
         guard let name = action["name"] as? String else {
             completion(WireFormat.error("vm get: missing 'name'")); return
         }
         let reg = try registry(from: action)
-        Task {
-            do {
-                let spec = try await reg.get(name)
-                let inst = instance(for: name)
-                let st: VMStatus = await (inst?.status) ?? .stopped
-                let ip: String? = await inst?.ipAddress
-                completion(WireFormat.success(successView(for: spec, status: st, ip: ip)))
-            } catch {
-                completion(WireFormat.error("vm get: \(error)"))
-            }
+        do {
+            let spec = try await reg.get(name)
+            let inst = instance(for: name, action: action)
+            let st: VMStatus = await (inst?.status) ?? .stopped
+            let ip: String? = await inst?.ipAddress
+            completion(WireFormat.success(successView(for: spec, status: st, ip: ip)))
+        } catch {
+            completion(WireFormat.error("vm get: \(error)"))
         }
     }
 
-    private func handleInspect(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) throws {
+    private func handleInspect(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
         guard let name = action["name"] as? String else {
             completion(WireFormat.error("vm inspect: missing 'name'")); return
         }
         let reg = try registry(from: action)
-        Task {
-            do {
-                let spec = try await reg.get(name)
-                let inst = instance(for: name)
-                let st: VMStatus = await (inst?.status) ?? .stopped
-                let lastError: String? = await inst?.lastError
-                var data: [String: Any] = successView(for: spec, status: st)
-                data["bundlePath"] = await reg.bundle(for: name).bundlePath.path
-                if let e = lastError { data["lastError"] = e }
-                completion(WireFormat.success(data))
-            } catch {
-                completion(WireFormat.error("vm inspect: \(error)"))
-            }
+        do {
+            let spec = try await reg.get(name)
+            let inst = instance(for: name, action: action)
+            let st: VMStatus = await (inst?.status) ?? .stopped
+            let lastError: String? = await inst?.lastError
+            var data: [String: Any] = successView(for: spec, status: st)
+            data["bundlePath"] = await reg.bundle(for: name).bundlePath.path
+            if let e = lastError { data["lastError"] = e }
+            completion(WireFormat.success(data))
+        } catch {
+            completion(WireFormat.error("vm inspect: \(error)"))
         }
     }
 
@@ -322,15 +359,15 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         let reg = try registry(from: action)
         let spec = try await reg.get(name)
         let bundle = await reg.bundle(for: name)
-        if let existing = instance(for: name) {
+        if let existing = instance(for: name, action: action) {
             let st = await existing.status
-            if st == .running {
-                completion(WireFormat.error("vm start: '\(name)' already running"))
+            if await existing.ownsRuntime || ![VMStatus.stopped, .ready, .error].contains(st) {
+                completion(WireFormat.error("vm start: '\(name)' still owns a native runtime or is in state \(st.rawValue); confirm shutdown first"))
                 return
             }
         }
         let inst = VMInstance(spec: spec, bundle: bundle, status: .ready)
-        putInstance(inst, name: name)
+        putInstance(inst, name: name, action: action)
         do {
             let r = try await inst.start(headless: headless, waitForAgent: waitForAgent)
             // Persist startedAt
@@ -343,7 +380,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
                 "ipAddress": r.ipAddress as Any
             ]))
         } catch {
-            dropInstance(name: name)
+            if !(await inst.ownsRuntime) { dropInstance(name: name, action: action) }
             completion(WireFormat.error("vm start: \(error)"))
         }
     }
@@ -354,13 +391,13 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         }
         let force = (action["force"] as? Bool) ?? false
         let timeout = timeInterval(from: action["timeout"], default: 60)
-        guard let inst = instance(for: name) else {
+        guard let inst = instance(for: name, action: action) else {
             completion(WireFormat.success(["state": VMStatus.stopped.rawValue, "transitionMs": 0]))
             return
         }
         do {
             try await inst.stop(force: force, timeout: timeout)
-            dropInstance(name: name)
+            dropInstance(name: name, action: action)
             completion(WireFormat.success(["state": VMStatus.stopped.rawValue, "transitionMs": 0]))
         } catch {
             completion(WireFormat.error("vm stop: \(error)"))
@@ -368,7 +405,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func handlePause(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
-        guard let name = action["name"] as? String, let inst = instance(for: name) else {
+        guard let name = action["name"] as? String, let inst = instance(for: name, action: action) else {
             completion(WireFormat.error("vm pause: not running")); return
         }
         do {
@@ -380,7 +417,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func handleResume(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
-        guard let name = action["name"] as? String, let inst = instance(for: name) else {
+        guard let name = action["name"] as? String, let inst = instance(for: name, action: action) else {
             completion(WireFormat.error("vm resume: not running")); return
         }
         do {
@@ -396,14 +433,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             completion(WireFormat.error("vm delete: missing 'name'")); return
         }
         let keepDisk = (action["keepDisk"] as? Bool) ?? false
-        // Stop first if running.
-        if let inst = instance(for: name) {
-            let st = await inst.status
-            if st == .running || st == .paused {
-                try? await inst.stop(force: true, timeout: 30)
-            }
-            dropInstance(name: name)
-        }
+        try await stopOwnedInstance(name: name, action: action, timeout: 30)
         let reg = try registry(from: action)
         do {
             try await reg.delete(name, keepDisk: keepDisk)
@@ -414,7 +444,10 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func handleExec(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
-        guard let name = action["name"] as? String, let inst = instance(for: name) else {
+        guard action["user"] == nil else {
+            completion(WireFormat.failure("unsupported_operation", "vm exec user selection is unavailable in the retained guest adapters; no field was ignored")); return
+        }
+        guard let name = action["name"] as? String, let inst = instance(for: name, action: action) else {
             completion(WireFormat.error("vm exec: '\(action["name"] as? String ?? "?")' not running"))
             return
         }
@@ -426,7 +459,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         let env = (action["env"] as? [String: String]) ?? [:]
         let workdir = action["workdir"] as? String
         let tty = (action["tty"] as? Bool) ?? false
-        let timeout = timeInterval(from: action["timeout"], default: 60)
+        let timeout = timeInterval(from: action["timeout"], default: 50)
         do {
             let r = try await inst.exec(argv: argv, env: env, workdir: workdir, tty: tty, timeout: timeout)
             completion(WireFormat.success([
@@ -445,7 +478,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             completion(WireFormat.error("vm \(verb): missing 'name'"))
             return nil
         }
-        guard let inst = instance(for: name) else {
+        guard let inst = instance(for: name, action: action) else {
             completion(WireFormat.error("vm \(verb): '\(name)' not running"))
             return nil
         }
@@ -454,11 +487,51 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
 
     private func sanitizedGuestParams(from action: [String: Any], verb: String) -> [String: Any] {
         var params = action
-        for key in ["type", "sub", "name", "stateDir", "timeout"] {
+        for key in ["type", "sub", "name", "stateDir"] {
             params.removeValue(forKey: key)
         }
         params["verb"] = verb
         return params
+    }
+
+    private func handleGuestScreenshot(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
+        guard let resolved = guestInstance(from: action, verb: "screenshot", completion: completion) else { return }
+        let deadline = try GuestWire.Deadline(seconds: min(50, timeInterval(from: action["timeout"], default: 30)))
+        let ping = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "ping"]), timeout: try deadline.remaining()).dict
+        try GuestWire.requireSnapshot(ping)
+        let captureBudget = try deadline.remaining()
+        let started = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "screenshot", "timeout": captureBudget]), timeout: captureBudget).dict
+        let receipt = try GuestWire.SnapshotReceipt(started)
+        if action["out"] == nil && receipt.bytes > 700_000 {
+            let release = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "screenshot_release", "snapshotId": receipt.id]), timeout: try deadline.remaining()).dict
+            try receipt.released(release)
+            completion(WireFormat.failure("resource_limit", "guest PNG exceeds inline reply capacity; request a host --out path")); return
+        }
+        var png = Data(); png.reserveCapacity(receipt.bytes)
+        while png.count < receipt.bytes {
+            let offset = png.count, length = min(GuestWire.snapshotChunkBytes, receipt.bytes - offset)
+            let result = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "screenshot_chunk", "snapshotId": receipt.id, "offset": offset, "length": length]), timeout: try deadline.remaining()).dict
+            png.append(try receipt.chunk(result, offset: offset, length: length))
+        }
+        try receipt.verify(png)
+        guard let source = CGImageSourceCreateWithData(png as CFData, nil), CGImageSourceGetCount(source) == 1,
+              CGImageSourceGetType(source) as String? == "public.png",
+              let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary),
+              image.width == receipt.width, image.height == receipt.height else { throw GuestAgentError.framing("guest bytes are not one decodable PNG with the recorded physical dimensions") }
+        _ = try deadline.remaining()
+        let release = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "screenshot_release", "snapshotId": receipt.id]), timeout: try deadline.remaining()).dict
+        try receipt.released(release)
+        var payload: [String: Any] = ["width": receipt.width, "height": receipt.height, "bytes": receipt.bytes, "format": "png"]
+        if let path = action["out"] as? String {
+            _ = try deadline.remaining()
+            // Reuse the retained exclusive output and actual readback used by
+            // Photos and VM copy. Do not overwrite or remove a failed output.
+            let output = try PhotosDomain.Output(path)
+            guard output.append(png), try output.finish() == png.count else { throw GuestAgentError.framing("host screenshot output write or readback failed; a partial file may remain") }
+            _ = try deadline.remaining()
+            payload["filePath"] = output.path
+        } else { payload["dataUrl"] = "data:image/png;base64," + png.base64EncodedString() }
+        completion(WireFormat.success(payload))
     }
 
     private func handleGuestVerb(_ verb: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
@@ -471,7 +544,31 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
                 completion(WireFormat.error("vm \(verb): \(result["error"] as? String ?? "guest verb failed")"))
                 return
             }
-            completion(WireFormat.success((result["data"] as? [String: Any]) ?? result))
+            if ["type", "click", "keys"].contains(verb) {
+                guard var payload = result["data"] as? [String: Any] else {
+                    completion(WireFormat.failure("partial_result", "vm input omitted its actual submission receipt; inspect guest state before retrying")); return
+                }
+                payload["name"] = resolved.name; payload["operation"] = verb
+                do {
+                    let bytes = try JSONSerialization.data(withJSONObject: payload)
+                    let receipt = try JSONDecoder().decode(DesktopVmInput.self, from: bytes)
+                    guard receipt.transport.rawValue == "coregraphics", receipt.submittedEvents.isFinite,
+                          receipt.submittedEvents.rounded(.towardZero) == receipt.submittedEvents,
+                          (0...65536).contains(receipt.submittedEvents), !receipt.guestEffectVerified else { throw GuestAgentError.framing("input needs actual bounded native submission without invented guest effects") }
+                    if verb == "type" {
+                        guard let text = action["text"] as? String, receipt.textUTF8Bytes == Double(text.utf8.count), receipt.submittedEvents == Double(text.unicodeScalars.count * 2), receipt.keys == nil, receipt.x == nil, receipt.y == nil, receipt.button == nil else { throw GuestAgentError.framing("guest Unicode submission differs") }
+                    } else if verb == "keys" {
+                        guard receipt.keys == (action["keys"] as? String), receipt.submittedEvents == 2, receipt.textUTF8Bytes == nil, receipt.x == nil, receipt.y == nil, receipt.button == nil else { throw GuestAgentError.framing("guest chord submission differs") }
+                    } else {
+                        guard receipt.x == (action["x"] as? NSNumber)?.doubleValue, receipt.y == (action["y"] as? NSNumber)?.doubleValue, receipt.button == (action["button"] as? String ?? "left"), receipt.submittedEvents == 2, receipt.textUTF8Bytes == nil, receipt.keys == nil else { throw GuestAgentError.framing("guest click submission differs") }
+                    }
+                    completion(WireFormat.success(payload))
+                } catch { completion(WireFormat.failure("partial_result", "vm input receipt failed validation: \(error); inspect guest state before retrying")) }
+                return
+            }
+            guard let raw = result["data"] as? [String: Any] else { throw GuestAgentError.framing("guest read omitted its payload") }
+            let payload = try GuestReadValidation.payload(raw, verb: verb, action: action, name: resolved.name)
+            completion(WireFormat.success(payload))
         } catch {
             completion(WireFormat.error("vm \(verb): \(error)"))
         }
@@ -480,60 +577,62 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
     private func handleCp(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
         guard let resolved = guestInstance(from: action, verb: "cp", completion: completion) else { return }
         guard let src = action["src"] as? String, let dst = action["dst"] as? String else {
-            completion(WireFormat.error("vm cp: missing 'src' or 'dst'"))
+            completion(WireFormat.failure("invalid_request", "vm cp requires source and destination"))
             return
         }
-        let timeout = timeInterval(from: action["timeout"], default: 60)
         let guestPrefix = "\(resolved.name):"
+        let incoming = dst.hasPrefix(guestPrefix), outgoing = src.hasPrefix(guestPrefix)
+        let guestPath = String((incoming ? dst : src).dropFirst(guestPrefix.count))
+        let hostPath = ((incoming ? src : dst) as NSString).expandingTildeInPath
+        guard incoming != outgoing, hostPath.hasPrefix("/"), !hostPath.contains("\0"), guestPath.hasPrefix("/"), !guestPath.contains("\0"),
+              !guestPath.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else {
+            completion(WireFormat.failure("invalid_request", "vm cp requires one exact absolute guest path and one absolute host file")); return
+        }
+        let clock = ContinuousClock(), timeout = min(50, timeInterval(from: action["timeout"], default: 50))
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        func remaining() throws -> TimeInterval {
+            let delta = clock.now.duration(to: deadline).components
+            let seconds = Double(delta.seconds) + Double(delta.attoseconds) / 1e18
+            guard seconds > 0 else { throw GuestAgentError.timeout("copy deadline expired; inspect exact destination before retrying") }
+            return seconds
+        }
+        func guestBytes(_ reply: [String: Any]) throws -> Data { try GuestWire.copyBytes(reply, path: guestPath) }
+        var admitted = false
         do {
-            if dst.hasPrefix(guestPrefix) {
-                let guestPath = String(dst.dropFirst(guestPrefix.count))
-                let srcURL = URL(fileURLWithPath: (src as NSString).expandingTildeInPath)
-                let data = try Data(contentsOf: srcURL)
+            // Old agents silently replace destinations. Check the actual
+            // implementation protocol before submitting either copy verb.
+            let probe = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "ping"]), timeout: remaining()).dict
+            try GuestWire.requireExclusiveCopy(probe)
+            let data: Data
+            if incoming {
+                data = try PhotosDomain().readFile(hostPath, maxBytes: 1_048_576, allowEmpty: true)
+                admitted = true
                 let result = try await resolved.inst.requestGuest(action: GuestAgentDict([
                     "verb": "cp_in",
                     "path": guestPath,
                     "dataBase64": data.base64EncodedString(),
-                ]), timeout: timeout).dict
-                let success = result["success"] as? Bool ?? false
-                if !success {
-                    completion(WireFormat.error("vm cp: \(result["error"] as? String ?? "guest cp_in failed")"))
-                    return
-                }
-                completion(WireFormat.success((result["data"] as? [String: Any]) ?? result))
-                return
+                    "timeout": try remaining(),
+                ]), timeout: remaining()).dict
+                guard result["success"] as? Bool == true else { throw GuestAgentError.remote(result["error"] as? String ?? "guest copy failed") }
+                try GuestWire.verifyCopied(result, path: guestPath, data: data)
+                let readback = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "cp_out", "path": guestPath, "timeout": try remaining()]), timeout: remaining()).dict
+                guard try guestBytes(readback) == data else { throw GuestAgentError.framing("guest copy readback differs; destination preserved") }
+            } else {
+                var metadata = stat()
+                guard lstat(hostPath, &metadata) != 0, errno == ENOENT else { throw GuestAgentError.remote("host destination already exists or cannot be checked; nothing replaced") }
+                let result = try await resolved.inst.requestGuest(action: GuestAgentDict(["verb": "cp_out", "path": guestPath, "timeout": try remaining()]), timeout: remaining()).dict
+                data = try guestBytes(result)
+                _ = try remaining()
+                let output = try PhotosDomain.Output(hostPath)
+                admitted = true
+                guard output.append(data), try output.finish(allowEmpty: true) == data.count else { throw GuestAgentError.ioFailure("host output did not pass retained byte readback") }
             }
-            if src.hasPrefix(guestPrefix) {
-                let guestPath = String(src.dropFirst(guestPrefix.count))
-                let result = try await resolved.inst.requestGuest(action: GuestAgentDict([
-                    "verb": "cp_out",
-                    "path": guestPath,
-                ]), timeout: timeout).dict
-                let success = result["success"] as? Bool ?? false
-                if !success {
-                    completion(WireFormat.error("vm cp: \(result["error"] as? String ?? "guest cp_out failed")"))
-                    return
-                }
-                guard
-                    let dataDict = result["data"] as? [String: Any],
-                    let b64 = dataDict["dataBase64"] as? String,
-                    let data = Data(base64Encoded: b64)
-                else {
-                    completion(WireFormat.error("vm cp: guest cp_out returned no dataBase64"))
-                    return
-                }
-                let dstURL = URL(fileURLWithPath: (dst as NSString).expandingTildeInPath)
-                try data.write(to: dstURL, options: .atomic)
-                completion(WireFormat.success([
-                    "path": dstURL.path,
-                    "bytes": data.count,
-                    "source": guestPath,
-                ]))
-                return
-            }
-            completion(WireFormat.error("vm cp: one side must be \(resolved.name):<path>"))
+            _ = try remaining()
+            let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            completion(WireFormat.success(["name": resolved.name, "direction": incoming ? "host-to-guest" : "guest-to-host", "source": src, "path": dst,
+                                           "bytes": data.count, "sha256": hash, "verified": true, "overwrite": false]))
         } catch {
-            completion(WireFormat.error("vm cp: \(error)"))
+            completion(WireFormat.failure(admitted ? "partial_result" : "provider_failed", "vm cp: \(error)", details: ["source": src, "destination": dst, "mutationSubmitted": admitted, "partialArtifactPossible": admitted, "observeBeforeRetry": admitted]))
         }
     }
 
@@ -593,7 +692,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             spec.shares.removeAll { $0.tag == tag }
             spec.shares.append(VMShareSpec(hostPath: hostPath, tag: tag, readOnly: readOnly))
             try await reg.update(spec)
-            let running = instance(for: name) != nil
+            let running = instance(for: name, action: action) != nil
             completion(WireFormat.success([
                 "name": name,
                 "tag": tag,
@@ -613,6 +712,11 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         }
         let reg = try registry(from: action)
         do {
+            if let inst = instance(for: src, action: action), await inst.ownsRuntime {
+                throw VMInstanceError.invalidTransition("clone requires a stopped source VM")
+            }
+            let sourceBundle = await reg.bundle(for: src)
+            try VMSnapshot.requireStableStorage(bundle: sourceBundle)
             let bundle = try await reg.clone(from: src, to: dst)
             completion(WireFormat.success([
                 "name": dst,
@@ -655,6 +759,8 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             return
         }
         let bundle = await reg.bundle(for: name)
+        try await stopOwnedInstance(name: name, action: action, timeout: 30)
+        try VMSnapshot.requireStableStorage(bundle: bundle)
 
         #if canImport(Virtualization)
         if #available(macOS 13.0, *) {
@@ -680,18 +786,22 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         guard let name = action["name"] as? String else {
             completion(WireFormat.error("vm reset: missing 'name'")); return
         }
-        // Drop any in-memory instance so the next start rebuilds from the spec.
-        dropInstance(name: name)
+        let reg = try registry(from: action)
+        _ = try await reg.get(name)
+        try await stopOwnedInstance(name: name, action: action, timeout: 30)
         completion(WireFormat.success(["state": VMStatus.ready.rawValue, "name": name]))
     }
 
     private func handleSnapshot(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) async throws {
-        let snapSub = action["sub"] as? String  // outer dispatch already pulled this
-        // Real outer "sub" is "snapshot"; inner sub here would be passed
-        // through `snapshotSub`. CLI sends both: `sub: "snapshot"`,
-        // `snapshotOp: "create|list|delete|restore"`.
         let op = (action["snapshotOp"] as? String) ?? "create"
-        _ = snapSub
+        if op == "restore" {
+            try await handleRestore(action, completion: completion)
+            return
+        }
+        guard ["create", "list", "delete"].contains(op) else {
+            completion(WireFormat.failure("invalid_request", "vm snapshot: unknown snapshot operation '\(op)'"))
+            return
+        }
         guard let name = action["name"] as? String else {
             completion(WireFormat.error("vm snapshot: missing 'name'")); return
         }
@@ -711,14 +821,14 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             } catch {
                 completion(WireFormat.error("vm snapshot delete: \(error)"))
             }
-        default:
+        case "create":
             // create — requires the VM to be paused for paused-state snapshots.
             guard let tag = action["tag"] as? String else {
                 completion(WireFormat.error("vm snapshot create: missing 'tag'")); return
             }
             let diskOnly = action["diskOnly"] as? Bool ?? false
             let pausedStateOnly = action["pausedStateOnly"] as? Bool ?? false
-            if !diskOnly, let inst = instance(for: name) {
+            if !diskOnly, let inst = instance(for: name, action: action) {
                 let mode: VMSnapshot.Mode = pausedStateOnly ? .pausedStateOnly : .both
                 do {
                     let manifest = try await inst.createSnapshot(tag: tag, mode: mode)
@@ -737,6 +847,9 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
                 completion(WireFormat.error("vm snapshot create: paused-state snapshot requires a running paused VM"))
                 return
             }
+            if let inst = instance(for: name, action: action), await inst.ownsRuntime {
+                throw VMInstanceError.invalidTransition("disk-only snapshot requires a stopped VM")
+            }
             // Disk-only snapshot — clonefile of Disk.img.
             let snapDir = bundle.snapshotDir(tag: tag)
             if FileManager.default.fileExists(atPath: snapDir.path) {
@@ -745,9 +858,11 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             }
             do {
                 try FileManager.default.createDirectory(at: snapDir, withIntermediateDirectories: true)
-                if FileManager.default.fileExists(atPath: bundle.diskPath.path) {
-                    let dst = snapDir.appendingPathComponent("Disk.img")
-                    try FileManager.default.copyItem(at: bundle.diskPath, to: dst)
+                guard FileManager.default.fileExists(atPath: bundle.diskPath.path) else { throw VMSnapshotError.missing("snapshot has no actual Disk.img") }
+                let dst = snapDir.appendingPathComponent("Disk.img")
+                try FileManager.default.copyItem(at: bundle.diskPath, to: dst)
+                if FileManager.default.fileExists(atPath: bundle.auxStoragePath.path) {
+                    try FileManager.default.copyItem(at: bundle.auxStoragePath, to: snapDir.appendingPathComponent("AuxiliaryStorage"))
                 }
                 let m = VMSnapshotManifest(tag: tag, kind: "disk-only", createdAt: Date(), hasPausedState: false, hasDiskClone: true, notes: nil)
                 let enc = JSONEncoder()
@@ -759,6 +874,8 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
             } catch {
                 completion(WireFormat.error("vm snapshot create: \(error)"))
             }
+        default:
+            completion(WireFormat.failure("invalid_request", "vm snapshot: unknown snapshot operation '\(op)'"))
         }
     }
 
@@ -772,12 +889,9 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
         let diskOnly = action["diskOnly"] as? Bool ?? false
         let pausedStateOnly = action["pausedStateOnly"] as? Bool ?? false
         let headless = action["headless"] as? Bool ?? true
-        // Stop the VM first if running.
-        if let inst = instance(for: name) {
-            try? await inst.stop(force: true, timeout: 10)
-            dropInstance(name: name)
-        }
+        try await stopOwnedInstance(name: name, action: action, timeout: 10)
         let inst = VMInstance(spec: spec, bundle: bundle, status: .stopped)
+        putInstance(inst, name: name, action: action)
         do {
             let manifest = try await inst.restoreSnapshot(
                 tag: tag,
@@ -786,9 +900,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
                 headless: headless
             )
             let status = await inst.status
-            if status == .paused || status == .running {
-                putInstance(inst, name: name)
-            }
+            if !(await inst.ownsRuntime) { dropInstance(name: name, action: action) }
             completion(WireFormat.success([
                 "tag": manifest.tag,
                 "state": status.rawValue,
@@ -798,6 +910,7 @@ final class VmDomain: DomainHandler, @unchecked Sendable {
                 "restored": status == .paused ? "paused-state" : "disk",
             ]))
         } catch {
+            if !(await inst.ownsRuntime) { dropInstance(name: name, action: action) }
             completion(WireFormat.error("vm restore: \(error)"))
         }
     }

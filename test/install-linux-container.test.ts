@@ -147,15 +147,15 @@ describe.skipIf(!SHOULD_RUN)("install.sh — Linux dry-run via Apple container",
     expect(stdout).not.toContain("Library/Application Support")
   })
 
-  test("--full --chrome is rejected on Linux with the documented error", () => {
+  test("--full --chrome plans the Linux provider without macOS services", () => {
     const r = containerRun(UBUNTU_IMAGE,
       "bash /work/scripts/install.sh --full --chrome --dry-run")
-    // Container exits non-zero, but the run itself succeeded — we want a
-    // structured stderr from the script saying "--full mode is macOS only".
     expect(r.ok).toBe(true)
-    expect(r.payload.exitCode).not.toBe(0)
-    const stderr = String(r.payload.stderr ?? "")
-    expect(stderr).toContain("--full mode is macOS only")
+    expect(r.payload.exitCode).toBe(0)
+    const stdout = String(r.payload.stdout ?? "")
+    expect(stdout).toContain("DRY: install owned native provider")
+    expect(stdout).toContain("DRY-RUN complete (Linux full mode)")
+    expect(stdout).not.toContain("com.interceptor.bridge.plist")
   })
 
   // the daemon-crash regression. test/os-input-platform.test.ts

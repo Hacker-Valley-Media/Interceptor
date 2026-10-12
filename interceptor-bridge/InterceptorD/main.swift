@@ -31,6 +31,10 @@
 
 import Foundation
 import Darwin
+import InputKeycodes
+import GuestWire
+import CoreFoundation
+import NativeAX
 
 #if os(macOS)
 import AppKit
@@ -45,20 +49,6 @@ let requiredAuthToken = ProcessInfo.processInfo.environment["INTERCEPTOR_GUEST_T
 
 // MARK: - JSON helpers
 
-func jsonData(_ obj: [String: Any]) -> Data? {
-    return try? JSONSerialization.data(withJSONObject: obj, options: [])
-}
-
-func writeFrame(fd: Int32, _ obj: [String: Any]) {
-    guard let data = jsonData(obj) else { return }
-    var length = UInt32(data.count).littleEndian
-    var frame = Data(bytes: &length, count: 4)
-    frame.append(data)
-    _ = frame.withUnsafeBytes { ptr in
-        Darwin.write(fd, ptr.baseAddress!, frame.count)
-    }
-}
-
 func successResult(_ id: String, data: [String: Any]) -> [String: Any] {
     return ["id": id, "result": ["success": true, "data": data]]
 }
@@ -70,411 +60,124 @@ func errorResult(_ id: String, _ message: String) -> [String: Any] {
 // MARK: - Verb handlers
 
 func handleExec(_ action: [String: Any]) -> [String: Any] {
-    guard let argv = action["argv"] as? [String], !argv.isEmpty else {
-        return ["success": false, "error": "exec: missing argv"]
-    }
-    let workdir = action["workdir"] as? String
-    let env = action["env"] as? [String: String] ?? [:]
-    let timeout: TimeInterval = {
-        switch action["timeout"] {
-        case let number as NSNumber:
-            return max(0, number.doubleValue)
-        case let double as Double:
-            return max(0, double)
-        case let int as Int:
-            return max(0, TimeInterval(int))
-        case let string as String:
-            return max(0, TimeInterval(string) ?? 0)
-        default:
-            return 0
-        }
-    }()
-
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: argv[0])
-    task.arguments = Array(argv.dropFirst())
-    if let wd = workdir { task.currentDirectoryURL = URL(fileURLWithPath: wd) }
-    var fullEnv = ProcessInfo.processInfo.environment
-    for (k, v) in env { fullEnv[k] = v }
-    task.environment = fullEnv
-
-    let outPipe = Pipe()
-    let errPipe = Pipe()
-    task.standardOutput = outPipe
-    task.standardError = errPipe
-    task.standardInput = FileHandle.nullDevice
-
-    let started = Date()
-    do {
-        try task.run()
-    } catch {
-        return ["success": false, "error": "exec: spawn failed: \(error.localizedDescription)"]
-    }
-    let sem = DispatchSemaphore(value: 0)
-    task.terminationHandler = { _ in sem.signal() }
-    var timedOut = false
-    if timeout > 0 {
-        timedOut = sem.wait(timeout: .now() + timeout) == .timedOut
-        if timedOut {
-            task.terminate()
-            if sem.wait(timeout: .now() + 2) == .timedOut {
-                kill(task.processIdentifier, SIGKILL)
-                _ = sem.wait(timeout: .now() + 2)
-            }
-        }
-    } else {
-        task.waitUntilExit()
-    }
-    let durationMs = Int(Date().timeIntervalSince(started) * 1000)
-
-    let stdoutData = outPipe.fileHandleForReading.readDataToEndOfFile()
-    let stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
-    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-    let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-
-    return [
-        "success": true,
-        "data": [
-            "exitCode": task.terminationStatus,
-            "stdout": stdout,
-            "stderr": stderr,
-            "durationMs": durationMs,
-            "timedOut": timedOut
-        ] as [String: Any]
-    ]
+    GuestExecution.execute(action)
 }
 
 func handleGetIP() -> [String: Any] {
-#if os(macOS)
-    // ifconfig en0 → grep inet
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/sbin/ifconfig")
-    task.arguments = ["en0"]
-    let pipe = Pipe()
-    task.standardOutput = pipe
-    do { try task.run() } catch {
-        return ["success": false, "error": "get_ip: ifconfig failed: \(error.localizedDescription)"]
-    }
-    task.waitUntilExit()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    let text = String(data: data, encoding: .utf8) ?? ""
-    for line in text.split(separator: "\n") {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("inet ") && !trimmed.contains("127.0.0.1") {
-            let parts = trimmed.split(separator: " ")
-            if parts.count >= 2 {
-                return ["success": true, "data": ["ipAddress": String(parts[1])]]
-            }
+    var first: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&first) == 0 else { return ["success": false, "error": "get_ip: native interface inventory failed"] }
+    defer { if let first { freeifaddrs(first) } }
+    var cursor = first, count = 0, seen = Set<UInt>(), addresses = Set<String>()
+    let deadline: GuestWire.Deadline
+    do { deadline = try .init(seconds: 5) } catch { return ["success": false, "error": "get_ip: invalid budget"] }
+    while let item = cursor {
+        do { _ = try deadline.remaining() } catch { return ["success": false, "error": "get_ip: interface traversal deadline expired"] }
+        count += 1
+        guard count <= 512, seen.insert(UInt(bitPattern: item)).inserted else {
+            return ["success": false, "error": "get_ip: native interface inventory is oversized or cyclic"]
         }
+        let interface = item.pointee
+        cursor = interface.ifa_next
+        guard let name = interface.ifa_name, String(cString: name) == "en0",
+              interface.ifa_flags & UInt32(IFF_UP) != 0, interface.ifa_flags & UInt32(IFF_LOOPBACK) == 0,
+              let address = interface.ifa_addr, Int32(address.pointee.sa_family) == AF_INET else { continue }
+        var value = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+        let number = UInt32(bigEndian: value.s_addr)
+        guard number != 0, number >> 24 != 127, number >> 24 < 224 else { continue }
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        guard inet_ntop(AF_INET, &value, &buffer, socklen_t(buffer.count)) != nil else {
+            return ["success": false, "error": "get_ip: native address conversion failed"]
+        }
+        addresses.insert(String(cString: buffer))
     }
-    return ["success": true, "data": ["ipAddress": NSNull()]]
-#else
-    // Linux: parse /proc/net/route or `ip -j addr`. Keep it dependency-free.
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    task.arguments = ["sh", "-c", "ip -j addr 2>/dev/null || ifconfig"]
-    let pipe = Pipe()
-    task.standardOutput = pipe
-    do { try task.run() } catch {
-        return ["success": false, "error": "get_ip: ip failed: \(error.localizedDescription)"]
+    guard addresses.count <= 1 else {
+        return ["success": false, "error": "get_ip: en0 has multiple actual IPv4 addresses; no first-address fallback was chosen"]
     }
-    task.waitUntilExit()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    let text = String(data: data, encoding: .utf8) ?? ""
-    // Best-effort regex for the first non-loopback IPv4.
-    if let range = text.range(of: #"\b(?!127\.0\.0\.1)\d+\.\d+\.\d+\.\d+\b"#, options: .regularExpression) {
-        return ["success": true, "data": ["ipAddress": String(text[range])]]
-    }
-    return ["success": true, "data": ["ipAddress": NSNull()]]
-#endif
+    return ["success": true, "data": ["ipAddress": addresses.first.map { $0 as Any } ?? NSNull()]]
 }
 
 #if os(macOS)
 import ScreenCaptureKit
 
-// macOS 15 deprecated CGDisplayCreateImage. ScreenCaptureKit is the
-// supported path: SCShareableContent.current.displays → SCContentFilter
-// for the display → SCScreenshotManager.captureImage(contentFilter:configuration:).
-// We use a sync wrapper around the async ScreenCaptureKit API.
-@available(macOS 14.0, *)
-func sckCaptureMainDisplay() async throws -> CGImage {
-    let content = try await SCShareableContent.current
-    guard let display = content.displays.first else {
-        throw NSError(domain: "InterceptorD", code: 1, userInfo: [NSLocalizedDescriptionKey: "no displays available"])
-    }
-    let filter = SCContentFilter(display: display, excludingWindows: [])
-    let config = SCStreamConfiguration()
-    config.width = display.width
-    config.height = display.height
-    config.showsCursor = true
-    return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-}
+func handleScreenshot(_ action: [String: Any]) -> [String: Any] { GuestCapture.shared.begin(action) }
 
-// Sendable holder. We serialize all access through a dedicated dispatch
-// queue rather than NSLock because Swift 6 disallows NSLock.lock() from
-// async contexts.
-final class ImageBox: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "interceptord.imagebox")
-    private var _image: CGImage?
-    private var _error: String?
-    func set(image: CGImage?, error: String?) {
-        queue.sync { self._image = image; self._error = error }
-    }
-    func snapshot() -> (CGImage?, String?) {
-        queue.sync { (self._image, self._error) }
-    }
-}
-
-func handleScreenshot(_ action: [String: Any]) -> [String: Any] {
-    let box = ImageBox()
-    let sem = DispatchSemaphore(value: 0)
-    if #available(macOS 14.0, *) {
-        Task.detached {
-            do {
-                let img = try await sckCaptureMainDisplay()
-                box.set(image: img, error: nil)
-            } catch {
-                box.set(image: nil, error: error.localizedDescription)
-            }
-            sem.signal()
-        }
-        _ = sem.wait(timeout: .now() + 10.0)
-    } else {
-        box.set(image: nil, error: "macOS < 14.0 unsupported")
-    }
-    let (cgImageOpt, errMsg) = box.snapshot()
-    guard let cgImage = cgImageOpt else {
-        return ["success": false, "error": "screenshot: ScreenCaptureKit: \(errMsg ?? "no image returned")"]
-    }
-    let out = (action["out"] as? String) ?? "/tmp/interceptord-screenshot.png"
-    let url = URL(fileURLWithPath: out)
-    let rep = NSBitmapImageRep(cgImage: cgImage)
-    guard let png = rep.representation(using: .png, properties: [:]) else {
-        return ["success": false, "error": "screenshot: PNG encode failed"]
-    }
-    do { try png.write(to: url) } catch {
-        return ["success": false, "error": "screenshot: write \(out): \(error.localizedDescription)"]
-    }
-    return ["success": true, "data": ["path": out, "width": cgImage.width, "height": cgImage.height, "bytes": png.count]]
-}
-
-func appMatches(_ app: NSRunningApplication, query: String) -> Bool {
-    let q = query.lowercased()
-    let candidates = [
-        app.localizedName,
-        app.bundleIdentifier,
-        app.bundleURL?.deletingPathExtension().lastPathComponent,
-        app.executableURL?.lastPathComponent,
-    ].compactMap { $0?.lowercased() }
-    return candidates.contains(q) || candidates.contains { $0.contains(q) }
-}
-
-func resolveRunningApp(_ query: String?) -> NSRunningApplication? {
-    let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let trimmed, !trimmed.isEmpty {
-        return NSWorkspace.shared.runningApplications.first { appMatches($0, query: trimmed) }
-    }
-    return liveFrontmostApplication()
-}
-
-// Live frontmost pull (issues #168, #198): NSWorkspace.frontmostApplication
-// is a main-run-loop push cache that freezes in daemon processes like this
-// one, and the system-wide focused-application attribute has nothing to
-// return for a frontmost app with zero windows. Ask the AX server, then scan
-// per-app AXFrontmost (the System Events algorithm), then the window server,
-// before trusting the cache. Inline copy of the host bridge's
-// FrontmostResolver — separate SwiftPM target, intentionally minimal deps.
-func liveFrontmostApplication() -> NSRunningApplication? {
-    var focused: CFTypeRef?
-    if AXUIElementCopyAttributeValue(
-        AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &focused) == .success,
-        let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
-        var pid: pid_t = 0
-        if AXUIElementGetPid(unsafeDowncast(focused, to: AXUIElement.self), &pid) == .success, pid > 0 {
-            return NSRunningApplication(processIdentifier: pid)
-        }
-    }
-    for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-        let element = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(element, 0.25)
-        var flag: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXFrontmostAttribute as CFString, &flag) == .success,
-           let flag = flag as? Bool, flag {
-            return NSRunningApplication(processIdentifier: app.processIdentifier)
-        }
-    }
-    if let list = CGWindowListCopyWindowInfo(
-        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
-        for window in list {
-            guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
-                  let pid = window[kCGWindowOwnerPID as String] as? Int
-            else { continue }
-            return NSRunningApplication(processIdentifier: pid_t(pid))
-        }
-    }
-    return NSWorkspace.shared.frontmostApplication
-}
+private let guestInputAdmission = DispatchSemaphore(value: 1)
 
 func eventTargetPID(_ action: [String: Any]) -> pid_t? {
-    guard let app = action["app"] as? String, !app.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-        return nil
+    guard let query = action["app"] as? String, !query.isEmpty else { return nil }
+    let exact = query.lowercased()
+    let matches = NSWorkspace.shared.runningApplications.filter { app in
+        !app.isTerminated && [app.localizedName, app.bundleIdentifier, app.bundleURL?.deletingPathExtension().lastPathComponent, app.executableURL?.lastPathComponent].compactMap { $0?.lowercased() }.contains(exact)
     }
-    return resolveRunningApp(app)?.processIdentifier
+    return matches.count == 1 ? matches[0].processIdentifier : nil
 }
 
-func postEvent(_ event: CGEvent?, targetPID: pid_t?) {
-    guard let event else { return }
-    if let targetPID {
-        event.postToPid(targetPID)
-    } else {
-        event.post(tap: .cghidEventTap)
-    }
+func postEvent(_ event: CGEvent, targetPID: pid_t?) {
+    if let targetPID { event.postToPid(targetPID) }
+    else { event.post(tap: .cghidEventTap) }
 }
 
 func handleType(_ action: [String: Any]) -> [String: Any] {
-    guard let text = action["text"] as? String else {
-        return ["success": false, "error": "type: missing 'text'"]
-    }
-    let source = CGEventSource(stateID: .hidSystemState)
+    guard let text = action["text"] as? String, !text.contains("\0"), text.utf8.count <= 32_768 else { return ["success": false, "error": "type requires bounded text without NUL"] }
+    guard guestInputAdmission.wait(timeout: .now()) == .success else { return ["success": false, "error": "guest input still owns delivery"] }
+    defer { guestInputAdmission.signal() }
     let pid = eventTargetPID(action)
-    for char in text.unicodeScalars {
-        // Use the unicode-string path so we don't need to map every key.
-        let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-        let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-        var u = UniChar(char.value)
-        down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-        up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-        postEvent(down, targetPID: pid)
-        postEvent(up, targetPID: pid)
-        usleep(10_000)
+    guard action["app"] == nil || pid != nil else { return ["success": false, "error": "type requires one exact running app; no global input was substituted"] }
+    guard CGPreflightPostEventAccess(), let source = CGEventSource(stateID: .privateState) else { return ["success": false, "error": "type requires guest native event permission"] }
+    var events: [CGEvent] = []
+    for scalar in text.unicodeScalars {
+        let units = Array(String(scalar).utf16)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true), let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { return ["success": false, "error": "type event construction failed before delivery"] }
+        units.withUnsafeBufferPointer { buffer in
+            down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+            up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+        }
+        down.flags = []; up.flags = []; events.append(down); events.append(up)
     }
-    return ["success": true, "data": ["typed": text.count, "targetPID": pid as Any? ?? NSNull()]]
+    for event in events { postEvent(event, targetPID: pid) }
+    return ["success": true, "data": ["transport": "coregraphics", "submittedEvents": events.count, "guestEffectVerified": false, "textUTF8Bytes": text.utf8.count]]
 }
 
 func handleClick(_ action: [String: Any]) -> [String: Any] {
-    let x = (action["x"] as? Double) ?? Double((action["x"] as? Int) ?? 0)
-    let y = (action["y"] as? Double) ?? Double((action["y"] as? Int) ?? 0)
-    let button = (action["button"] as? String) ?? "left"
-    let source = CGEventSource(stateID: .hidSystemState)
-    let mb: CGMouseButton
-    let down: CGEventType
-    let up: CGEventType
-    switch button {
-    case "right": mb = .right; down = .rightMouseDown; up = .rightMouseUp
-    case "middle": mb = .center; down = .otherMouseDown; up = .otherMouseUp
-    default: mb = .left; down = .leftMouseDown; up = .leftMouseUp
-    }
-    let pt = CGPoint(x: x, y: y)
+    guard let nx = action["x"] as? NSNumber, let ny = action["y"] as? NSNumber,
+          CFGetTypeID(nx) != CFBooleanGetTypeID(), CFGetTypeID(ny) != CFBooleanGetTypeID(), nx.doubleValue.isFinite, ny.doubleValue.isFinite else { return ["success": false, "error": "click requires actual finite guest pixel coordinates"] }
+    let x = nx.doubleValue, y = ny.doubleValue, button = action["button"] as? String ?? "left"
+    guard ["left", "right", "middle"].contains(button) else { return ["success": false, "error": "unknown guest pointer button"] }
+    let display = CGMainDisplayID(), frame = CGDisplayBounds(display)
+    let width = CGDisplayPixelsWide(display), height = CGDisplayPixelsHigh(display)
+    guard width > 0, height > 0, frame.width > 0, frame.height > 0, x >= 0, y >= 0, x < Double(width), y < Double(height) else { return ["success": false, "error": "click is outside the actual guest main display"] }
+    guard guestInputAdmission.wait(timeout: .now()) == .success else { return ["success": false, "error": "guest input still owns delivery"] }
+    defer { guestInputAdmission.signal() }
     let pid = eventTargetPID(action)
-    postEvent(CGEvent(mouseEventSource: source, mouseType: down, mouseCursorPosition: pt, mouseButton: mb), targetPID: pid)
-    postEvent(CGEvent(mouseEventSource: source, mouseType: up, mouseCursorPosition: pt, mouseButton: mb), targetPID: pid)
-    return ["success": true, "data": ["x": x, "y": y, "button": button, "targetPID": pid as Any? ?? NSNull()]]
+    guard action["app"] == nil || pid != nil else { return ["success": false, "error": "click requires one exact running app; no global input was substituted"] }
+    guard CGPreflightPostEventAccess(), let source = CGEventSource(stateID: .privateState) else { return ["success": false, "error": "click requires guest native event permission"] }
+    let mouse: CGMouseButton = button == "right" ? .right : button == "middle" ? .center : .left
+    let downType: CGEventType = button == "right" ? .rightMouseDown : button == "middle" ? .otherMouseDown : .leftMouseDown
+    let upType: CGEventType = button == "right" ? .rightMouseUp : button == "middle" ? .otherMouseUp : .leftMouseUp
+    let point = CGPoint(x: frame.minX + x * frame.width / Double(width), y: frame.minY + y * frame.height / Double(height))
+    guard let down = CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: mouse), let up = CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: mouse) else { return ["success": false, "error": "click event construction failed before delivery"] }
+    postEvent(down, targetPID: pid); postEvent(up, targetPID: pid)
+    return ["success": true, "data": ["transport": "coregraphics", "submittedEvents": 2, "guestEffectVerified": false, "x": x, "y": y, "button": button]]
 }
 
 func handleKeys(_ action: [String: Any]) -> [String: Any] {
-    guard let chord = action["keys"] as? String else {
-        return ["success": false, "error": "keys: missing 'keys'"]
+    guard let text = action["keys"] as? String, text.utf8.count <= 4096, let chord = InputKeycodes.macChord(text) else { return ["success": false, "error": "keys requires one supported physical chord without unknown or duplicate modifiers"] }
+    guard guestInputAdmission.wait(timeout: .now()) == .success else { return ["success": false, "error": "guest input still owns delivery"] }
+    defer { guestInputAdmission.signal() }
+    let pid = eventTargetPID(action)
+    guard action["app"] == nil || pid != nil else { return ["success": false, "error": "keys requires one exact running app; no global input was substituted"] }
+    guard CGPreflightPostEventAccess(), let source = CGEventSource(stateID: .privateState), let down = CGEvent(keyboardEventSource: source, virtualKey: chord.code, keyDown: true), let up = CGEvent(keyboardEventSource: source, virtualKey: chord.code, keyDown: false) else { return ["success": false, "error": "keys requires guest permission and actual native events"] }
+    var flags: CGEventFlags = []
+    for modifier in chord.modifiers {
+        switch modifier { case "shift": flags.insert(.maskShift); case "control": flags.insert(.maskControl); case "option": flags.insert(.maskAlternate); case "command": flags.insert(.maskCommand); default: break }
     }
-    // Minimal mapping: just handle the chord as a literal sequence via type.
-    // Full chord mapping (cmd+shift+x) is v2; for v0 the host can use osascript fallback.
-    return handleType(["text": chord])
+    down.flags = flags; up.flags = flags
+    postEvent(down, targetPID: pid); postEvent(up, targetPID: pid)
+    return ["success": true, "data": ["transport": "coregraphics", "submittedEvents": 2, "guestEffectVerified": false, "keys": text]]
 }
 
-func handleReadAX(_ action: [String: Any]) -> [String: Any] {
-    let depth = (action["max_depth"] as? Int) ?? 4
-    let maxNodes = (action["max_nodes"] as? Int) ?? 500
-    guard let app = resolveRunningApp(action["app"] as? String) else {
-        return ["success": false, "error": "read_ax: no target app found"]
-    }
+func handleReadAX(_ action: [String: Any]) -> [String: Any] { GuestAX.read(action) }
 
-    let appElement = AXUIElementCreateApplication(app.processIdentifier)
-    var visited = 0
-    let tree = axNode(appElement, depth: 0, maxDepth: depth, maxNodes: maxNodes, visited: &visited)
-    return [
-        "success": true,
-        "data": [
-            "app": app.localizedName ?? "",
-            "bundleIdentifier": app.bundleIdentifier ?? "",
-            "pid": app.processIdentifier,
-            "tree": tree,
-            "visited": visited,
-            "maxDepth": depth
-        ] as [String: Any]
-    ]
-}
-
-func axString(_ el: AXUIElement, _ attr: CFString) -> String? {
-    var value: CFTypeRef?
-    let result = AXUIElementCopyAttributeValue(el, attr, &value)
-    guard result == .success, let value else { return nil }
-    if let s = value as? String { return s }
-    if CFGetTypeID(value) == AXUIElementGetTypeID() { return nil }
-    let described = String(describing: value)
-    return described.isEmpty ? nil : described
-}
-
-func axPoint(_ value: CFTypeRef?) -> CGPoint? {
-    guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
-    var point = CGPoint.zero
-    if AXValueGetValue((value as! AXValue), .cgPoint, &point) { return point }
-    return nil
-}
-
-func axSize(_ value: CFTypeRef?) -> CGSize? {
-    guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
-    var size = CGSize.zero
-    if AXValueGetValue((value as! AXValue), .cgSize, &size) { return size }
-    return nil
-}
-
-func axFrame(_ el: AXUIElement) -> [String: Any]? {
-    var posRef: CFTypeRef?
-    var sizeRef: CFTypeRef?
-    AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posRef)
-    AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeRef)
-    guard let point = axPoint(posRef), let size = axSize(sizeRef) else { return nil }
-    return [
-        "x": point.x,
-        "y": point.y,
-        "width": size.width,
-        "height": size.height,
-    ]
-}
-
-func axNode(_ el: AXUIElement, depth: Int, maxDepth: Int, maxNodes: Int, visited: inout Int) -> [String: Any] {
-    visited += 1
-    var node: [String: Any] = [
-        "ref": "ax\(visited)",
-        "role": axString(el, kAXRoleAttribute as CFString) ?? (depth == 0 ? "AXSystem" : "?"),
-    ]
-    if let title = axString(el, kAXTitleAttribute as CFString), !title.isEmpty { node["title"] = title }
-    if let value = axString(el, kAXValueAttribute as CFString), !value.isEmpty { node["value"] = value }
-    if let desc = axString(el, kAXDescriptionAttribute as CFString), !desc.isEmpty { node["description"] = desc }
-    if let frame = axFrame(el) { node["frame"] = frame }
-
-    guard depth < maxDepth, visited < maxNodes else { return node }
-    var childrenRef: CFTypeRef?
-    var children: [AXUIElement] = []
-    let result = AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &childrenRef)
-    if result == .success, let axChildren = childrenRef as? [AXUIElement], !axChildren.isEmpty {
-        children = axChildren
-    } else {
-        var windowsRef: CFTypeRef?
-        let windowsResult = AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &windowsRef)
-        if windowsResult == .success, let windows = windowsRef as? [AXUIElement], !windows.isEmpty {
-            children = windows
-        }
-    }
-    if !children.isEmpty {
-        var childNodes: [[String: Any]] = []
-        for child in children.prefix(50) {
-            if visited >= maxNodes { break }
-            childNodes.append(axNode(child, depth: depth + 1, maxDepth: maxDepth, maxNodes: maxNodes, visited: &visited))
-        }
-        node["children"] = childNodes
-    }
-    return node
-}
 #else
 // Linux stubs — defer the rich verbs to the Linux variant (CL31 / v2).
 func handleScreenshot(_ action: [String: Any]) -> [String: Any] {
@@ -494,117 +197,59 @@ func handleReadAX(_ action: [String: Any]) -> [String: Any] {
 }
 #endif
 
-func handleMount(_ action: [String: Any]) -> [String: Any] {
-    guard let tag = action["tag"] as? String, let path = action["path"] as? String else {
-        return ["success": false, "error": "mount: missing 'tag' or 'path'"]
-    }
-    // mkdir -p the mount point then mount.
-    let mkdir = Process()
-    mkdir.executableURL = URL(fileURLWithPath: "/bin/mkdir")
-    mkdir.arguments = ["-p", path]
-    try? mkdir.run(); mkdir.waitUntilExit()
+func handleMount(_ action: [String: Any]) -> [String: Any] { GuestMount.mount(action) }
 
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/sbin/mount")
-    task.arguments = ["-t", "virtiofs", tag, path]
-    let errPipe = Pipe()
-    task.standardError = errPipe
-    do { try task.run() } catch {
-        return ["success": false, "error": "mount: \(error.localizedDescription)"]
-    }
-    task.waitUntilExit()
-    if task.terminationStatus != 0 {
-        let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return ["success": false, "error": "mount failed: \(err)"]
-    }
-    return ["success": true, "data": ["tag": tag, "path": path]]
-}
+func handleCopyIn(_ action: [String: Any]) -> [String: Any] { GuestFiles.copyIn(action) }
 
-func handleCopyIn(_ action: [String: Any]) -> [String: Any] {
-    guard let path = action["path"] as? String, let b64 = action["dataBase64"] as? String else {
-        return ["success": false, "error": "cp_in: missing 'path' or 'dataBase64'"]
-    }
-    guard let data = Data(base64Encoded: b64) else {
-        return ["success": false, "error": "cp_in: dataBase64 is invalid"]
-    }
-    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-    do {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
-        if let mode = action["mode"] as? String, let modeInt = Int(mode, radix: 8) {
-            chmod(url.path, mode_t(modeInt))
-        }
-        return ["success": true, "data": ["path": url.path, "bytes": data.count]]
-    } catch {
-        return ["success": false, "error": "cp_in: \(error.localizedDescription)"]
-    }
-}
-
-func handleCopyOut(_ action: [String: Any]) -> [String: Any] {
-    guard let path = action["path"] as? String else {
-        return ["success": false, "error": "cp_out: missing 'path'"]
-    }
-    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-    do {
-        let data = try Data(contentsOf: url)
-        return [
-            "success": true,
-            "data": [
-                "path": url.path,
-                "bytes": data.count,
-                "dataBase64": data.base64EncodedString(),
-            ],
-        ]
-    } catch {
-        return ["success": false, "error": "cp_out: \(error.localizedDescription)"]
-    }
-}
+func handleCopyOut(_ action: [String: Any]) -> [String: Any] { GuestFiles.copyOut(action) }
 
 func handleLogs(_ action: [String: Any]) -> [String: Any] {
-    let limit = (action["limit"] as? Int) ?? 200
-    let paths = ["/tmp/InterceptorD.err.log", "/tmp/InterceptorD.out.log"]
-    var entries: [[String: Any]] = []
-    for path in paths {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        let tail = lines.suffix(limit).map(String.init)
-        entries.append(["path": path, "lines": tail])
+    guard let number = (action["limit"] ?? 200) as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+          number.doubleValue.rounded(.towardZero) == number.doubleValue, (1...1000).contains(number.doubleValue) else {
+        return ["success": false, "error": "logs: limit must be an integer1...1000"]
     }
-    return ["success": true, "data": ["logs": entries]]
+    let limit = number.intValue, paths = ["/tmp/InterceptorD.err.log", "/tmp/InterceptorD.out.log"]
+    var entries: [[String: Any]] = [], remaining = 65_536, partial = false
+    let deadline: GuestWire.Deadline
+    do { deadline = try .init(seconds: min(5, GuestWire.requestBudget(action, defaultSeconds: 5))) } catch { return ["success": false, "error": "logs: invalid budget"] }
+    for path in paths {
+        do {
+            let data = try GuestFiles.File(path: path, create: false).read(deadline: deadline)
+            guard let text = String(data: data, encoding: .utf8) else { throw GuestWire.Failure.framing("log is not complete UTF8") }
+            var lines: [String] = [], truncated = false
+            // Walk from the end, retaining at most the requested line count.
+            // Unicode scalar clipping cannot split a surrogate/UTF8 sequence.
+            for line in text.split(separator: "\n", omittingEmptySubsequences: false).suffix(limit).reversed() {
+                let clipped = String(String.UnicodeScalarView(line.unicodeScalars.prefix(512)))
+                guard clipped.utf8.count <= remaining else { truncated = true; break }
+                remaining -= clipped.utf8.count
+                if clipped != line { truncated = true }
+                lines.append(clipped)
+            }
+            partial = partial || truncated
+            entries.append(["path": path, "lines": Array(lines.reversed()), "state": "read", "truncated": truncated])
+        } catch {
+            partial = true
+            entries.append(["path": path, "lines": [String](), "state": "unavailable", "truncated": false, "error": "retained log read failed or changed: \(error)"])
+        }
+    }
+    return ["success": true, "data": ["logs": entries, "partial": partial]]
 }
 
 func boolFlag(_ action: [String: Any], _ key: String) -> Bool {
-    return action[key] as? Bool ?? false
+    guard let value = action[key] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return false }
+    return value.boolValue
 }
 
 #if os(macOS)
-func resetTCC(service: String) -> [String: Any] {
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-    task.arguments = ["reset", service]
-    let stdout = Pipe()
-    let stderr = Pipe()
-    task.standardOutput = stdout
-    task.standardError = stderr
-    do {
-        try task.run()
-    } catch {
-        return [
-            "service": service,
-            "ok": false,
-            "error": error.localizedDescription,
-        ]
+func resetTCC(service: String, timeout: Double) -> [String: Any] {
+    let result = GuestExecution.execute(["argv": ["/usr/bin/tccutil", "reset", service], "timeout": min(10, timeout)])
+    guard result["success"] as? Bool == true, let data = result["data"] as? [String: Any], let code = data["exitCode"] as? NSNumber,
+          let out = data["stdout"] as? String, let err = data["stderr"] as? String, let duration = data["durationMs"] as? NSNumber else {
+        return ["service": service, "ok": false, "outcomeUnknown": true, "error": "owned TCC reset failed or its outcome is unknown: \(result["error"] as? String ?? "missing native exit")"]
     }
-    task.waitUntilExit()
-    let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    return [
-        "service": service,
-        "ok": task.terminationStatus == 0,
-        "exitCode": task.terminationStatus,
-        "stdout": stdoutText,
-        "stderr": stderrText,
-    ]
+    let clippedOut = String(String.UnicodeScalarView(out.unicodeScalars.prefix(4096))), clippedErr = String(String.UnicodeScalarView(err.unicodeScalars.prefix(4096)))
+    return ["service": service, "ok": code.intValue == 0, "exitCode": code, "stdout": clippedOut, "stderr": clippedErr, "durationMs": duration, "truncated": clippedOut != out || clippedErr != err]
 }
 
 func checkAccessibility(prompt: Bool) -> Bool {
@@ -634,8 +279,18 @@ func openPrivacyPane(_ anchor: String) -> Bool {
 }
 #endif
 
+private let guestTrustAdmission = DispatchSemaphore(value: 1)
+
 func handleTrust(_ action: [String: Any]) -> [String: Any] {
 #if os(macOS)
+    for key in ["noPrompt", "prompt", "walkthrough", "accessibilityPrompt", "screenPrompt", "resetDenied"] {
+        if let raw = action[key] { guard let value = raw as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return ["success": false, "error": "trust flags require actual Booleans; no prompt or reset was performed"] } }
+    }
+    let deadline: GuestWire.Deadline
+    do { deadline = try .init(seconds: GuestWire.requestBudget(action, defaultSeconds: 30)) }
+    catch { return ["success": false, "error": "trust: invalid request budget; no prompt or reset was performed"] }
+    guard guestTrustAdmission.wait(timeout: .now()) == .success else { return ["success": false, "error": "trust: another native permission query, prompt or reset still owns admission"] }
+    defer { guestTrustAdmission.signal() }
     let noPrompt = boolFlag(action, "noPrompt")
     let prompt = !noPrompt && boolFlag(action, "prompt")
     let walkthrough = !noPrompt && boolFlag(action, "walkthrough")
@@ -648,16 +303,18 @@ func handleTrust(_ action: [String: Any]) -> [String: Any] {
 
     var resetResults: [[String: Any]] = []
     if resetDenied {
-        if shouldPromptAccessibility {
-            resetResults.append(resetTCC(service: "Accessibility"))
-        }
-        if shouldPromptScreen {
-            resetResults.append(resetTCC(service: "ScreenCapture"))
+        do {
+            if shouldPromptAccessibility { resetResults.append(resetTCC(service: "Accessibility", timeout: try deadline.remaining())) }
+            if shouldPromptScreen { resetResults.append(resetTCC(service: "ScreenCapture", timeout: try deadline.remaining())) }
+        } catch {
+            return ["success": false, "error": "trust: native reset exhausted the request deadline; inspect guest permission state before retrying"]
         }
     }
-
+    guard (try? deadline.remaining()) != nil else { return ["success": false, "error": "trust: deadline expired before permission queries or prompts"] }
     let accessibility = checkAccessibility(prompt: shouldPromptAccessibility)
+    guard (try? deadline.remaining()) != nil else { return ["success": false, "error": "trust: native Accessibility query or prompt exceeded the deadline; no screen prompt followed"] }
     let screenRecording = checkScreenRecording(prompt: shouldPromptScreen)
+    guard (try? deadline.remaining()) != nil else { return ["success": false, "error": "trust: native screen query or prompt exceeded the deadline; observe guest state before retrying"] }
 
     var opened: [String] = []
     if walkthrough {
@@ -688,11 +345,11 @@ func handleTrust(_ action: [String: Any]) -> [String: Any] {
         "platform": "macos",
         "accessibility": accessibility ? "granted" : "denied",
         "screenRecording": screenRecording ? "granted" : "denied",
-        "postEvent": "unknown",
-        "inputMonitoring": "unknown",
+        "postEvent": CGPreflightPostEventAccess() ? "granted" : "denied",
+        "inputMonitoring": CGPreflightListenEventAccess() ? "granted" : "denied",
         "notes": [
             "Accessibility and Screen Recording expose only boolean preflight state through public APIs here.",
-            "PostEvent/Input Monitoring should be validated by attempting the requested verb and checking failure diagnostics.",
+            "PostEvent and Input Monitoring report their actual public boolean preflight state.",
             "On unmanaged macOS guests, prompts still require user approval in the guest UI; SSH cannot silently grant TCC.",
         ],
     ]
@@ -733,7 +390,7 @@ func isMutatingVerb(_ verb: String, action: [String: Any]) -> Bool {
             || boolFlag(action, "resetDenied")
     }
     switch verb {
-    case "ping", "get_ip", "trust", "read_ax", "screenshot", "logs":
+    case "ping", "get_ip", "trust", "read_ax", "screenshot", "screenshot_chunk", "screenshot_release", "logs":
         return false
     default:
         return true
@@ -743,12 +400,25 @@ func isMutatingVerb(_ verb: String, action: [String: Any]) -> Bool {
 // MARK: - Request dispatcher
 
 func dispatch(request: [String: Any]) -> [String: Any] {
-    let id = (request["id"] as? String) ?? UUID().uuidString
+    let id: String
+    do { id = try GuestWire.requestID(request) }
+    catch { return errorResult(request["id"] as? String ?? "", "invalid guest request envelope") }
     guard let action = request["action"] as? [String: Any] else {
         return errorResult(id, "missing action")
     }
     guard let verb = action["verb"] as? String else {
         return errorResult(id, "missing action.verb")
+    }
+    let fields: [String: Set<String>] = [
+        "ping": [], "get_ip": [], "exec": ["argv", "env", "workdir", "user", "tty", "timeout"],
+        "screenshot": ["timeout"], "screenshot_chunk": ["snapshotId", "offset", "length"], "screenshot_release": ["snapshotId"],
+        "type": ["text", "app", "timeout"], "click": ["x", "y", "button", "app", "timeout"], "keys": ["keys", "app", "timeout"],
+        "read_ax": ["app", "max_depth", "timeout"], "mount": ["tag", "path", "timeout"],
+        "cp_in": ["path", "dataBase64", "mode", "timeout"], "cp_out": ["path", "timeout"], "logs": ["limit", "timeout"],
+        "trust": ["noPrompt", "prompt", "walkthrough", "accessibilityPrompt", "screenPrompt", "resetDenied", "timeout"]
+    ]
+    guard let allowed = fields[verb], Set(action.keys).isSubset(of: allowed.union(["verb", "authToken"])) else {
+        return errorResult(id, "unknown guest verb or field; no native operation was submitted")
     }
     if let requiredAuthToken, isMutatingVerb(verb, action: action) {
         guard action["authToken"] as? String == requiredAuthToken else {
@@ -760,6 +430,8 @@ func dispatch(request: [String: Any]) -> [String: Any] {
     case "exec":       result = handleExec(action)
     case "get_ip":     result = handleGetIP()
     case "screenshot": result = handleScreenshot(action)
+    case "screenshot_chunk": result = GuestCapture.shared.chunk(action)
+    case "screenshot_release": result = GuestCapture.shared.release(action)
     case "type":       result = handleType(action)
     case "click":      result = handleClick(action)
     case "keys":       result = handleKeys(action)
@@ -769,7 +441,7 @@ func dispatch(request: [String: Any]) -> [String: Any] {
     case "cp_out":     result = handleCopyOut(action)
     case "trust":      result = handleTrust(action)
     case "logs":       result = handleLogs(action)
-    case "ping":       result = ["success": true, "data": ["pong": true]]
+    case "ping":       result = ["success": true, "data": ["pong": true, "protocolVersion": GuestWire.protocolVersion, "features": [GuestWire.exclusiveCopyFeature, GuestWire.snapshotFeature]]]
     default:           result = ["success": false, "error": "unknown verb: \(verb)"]
     }
     return ["id": id, "result": result]
@@ -784,12 +456,22 @@ func dispatch(request: [String: Any]) -> [String: Any] {
 let AF_VSOCK_C: Int32 = 40
 let VMADDR_CID_ANY_C: UInt32 = 0xFFFFFFFF
 
+let guestConnectionAdmission = DispatchSemaphore(value: 8)
+
 func serveAcceptedClients(server: Int32) -> Never {
-    Darwin.listen(server, 5)
+    guard Darwin.listen(server, 5) == 0 else {
+        fputs("InterceptorD: listen failed\n", stderr)
+        Darwin.close(server)
+        exit(1)
+    }
     while true {
         let client = Darwin.accept(server, nil, nil)
-        if client < 0 { continue }
-        Thread.detachNewThread { handleClient(fd: client) }
+        if client < 0 { if errno != EINTR { Thread.sleep(forTimeInterval: 0.01) }; continue }
+        guard guestConnectionAdmission.wait(timeout: .now()) == .success else { Darwin.close(client); continue }
+        Thread.detachNewThread {
+            defer { guestConnectionAdmission.signal() }
+            handleClient(fd: client)
+        }
     }
 }
 
@@ -869,25 +551,19 @@ func serve() -> Never {
 
 func handleClient(fd: Int32) {
     defer { Darwin.close(fd) }
-    var buffer = Data()
-    var buf = [UInt8](repeating: 0, count: 64 * 1024)
-    while true {
-        let n = buf.withUnsafeMutableBufferPointer { Darwin.read(fd, $0.baseAddress, $0.count) }
-        if n <= 0 { return }
-        buffer.append(buf, count: n)
-        while buffer.count >= 4 {
-            let length: UInt32 = buffer.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-            if length == 0 || length > 50_000_000 { buffer.removeAll(); break }
-            let total = 4 + Int(length)
-            if buffer.count < total { break }
-            let payload = buffer.subdata(in: 4..<total)
-            buffer.removeSubrange(0..<total)
-            guard let req = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
-                continue
-            }
-            let response = dispatch(request: req)
-            writeFrame(fd: fd, response)
-        }
+    do {
+        // Exactly one frame and reply per connection. Invalid or partial
+        // framing closes the connection rather than resynchronizing it.
+        let deadline = try GuestWire.Deadline(seconds: 58)
+        let request = try GuestWire.read(fd: fd, deadline: deadline)
+        _ = try GuestWire.requestID(request)
+        let response = dispatch(request: request)
+        let frame = try GuestWire.encode(response)
+        try GuestWire.write(fd: fd, frame: frame, deadline: deadline)
+    } catch {
+        // No result is fabricated and no request is replayed after a lost
+        // response. Native handler effects can remain and require observation.
+        fputs("InterceptorD: guest exchange closed: \(error)\n", stderr)
     }
 }
 
@@ -895,4 +571,14 @@ func handleClient(fd: Int32) {
 
 let transport = ProcessInfo.processInfo.environment["INTERCEPTOR_GUEST_TCP_LISTEN"] == "1" ? "tcp-diagnostic" : "vsock"
 fputs("InterceptorD starting on \(transport) port \(kAgentPort)\n", stderr)
+#if os(macOS)
+// Native frameworks can dispatch completions to the main queue. The socket
+// accept loop must not hold it forever. This agent has no activating UI.
+let guestApplication = NSApplication.shared
+guestApplication.setActivationPolicy(.prohibited)
+DispatchQueue.global(qos: .userInitiated).async { serve() }
+guestApplication.run()
+exit(1)
+#else
 serve()
+#endif

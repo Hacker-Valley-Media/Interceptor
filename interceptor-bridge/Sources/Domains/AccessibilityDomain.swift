@@ -2,6 +2,12 @@ import Foundation
 import ApplicationServices
 import AppKit
 
+/// AXEnabled is false on a disabled control; a missing attribute counts as enabled.
+func axElementDisabled(_ element: AXUIElement, transport: any AXTransport = LiveAXTransport()) -> Bool {
+    let (result, value) = transport.copyAttributeValue(element, kAXEnabledAttribute as String)
+    return result == .success && (value as? Bool) == false
+}
+
 final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     let refRegistry = RefRegistry.shared
     // every AX C call in this domain now routes through the
@@ -16,6 +22,46 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let type = action["type"] as? String, ["desktop_move", "desktop_resize", "desktop_value", "desktop_action", "desktop_inspect"].contains(type) {
+            guard let ref = action["ref"] as? String, let element = refRegistry.resolve(ref),
+                  let owner = transport.pid(element).1, owner > 0,
+                  InputTargetSelector.defaultPidIsLive(owner) else {
+                completion(["success": false, "code": "stale_reference", "error": "read the target again for a fresh reference"])
+                return
+            }
+            if let expected = refRegistry.resolvePID(ref), expected != owner {
+                completion(["success": false, "code": "stale_reference", "error": "reference process identity changed"])
+                return
+            }
+            if let requested = action["pid"] as? Int, requested != Int(owner) {
+                completion(["success": false, "code": "unsupported_target", "error": "reference belongs to a different target process"])
+                return
+            }
+            if let requested = action["app"] as? String {
+                let matches = NSWorkspace.shared.runningApplications.filter { DefaultAppLauncher.matches($0, requested) }
+                guard matches.count == 1, matches[0].processIdentifier == owner else {
+                    completion(["success": false, "code": matches.count > 1 ? "target_ambiguous" : "unsupported_target", "error": "reference does not uniquely match the requested application"])
+                    return
+                }
+            }
+            if let requested = action["window"] as? Int, BackgroundInput.windowID(owning: element, transport: transport).map(Int.init) != requested {
+                completion(["success": false, "code": "unsupported_target", "error": "reference belongs to a different target window"])
+                return
+            }
+            if ["desktop_move", "desktop_resize"].contains(type) {
+                guard let app = NSRunningApplication(processIdentifier: owner), !app.isTerminated else {
+                    completion(["success": false, "code": "stale_reference", "error": "read the target again for a fresh reference"])
+                    return
+                }
+                let (minimizedError, minimizedValue) = transport.copyAttributeValue(element, kAXMinimizedAttribute as String)
+                let minimized = AXValueCodec.tag(minimizedValue)
+                if getStringAttribute(element, kAXRoleAttribute as CFString) != "AXWindow" ||
+                    minimizedError != .success || minimized["kind"] as? String != "boolean" || minimized["value"] as? Bool != false {
+                    completion(["success": false, "code": "unsupported_target", "error": "geometry requires a restored top-level window ref"])
+                    return
+                }
+            }
+        }
         switch command {
         case "tree":
             handleTree(action: action, completion: completion)
@@ -89,10 +135,35 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         // Refs: AXUIElement.h, Apple a11y guides, Chromium a11y_extension.cc.
         wakeAXTree(app: axApp)
 
-        refRegistry.clear()
+        var root = axApp
+        if let requested = action["window"] as? Int {
+            budget.countCalls(1)
+            let (error, value) = transport.copyAttributeValue(axApp, kAXWindowsAttribute as String)
+            guard error == .success, let windows = value as? [AXUIElement] else {
+                completion(AXTypedError.errorDict("the requested window inventory is unavailable", code: "unsupported_target", axError: error)); return
+            }
+            var selected: AXUIElement?
+            for window in windows {
+                guard !budget.shouldStop() else {
+                    completion(AXTypedError.errorDict("window selection exceeded the tree read budget", code: "resource_limit")); return
+                }
+                budget.countCalls(2)
+                _ = transport.setMessagingTimeout(window, seconds: AXBudget.scanMessagingTimeoutSeconds)
+                if cgsWindowID(of: window).map(Int.init) == requested {
+                    guard selected == nil else {
+                        completion(AXTypedError.errorDict("more than one accessibility window matches the requested window", code: "target_ambiguous")); return
+                    }
+                    selected = window
+                }
+            }
+            guard let selected else {
+                completion(AXTypedError.errorDict("the requested window does not belong to the target app", code: "unsupported_target")); return
+            }
+            root = selected
+        }
 
         var output = ""
-        buildTree(element: axApp, pid: pid, depth: 0, maxDepth: depth, filter: filter, output: &output, maxChars: maxChars, budget: budget)
+        buildTree(element: root, pid: pid, depth: 0, maxDepth: depth, filter: filter, output: &output, maxChars: maxChars, budget: budget)
         if !budget.stopMarker.isEmpty { output += budget.stopMarker + "\n" }
 
         completion(WireFormat.success(output))
@@ -124,7 +195,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     func buildTree(element: AXUIElement, pid: pid_t, depth: Int, maxDepth: Int, filter: String, output: inout String, maxChars: Int, budget: AXBudget) {
         guard depth < maxDepth, output.count < maxChars, !budget.shouldStop() else { return }
         budget.countNode()
-        budget.countCalls(5)   // 4 attribute reads + 1 children read below
+        budget.countCalls(7)   // 4 attributes, 2 secure-classification reads, 1 children read
 
         let role = getStringAttribute(element, kAXRoleAttribute as CFString) ?? "unknown"
         let title = getStringAttribute(element, kAXTitleAttribute as CFString)
@@ -172,6 +243,11 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func getStringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        let name = attribute as String
+        if (name == kAXValueAttribute as String || name == kAXSelectedTextAttribute as String),
+           AXSecureRedaction.isSecureElement(element, transport: transport) {
+            return AXSecureRedaction.placeholder
+        }
         let (result, value) = transport.copyAttributeValue(element, attribute as String)
         guard result == .success else { return nil }
         return AXValueCodec.displayString(value)
@@ -223,7 +299,6 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         _ = transport.setMessagingTimeout(axApp, seconds: AXBudget.scanMessagingTimeoutSeconds)
 
         wakeAXTree(app: axApp)
-        refRegistry.clear()
         let searchRoot = searchRootElement(for: axApp) ?? axApp
 
         var matches: [[String: Any]] = []
@@ -235,7 +310,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     private func findElements(element: AXUIElement, pid: pid_t, query: String, roleFilter: String?, depth: Int, maxDepth: Int, maxMatches: Int, matches: inout [[String: Any]], budget: AXBudget) {
         guard depth < maxDepth, matches.count < maxMatches, !budget.shouldStop() else { return }
         budget.countNode()
-        budget.countCalls(6)   // 6 attribute reads per node
+        budget.countCalls(9)   // 6 attributes, 2 secure-classification reads, 1 children read
 
         let role = getStringAttribute(element, kAXRoleAttribute as CFString) ?? ""
         let identifier = getStringAttribute(element, kAXIdentifierAttribute as CFString) ?? ""
@@ -320,6 +395,17 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         }
 
         if let newValue = action["value"] as? String {
+            // Windows and Linux refuse writes to disabled or read-only controls; AX would report success.
+            if axElementDisabled(element, transport: transport) { completion(WireFormat.error("element is disabled; nothing was changed")); return }
+            let (probe, settable) = transport.isAttributeSettable(element, kAXValueAttribute as String)
+            if probe == .success && settable == false {
+                // A checkbox, button or pop-up is not read-only, it has no text value.
+                let (_, role) = transport.copyAttributeValue(element, kAXRoleAttribute as String)
+                if !["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXStaticText"].contains(AXValueCodec.displayString(role) ?? "") {
+                    completion(WireFormat.failure("unsupported_target", "this control has no text value; use action or act to press, toggle or select it; nothing was changed", details: ["dispatched": false])); return
+                }
+                completion(WireFormat.error("value is read-only; nothing was changed")); return
+            }
             let result = transport.setAttributeValue(element, kAXValueAttribute as String, newValue as CFTypeRef)
             if result == .success {
                 completion(WireFormat.success("value set"))
@@ -341,11 +427,19 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
 
         let actionName = action["action"] as? String ?? "press"
         let axAction = "AX" + actionName.prefix(1).uppercased() + actionName.dropFirst()
+        if axElementDisabled(element, transport: transport) { completion(WireFormat.error("element is disabled; no action was performed")); return }
 
         let result = transport.performAction(element, axAction)
         if result == .success {
             completion(WireFormat.success("ok"))
         } else {
+            if action["type"] as? String == "desktop_action" {
+                // A neutral reference action never falls through to a global
+                // pointer event. Preserve the AX outcome for the neutral
+                // normalizer, including uncertainty after cannotComplete.
+                completion(AXTypedError.errorDict("accessibility action failed", code: AXTypedError.productCode(result) ?? "timeout_unknown_outcome", axError: result))
+                return
+            }
             // Auto-escalation: try CGEvent click using element frame.
             // NOTE (future work): this global-click fallback is slated for removal
             // in favor of PID-routed InputDomain delegation; G0 preserves it.
@@ -433,7 +527,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         completion(WireFormat.success(result))
     }
 
-    // PRD-62: ground-truth geometry — handleResize and handleMove now read
+    // Ground-truth geometry — handleResize and handleMove now read
     // post-set kAXSize / kAXPosition back via getFrame() instead of echoing
     // the input dict, expose NSScreen.visibleFrame as `clampedTo` whenever
     // the system clamped the request, and run a single internal retry to
@@ -450,7 +544,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
             return
         }
 
-        // Spec 3: pre-flight settability per AXUIElementIsAttributeSettable.
+        // Pre-flight settability per AXUIElementIsAttributeSettable.
         if let unsettable = settabilityError(element: element, attribute: kAXSizeAttribute as CFString, verb: "resize") {
             completion(unsettable)
             return
@@ -462,7 +556,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
             return
         }
 
-        // Spec 2: verify, and if drifted within visibleFrame, retry exactly once.
+        // Verify, and if drifted within visibleFrame, retry exactly once.
         var frame = getFrame(element)
         if let f = frame, !Self.sizeMatches(f.size, target) {
             if let visible = visibleFrameRectForElement(element),
@@ -535,7 +629,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         completion(WireFormat.success(response))
     }
 
-    // MARK: - PRD-62 geometry helpers
+    // MARK: - Geometry helpers
 
     private func setSize(_ element: AXUIElement, _ size: CGSize) -> AXError? {
         var s = size
@@ -565,7 +659,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         return nil
     }
 
-    /// PRD-62 Spec 1: 1px tolerance absorbs AX's CGFloat round-trip noise.
+    /// 1px tolerance absorbs AX's CGFloat round-trip noise.
     static func sizeMatches(_ a: CGSize, _ b: CGSize) -> Bool {
         return abs(a.width - b.width) < 1.0 && abs(a.height - b.height) < 1.0
     }
@@ -591,7 +685,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         return CGRect(x: vf.origin.x, y: axY, width: vf.width, height: vf.height)
     }
 
-    /// Build the PRD-62 response shape from observed frame + intent.
+    /// Build the geometry response shape from observed frame + intent.
     /// Pure logic so tests can exercise the clamp classification without AX.
     static func buildGeometryResponse(
         frame: CGRect,
@@ -644,7 +738,7 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
 
         let callback: AXObserverCallback = { _, element, notification, refcon in
             let domain = Unmanaged<AccessibilityDomain>.fromOpaque(refcon!).takeUnretainedValue()
-            domain.refRegistry.clear()
+            if (notification as String) == (kAXUIElementDestroyedNotification as String) { domain.refRegistry.remove(element) }
             Platform.emitEvent("ax_notification", data: ["notification": notification as String])
         }
 

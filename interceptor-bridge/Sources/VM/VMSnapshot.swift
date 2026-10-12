@@ -11,7 +11,7 @@
 //      transparently on APFS volumes.
 //
 // `manifest.json` in the snapshot dir records when the snapshot was
-// taken, which kind, and which Disk.img digest it points at.
+// taken, which kind, and which storage files were actually copied.
 
 import Foundation
 #if canImport(Virtualization)
@@ -44,6 +44,12 @@ public enum VMSnapshotError: Error, CustomStringConvertible, Sendable {
 }
 
 public struct VMSnapshot: Sendable {
+    static func requireStableStorage(bundle: VMBundle) throws {
+        let pending = bundle.bundlePath.appendingPathComponent("restore-pending.json")
+        guard !FileManager.default.fileExists(atPath: pending.path) else {
+            throw VMSnapshotError.ioFailure("storage restore outcome is unresolved; prior files and operation receipt retained at \(pending.path)")
+        }
+    }
     public enum Mode: String, Sendable {
         case both
         case pausedStateOnly
@@ -68,6 +74,7 @@ public struct VMSnapshot: Sendable {
     @available(macOS 14.0, *)
     public static func create(
         vm: VZVirtualMachine,
+        queue: DispatchQueue,
         bundle: VMBundle,
         tag: String,
         mode: Mode
@@ -79,6 +86,11 @@ public struct VMSnapshot: Sendable {
         if mode != .diskOnly {
             try requirePausedStateSupport("paused-state snapshots")
         }
+        let machine = UncheckedSendableBox(vm)
+        let validState = await withCheckedContinuation { cc in
+            queue.async { cc.resume(returning: machine.value.state == (mode == .diskOnly ? .stopped : .paused)) }
+        }
+        guard validState else { throw VMSnapshotError.notSupported("snapshot requires the corresponding native stopped or paused state") }
         do {
             try FileManager.default.createDirectory(at: snapDir, withIntermediateDirectories: true)
         } catch {
@@ -92,7 +104,7 @@ public struct VMSnapshot: Sendable {
             let saveURL = bundle.snapshotFile(tag: tag)
             #if arch(arm64)
             do {
-                try await vm.saveMachineStateTo(url: saveURL)
+                try await pausedStateIO(vm: vm, queue: queue, file: saveURL, save: true)
                 hasPaused = true
             } catch {
                 throw VMSnapshotError.ioFailure("saveMachineStateTo: \(error.localizedDescription)")
@@ -107,13 +119,15 @@ public struct VMSnapshot: Sendable {
         if mode != .pausedStateOnly {
             let src = bundle.diskPath
             let dst = snapDir.appendingPathComponent("Disk.img")
-            if FileManager.default.fileExists(atPath: src.path) {
-                do {
-                    try FileManager.default.copyItem(at: src, to: dst) // APFS clonefile(2)
-                    hasDisk = true
-                } catch {
-                    throw VMSnapshotError.ioFailure("clone Disk.img: \(error.localizedDescription)")
+            guard FileManager.default.fileExists(atPath: src.path) else { throw VMSnapshotError.missing("snapshot has no actual Disk.img") }
+            do {
+                try FileManager.default.copyItem(at: src, to: dst)
+                if FileManager.default.fileExists(atPath: bundle.auxStoragePath.path) {
+                    try FileManager.default.copyItem(at: bundle.auxStoragePath, to: snapDir.appendingPathComponent("AuxiliaryStorage"))
                 }
+                hasDisk = true
+            } catch {
+                throw VMSnapshotError.ioFailure("clone VM storage: \(error.localizedDescription)")
             }
         }
 
@@ -135,11 +149,13 @@ public struct VMSnapshot: Sendable {
     @available(macOS 14.0, *)
     public static func restore(
         vm: VZVirtualMachine,
+        queue: DispatchQueue,
         bundle: VMBundle,
         tag: String,
         pausedStateOnly: Bool = false,
         diskOnly: Bool = false
     ) async throws -> VMSnapshotManifest {
+        try requireStableStorage(bundle: bundle)
         let manifestURL = bundle.snapshotManifest(tag: tag)
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
             throw VMSnapshotError.missing("snapshot '\(tag)' not found at \(manifestURL.path)")
@@ -150,30 +166,14 @@ public struct VMSnapshot: Sendable {
         }
 
         if !pausedStateOnly && manifest.hasDiskClone {
-            let snapDisk = bundle.snapshotDir(tag: tag).appendingPathComponent("Disk.img")
-            let liveDisk = bundle.diskPath
-            // Replace live disk with the snapshot's clone. We move the
-            // current disk aside so a botched restore can be undone.
-            let parked = bundle.bundlePath.appendingPathComponent("Disk.img.pre-restore-\(Int(Date().timeIntervalSince1970))")
-            if FileManager.default.fileExists(atPath: liveDisk.path) {
-                try? FileManager.default.moveItem(at: liveDisk, to: parked)
-            }
-            do {
-                try FileManager.default.copyItem(at: snapDisk, to: liveDisk)
-            } catch {
-                // attempt rollback
-                try? FileManager.default.moveItem(at: parked, to: liveDisk)
-                throw VMSnapshotError.ioFailure("restore Disk.img: \(error.localizedDescription)")
-            }
-            // best-effort cleanup
-            try? FileManager.default.removeItem(at: parked)
+            throw VMSnapshotError.notSupported("restore disk storage before constructing the native VM; use the VMInstance restore path")
         }
 
         if !diskOnly && manifest.hasPausedState {
             let saveURL = bundle.snapshotFile(tag: tag)
             #if arch(arm64)
             do {
-                try await vm.restoreMachineStateFrom(url: saveURL)
+                try await pausedStateIO(vm: vm, queue: queue, file: saveURL, save: false)
             } catch {
                 throw VMSnapshotError.ioFailure("restoreMachineStateFrom: \(error.localizedDescription)")
             }
@@ -189,6 +189,7 @@ public struct VMSnapshot: Sendable {
     @available(macOS 14.0, *)
     public static func restorePausedState(
         vm: VZVirtualMachine,
+        queue: DispatchQueue,
         bundle: VMBundle,
         tag: String
     ) async throws -> VMSnapshotManifest {
@@ -200,7 +201,7 @@ public struct VMSnapshot: Sendable {
         let saveURL = bundle.snapshotFile(tag: tag)
         #if arch(arm64)
         do {
-            try await vm.restoreMachineStateFrom(url: saveURL)
+            try await pausedStateIO(vm: vm, queue: queue, file: saveURL, save: false)
         } catch {
             throw VMSnapshotError.ioFailure("restoreMachineStateFrom: \(error.localizedDescription)")
         }
@@ -210,6 +211,31 @@ public struct VMSnapshot: Sendable {
         throw VMSnapshotError.notSupported("paused-state restore requires Apple silicon; use diskOnly on Intel")
         #endif
     }
+
+    #if arch(arm64)
+    @available(macOS 14.0, *)
+    private static func pausedStateIO(vm: VZVirtualMachine, queue: DispatchQueue, file: URL, save: Bool) async throws {
+        let machine = UncheckedSendableBox(vm)
+        try await withCheckedThrowingContinuation { (cc: CheckedContinuation<Void, Error>) in
+            queue.async {
+                guard machine.value.state == (save ? .paused : .stopped) else {
+                    cc.resume(throwing: VMSnapshotError.notSupported("native snapshot state differs before SDK operation")); return
+                }
+                let completed: @Sendable (Error?) -> Void = { error in
+                    if let error {
+                        cc.resume(throwing: VMSnapshotError.ioFailure("native machine-state operation: \(error.localizedDescription)"))
+                    } else if machine.value.state != .paused {
+                        cc.resume(throwing: VMSnapshotError.ioFailure("native machine-state operation did not confirm paused state"))
+                    } else {
+                        cc.resume(returning: ())
+                    }
+                }
+                if save { machine.value.saveMachineStateTo(url: file, completionHandler: completed) }
+                else { machine.value.restoreMachineStateFrom(url: file, completionHandler: completed) }
+            }
+        }
+    }
+    #endif
 #endif
 
     public static func manifest(bundle: VMBundle, tag: String) throws -> VMSnapshotManifest {
@@ -221,23 +247,35 @@ public struct VMSnapshot: Sendable {
     }
 
     public static func restoreDisk(bundle: VMBundle, tag: String) throws -> VMSnapshotManifest {
+        try requireStableStorage(bundle: bundle)
         let manifest = try manifest(bundle: bundle, tag: tag)
         guard manifest.hasDiskClone else {
             throw VMSnapshotError.missing("snapshot '\(tag)' has no Disk.img")
         }
-        let snapDisk = bundle.snapshotDir(tag: tag).appendingPathComponent("Disk.img")
-        let liveDisk = bundle.diskPath
-        let parked = bundle.bundlePath.appendingPathComponent("Disk.img.pre-restore-\(Int(Date().timeIntervalSince1970))")
-        if FileManager.default.fileExists(atPath: liveDisk.path) {
-            try? FileManager.default.moveItem(at: liveDisk, to: parked)
+        let fm = FileManager.default
+        let files = ["Disk.img", "AuxiliaryStorage"].filter { $0 == "Disk.img" || fm.fileExists(atPath: bundle.snapshotDir(tag: tag).appendingPathComponent($0).path) }
+        let id = UUID().uuidString
+        let pending = bundle.bundlePath.appendingPathComponent("restore-pending.json")
+        // Stage every actual snapshot file before moving any live storage.
+        for file in files {
+            let source = bundle.snapshotDir(tag: tag).appendingPathComponent(file)
+            guard fm.fileExists(atPath: source.path) else { throw VMSnapshotError.missing("snapshot is missing actual \(file)") }
+            try fm.copyItem(at: source, to: bundle.bundlePath.appendingPathComponent(file + ".restore-next-" + id))
         }
-        do {
-            try FileManager.default.copyItem(at: snapDisk, to: liveDisk)
-            try? FileManager.default.removeItem(at: parked)
-        } catch {
-            try? FileManager.default.moveItem(at: parked, to: liveDisk)
-            throw VMSnapshotError.ioFailure("restore Disk.img: \(error.localizedDescription)")
+        let receipt = try JSONSerialization.data(withJSONObject: ["id": id, "tag": tag, "files": files, "priorSuffix": ".pre-restore-" + id, "nextSuffix": ".restore-next-" + id], options: [.sortedKeys])
+        try receipt.write(to: pending, options: .atomic)
+        guard try Data(contentsOf: pending) == receipt else { throw VMSnapshotError.ioFailure("restore operation receipt readback differs") }
+        for file in files {
+            let live = bundle.bundlePath.appendingPathComponent(file)
+            let parked = bundle.bundlePath.appendingPathComponent(file + ".pre-restore-" + id)
+            if fm.fileExists(atPath: live.path) { try fm.moveItem(at: live, to: parked) }
+            do {
+                try fm.moveItem(at: bundle.bundlePath.appendingPathComponent(file + ".restore-next-" + id), to: live)
+            } catch {
+                throw VMSnapshotError.ioFailure("restore outcome unknown for \(file); prior storage retained at \(parked.path): \(error.localizedDescription)")
+            }
         }
+        try fm.removeItem(at: pending)
         return manifest
     }
 

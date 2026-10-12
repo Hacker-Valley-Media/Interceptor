@@ -9,7 +9,8 @@
 // The helper is extracted from the real script text (single source of truth)
 // and exercised against live decoy processes with the host's pgrep.
 import { afterAll, describe, expect, test } from "bun:test"
-import { spawn, spawnSync } from "bun"
+import { spawn } from "bun"
+import { captureShell } from "./helpers/shell-capture"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
@@ -20,11 +21,13 @@ const CAN_PGREP = process.platform !== "win32"
 
 function pattern(platform: "Linux" | "Darwin", name: string): string {
   if (!HELPER) throw new Error("browser_pgrep_pattern() not found in scripts/install.sh")
-  const run = spawnSync(["bash", "-c", `PLATFORM=${platform}\n${HELPER}\nbrowser_pgrep_pattern "$1"`, "bash", name])
+  const run = captureShell("bash", ["-c", `PLATFORM=${platform}\n${HELPER}\nbrowser_pgrep_pattern "$1"`, "bash", name])
+  if (run.status !== 0) throw new Error(`browser pattern failed: ${run.stderr}`)
   return run.stdout.toString()
 }
 function pgrepPids(pat: string): number[] {
-  const run = spawnSync(["pgrep", "-f", pat])
+  const run = captureShell("pgrep", ["-f", pat])
+  if (run.status !== 0 && run.status !== 1) throw new Error(`pgrep failed: ${run.stderr}`)
   return run.stdout.toString().split("\n").filter(Boolean).map(Number)
 }
 

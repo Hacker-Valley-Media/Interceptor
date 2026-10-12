@@ -17,6 +17,13 @@
 export const CDP_CONTEXT_PREFIX = "cdp:"
 export const APP_CONTEXT_PREFIX = "app:"
 
+/** Daemon app lifecycle actions; excludes the browser extension's cdp_tree. */
+export const CDP_ACTION_TYPES = new Set<string>([
+  "cdp_connect", "cdp_targets", "cdp_attach", "cdp_detach", "cdp_status", "cdp_raw",
+  "cdp_discover", "cdp_launch",
+  "app_attach", "app_detach", "app_status", "app_discover", "app_launch",
+])
+
 /** Default Chromium renderer remote-debugging HTTP port (`--remote-debugging-port`). */
 export const DEFAULT_REMOTE_DEBUG_PORT = 9222
 /** Default Node/V8 main-process inspector port (`--inspect`, SIGUSR1). */
@@ -148,13 +155,14 @@ export function appContextId(appName: string): string {
 
 /** Extract a `--remote-debugging-port` / `--inspect[-port]` value from a process command line. */
 export function parseDebugPortFromArgs(args: string, switchName: string): number | undefined {
-  // matches --remote-debugging-port=9222 and --inspect=127.0.0.1:9229
-  const re = new RegExp(`--${switchName}(?:=(?:[^\\s:=]+:)?(\\d+))?`)
+  if (!/^[a-z][a-z-]*$/.test(switchName)) return undefined
+  // Match an entire argument, including command lines with quoted arguments.
+  const re = new RegExp(`(?:^|[\\s"'])--${switchName}=(?:\\[[^\\]]+\\]:|[^\\s:"'=]+:)?(\\d+)(?=$|[\\s"'])`)
   const m = re.exec(args)
   if (!m) return undefined
   if (m[1]) {
     const n = parseInt(m[1], 10)
-    return Number.isNaN(n) ? undefined : n
+    return Number.isSafeInteger(n) && n >= 1 && n <= 65535 ? n : undefined
   }
   return undefined
 }

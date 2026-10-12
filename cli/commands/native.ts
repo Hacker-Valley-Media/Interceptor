@@ -8,7 +8,7 @@
  */
 
 import { writeFileSync } from "fs"
-import { sendCommand, type DaemonResponse, type DaemonResult } from "../transport"
+import { sendCommand, jsonFailure, type DaemonResponse, type DaemonResult } from "../transport"
 import { isNativeContextId } from "../../shared/native-agent"
 import { NATIVE_PLATFORM_TARGETS_ENABLED } from "../../shared/native-build-config"
 
@@ -33,11 +33,7 @@ async function send(action: Action, contextId?: string): Promise<DaemonResult> {
 
 function emit(result: DaemonResult, jsonMode: boolean): void {
   if (jsonMode) {
-    const errPayload =
-      result.data && typeof result.data === "object" && !Array.isArray(result.data)
-        ? { error: result.error, ...(result.data as Record<string, unknown>) }
-        : { error: result.error }
-    console.log(JSON.stringify(result.success ? (result.data ?? null) : errPayload))
+        console.log(JSON.stringify(result.success ? (result.data ?? null) : jsonFailure(result)))
     return
   }
   if (!result.success) { console.error(`error: ${result.error || "unknown error"}`); return }

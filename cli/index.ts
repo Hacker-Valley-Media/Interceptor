@@ -36,6 +36,8 @@ import { parseBrowserCommand } from "./commands/browser"
 import { runCompoundCommand, webSearchQuery, webSearchTimeout } from "./commands/compound"
 import { runOverride } from "./commands/override"
 import { runMacosCommand } from "./commands/macos"
+import { runDesktopCommand } from "./commands/desktop"
+import { desktopProviderBinary } from "../shared/desktop-provider"
 import { runIosCommand } from "./commands/ios"
 import { runUpgradeCommand } from "./commands/upgrade"
 import { runInitCommand } from "./commands/init"
@@ -82,6 +84,7 @@ const BROWSER_CMDS = new Set(["browser"])
 const COMPOUND_CMDS = new Set(["open", "read", "act", "inspect", "websearch", "search"])
 const OVERRIDE_CMDS = new Set(["override"])
 const MACOS_CMDS = new Set(["macos"])
+const DESKTOP_CMDS = new Set(["desktop"])
 const IOS_CMDS = new Set(["ios"])
 const UPDATE_CMDS = new Set(["update"])
 const UPGRADE_CMDS = new Set(["upgrade"])
@@ -106,7 +109,7 @@ const ALL_KNOWN_CMDS = new Set<string>([
   ...STATE_CMDS, ...ACTION_CMDS, ...NAV_CMDS, ...TAB_CMDS, ...NET_CMDS,
   ...SS_CMDS, ...DATA_CMDS, ...META_CMDS, ...EVAL_CMDS,
   ...SAVE_CMDS, ...BRAND_CMDS, ...GROUP_CMDS, ...BATCH_CMDS, ...MONITOR_CMDS, ...SCENE_CMDS, ...SSE_CMDS,
-  ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...MACOS_CMDS, ...IOS_CMDS,
+  ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...MACOS_CMDS, ...DESKTOP_CMDS, ...IOS_CMDS,
   ...UPDATE_CMDS, ...UPGRADE_CMDS, ...INIT_CMDS, ...RESEARCH_CMDS, ...EXTENSIONS_CMDS,
   ...SKILLS_CMDS, ...MANIFEST_CMDS, ...DIAGNOSE_CMDS, ...MCP_CMDS, ...DAEMON_CMDS,
   ...POWER_CMDS, ...DELEGATE_CMDS, ...BROWSER_CMDS,
@@ -139,7 +142,7 @@ async function main() {
   // error. Screenshot still honors --no-ws as an escape hatch.
   // issue #244: a secret-bearing action resolves inside the daemon's IPC handler,
   // so it never takes the WebSocket lane.
-  const carriesSecret = args.includes("--secret") || (args[0] === "macos" && (args[1] === "secret" || args[1] === "sudo" || args[1] === "authdialog"))
+  const carriesSecret = args.includes("--secret") || (["macos", "desktop"].includes(args[0]) && (args[1] === "secret" || args[1] === "sudo" || args[1] === "authdialog"))
   const useWs = !carriesSecret && (globalArgs.includes("--ws") || isSaveCmd || (isScreenshotCmd && !globalArgs.includes("--no-ws")))
   const anyTab = globalArgs.includes("--any-tab")
   const globalTabId = parseTabFlag(globalArgs)
@@ -152,7 +155,7 @@ async function main() {
   // Build filtered args (strip global flags). Native surfaces retain nested
   // command-local JSON payload flags such as `macos translate batch --json`.
   let filtered = buildFilteredArgs(args)
-  if (filtered[0] !== "macos" && filtered[0] !== "ios") setGlobalFrame(parseFrameFlag(globalArgs))
+  if (!["macos", "desktop", "ios"].includes(filtered[0])) setGlobalFrame(parseFrameFlag(globalArgs))
 
   // progressive disclosure. Bare invocation and `help` print the
   // concise tier-0 card; `help <cmd>` prints one command's contract; `help
@@ -262,11 +265,7 @@ async function main() {
 
   // fail fast (before any daemon spawn) when a surface is not
   // part of this install. Override with --all-surfaces / INTERCEPTOR_ALL_SURFACES.
-  // `update` rides the macos surface: Sparkle lives in the bridge, so a mac
-  // browser-only install gets the upgrade hint instead of a bridge error.
-  // On win32 `update` skips the gate — its dispatch branch prints the
-  // Windows installer guidance instead of the macOS-only hint.
-  if (MACOS_CMDS.has(cmd) || IOS_CMDS.has(cmd) || (UPDATE_CMDS.has(cmd) && process.platform !== "win32")) {
+  if (MACOS_CMDS.has(cmd) || IOS_CMDS.has(cmd) || (UPDATE_CMDS.has(cmd) && process.platform === "darwin")) {
     const surfaces = detectSurfaces(args)
     const available = IOS_CMDS.has(cmd) ? surfaces.ios : surfaces.macos
     if (!available) {
@@ -280,9 +279,9 @@ async function main() {
   if (cmd !== "skills" && cmd !== "manifest") maybeEmitSkillsHint(args)
 
   let needsDaemon = !NO_DAEMON.has(cmd)
-  // win32 `update` prints static installer guidance — no daemon involved
-  // (on macOS it routes through the daemon to the bridge's Sparkle updater).
-  if (UPDATE_CMDS.has(cmd) && process.platform === "win32") {
+  // Windows/Linux desktop verbs go straight to the native provider; secret and cdp are served by the daemon.
+  if (cmd === "desktop" && process.platform !== "darwin" && !["secret", "cdp"].includes(filtered[1] ?? "") && !filtered.includes("--secret")) needsDaemon = false
+  if (UPDATE_CMDS.has(cmd) && process.platform !== "darwin") {
     needsDaemon = false
   }
   if (cmd === "monitor" && filtered[1] && MONITOR_LOCAL_SUBCOMMANDS.has(filtered[1])) {
@@ -300,16 +299,10 @@ async function main() {
   let action: { type: string; [key: string]: unknown } | null
 
   if (UPDATE_CMDS.has(cmd)) {
-    // `interceptor update` is the front door for updating Interceptor itself
-    // sugar for the retained-but-hidden
-    // `interceptor macos update check` — a user-initiated Sparkle check via the
-    // bridge that reports Sparkle's selected version, no-update result, or
-    // error. `interceptor update status` passes through to the lifecycle state.
-    //
-    // Windows has no Sparkle: updates ship as a signed installer (see
-    // docs/windows-install.md — run a newer architecture-matched Setup; the
-    // surface gate's macOS-only upgrade hint would be nonsense here).
-    if (process.platform === "win32") {
+    const args=filtered.length>1?filtered.slice(1):["check"]
+    // A Windows browser-only install ships no native provider (only Full has interceptor-desktop.exe),
+    // so it gets the signed-installer guidance instead of a provider error.
+    if (process.platform === "win32" && !desktopProviderBinary()) {
       const msg = {
         message: "Windows updates ship as a signed installer — download the latest Interceptor-Browser-<version>-windows-<arch>.exe and run Setup (upgrades preserve the install directory; downgrades are refused).",
         releases: "https://github.com/Hacker-Valley-Media/Interceptor/releases",
@@ -317,13 +310,18 @@ async function main() {
       console.log(jsonMode ? JSON.stringify({ success: true, data: msg }, null, 2) : `${msg.message}\n${msg.releases}`)
       return
     }
-    const sub = filtered[1] && !filtered[1].startsWith("-") ? filtered[1] : "check"
-    await runMacosCommand(["macos", "update", sub], { jsonMode, useWs, globalTabId, contextId: globalContextId })
+    if(process.platform==='darwin')await runMacosCommand(["macos","update",...args],{jsonMode,useWs,globalTabId,contextId:globalContextId})
+    else await runDesktopCommand(["desktop","update",...args],{jsonMode,useWs,globalTabId,contextId:globalContextId})
     return
   }
 
   if (MACOS_CMDS.has(cmd)) {
     await runMacosCommand(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
+    return
+  }
+
+  if (DESKTOP_CMDS.has(cmd)) {
+    await runDesktopCommand(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
     return
   }
 

@@ -1,4 +1,4 @@
-// PRD-66 Domain 5 — LocalAuthentication. macOS 10.10+. References:
+// LocalAuthentication. macOS 10.10+. References:
 // apple-developer-docs/LocalAuthentication/{LAContext,LAPolicy,LABiometryType}.md.
 
 import Foundation
@@ -10,6 +10,7 @@ final class AuthDomain: DomainHandler, @unchecked Sendable {
     private var sharedContext = LAContext()
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if action["type"] as? String == "desktop_auth" { handleNeutral(action, completion: completion); return }
         let sub = action["sub"] as? String ?? command
         switch sub {
         case "status":         status(completion: completion)
@@ -17,6 +18,50 @@ final class AuthDomain: DomainHandler, @unchecked Sendable {
         case "invalidate":     invalidate(completion: completion)
         case "domain-state":   domainState(completion: completion)
         default:               completion(WireFormat.error("auth.\(sub) — unknown verb"))
+        }
+    }
+
+    private func handleNeutral(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let failure = DesktopAuthValidation.validate(action) { completion(failure); return }
+        let sub = action["sub"] as? String ?? ""
+        let requested = action["policy"] as? String ?? "any"
+        let provider = "local-authentication"
+        let user = String(getuid())
+        if sub == "status" {
+            let context = LAContext()
+            let policies = ["any", "biometry", "biometry-or-watch", "watch"].filter { context.canEvaluatePolicy(policy(from: $0), error: nil) }
+            var error: NSError?
+            let available = context.canEvaluatePolicy(policy(from: requested), error: &error)
+            var data: [String: Any] = ["canEvaluate": available, "policy": requested, "provider": provider, "user": user, "biometryType": biometryString(context.biometryType), "availablePolicies": policies]
+            if !available { data["error"] = error?.localizedDescription ?? "Authentication policy unavailable"; if let error { data["errorCode"] = error.code } }
+            completion(WireFormat.success(data)); return
+        }
+        var legacy = action
+        legacy["type"] = "macos_auth"
+        legacy["reuse_seconds"] = action["reuse_seconds"] ?? 0
+        legacy["fallback_title"] = action["fallback_title"] ?? "Use Password"
+        legacy["cancel_title"] = action["cancel_title"] ?? "Cancel"
+        let started = Date()
+        let reason = action["reason"] as? String ?? ""
+        handle(sub, action: legacy) { result in
+            guard result["success"] as? Bool == true, let old = result["data"] as? [String: Any] else {
+                completion(["success": false, "code": "provider_failed", "error": result["error"] as? String ?? "Native authentication failed"]); return
+            }
+            switch sub {
+            case "confirm":
+                let ok = old["ok"] as? Bool == true
+                var data: [String: Any] = ["ok": ok, "policy": requested, "provider": provider, "user": user, "reason": reason, "elapsedMs": Int(Date().timeIntervalSince(started) * 1000), "biometryType": old["biometryType"] as? String ?? "unspecified"]
+                if let state = old["domainState"] as? String { data["domainState"] = state }
+                if !ok { data["error"] = old["error"] as? String ?? "Authentication was not approved"; if let code = old["errorCode"] as? Int { data["errorCode"] = code } }
+                completion(WireFormat.success(data))
+            case "invalidate": completion(WireFormat.success(["invalidated": true, "provider": provider]))
+            case "domain-state":
+                var data: [String: Any] = ["available": false, "provider": provider]
+                if let state = old["domainState"] as? String, !state.isEmpty { data["available"] = true; data["state"] = state }
+                else { data["reason"] = "No evaluated authentication domain state" }
+                completion(WireFormat.success(data))
+            default: completion(["success": false, "code": "invalid_request", "error": "Unknown authentication verb"])
+            }
         }
     }
 
@@ -39,8 +84,8 @@ final class AuthDomain: DomainHandler, @unchecked Sendable {
         case .touchID: return "touchID"
         case .none: return "none"
         @unknown default:
-            // .opticID lives on macOS 14+ visionOS — handled with a runtime mirror.
-            return String(describing: t)
+            // .opticID (raw 4) is visionOS hardware; anything newer reads "unknown".
+            return t.rawValue == 4 ? "opticID" : "unknown"
         }
     }
 
@@ -86,7 +131,7 @@ final class AuthDomain: DomainHandler, @unchecked Sendable {
             if ok {
                 completion(WireFormat.success([
                     "ok": true,
-                    "policy": String(describing: pol),
+                    "policy": action["policy"] as? String ?? "any",
                     "reason": reason,
                     "biometryType": self.biometryString(ctx.biometryType),
                     "domainState": ctx.evaluatedPolicyDomainState?.map { String(format: "%02x", $0) }.joined() as Any? ?? NSNull(),
@@ -96,7 +141,7 @@ final class AuthDomain: DomainHandler, @unchecked Sendable {
                 let nsErr = error as NSError?
                 completion(WireFormat.success([
                     "ok": false,
-                    "policy": String(describing: pol),
+                    "policy": action["policy"] as? String ?? "any",
                     "errorCode": nsErr?.code as Any? ?? NSNull(),
                     "errorDomain": nsErr?.domain as Any? ?? NSNull(),
                     "error": nsErr?.localizedDescription as Any? ?? NSNull(),

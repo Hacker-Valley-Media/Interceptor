@@ -23,7 +23,7 @@
  * confirm its license before porting.
  */
 
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../../shared/subprocess-sync"
 import { writeFileSync, mkdtempSync, existsSync, copyFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, basename } from "node:path"

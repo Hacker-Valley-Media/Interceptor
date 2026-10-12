@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../shared/subprocess-sync"
 import {
   decodePlist, decodeBinaryPlist, decodeXmlPlist, encodeXmlPlist, isBinaryPlist,
   PlistError, DEFAULT_PLIST_LIMITS, type PlistValue,

@@ -2,6 +2,7 @@ import { isExtensionInstallType, type ExtensionInstallType } from "../shared/ext
 
 export type ContextSocket = {
   send: (data: string) => void
+  close?: (code?: number, reason?: string) => void
   __contextId?: string
   __native?: boolean
   /** Manifest version the extension registered with (issue #241). */

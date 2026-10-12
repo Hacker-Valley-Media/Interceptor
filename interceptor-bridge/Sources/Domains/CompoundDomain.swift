@@ -36,6 +36,7 @@ final class DefaultAppLauncher: AppLauncher {
             localizedName: app.localizedName,
             bundleBaseName: app.bundleURL?.deletingPathExtension().lastPathComponent,
             bundleId: app.bundleIdentifier,
+            bundlePath: app.bundleURL?.path,
             name: name
         )
     }
@@ -46,8 +47,14 @@ final class DefaultAppLauncher: AppLauncher {
         localizedName: String?,
         bundleBaseName: String?,
         bundleId: String?,
+        bundlePath: String? = nil,
         name: String
     ) -> Bool {
+        if name.hasPrefix("/") {
+            guard let bundlePath else { return false }
+            return URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath().standardizedFileURL.path ==
+                URL(fileURLWithPath: name).resolvingSymlinksInPath().standardizedFileURL.path
+        }
         let target = name.lowercased()
         let targetNoExt = target.hasSuffix(".app") ? String(target.dropLast(4)) : target
         if let localized = localizedName?.lowercased(),
@@ -98,6 +105,7 @@ final class DefaultAppLauncher: AppLauncher {
         }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = activates
+        config.allowsRunningApplicationSubstitution = !name.hasPrefix("/")
         config.addsToRecentItems = false
         // Reuse a running instance if there happens to be one (default).
         // createsNewApplicationInstance defaults to false; we leave it.
@@ -107,6 +115,13 @@ final class DefaultAppLauncher: AppLauncher {
     }
 
     static func resolveAppURL(name: String) -> URL? {
+        if name.hasPrefix("/") {
+            let url = URL(fileURLWithPath: name).resolvingSymlinksInPath().standardizedFileURL
+            guard url.pathExtension.lowercased() == "app",
+                  let executable = Bundle(url: url)?.executableURL,
+                  FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
+            return url
+        }
         let workspace = NSWorkspace.shared
         // 1. If `name` is itself a bundle id (contains a dot and matches
         //    a known app), use the modern bundle-id resolver.
@@ -145,6 +160,10 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let type = action["type"] as? String, DesktopCompoundShape.operations.contains(type) {
+            handleNeutral(action, completion: completion)
+            return
+        }
         let sub = action["sub"] as? String ?? command
         switch sub {
         case "open":
@@ -157,6 +176,141 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
             handleInspect(action, completion: completion)
         default:
             notImplemented(sub, completion: completion)
+        }
+    }
+
+    private func handleNeutral(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let failure = DesktopCompoundValidation.validate(action) { completion(failure); return }
+        let type = action["type"] as! String
+        if type == "desktop_open" { handleNeutralOpen(action, completion: completion); return }
+        let ref = action["ref"] as? String
+        let refPid = ref.flatMap { RefRegistry.shared.resolvePID($0) }
+        if type == "desktop_act", refPid == nil {
+            completion(["success": false, "code": "stale_reference", "error": "read the target again for a fresh reference"])
+            return
+        }
+        let requestedPid = (action["pid"] as? NSNumber).map { pid_t($0.int32Value) }
+        let requestedName = action["app"] as? String
+        var targets = NSWorkspace.shared.runningApplications.filter { app in
+            (requestedPid == nil || app.processIdentifier == requestedPid) &&
+            (requestedName == nil || DefaultAppLauncher.matches(app, requestedName!)) &&
+            (refPid == nil || app.processIdentifier == refPid)
+        }
+        if requestedPid == nil, requestedName == nil, refPid == nil {
+            targets = NSWorkspace.shared.frontmostApplication.map { [$0] } ?? []
+        }
+        guard targets.count == 1, let target = targets.first else {
+            let code = targets.isEmpty ? (type == "desktop_act" ? "unsupported_target" : "target_gone") : "target_ambiguous"
+            completion(["success": false, "code": code, "error": "compound operation requires one matching application"])
+            return
+        }
+        let pid = target.processIdentifier
+        let name = target.localizedName ?? requestedName ?? "unknown"
+        let bundleId = target.bundleIdentifier ?? ""
+        let typed = action["text"] != nil
+        let filter = action["filter"] as? String ?? "interactive"
+        let depth = action["depth"] as? Int ?? 10
+        let read: @Sendable (Bool) -> Void = { mutated in
+            let treeAction = self.buildAction("desktop_tree", app: nil, pid: pid, extra: ["filter": filter, "depth": depth])
+            self.router.route(action: treeAction) { result in
+                guard result["success"] as? Bool == true else {
+                    if mutated {
+                        completion(["success": false, "code": "timeout_unknown_outcome", "error": "action was delivered but the following tree read failed", "retryable": false, "details": ["dispatched": true, "verified": false, "readFailure": result]])
+                    } else { completion(DesktopCompoundValidation.normalize(result, type: type)) }
+                    return
+                }
+                let tree = result["data"] as? String ?? ""
+                if type == "desktop_act" {
+                    completion(WireFormat.success(["action": typed ? "typed" : "clicked", "ref": ref!, "tree": tree]))
+                } else if type == "desktop_inspect_app" {
+                    completion(WireFormat.success(["tree": tree, "apps": self.appsSnapshot(), "target": ["name": name, "pid": pid, "bundleId": bundleId], "frontmost": Self.frontmostRow()]))
+                } else {
+                    completion(WireFormat.success(["tree": tree, "app": name, "pid": pid]))
+                }
+            }
+        }
+        if type != "desktop_act" { read(false); return }
+        if let element = RefRegistry.shared.resolve(ref!), axElementDisabled(element) {
+            completion(["success": false, "code": "unsupported_target", "error": "target element is disabled; nothing was clicked or typed", "details": ["dispatched": false]])
+            return
+        }
+        var input: [String: Any] = ["type": action["text"] == nil ? "desktop_click" : "desktop_type", "ref": ref!, "pid": Int(pid)]
+        if let text = action["text"] { input["text"] = text }
+        router.route(action: input) { result in
+            guard result["success"] as? Bool == true else { completion(result); return }
+            usleep(200_000)
+            read(true)
+        }
+    }
+
+    private func handleNeutralOpen(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let requestedPid = (action["pid"] as? NSNumber).map { pid_t($0.int32Value) }
+        let requestedName = action["app"] as? String
+        let activate = action["activate"] as? Bool ?? false
+        var targets = NSWorkspace.shared.runningApplications.filter {
+            (requestedPid == nil || $0.processIdentifier == requestedPid) &&
+            (requestedName == nil || DefaultAppLauncher.matches($0, requestedName!))
+        }
+        if requestedPid == nil, requestedName == nil { targets = NSWorkspace.shared.frontmostApplication.map { [$0] } ?? [] }
+        var launched = false
+        if targets.isEmpty, requestedPid == nil, let name = requestedName {
+            guard DefaultAppLauncher.resolveAppURL(name: name) != nil else {
+                completion(["success": false, "code": "target_gone", "error": "requested application is not installed"])
+                return
+            }
+            let semaphore = DispatchSemaphore(value: 0)
+            let launchedPid = LaunchedPidBox()
+            launcher.launch(name, activates: activate) { pid in launchedPid.set(pid); semaphore.signal() }
+            let completed = semaphore.wait(timeout: .now() + 5) == .success
+            guard completed, let pid = launchedPid.get() else {
+                completion(["success": false, "code": "timeout_unknown_outcome", "error": "application launch could not be verified; observe before retrying", "retryable": false, "details": ["dispatched": true, "verified": false]])
+                return
+            }
+            launched = true
+            let deadline = Date().addingTimeInterval(2)
+            repeat {
+                targets = NSWorkspace.shared.runningApplications.filter { $0.processIdentifier == pid }
+                if !targets.isEmpty { break }
+                usleep(50_000)
+            } while Date() < deadline
+            if targets.isEmpty {
+                completion(["success": false, "code": "timeout_unknown_outcome", "error": "launched process has not registered as an application; observe before retrying", "retryable": false, "details": ["dispatched": true, "verified": false, "pid": Int(pid)]])
+                return
+            }
+        }
+        guard targets.count == 1, let target = targets.first else {
+            completion(["success": false, "code": targets.isEmpty ? "target_gone" : "target_ambiguous", "error": "open requires one matching application"])
+            return
+        }
+        let pid = target.processIdentifier
+        let name = target.localizedName ?? requestedName ?? "unknown"
+        if activate {
+            target.activate(options: [.activateIgnoringOtherApps])
+            usleep(300_000)
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                completion(["success": false, "code": "restricted_by_os", "error": "application did not become frontmost after requested activation"])
+                return
+            }
+        }
+        let didLaunch = launched
+        let failure: @Sendable ([String: Any]) -> Void = { result in
+            if didLaunch {
+                completion(["success": false, "code": "timeout_unknown_outcome", "error": "application was launched but the following read failed; observe before retrying", "retryable": false, "details": ["dispatched": true, "pid": Int(pid), "verified": false, "readFailure": result]])
+            } else { completion(DesktopCompoundValidation.normalize(result, type: "desktop_open")) }
+        }
+        router.route(action: buildAction("desktop_tree", app: nil, pid: pid, extra: ["filter": action["filter"] as? String ?? "interactive", "depth": action["depth"] as? Int ?? 10])) { result in
+            guard result["success"] as? Bool == true, let tree = result["data"] as? String else { failure(result); return }
+            self.router.route(action: self.buildAction("desktop_windows", app: nil, pid: pid)) { result in
+                guard result["success"] as? Bool == true, let windows = result["data"] as? [[String: Any]] else { failure(result); return }
+                let rows = windows.map { window -> [String: Any] in
+                    var row: [String: Any] = ["title": window["title"] as? String ?? ""]
+                    if let ref = window["ref"] as? String { row["ref"] = ref }
+                    if let id = window["windowId"] as? NSNumber { row["windowId"] = id.stringValue }
+                    if let frame = window["frame"] as? [String: Any] { row["frame"] = frame }
+                    return row
+                }
+                completion(WireFormat.success(["tree": tree, "windows": rows, "app": name, "pid": Int(pid)]))
+            }
         }
     }
 
@@ -302,13 +456,20 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
             completion(WireFormat.success([
                 "tree": treeData,
                 "apps": self.appsSnapshot(),
-                "frontmost": [
+                "target": [
                     "name": appInfo.name,
                     "pid": appInfo.pid,
                     "bundleId": appInfo.bundleId
-                ]
+                ],
+                "frontmost": Self.frontmostRow()
             ]))
         }
+    }
+
+    // The app the person is in, reported beside the inspected target.
+    static func frontmostRow() -> Any {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return NSNull() }
+        return ["name": app.localizedName ?? "unknown", "pid": app.processIdentifier, "bundleId": app.bundleIdentifier ?? ""] as [String: Any]
     }
 
     private func buildAction(_ type: String, app: String?, pid: Int32? = nil, extra: [String: Any] = [:]) -> [String: Any] {

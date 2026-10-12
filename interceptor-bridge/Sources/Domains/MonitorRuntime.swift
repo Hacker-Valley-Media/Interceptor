@@ -67,6 +67,16 @@ final class MonitorRuntime: @unchecked Sendable {
     static let sessionMaxBytesPerFile: Int64 = 100 * 1024 * 1024
 
     #if canImport(ScreenCaptureKit)
+    let captureQueue = DispatchQueue(label: "interceptor.monitor.frames")
+    var captureTask: Task<Void, Never>?
+    var captureGeneration: UInt64 = 0
+    var capturePid: pid_t?
+    var captureWindowId: CGWindowID?
+    var restartCapture: (@Sendable () -> Void)?
+    var savedFrames = 0
+    var savedFrameBytes: Int64 = 0
+    var lastFrameData: Data?
+    var frameBudgetReached = false
     var captureStream: SCStream?
     var captureOutput: MonitorCaptureOutput?
     // continuous video via SCRecordingOutput (macOS 15+).
@@ -74,6 +84,12 @@ final class MonitorRuntime: @unchecked Sendable {
     var recordingPath: String?
     var recordingDelegate: AnyObject?
     #endif
+
+    // ponytail: one lock per recording serializes artifact writes and lifecycle
+    // gates. Split encoding from persistence if frame throughput requires it.
+    let captureLock = NSRecursiveLock()
+    var lifecycleTask: Task<Void, Never>?
+    var pendingLifecycleRequests = 0
 
     // guards the speech ring buffer (mutated on the audio render
     // thread, read on the restart timer queue).
@@ -114,8 +130,8 @@ final class MonitorRuntime: @unchecked Sendable {
     // per-session capture configuration (parsed from monitor start).
     var speechMode: String = "auto"          // auto | live | offline | off
     var framePixelScale: Int = 2
-    var frameBudget: Int = 7200              // 0 = unbounded
-    var frameDiskCapBytes: Int64 = 0         // 0 = uncapped
+    var frameBudget: Int = 7200
+    var frameDiskCapBytes: Int64 = 100 * 1024 * 1024
     var videoMaxBytes: Int64 = 0             // 0 = uncapped
     var scrollCoalesceMs: Int = 100
     var axCoalesceMs: Int = 100

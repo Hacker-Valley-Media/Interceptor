@@ -19,17 +19,41 @@
  * needing live validation.
  */
 
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../../shared/subprocess-sync"
+import { captureSubprocess } from "../subprocess"
 import { CdpConnection } from "./connection"
 import { pollForEndpoint } from "./discovery"
 import { DEFAULT_NODE_INSPECT_PORT } from "../../shared/cdp-app"
 
-/** The process listening on a local TCP port, or undefined when free or unknown (no lsof). */
-export function inspectPortHolder(port: number): { pid: number; name: string } | undefined {
-  const r = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf-8" })
-  const pid = parseInt((r.stdout ?? "").trim().split("\n")[0] ?? "", 10)
-  if (!Number.isFinite(pid)) return undefined
-  const name = spawnSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf-8" }).stdout?.trim().split("/").pop() || "unknown"
+/** The listener PID, undefined only when free. Unknown ownership refuses use. */
+export async function inspectPortHolder(port: number): Promise<{ pid: number; name: string } | undefined> {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("debug port must be an integer 1..65535")
+  if (process.platform === "win32") {
+    const r = await captureSubprocess(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+      `$ErrorActionPreference='Stop'; @(Get-NetTCPConnection -State Listen | Where-Object LocalPort -EQ ${port} | Select-Object -ExpandProperty OwningProcess -Unique) | ConvertTo-Json -Compress`],
+      { timeoutMs: 20_000 })
+    if (r.code !== 0) throw new Error("Windows debug-port ownership could not be established")
+    const parsed = r.stdout.trim() ? JSON.parse(r.stdout) : []
+    const pids = [...new Set(Array.isArray(parsed) ? parsed : [parsed])]
+    if (!pids.length) return undefined
+    if (pids.length !== 1 || !Number.isSafeInteger(pids[0]) || pids[0] < 1) return { pid: 0, name: "unresolved port owner" }
+    return { pid: pids[0], name: `pid-${pids[0]}` }
+  }
+  if (process.platform === "linux") {
+    const r = spawnSync("ss", ["-H", "-ltnp", `sport = :${port}`], { encoding: "utf-8", timeout: 2000, maxBuffer: 65536 })
+    if (r.error || r.status !== 0) throw new Error("Linux debug-port ownership requires a successful ss inspection")
+    if (!r.stdout.trim()) return undefined
+    const pids = [...new Set([...r.stdout.matchAll(/pid=(\d+)/g)].map(m => Number(m[1])))]
+    return pids.length === 1 ? { pid: pids[0], name: `pid-${pids[0]}` } : { pid: 0, name: "unresolved port owner" }
+  }
+  const r = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf-8", timeout: 2000, maxBuffer: 65536 })
+  if (r.error || (r.status !== 0 && r.status !== 1)) throw new Error("debug-port ownership could not be established")
+  const pids = [...new Set(r.stdout.trim().split(/\s+/).filter(Boolean).map(Number))]
+  if (r.status === 0 && !pids.length) throw new Error("debug-port ownership returned no identity; no signal may be sent")
+  if (!pids.length) return undefined
+  if (pids.length !== 1 || !Number.isSafeInteger(pids[0]) || pids[0] < 1) return { pid: 0, name: "unresolved port owner" }
+  const pid = pids[0]
+  const name = spawnSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf-8", timeout: 2000, maxBuffer: 65536 }).stdout?.trim().split("/").pop() || "unknown"
   return { pid, name }
 }
 
@@ -98,14 +122,10 @@ export async function bootstrapLoadExtension(opts: {
   const host = opts.host ?? "127.0.0.1"
   const inspectPort = opts.inspectPort ?? DEFAULT_NODE_INSPECT_PORT
 
-  if (process.platform === "win32") {
-    return { success: false, error: "SIGUSR1 inspector bootstrap is not available on Windows; use the CDP fallback (macos cdp connect)" }
-  }
-
   // 1. Send SIGUSR1 to start the inspector — unless another process already
   // holds the port: the app's inspector cannot bind it, and the poll below would
   // answer for that process (seen with a Chromium browser on 9229).
-  const holder = inspectPortHolder(inspectPort)
+  const holder = await inspectPortHolder(inspectPort)
   if (holder && holder.pid !== opts.pid) {
     return {
       success: false,
@@ -115,6 +135,9 @@ export async function bootstrapLoadExtension(opts: {
     }
   }
   if (!holder) {
+    if (process.platform === "win32") {
+      return { success: false, error: "Windows inspector attach requires the selected app to have been launched with --inspect; no signal was sent" }
+    }
     try {
       process.kill(opts.pid, "SIGUSR1")
     } catch (err) {
@@ -137,16 +160,15 @@ export async function bootstrapLoadExtension(opts: {
   try {
     await conn.connect(5000)
     await conn.send("Runtime.enable").catch(() => {})
-    // Identity guard: the global inspect port (9229) may be held by a DIFFERENT
-    // node/Electron process. Confirm we reached the pid we signaled before we
-    // load anything into it.
+    // Require both OS ownership and the inspector's own PID before injection.
     try {
+      if ((await inspectPortHolder(inspectPort))?.pid !== opts.pid) return { success: false, error: "inspector port ownership changed before extension load" }
       const probe = await conn.send("Runtime.evaluate", { expression: "process.pid", returnByValue: true })
       const inspectedPid = (probe.result as { value?: unknown } | undefined)?.value
-      if (typeof inspectedPid === "number" && inspectedPid !== opts.pid) {
+      if (inspectedPid !== opts.pid) {
         return { success: false, error: `inspector on ${host}:${inspectPort} belongs to pid ${inspectedPid}, not target pid ${opts.pid} (port collision) — aborting before loadExtension` }
       }
-    } catch { /* probe is best-effort; proceed if process.pid is unavailable */ }
+    } catch { return { success: false, error: "inspector process identity could not be verified; no extension was loaded" } }
     const r = await conn.send("Runtime.evaluate", {
       expression: buildLoadExtensionExpression(opts.extPath),
       awaitPromise: true,

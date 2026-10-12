@@ -2,7 +2,44 @@
  * cli/transport.ts — sendCommand (Unix socket / TCP) and sendCommandWs (WebSocket)
  */
 
-import { IPC_PORT, IS_WIN, SOCKET_PATH, WS_PORT, MAX_UPLOAD_FRAME_BYTES } from "../shared/platform"
+import { IPC_PORT, IS_WIN, SOCKET_PATH, WS_PORT, LOCK_PATH, MAX_UPLOAD_FRAME_BYTES } from "../shared/platform"
+import {readLockFile} from '../daemon/lifecycle'
+import {isSecretBearing} from '../daemon/redact'
+import { callDesktopProvider } from "../daemon/desktop-provider"
+import { isDesktopActionType } from "../shared/desktop-contract"
+import {desktopContainerActionError,desktopContainerDeadline} from "../shared/desktop-container-validation"
+import {desktopCaptureDeadline} from "../shared/desktop-capture-validation"
+import {desktopLanguageActionError} from "../shared/desktop-language-validation"
+import {desktopVisionActionError} from "../shared/desktop-vision-validation"
+import {desktopSensitiveActionError} from "../shared/desktop-sensitive-validation"
+import {desktopUpdateActionError} from "../shared/desktop-update-validation"
+import {DESKTOP_UPDATE_DEADLINE_MS} from "../shared/desktop-contract"
+import {desktopLocationActionError} from "../shared/desktop-location-validation"
+import {DESKTOP_LOCATION_DEADLINE_MS} from "../shared/desktop-contract"
+import {DESKTOP_CONTRACT_ALIASES} from "../shared/desktop-contract.generated"
+import {DESKTOP_MAPS_DEADLINE_MS} from "../shared/desktop-contract"
+import {desktopShareActionError} from "../shared/desktop-share-validation"
+import {DESKTOP_SHARE_DEADLINE_MS} from "../shared/desktop-contract"
+import {desktopContactsActionError} from "../shared/desktop-contacts-validation"
+import {desktopEventKitActionError} from "../shared/desktop-eventkit-validation"
+import {desktopPhotosActionError} from "../shared/desktop-photos-validation"
+import {desktopOverlayDeadline} from "../shared/desktop-overlay-validation"
+import {desktopVmActionError} from "../shared/desktop-vm-validation"
+import {DESKTOP_VM_DEADLINE_MS} from "../shared/desktop-contract"
+import {DESKTOP_PHOTOS_DEADLINE_MS} from "../shared/desktop-contract"
+import {DESKTOP_EVENTKIT_DEADLINE_MS} from "../shared/desktop-contract"
+import {DESKTOP_CONTACTS_DEADLINE_MS} from "../shared/desktop-contract"
+import {desktopMusicActionError} from "../shared/desktop-music-validation"
+import {DESKTOP_MUSIC_DEADLINE_MS} from "../shared/desktop-contract"
+import {DESKTOP_SENSITIVE_DEADLINE_MS} from "../shared/desktop-contract"
+import {desktopScriptActionError} from "../shared/desktop-script-validation"
+import {DESKTOP_SCRIPT_DEADLINE_MS} from "../shared/desktop-contract"
+import {DESKTOP_PDF_DEADLINE_MS} from "../shared/desktop-contract"
+import {desktopPdfActionError} from "../shared/desktop-pdf-validation"
+import {DESKTOP_VISION_DEADLINE_MS} from "../shared/desktop-contract"
+import {DESKTOP_LANGUAGE_DEADLINE_MS} from "../shared/desktop-contract"
+import {CDP_ACTION_TYPES} from "../shared/cdp-app"
+import {DESKTOP_LANGUAGE_OPERATIONS} from "../shared/desktop-contract.generated"
 import { IOS_SVC_ACTION_TYPES } from "../shared/ios-service"
 import { IOS_DEV_ACTION_TYPES } from "../shared/ios-dev"
 
@@ -32,6 +69,7 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   // issue #244: the registration box and gated releases wait on a person; sudo
   // may run an installer; the admin-prompt fill polls the dialog.
   macos_secret: 620_000,
+  desktop_secret: 620_000,
   macos_sudo: 620_000,
   macos_authdialog: 60_000,
   ios_unlock: 60_000,
@@ -110,6 +148,33 @@ const ACTION_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
 const SCREENSHOT_TIMEOUT_MS = 175_000
 
 export function pickTimeoutForAction(action: Action): number {
+  const overlayDeadline=desktopOverlayDeadline(action)
+  if(overlayDeadline)return Math.max(INTERCEPTOR_TIMEOUT_MS,overlayDeadline+5_000)
+  if(action.type==='desktop_vm'&&!desktopVmActionError(action))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_VM_DEADLINE_MS+5_000)
+  if(['desktop_contacts','macos_contacts'].includes(action.type)&&!desktopContactsActionError({...action,type:'desktop_contacts'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_CONTACTS_DEADLINE_MS+5_000)
+  if(['desktop_calendar','macos_calendar','desktop_reminders','macos_reminders'].includes(action.type)&&!desktopEventKitActionError({...action,type:action.type.replace(/^macos_/,'desktop_')}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_EVENTKIT_DEADLINE_MS+5_000)
+  if(['desktop_photos','macos_photos'].includes(action.type)&&!desktopPhotosActionError({...action,type:'desktop_photos'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_PHOTOS_DEADLINE_MS+5_000)
+  if(['desktop_location','macos_location'].includes(action.type)&&!desktopLocationActionError({...action,type:'desktop_location'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_LOCATION_DEADLINE_MS+5_000)
+  if(['desktop_maps','macos_maps'].includes(action.type)&&DESKTOP_CONTRACT_ALIASES.DesktopMapsVerb.some(verb=>verb===action.sub))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_MAPS_DEADLINE_MS+5_000)
+  if(['desktop_share','macos_share'].includes(action.type)&&!desktopShareActionError({...action,type:'desktop_share'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_SHARE_DEADLINE_MS+5_000)
+  if(['desktop_music','macos_music'].includes(action.type)&&!desktopMusicActionError({...action,type:'desktop_music'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_MUSIC_DEADLINE_MS+5_000)
+  if(['desktop_update','macos_update'].includes(action.type)&&!desktopUpdateActionError({...action,type:'desktop_update'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_UPDATE_DEADLINE_MS+5_000)
+  if(['desktop_sensitive','macos_sensitive'].includes(action.type)&&!desktopSensitiveActionError({...action,type:'desktop_sensitive'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_SENSITIVE_DEADLINE_MS+5_000)
+  if(['desktop_pdf','macos_pdf'].includes(action.type)&&!desktopPdfActionError({...action,type:'desktop_pdf'}))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_PDF_DEADLINE_MS+5_000)
+  if(['desktop_script_run','desktop_intent_dispatch'].includes(action.type)&&!desktopScriptActionError(action))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_SCRIPT_DEADLINE_MS+5_000)
+  // The macOS parser leaves absent flags as undefined keys (e.g. app); the contract check treats a present key as set.
+  if(['desktop_vision','macos_vision'].includes(action.type)&&!desktopVisionActionError(Object.fromEntries(Object.entries({...action,type:'desktop_vision'}).filter(([,v])=>v!==undefined))))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_VISION_DEADLINE_MS+5_000)
+  if(DESKTOP_LANGUAGE_OPERATIONS.some(type=>type===action.type)&&!desktopLanguageActionError(action))return Math.max(INTERCEPTOR_TIMEOUT_MS,DESKTOP_LANGUAGE_DEADLINE_MS+5_000)
+  if(action.type==='desktop_container_run'&&!desktopContainerActionError(action))return Math.max(INTERCEPTOR_TIMEOUT_MS,desktopContainerDeadline(action))
+  const nativeCaptureDeadline=desktopCaptureDeadline(action)
+  if(nativeCaptureDeadline>0)return Math.max(INTERCEPTOR_TIMEOUT_MS,nativeCaptureDeadline+5_000)
+  if(action.type==='desktop_type'&&typeof action.secret==='string')return 240_000
+  if(action.type==='desktop_authdialog'&&typeof action.secret==='string')return 240_000
+  if(action.type === "desktop_auth")return 180_000
+  if (["macos_url_fetch","desktop_url_fetch"].includes(action.type)) {
+    const deadline=typeof action.timeoutMs==="number"&&Number.isInteger(action.timeoutMs)&&action.timeoutMs>=100&&action.timeoutMs<=120000?action.timeoutMs:30000
+    return Math.max(INTERCEPTOR_TIMEOUT_MS,deadline+5000)
+  }
   if (action.type === "daemon_shutdown" && typeof action.timeoutMs === "number") {
     return Math.min(62_000, Math.max(2_000, action.timeoutMs + 2_000))
   }
@@ -137,6 +202,7 @@ export function pickTimeoutForAction(action: Action): number {
 // their own tailored hints and never need the context probe.
 export function isGenericBrowserAction(actionType: string): boolean {
   return actionType !== "daemon_shutdown"
+    && actionType !== "desktop_secret"
     && !actionType.startsWith("macos_")
     && !actionType.startsWith("ios_")
     && !IOS_SVC_ACTION_TYPES.has(actionType)
@@ -212,6 +278,9 @@ export function timeoutMessage(actionType: string, ms: number): string {
   if (actionType === "daemon_shutdown") {
     return `timeout: the daemon did not acknowledge shutdown within ${seconds}s.`
   }
+  if (actionType === "desktop_secret") {
+    return `timeout: no response for '${actionType}' after ${seconds}s. The native credential service or authentication may still be pending. The outcome is unknown; inspect secret metadata before retrying a storage or removal operation.`
+  }
   if (actionType.startsWith("macos_")) {
     return `timeout: no response for '${actionType}' after ${seconds}s. The macOS bridge may be waiting on a TCC permission prompt (Microphone / Speech Recognition for listen/vad, Screen Recording for screenshot/capture/vision). Check System Settings → Privacy & Security.`
   }
@@ -234,7 +303,14 @@ export function timeoutMessage(actionType: string, ms: number): string {
 }
 
 export type Action = { type: string; [key: string]: unknown }
-export type DaemonResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+export type DaemonResult = { success: boolean; error?: string; code?: string; data?: unknown; tabId?: number }
+
+/** The --json line for a failure: always success:false and a code, so scripts can branch without parsing the message. */
+export function jsonFailure(result: DaemonResult): Record<string, unknown> {
+  const { data, ...rest } = result as DaemonResult & Record<string, unknown>
+  const fields = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {}
+  return { ...rest, ...fields, success: false, code: result.code ?? fields.code ?? "provider_failed" }
+}
 export type DaemonResponse = {
   id: string
   result: DaemonResult
@@ -262,6 +338,10 @@ export function setGlobalGroup(group?: string, groupColor?: string, soft = false
 
 /** Exported for tests (wire-shape assertion); production callers use sendCommand. */
 export function withGroup(action: Action): Action {
+  // Browser routing metadata never changes native domain fields. Contacts
+  // uses group for actual membership filtering, and native schemas reject
+  // unrelated browser scope and frame fields.
+  if (/^(?:macos|desktop|ios)_/.test(action.type)) return action
   if (globalFrame !== undefined) {
     if (action.frameId !== undefined && action.frameId !== globalFrame) {
       throw new ActionValidationError("element frame conflicts with --frame; use the frame from the fresh element ref")
@@ -278,6 +358,20 @@ export function withGroup(action: Action): Action {
 
 export function sendCommand(rawAction: Action, tabId?: number, contextId?: string): Promise<DaemonResponse> {
   const action = withGroup(rawAction)
+  if (process.platform !== "darwin" && isDesktopActionType(action.type) && !CDP_ACTION_TYPES.has(action.type) && !isSecretBearing(action)) {
+    const id = crypto.randomUUID()
+    // A native socket authenticates this CLI's OS identity. A daemon proxy
+    // would substitute its own login and lose the caller's session boundary.
+    if (!/^(?:desktop|macos)_/.test(action.type)) return Promise.resolve({ id, result: {
+      success: false, code: "unsupported_operation", error: "this native surface is not implemented by the host provider" } } as DaemonResponse)
+    process.stderr.write(`[${id.slice(0, 8)}] → ${action.type}\n`)
+    return callDesktopProvider(action, pickTimeoutForAction(action)).then(result => ({ id, result } as DaemonResponse))
+  }
+  // The vault is daemon-owned on every host. Its native store and metadata
+  // policy already live there; secret values must not enter an AX provider.
+  const needsCredentialAuthentication = isSecretBearing(action)
+  const vaultToken = needsCredentialAuthentication ? readLockFile(LOCK_PATH)?.shutdownToken : undefined
+  if (needsCredentialAuthentication && !vaultToken) return Promise.resolve({ id: crypto.randomUUID(), result: { success: false, code: "not_installed", error: "daemon credential authentication is unavailable; start or repair the installed daemon before using credentials" } } as DaemonResponse)
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID()
     const shortId = id.slice(0, 8)
@@ -326,7 +420,7 @@ export function sendCommand(rawAction: Action, tabId?: number, contextId?: strin
     const socketHandlers: Bun.SocketHandler<undefined> = {
       open(socket: Bun.Socket<undefined>) {
         socketRef = socket
-        const payload = JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }), ...(contextId !== undefined && { contextId }) })
+        const payload = JSON.stringify({ id, action, ...(vaultToken !== undefined && { vaultToken }), ...(tabId !== undefined && { tabId }), ...(contextId !== undefined && { contextId }) })
         const encoded = Buffer.from(payload, "utf-8")
         const header = Buffer.alloc(4)
         header.writeUInt32LE(encoded.byteLength, 0)

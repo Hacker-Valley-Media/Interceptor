@@ -17,6 +17,7 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let failure = DesktopDisplayValidation.validate(action) { completion(failure); return }
         let sub = action["sub"] as? String ?? command
         switch sub {
         case "list":
@@ -59,6 +60,15 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
         completion(WireFormat.success(displays))
     }
 
+    // alloc returns +1 and init consumes it and returns +1, so the init result is taken retained. It was
+    // taken unretained, which leaked the CGVirtualDisplay: `remove` dropped it from the registry but the
+    // display never deallocated, so it stayed active.
+    static func objcInit(_ cls: AnyClass, _ selector: String, with argument: AnyObject? = nil) -> AnyObject? {
+        let sel = NSSelectorFromString(selector)
+        guard let allocated = (cls as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(), allocated.responds(to: sel) else { return nil }
+        return (argument.map { allocated.perform(sel, with: $0) } ?? allocated.perform(sel))?.takeRetainedValue()
+    }
+
     private func createVirtualDisplay(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         // Parse resolution from action (e.g., "1920x1080" or width/height params)
         var width = action["width"] as? Int ?? 1920
@@ -67,11 +77,16 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
         let refreshRate = action["hz"] as? Double ?? 60.0
 
         if let resolution = action["resolution"] as? String {
-            let parts = resolution.lowercased().split(separator: "x")
-            if parts.count == 2, let w = Int(parts[0]), let h = Int(parts[1]) {
-                width = w
-                height = h
+            let parts = resolution.lowercased().split(separator: "x", omittingEmptySubsequences: false)
+            // An unreadable resolution used to fall back to 1920x1080 and create a display.
+            guard parts.count == 2, let w = Int(parts[0]), let h = Int(parts[1]) else {
+                completion(WireFormat.failure("invalid_request", "display resolution must be <width>x<height>, for example 1920x1080; no display was created")); return
             }
+            width = w
+            height = h
+        }
+        guard (1...16384).contains(width), (1...16384).contains(height), refreshRate.isFinite, refreshRate > 0, refreshRate <= 480 else {
+            completion(WireFormat.failure("invalid_request", "display width and height must be 1 to 16384 and the refresh rate 1 to 480 Hz; no display was created")); return
         }
 
         // Load private API classes at runtime
@@ -79,7 +94,7 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
               let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor"),
               let settingsClass = NSClassFromString("CGVirtualDisplaySettings"),
               let modeClass = NSClassFromString("CGVirtualDisplayMode") else {
-            completion(WireFormat.error("CGVirtualDisplay private APIs not available on this macOS version"))
+            completion(WireFormat.failure("provider_failed", "CGVirtualDisplay private APIs not available on this macOS version"))
             return
         }
 
@@ -88,13 +103,13 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
         do {
             let allocSel = NSSelectorFromString("alloc")
             guard let allocated = (modeClass as AnyObject).perform(allocSel)?.takeUnretainedValue() else {
-                completion(WireFormat.error("failed to allocate CGVirtualDisplayMode"))
+                completion(WireFormat.failure("provider_failed", "failed to allocate CGVirtualDisplayMode"))
                 return
             }
 
             let initSel = NSSelectorFromString("initWithWidth:height:refreshRate:")
             guard (allocated as AnyObject).responds(to: initSel) else {
-                completion(WireFormat.error("CGVirtualDisplayMode missing initWithWidth:height:refreshRate:"))
+                completion(WireFormat.failure("provider_failed", "CGVirtualDisplayMode missing initWithWidth:height:refreshRate:"))
                 return
             }
 
@@ -107,12 +122,8 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
         // Create descriptor
         let descriptorObj: AnyObject
         do {
-            guard let allocated = (descriptorClass as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() else {
-                completion(WireFormat.error("failed to allocate descriptor"))
-                return
-            }
-            guard let inited = (allocated as AnyObject).perform(NSSelectorFromString("init"))?.takeUnretainedValue() else {
-                completion(WireFormat.error("failed to init descriptor"))
+            guard let inited = Self.objcInit(descriptorClass, "init") else {
+                completion(WireFormat.failure("provider_failed", "failed to create the virtual display descriptor"))
                 return
             }
             descriptorObj = inited
@@ -166,22 +177,15 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
         }
 
         // Create virtual display
-        guard let displayAllocated = (displayClass as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() else {
-            completion(WireFormat.error("failed to allocate CGVirtualDisplay"))
-            return
-        }
-
-        let initWithDescSel = NSSelectorFromString("initWithDescriptor:")
-        guard (displayAllocated as AnyObject).responds(to: initWithDescSel),
-              let display = (displayAllocated as AnyObject).perform(initWithDescSel, with: descriptorObj)?.takeUnretainedValue() else {
-            completion(WireFormat.error("failed to init CGVirtualDisplay with descriptor"))
+        guard let display = Self.objcInit(displayClass, "initWithDescriptor:", with: descriptorObj) else {
+            completion(WireFormat.failure("provider_failed", "failed to create the CGVirtualDisplay"))
             return
         }
 
         // Create and apply settings with mode
         guard let settingsAllocated = (settingsClass as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(),
               let settings = (settingsAllocated as AnyObject).perform(NSSelectorFromString("init"))?.takeUnretainedValue() else {
-            completion(WireFormat.error("failed to create settings"))
+            completion(WireFormat.failure("provider_failed", "failed to create settings"))
             return
         }
 
@@ -203,7 +207,7 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
         // Apply settings
         let applySel = NSSelectorFromString("applySettings:")
         guard (display as AnyObject).responds(to: applySel) else {
-            completion(WireFormat.error("CGVirtualDisplay missing applySettings:"))
+            completion(WireFormat.failure("provider_failed", "CGVirtualDisplay missing applySettings:"))
             return
         }
 
@@ -213,7 +217,7 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
         let applied = applySettings(display, applySel, settings)
 
         guard applied else {
-            completion(WireFormat.error("failed to apply settings to virtual display"))
+            completion(WireFormat.failure("provider_failed", "failed to apply settings to virtual display"))
             return
         }
 
@@ -263,7 +267,7 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
 
     private func removeVirtualDisplay(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let sid = action["id"] as? String else {
-            completion(WireFormat.error("remove requires an id"))
+            completion(WireFormat.failure("invalid_request", "display remove requires the id that display create returned"))
             return
         }
         lock.lock()
@@ -274,14 +278,24 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
             Platform.log("virtual display removed: \(sid)")
             completion(WireFormat.success("ok"))
         } else {
-            completion(WireFormat.error("virtual display not found: \(sid)"))
+            completion(WireFormat.failure("target_gone", "no virtual display with id \(sid) was created by this bridge"))
         }
     }
 
     private func displayInfo(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let idVal = action["id"] as? UInt32 ?? (action["id"] as? String).flatMap({ UInt32($0) }) else {
-            completion(WireFormat.error("display info requires an id"))
+            completion(WireFormat.failure("invalid_request", "display info requires a display id"))
             return
+        }
+
+        if action["type"] as? String == "desktop_display_info" {
+            var count: UInt32 = 0
+            var ids = [CGDirectDisplayID](repeating: 0, count: DESKTOP_DISPLAY_MAX_COUNT)
+            guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success,
+                  ids.prefix(Int(count)).contains(idVal) else {
+                completion(DesktopDisplayValidation.failure("unsupported_target", "requested display is not active"))
+                return
+            }
         }
         let bounds = CGDisplayBounds(idVal)
         let mode = CGDisplayCopyDisplayMode(idVal)
@@ -301,7 +315,7 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
     private func moveWindow(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let windowId = action["windowId"] as? UInt32 ?? (action["wid"] as? String).flatMap({ UInt32($0) }),
               let displayId = action["displayId"] as? UInt32 ?? (action["did"] as? String).flatMap({ UInt32($0) }) else {
-            completion(WireFormat.error("move-window requires windowId and displayId"))
+            completion(WireFormat.failure("invalid_request", "move-window requires windowId and displayId"))
             return
         }
 
@@ -330,6 +344,6 @@ final class DisplayDomain: DomainHandler, @unchecked Sendable {
             }
         }
 
-        completion(WireFormat.error("move-window failed — CGSMoveWindow not available"))
+        completion(WireFormat.failure("unsupported_operation", "move-window failed: CGSMoveWindow is not available"))
     }
 }

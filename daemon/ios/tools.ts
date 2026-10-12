@@ -20,6 +20,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSy
 import { tmpdir, homedir } from "node:os"
 import { join, delimiter, dirname } from "node:path"
 import { createHash } from "node:crypto"
+import { captureSubprocess } from "../subprocess"
 
 /** Use the experimental userspace launcher only when an operator opts in. */
 export function preferNoXcodeIosPath(): boolean {
@@ -57,6 +58,12 @@ export function run(cmd: string, args: string[], opts: { timeoutMs?: number; inp
   const stderr = proc.stderr ? Buffer.from(proc.stderr).toString("utf-8") : ""
   const code = typeof proc.exitCode === "number" ? proc.exitCode : (proc.success ? 0 : -1)
   return { code, stdout, stderr, ok: proc.success }
+}
+
+/** Host tools used by the daemon must yield while the operating system runs them. */
+export async function runAsync(cmd: string, args: string[], opts: { timeoutMs?: number; input?: string } = {}): Promise<RunResult> {
+  const result = await captureSubprocess([cmd, ...args], { ...opts, timeoutMs: opts.timeoutMs ?? 30_000 })
+  return { ...result, ok: result.code === 0 }
 }
 
 /** Is a CLI tool resolvable on PATH? */
@@ -106,11 +113,11 @@ export type Toolchain = {
   sips: boolean
 }
 
-export function detectToolchain(): Toolchain {
+export async function detectToolchain(): Promise<Toolchain> {
   return {
-    devicectl: run("/usr/bin/xcrun", ["--find", "devicectl"]).ok,
-    simctl: run("/usr/bin/xcrun", ["--find", "simctl"]).ok,
-    xcodebuild: run("/usr/bin/xcrun", ["--find", "xcodebuild"]).ok,
+    devicectl: (await runAsync("/usr/bin/xcrun", ["--find", "devicectl"])).ok,
+    simctl: (await runAsync("/usr/bin/xcrun", ["--find", "simctl"])).ok,
+    xcodebuild: (await runAsync("/usr/bin/xcrun", ["--find", "xcodebuild"])).ok,
     sips: true, // /usr/bin/sips ships with macOS
   }
 }
@@ -123,10 +130,10 @@ export type RawSimDevice = { udid: string; name: string; state: string; isAvaila
  * List booted/available simulators via `xcrun simctl list devices --json`.
  * Returns flattened devices with their runtime version parsed from the key.
  */
-export function listSimulators(): RawSimDevice[] {
-  const json = runJson<{ devices: Record<string, Array<Omit<RawSimDevice, "runtimeVersion">>> }>(
-    "/usr/bin/xcrun", ["simctl", "list", "devices", "--json"],
-  )
+export async function listSimulators(): Promise<RawSimDevice[]> {
+  const result = await runAsync("/usr/bin/xcrun", ["simctl", "list", "devices", "--json"])
+  let json: { devices?: Record<string, Array<Omit<RawSimDevice, "runtimeVersion">>> }
+  try { if (!result.ok) return []; json = JSON.parse(result.stdout) } catch { return [] }
   if (!json?.devices) return []
   const out: RawSimDevice[] = []
   for (const [runtime, devices] of Object.entries(json.devices)) {
@@ -158,12 +165,12 @@ type DevicectlDevice = {
  * pairing state, and de-duplicate by udid (a device wired + on the network shows
  * twice — prefer the wired entry).
  */
-export function listPhysicalDevices(): RawPhysDevice[] {
+export async function listPhysicalDevices(): Promise<RawPhysDevice[]> {
   const dir = mkdtempSync(join(tmpdir(), "interceptor-ios-dc-"))
   const out = join(dir, "devices.json")
   let raw = ""
   try {
-    const r = run("/usr/bin/xcrun", ["devicectl", "list", "devices", "--json-output", out, "--quiet"], { timeoutMs: 20_000 })
+    const r = await runAsync("/usr/bin/xcrun", ["devicectl", "list", "devices", "--json-output", out, "--quiet"], { timeoutMs: 20_000 })
     if (!r.ok && !existsSync(out)) return []
     raw = readFileSync(out, "utf-8")
   } catch { return [] }
@@ -199,11 +206,11 @@ export function listPhysicalDevices(): RawPhysDevice[] {
  * List installed apps on a physical device via `xcrun devicectl device info apps`
  * (CoreDevice, native). Returns the parsed JSON or undefined.
  */
-export function listDeviceApps(udid: string): unknown | undefined {
+export async function listDeviceApps(udid: string): Promise<unknown | undefined> {
   const dir = mkdtempSync(join(tmpdir(), "interceptor-ios-apps-"))
   const out = join(dir, "apps.json")
   try {
-    const r = run("/usr/bin/xcrun", ["devicectl", "device", "info", "apps", "--device", udid, "--json-output", out, "--quiet"], { timeoutMs: 30_000 })
+    const r = await runAsync("/usr/bin/xcrun", ["devicectl", "device", "info", "apps", "--device", udid, "--json-output", out, "--quiet"], { timeoutMs: 30_000 })
     if (!r.ok && !existsSync(out)) return undefined
     const parsed = JSON.parse(readFileSync(out, "utf-8")) as { result?: { apps?: unknown } }
     return parsed.result?.apps ?? parsed.result ?? parsed
@@ -469,8 +476,8 @@ export function inspectRunnerIdentity(
   return { bundleId, teamId, profilePath, expiresAt: profile.expiresAt }
 }
 
-export function buildRunnerWithXcode(udid: string, opts: XcodeRunnerBuildOptions = {}): XcodeRunnerBuildResult {
-  if (!detectToolchain().xcodebuild) throw new Error("Xcode command-line tools are not available; install Xcode and run `sudo xcode-select -s /Applications/Xcode.app`.")
+export async function buildRunnerWithXcode(udid: string, opts: XcodeRunnerBuildOptions = {}): Promise<XcodeRunnerBuildResult> {
+  if (!(await detectToolchain()).xcodebuild) throw new Error("Xcode command-line tools are not available; install Xcode and run `sudo xcode-select -s /Applications/Xcode.app`.")
   const projectPath = resolveRunnerProject(opts.projectPath)
   if (!projectPath) {
     throw new Error(
@@ -488,7 +495,7 @@ export function buildRunnerWithXcode(udid: string, opts: XcodeRunnerBuildOptions
     rmSync(derived, { recursive: true, force: true })
   } catch {}
 
-  const r = run("/usr/bin/xcrun", [
+  const r = await runAsync("/usr/bin/xcrun", [
     "xcodebuild", "build-for-testing",
     "-project", projectPath,
     "-scheme", "InterceptorRunner",
@@ -608,14 +615,14 @@ export async function installRunnerApp(
     try { await installer.installApp(udid, app, identity.bundleId); return { ok: true, bundleId: identity.bundleId } }
     catch (err) { return { ok: false, error: (err as Error).message } }
   }
-  const r = run("/usr/bin/xcrun", ["devicectl", "device", "install", "app", "--device", udid, app], { timeoutMs: 180_000 })
+  const r = await runAsync("/usr/bin/xcrun", ["devicectl", "device", "install", "app", "--device", udid, app], { timeoutMs: 180_000 })
   if (!r.ok) return { ok: false, error: `devicectl install failed: ${(r.stderr || r.stdout).slice(-400)}` }
   return { ok: true, bundleId: identity.bundleId }
 }
 
 /** Is the agent installed on the device? (devicectl app inventory.) */
-export function isRunnerInstalled(udid: string, bundleId = RUNNER_BUNDLE_ID): boolean {
-  const apps = listDeviceApps(udid) as { bundleIdentifier?: string }[] | { apps?: { bundleIdentifier?: string }[] } | undefined
+export async function isRunnerInstalled(udid: string, bundleId = RUNNER_BUNDLE_ID): Promise<boolean> {
+  const apps = await listDeviceApps(udid) as { bundleIdentifier?: string }[] | { apps?: { bundleIdentifier?: string }[] } | undefined
   const list = Array.isArray(apps) ? apps : (apps as { apps?: unknown[] } | undefined)?.apps
   if (!Array.isArray(list)) return false
   return list.some((a) => (a as { bundleIdentifier?: string })?.bundleIdentifier === bundleId)

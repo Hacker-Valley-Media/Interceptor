@@ -2,6 +2,51 @@ import { describe, expect, test } from "bun:test"
 import { parseMacosCommand } from "../cli/commands/macos"
 
 describe("macos parser", () => {
+  test("desktop detect stdin carries piped text as data, even when it starts with --", () => {
+    expect(parseMacosCommand(["macos", "detect", "stdin", "--types", "link"], undefined, true, "---\ntitle: https://example.com\n---\n"))
+      .toMatchObject({type: "macos_detect", sub: "stdin", input: "---\ntitle: https://example.com\n---\n", types: "link"})
+  })
+  test("notification flags do not overwrite nested verbs or identifiers", () => {
+    expect(parseMacosCommand(["macos", "notifications", "tail", "--name", "com.interceptor.owned"]))
+      .toMatchObject({type: "macos_notifications", sub: "tail", name: "com.interceptor.owned"})
+    expect(parseMacosCommand(["macos", "notifications", "categories", "--json"]))
+      .toMatchObject({type: "macos_notifications", sub: "categories", verb: "list"})
+    expect(parseMacosCommand(["macos", "notifications", "badge", "--count", "3", "--json"]))
+      .toMatchObject({sub: "badge", count: 3})
+    for (const sub of ["cancel", "dismiss"]) {
+      expect(parseMacosCommand(["macos", "notifications", sub, "--id", "owned", "--json"]))
+        .toMatchObject({sub, id: "owned"})
+      expect(parseMacosCommand(["macos", "notifications", sub, "owned", "--json"]))
+        .toMatchObject({sub, id: "owned"})
+    }
+    expect(parseMacosCommand(["macos", "notifications", "badge", "clear", "--json"]))
+      .toMatchObject({sub: "badge", clear: true})
+    expect(parseMacosCommand(["macos", "notifications", "badge", "5", "--json"]))
+      .toMatchObject({sub: "badge", count: 5})
+  })
+  test("physical US-key typing preserves secret names and exact window targets", () => {
+    expect(parseMacosCommand(["macos", "type", "--secret", "owned-vm", "--app", "UTM", "--window", "241", "--keycodes-us"]))
+      .toMatchObject({type:"macos_type",secret:"owned-vm",app:"UTM",window:241,keycodesUS:true})
+    expect(parseMacosCommand(["macos", "type", "Aa9!", "--app", "UTM", "--keycodes-us"]))
+      .toMatchObject({type:"macos_type",text:"Aa9!",app:"UTM",keycodesUS:true})
+    expect(parseMacosCommand(["macos", "type", "--keycodes-us", "--window", "241", "Aa9!", "--app", "UTM"]))
+      .toMatchObject({type:"macos_type",text:"Aa9!",app:"UTM",window:241,keycodesUS:true})
+    for (const args of [["--keycodes-us","--keycodes-us"],["--keycodes-us","--unknown"],["--keycodes-us","extra"]]) {
+      expect(() => parseMacosCommand(["macos","type","owned",...args])).toThrow()
+    }
+    expect(() => parseMacosCommand(["macos", "type", "a", "--keycodes-us"],undefined,true)).toThrow("macos type")
+    expect(parseMacosCommand(["macos", "type", "Unicode 文件"])).not.toHaveProperty("keycodesUS")
+  })
+  test("tree preserves the selected window through legacy and desktop parsing", () => {
+    for (const desktop of [false, true]) {
+      expect(parseMacosCommand(["macos", "tree", "--pid", "42", "--window", "1362"], undefined, desktop))
+        .toMatchObject({type: "macos_tree", pid: 42, window: 1362})
+    }
+    for (const bad of ["0", "1junk", "1.5", "-1", "9007199254740992", ""]) {
+      expect(() => parseMacosCommand(["macos", "tree", "--window", bad], undefined, true)).toThrow("window id")
+    }
+    expect(() => parseMacosCommand(["macos", "tree", "--window"], undefined, true)).toThrow("window id")
+  })
   test("menu --app keeps the app name out of the menu path", () => {
     const action = parseMacosCommand(["macos", "menu", "--app", "TextEdit"]) as Record<string, unknown>
     expect(action.type).toBe("macos_menu")

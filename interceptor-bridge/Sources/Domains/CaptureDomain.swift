@@ -17,12 +17,13 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
     private var activeOutput: CaptureStreamOutput?
     private var activeDelegate: CaptureStreamDelegateLogger?
     private var latestFrame: Data?
-    // PRD-63 Spec 3+4: track per-frame metadata so `capture status` can
+    // Track per-frame metadata so `capture status` can
     // report frame age, and `capture frame` can return bytes/width/height
     // matching ScreenshotDomain's payload shape.
     private var latestFrameSize: CGSize?
     private var latestFrameTimestamp: Date?
     private let lock = NSLock()
+    private var neutralCaptureStarting = false
     // Signaled by CaptureStreamOutput.onFrame each time a sample buffer
     // arrives. handleCapture("frame", ...) waits on this so callers don't
     // race the documented gap between SCStream.startCapture's success
@@ -57,7 +58,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
         while frameReady.wait(timeout: .now()) == .success {}
     }
 
-    /// PRD-63 Spec 4: decode JPEG dimensions without paying for full pixel
+    /// Decode JPEG dimensions without paying for full pixel
     /// decode. CGImageSource reads the SOI/SOF headers only.
     static func decodeJPEGSize(_ data: Data) -> CGSize? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -68,6 +69,28 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
     }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let failure = DesktopCaptureValidation.validate(action) { completion(failure); return }
+        let neutral = (action["type"] as? String)?.hasPrefix("desktop_") == true
+        let starting = neutral && command == "capture" && action["sub"] as? String == "start"
+        if starting {
+            let occupied = lock.withLock { () -> Bool in
+                if activeStream != nil || neutralCaptureStarting { return true }
+                neutralCaptureStarting = true
+                return false
+            }
+            if occupied { completion(DesktopCaptureValidation.failure("invalid_request", "capture is already active or starting; stop it before selecting another target")); return }
+        } else if neutral && command == "capture" && action["sub"] as? String == "stop" && lock.withLock({ neutralCaptureStarting }) {
+            completion(DesktopCaptureValidation.failure("resource_limit", "capture start is pending; wait for its reply before stopping")); return
+        }
+        if neutral && (command == "screenshot" || starting) && !CGPreflightScreenCaptureAccess() {
+            if starting { lock.withLock { neutralCaptureStarting = false } }
+            completion(DesktopCaptureValidation.failure("permission_required", "Screen Recording permission required; grant it to Interceptor in System Settings")); return
+        }
+        let originalType = action["type"] as? String ?? ""
+        let completion: @Sendable ([String: Any]) -> Void = { [self] result in
+            if starting { lock.withLock { neutralCaptureStarting = false } }
+            completion(DesktopCaptureValidation.normalize(result, action: ["type": originalType]))
+        }
         switch command {
         case "screenshot":
             takeScreenshot(action, completion: completion)
@@ -106,9 +129,24 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                 var targetWindow: SCWindow? = nil
                 var targetDisplay: SCDisplay? = nil
 
-                if mode == "display", let display = content.displays.first {
+                if mode == "display" {
+                    guard let display = content.displays.first(where: { displayId == nil || Int($0.displayID) == displayId }) else {
+                        completion(WireFormat.error(displayId.map { "display not found: \($0)" } ?? "no capturable display found"))
+                        return
+                    }
                     filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
                     targetDisplay = display
+                } else if let windowId = windowId {
+                    guard let window = content.windows.first(where: { Int($0.windowID) == windowId }) else {
+                        completion(WireFormat.error("window not found: \(windowId)"))
+                        return
+                    }
+                    if let appName = appName, window.owningApplication?.applicationName != appName {
+                        completion(WireFormat.error("window \(windowId) does not belong to app: \(appName)"))
+                        return
+                    }
+                    filter = SCContentFilter(desktopIndependentWindow: window)
+                    targetWindow = window
                 } else if let appName = appName {
                     guard let _ = content.applications.first(where: { $0.applicationName == appName }) else {
                         completion(WireFormat.error("app not found: \(appName)"))
@@ -119,22 +157,25 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                     let appWindows = content.windows
                         .filter { $0.owningApplication?.applicationName == appName }
                         .sorted { ($0.frame.width * $0.frame.height) > ($1.frame.width * $1.frame.height) }
-                    let chosen = appWindows.first ?? content.windows[0]
+                    guard let chosen = appWindows.first else {
+                        completion(WireFormat.error("app has no capturable window: \(appName)"))
+                        return
+                    }
                     filter = SCContentFilter(desktopIndependentWindow: chosen)
                     targetWindow = chosen
-                } else if let displayId = displayId,
-                          let display = content.displays.first(where: { Int($0.displayID) == displayId }) {
+                } else if let displayId = displayId {
+                    guard let display = content.displays.first(where: { Int($0.displayID) == displayId }) else {
+                        completion(WireFormat.error("display not found: \(displayId)"))
+                        return
+                    }
                     filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
                     targetDisplay = display
-                } else if let windowId = windowId,
-                          let window = content.windows.first(where: { Int($0.windowID) == windowId }) {
-                    filter = SCContentFilter(desktopIndependentWindow: window)
-                    targetWindow = window
                 } else {
                     let frontApp = FrontmostResolver.frontmostApplication()
                     if let frontPid = frontApp?.processIdentifier,
                        let _ = content.applications.first(where: { $0.processID == frontPid }),
-                       let window = content.windows.first(where: { $0.owningApplication?.processID == frontPid }) {
+                       let window = content.windows.filter({ $0.owningApplication?.processID == frontPid && $0.isOnScreen && $0.windowLayer == 0 && $0.frame.width > 0 && $0.frame.height > 0 })
+                           .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) {
                         filter = SCContentFilter(desktopIndependentWindow: window)
                         targetWindow = window
                     } else if let display = content.displays.first {
@@ -230,6 +271,11 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                 // identical pipelines for all three formats (NSBitmapImageRep does not
                 // support WebP).
                 guard let data = Self.encode(cgImage: cgImg, format: format, quality: quality) else {
+                    // ImageIO reads WebP but has no WebP writer on current macOS.
+                    if format == "webp", !((CGImageDestinationCopyTypeIdentifiers() as? [String]) ?? []).contains("org.webmproject.webp") {
+                        completion(["success": false, "code": "unsupported_operation", "error": "this macOS has no WebP encoder; use png or jpeg"])
+                        return
+                    }
                     completion(WireFormat.error("failed to encode image as \(format)"))
                     return
                 }
@@ -359,7 +405,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
         case "frame":
             handleFrame(action, completion: completion)
         case "status":
-            // PRD-63 Spec 3: ground-truth state of the continuous-capture
+            // Ground-truth state of the continuous-capture
             // pipeline. `active` reflects whether SCStream is registered;
             // `hasFrame` whether the cache holds a sample buffer; and
             // `frameAgeMs` how stale the cached frame is (omitted when
@@ -441,7 +487,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
-    /// PRD-63 Spec 4: produce the metadata-rich frame payload that mirrors
+    /// Produce the metadata-rich frame payload that mirrors
     /// ScreenshotDomain's shape (`bytes`/`width`/`height`/`format`/`dataUrl`).
     /// Falls back to JPEG-header decode if a precomputed size isn't cached.
     static func buildFramePayload(frame: Data, size: CGSize?) -> [String: Any] {
@@ -457,19 +503,21 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
 
     private func startContinuousCapture(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let appName = action["app"] as? String
+        let neutral = action["type"] as? String == "desktop_capture"
 
         // Drain leftover semaphore signals from a prior run BEFORE
         // entering the async Task, since DispatchSemaphore.wait is
         // unavailable from async contexts under Swift strict concurrency.
         // Also clear any stale frame buffer.
         while frameReady.wait(timeout: .now()) == .success {}
-        lock.withLock {
+        if !neutral { lock.withLock {
             latestFrame = nil
             latestFrameSize = nil
             latestFrameTimestamp = nil
-        }
+        } }
 
         Task {
+            var startingStream: SCStream?
             do {
                 let content = try await SCShareableContent.current
                 let filter: SCContentFilter
@@ -481,7 +529,10 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                 var captureHeight: Int = 0
                 if let appName = appName,
                    let app = content.applications.first(where: { $0.applicationName == appName }),
-                   let window = content.windows.first(where: { $0.owningApplication?.processID == app.processID }) {
+                   // The app's largest on-screen normal window (as the monitor does): the first listed
+                   // window can be an offscreen helper or popup menu that never delivers a frame.
+                   let window = content.windows.filter({ $0.owningApplication?.processID == app.processID && $0.isOnScreen && $0.windowLayer == 0 && $0.frame.width > 0 && $0.frame.height > 0 })
+                       .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) {
                     // Explicit --app target: capture that app's first
                     // window via desktopIndependentWindow (works reliably
                     // for AppKit apps that own a normal NSWindow).
@@ -489,6 +540,10 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                     captureWidth = Int(window.frame.width * 2)
                     captureHeight = Int(window.frame.height * 2)
                 } else if let display = content.displays.first {
+                    if neutral && appName != nil {
+                        completion(DesktopCaptureValidation.failure("unsupported_target", "requested app has no capturable window; display fallback refused"))
+                        return
+                    }
                     // No --app: default to display-mode capture. SCK's
                     // desktopIndependentWindow filter against the
                     // frontmost-app's window silently fails to deliver
@@ -502,6 +557,12 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                     return
                 }
 
+                if neutral { self.lock.withLock {
+                    self.latestFrame = nil
+                    self.latestFrameSize = nil
+                    self.latestFrameTimestamp = nil
+                } }
+
                 let config = SCStreamConfiguration()
                 config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
                 // Apple's capturing-screen-content-in-macos sample sets
@@ -510,25 +571,27 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                 if captureWidth > 0 { config.width = captureWidth }
                 if captureHeight > 0 { config.height = captureHeight }
 
-                let output = CaptureStreamOutput { [weak self] data in
+                let output = CaptureStreamOutput { [weak self] stream, data in
                     guard let self = self else { return }
                     // Discard late-arriving sample buffers that fire
                     // after capture stop. SCK doesn't always cancel the
                     // delivery queue immediately when stopCapture is
                     // called, and we don't want a stale frame to leak
                     // out of `frame` after the user has stopped.
-                    self.lock.withLock {
-                        if self.activeStream != nil {
+                    let accepted = self.lock.withLock {
+                        if self.activeStream === stream {
                             self.latestFrame = data
-                            // PRD-63 Spec 3+4: cache the frame's pixel
+                            // Cache the frame's pixel
                             // dimensions and ingest timestamp so handleFrame
                             // can return them in the metadata payload, and
                             // handleCapture("status") can report frame age.
                             self.latestFrameSize = Self.decodeJPEGSize(data)
                             self.latestFrameTimestamp = Date()
+                            return true
                         }
+                        return false
                     }
-                    self.frameReady.signal()
+                    if accepted { self.frameReady.signal() }
                 }
 
                 // Pass a delegate so SCK's stream(_:didStopWithError:),
@@ -539,7 +602,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                 let delegate = CaptureStreamDelegateLogger()
                 let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
                 try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue.global())
-                try await stream.startCapture()
+                startingStream = stream
 
                 // Strong-retain stream, output, AND delegate.
                 // SCK's addStreamOutput doesn't keep the output alive,
@@ -551,9 +614,25 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
                     self.activeOutput = output
                     self.activeDelegate = delegate
                 }
+                // Install the exact stream identity before startCapture can
+                // deliver its initial frame. A static target may subsequently
+                // produce only idle buffers, so that first frame must survive.
+                try await stream.startCapture()
 
                 completion(WireFormat.success("continuous capture started"))
             } catch {
+                if let startingStream {
+                    self.lock.withLock {
+                        if self.activeStream === startingStream {
+                            self.activeStream = nil
+                            self.activeOutput = nil
+                            self.activeDelegate = nil
+                            self.latestFrame = nil
+                            self.latestFrameSize = nil
+                            self.latestFrameTimestamp = nil
+                        }
+                    }
+                }
                 let msg = error.localizedDescription
                 if msg.contains("3801") || msg.contains("declined") {
                     completion(WireFormat.error("Screen Recording permission required"))
@@ -567,9 +646,9 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
 
 @available(macOS 13.0, *)
 final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
-    private let onFrame: @Sendable (Data) -> Void
+    private let onFrame: @Sendable (SCStream, Data) -> Void
 
-    init(onFrame: @escaping @Sendable (Data) -> Void) {
+    init(onFrame: @escaping @Sendable (SCStream, Data) -> Void) {
         self.onFrame = onFrame
     }
 
@@ -602,7 +681,7 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         if let cgImage = context.createCGImage(ciImage, from: CGRect(x: 0, y: 0, width: width, height: height)) {
             let rep = NSBitmapImageRep(cgImage: cgImage)
             if let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.5]) {
-                onFrame(data)
+                onFrame(stream, data)
             }
         }
     }

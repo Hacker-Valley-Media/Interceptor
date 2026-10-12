@@ -9,21 +9,28 @@ final class StreamDomain: DomainHandler, @unchecked Sendable {
 
     private let sessionsQueue = DispatchQueue(label: "interceptor.stream.sessions")
     private var sessions: [String: StreamSession] = [:]
+    private weak var router: Router?
 
-    init() {
+    init(router: Router? = nil) {
+        self.router = router
         StreamDomain.shared = self
     }
 
     func latestFrame(for app: String? = nil) -> CGImage? {
         return sessionsQueue.sync {
-            if let firstSession = sessions.values.first {
-                return firstSession.latestCGImage
+            let matching = sessions.values.filter { session in session.lock.withLock { app == nil || session.appName == app } }
+            if matching.count == 1, let firstSession = matching.first {
+                return firstSession.lock.withLock { firstSession.error == nil ? firstSession.latestCGImage : nil }
             }
             return nil
         }
     }
 
+    static func code(for message: String) -> String { message.contains("one exact current application") || message.contains("no longer") ? "target_gone" : "provider_failed" }
+
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let error = Self.validationError(action) { completion(["success": false, "code": "invalid_request", "error": error]); return }
+        if action["virtual"] != nil { completion(WireFormat.failure("unsupported_operation", "virtual-output selection requires the virtual-display backend; no display fallback was captured")); return }
         let op = action["op"] as? String ?? command
         switch op {
         case "start":
@@ -33,7 +40,7 @@ final class StreamDomain: DomainHandler, @unchecked Sendable {
         case "status":
             streamStatus(completion: completion)
         case "list":
-            // PRD-65 Spec 3 / PRD-64 Spec 3: project the sessions dict so
+            // Project the sessions dict so
             // callers can enumerate active streams. The dict already holds
             // per-session metadata; this verb just shapes it for the wire.
             listStreams(completion: completion)
@@ -52,9 +59,62 @@ final class StreamDomain: DomainHandler, @unchecked Sendable {
         }
     }
 
+    static func validationError(_ action: [String: Any]) -> String? {
+        var canonical = action
+        canonical["type"] = "desktop_stream"
+        canonical["op"] = action["op"] as? String ?? "status"
+        if let error = DesktopStreamShape.validationError(canonical) { return error }
+        let op = canonical["op"] as? String ?? "status"
+        func bounded(_ value: Any?, _ max: Int) -> Bool {
+            guard let text = value as? String else { return false }
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !text.contains("\0") && text.utf8.count <= max
+        }
+        if let sid = action["sid"] as? String, sid.range(of: "^[a-zA-Z0-9_-]{1,64}$", options: .regularExpression) == nil { return "invalid stream identity" }
+        if action["sid"] != nil, ["start", "status", "list"].contains(op) { return "this operation accepts no session identity" }
+        let targets = ["app", "window", "display", "virtual"]
+        if targets.filter({ action[$0] != nil }).count > 1 { return "stream requires one target selector" }
+        if op != "start", (targets + ["format"]).contains(where: { action[$0] != nil }) { return "stream target/format fields require start" }
+        for key in ["window", "display"] {
+            if let n = action[key] as? NSNumber {
+                let value = n.doubleValue, minimum: Double = key == "display" && action["type"] as? String != "desktop_stream" ? 0 : 1
+                if !value.isFinite || value.rounded(.towardZero) != value || !(minimum...9007199254740991).contains(value) { return "stream target requires a bounded native identity" }
+            }
+        }
+        for (key, max) in [("app", 512), ("virtual", 64), ("group", 256), ("groupColor", 256)] {
+            if action[key] != nil && !bounded(action[key], max) { return "invalid bounded stream target/group text" }
+        }
+        if let format = action["format"] as? String, !["jpeg", "jpg"].contains(format) { return "stream frames require JPEG" }
+        let inputs = ["inputType", "ref", "x", "y", "text", "combo", "direction", "amount"]
+        if op != "inject", inputs.contains(where: { action[$0] != nil }) { return "input fields require stream inject" }
+        if op == "inject" {
+            let kind = action["inputType"] as? String ?? "click"
+            let owned = kind == "click" ? ["x", "y"] : kind == "type" ? ["text", "ref"] : kind == "keys" ? ["combo"] : ["direction", "amount"]
+            if inputs.contains(where: { $0 != "inputType" && action[$0] != nil && !owned.contains($0) }) { return "input fields contradict the input kind" }
+            if kind == "click", ["x", "y"].contains(where: { key in
+                guard let n = action[key] as? NSNumber else { return true }
+                return !n.doubleValue.isFinite || n.doubleValue.rounded(.towardZero) != n.doubleValue || abs(n.doubleValue) > 1_000_000
+            }) { return "stream click requires bounded integer screen coordinates" }
+            if kind == "type" && !bounded(action["text"], 1_048_576) || kind == "keys" && !bounded(action["combo"], 4096) || action["ref"] != nil && !bounded(action["ref"], 256) { return "invalid bounded stream input" }
+            if kind == "scroll" {
+                guard action["direction"] != nil, let n = action["amount"] as? NSNumber, n.doubleValue.rounded(.towardZero) == n.doubleValue, (1...10000).contains(n.doubleValue) else { return "stream scroll requires direction and an integer amount 1..10000" }
+            }
+        }
+        if action["recordOp"] != nil && op != "record" { return "record selector requires stream record" }
+        if (action["media"] != nil || action["recordAudio"] != nil) && (op != "record" || action["recordOp"] as? String != "start") { return "media and recording audio require stream record start" }
+        if action["recordAudio"] != nil && action["media"] as? Bool != true { return "recording audio requires explicit media recording" }
+        return nil
+    }
+
+    private func selectedSession(_ action: [String: Any]) -> StreamSession? {
+        sessionsQueue.sync {
+            if let sid = action["sid"] as? String { return sessions[sid] }
+            return sessions.count == 1 ? sessions.values.first : nil
+        }
+    }
+
     private func listStreams(completion: @escaping @Sendable ([String: Any]) -> Void) {
         let snapshot: [[String: Any]] = sessionsQueue.sync {
-            sessions.map { (sid, session) in
+            sessions.map { (sid, session) in session.lock.withLock {
                 var entry: [String: Any] = [
                     "sid": sid,
                     "frameCount": session.frameCount,
@@ -70,7 +130,9 @@ final class StreamDomain: DomainHandler, @unchecked Sendable {
                 }
                 return entry
             }
+            }
         }
+        if let error = sessionsQueue.sync(execute: { sessions.values.compactMap { s in s.lock.withLock { s.problem } }.first }) { completion(WireFormat.failure(Self.code(for: error), error)); return }
         completion(WireFormat.success(snapshot))
     }
 
@@ -78,80 +140,177 @@ final class StreamDomain: DomainHandler, @unchecked Sendable {
         let appName = action["app"] as? String
         let displayIdx = action["display"] as? Int
         if #available(macOS 13.0, *) {
+            let sid = UUID().uuidString.lowercased(), session = StreamSession(), finished = AtomicFlag()
+            session.sid = sid
+            session.startReply = { response in if finished.set() { completion(response) } }
+            let admitted = sessionsQueue.sync { () -> Bool in
+                guard sessions.count < DESKTOP_STREAM_MAX_SESSIONS, sessions[sid] == nil else { return false }
+                sessions[sid] = session
+                return true
+            }
+            guard admitted else { completion(WireFormat.failure("resource_limit", "at most four native streams, including unresolved cleanup, may be admitted")); return }
+            session.onFailure = { [weak self, weak session] error in
+                guard let self, let session else { return }
+                self.retire(sid, session: session, error: error)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                if finished.set() {
+                    completion(["success": false, "code": "timeout_unknown_outcome", "error": "stream startup exceeded ten seconds; late admission is revoked, native cleanup may still be resolving"])
+                    self.retire(sid, session: session, error: "stream startup exceeded its deadline")
+                }
+            }
+            let boxedAction = UncheckedSendableBox(action)
             Task {
                 do {
                     let content = try await SCShareableContent.current
-                    let sid = UUID().uuidString.prefix(8).lowercased()
+                    let action = boxedAction.value
+                    guard !session.lock.withLock({ session.retiring }) else { self.finishStart(sid, session: session, error: "stream startup cancelled"); return }
                     let filter: SCContentFilter
 
-                    if let appName = appName,
-                       let app = content.applications.first(where: { $0.applicationName == appName }),
-                       let window = content.windows.first(where: { $0.owningApplication?.processID == app.processID }) {
+                    var targetWindow: SCWindow?, targetDisplay: SCDisplay?
+                    if let appName {
+                        let apps = content.applications.filter { $0.applicationName == appName }
+                        guard apps.count == 1, let app = apps.first else { self.finishStart(sid, session: session, error: "stream requires one exact current application; no display fallback was captured"); return }
+                        let windows = content.windows.filter { $0.owningApplication?.processID == app.processID && $0.isOnScreen }
+                        guard windows.count == 1, let window = windows.first else { self.finishStart(sid, session: session, error: "stream application requires one on-screen window; use an exact window target"); return }
+                        targetWindow = window
                         filter = SCContentFilter(desktopIndependentWindow: window)
-                    } else if let displayIdx = displayIdx, displayIdx < content.displays.count {
-                        filter = SCContentFilter(display: content.displays[displayIdx], excludingApplications: [], exceptingWindows: [])
+                    } else if let windowID = action["window"] as? Int {
+                        guard windowID > 0, let window = content.windows.first(where: { Int($0.windowID) == windowID && $0.isOnScreen }) else { self.finishStart(sid, session: session, error: "stream window is not available; no display fallback was captured"); return }
+                        targetWindow = window
+                        filter = SCContentFilter(desktopIndependentWindow: window)
+                    } else if let displayIdx {
+                        let display: SCDisplay?
+                        if action["type"] as? String == "desktop_stream" { display = content.displays.first(where: { Int($0.displayID) == displayIdx }) }
+                        else { display = content.displays.indices.contains(displayIdx) ? content.displays[displayIdx] : nil }
+                        guard let display else { self.finishStart(sid, session: session, error: "requested stream display is not available"); return }
+                        targetDisplay = display
+                        filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
                     } else {
-                        filter = SCContentFilter(display: content.displays.first!, excludingApplications: [], exceptingWindows: [])
+                        guard let display = content.displays.first else { self.finishStart(sid, session: session, error: "no stream display is available"); return }
+                        targetDisplay = display
+                        filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
                     }
 
                     let config = SCStreamConfiguration()
-                    config.capturesAudio = true
-                    config.excludesCurrentProcessAudio = true
+                    config.capturesAudio = false
                     config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+                    let scale = Double(max(1, filter.pointPixelScale))
+                    let width = ceil(Double(filter.contentRect.width) * scale), height = ceil(Double(filter.contentRect.height) * scale)
+                    guard width.isFinite, height.isFinite, width > 0, height > 0, width <= 16384, height <= 16384,
+                          width * height <= Double(DESKTOP_CAPTURE_MAX_PIXELS) else { self.finishStart(sid, session: session, error: "native stream geometry exceeds its pixel bound"); return }
+                    config.width = Int(width); config.height = Int(height)
 
-                    let session = StreamSession()
-                    let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-                    try stream.addStreamOutput(session, type: .screen, sampleHandlerQueue: DispatchQueue.global())
-                    try stream.addStreamOutput(session, type: .audio, sampleHandlerQueue: DispatchQueue.global())
-                    try await stream.startCapture()
-
-                    session.stream = stream
-                    session.startTime = Date()
-
-                    self.sessionsQueue.sync {
-                        self.sessions[String(sid)] = session
+                    let stream = SCStream(filter: filter, configuration: config, delegate: session)
+                    let current = session.lock.withLock { () -> Bool in
+                        guard !session.retiring else { return false }
+                        session.windowID = targetWindow?.windowID
+                        session.appName = targetWindow?.owningApplication?.applicationName
+                        session.application = targetWindow?.owningApplication.flatMap { NSRunningApplication(processIdentifier: $0.processID) }
+                        session.displayID = targetDisplay?.displayID; session.explicitDisplay = displayIdx != nil
+                        session.configuration = config
+                        session.stream = stream
+                        session.startTime = Date()
+                        return true
                     }
-
-                    completion(WireFormat.success(["sid": sid, "status": "streaming"]))
+                    guard current else { self.finishStart(sid, session: session, error: "stream startup cancelled"); return }
+                    try stream.addStreamOutput(session, type: .screen, sampleHandlerQueue: DispatchQueue.global())
+                    let starting = session.lock.withLock { () -> Bool in
+                        guard !session.retiring else { return false }
+                        session.captureAttempted = true
+                        return true
+                    }
+                    guard starting else { self.finishStart(sid, session: session, error: "stream startup cancelled"); return }
+                    try await stream.startCapture()
+                    self.finishStart(sid, session: session, error: nil)
                 } catch {
-                    completion(WireFormat.error("stream start failed: \(error.localizedDescription)"))
+                    self.finishStart(sid, session: session, error: "stream start failed: \(error.localizedDescription)")
                 }
             }
         } else {
-            completion(WireFormat.error("streaming requires macOS 13.0+"))
+            completion(WireFormat.failure("unsupported_operation", "streaming requires macOS 13.0+"))
         }
     }
 
+    private func finishStart(_ sid: String, session: StreamSession, error: String?) {
+        let reply = session.lock.withLock { () -> (@Sendable ([String: Any]) -> Void)? in
+            session.starting = false
+            if let error { session.error = error; session.retiring = true }
+            let reply = session.startReply; session.startReply = nil
+            return reply
+        }
+        let retiring = session.lock.withLock { session.retiring }
+        if retiring {
+            reply?(WireFormat.failure(Self.code(for: error ?? "stream startup cancelled"), error ?? "stream startup cancelled"))
+            retire(sid, session: session, error: error)
+        } else { reply?(WireFormat.success(["sid": sid, "status": "streaming"])) }
+    }
+
+    private func retire(_ sid: String, session: StreamSession, error: String? = nil, completion: (@Sendable ([String: Any]) -> Void)? = nil) {
+        session.lock.lock()
+        if completion != nil && session.stopReply != nil { session.lock.unlock(); completion?(WireFormat.failure("resource_limit", "stream native cleanup is already resolving")); return }
+        session.retiring = true; session.recording = false; session.lastFrameData = nil; session.latestCGImage = nil
+        if let error { session.error = error }
+        let startup = session.startReply; session.startReply = nil
+        if let completion { session.stopReply = completion }
+        let ready = !session.starting && !session.stopping
+        if ready { session.stopping = true }
+        let stream = session.captureAttempted ? session.stream : nil
+        let media = session.mediaRecord
+        session.lock.unlock()
+        startup?(WireFormat.failure(Self.code(for: error ?? "stream startup cancelled"), error ?? "stream startup cancelled"))
+        guard ready else { return }
+        let closeNative: @Sendable ([String: Any]?) -> Void = { mediaFailure in
+        let failureBox = UncheckedSendableBox(mediaFailure)
+        let stopped: @Sendable (Error?) -> Void = { stopError in
+            // SCStreamError.attemptToStopStreamState: the stream is already stopped or gone (it stopped
+            // itself, e.g. its window closed), so native cleanup is complete; keeping the session would
+            // fail every later stream command with this stale error.
+            let error = (stopError as NSError?).flatMap { $0.domain == SCStreamErrorDomain && $0.code == SCStreamError.Code.attemptToStopStreamState.rawValue ? nil : $0 }
+            let reply = session.lock.withLock { () -> (@Sendable ([String: Any]) -> Void)? in
+                let reply = session.stopReply; session.stopReply = nil; session.stopping = false
+                if let error { session.error = "native stream cleanup failed: \(error.localizedDescription)" }
+                else { session.stream = nil }
+                return reply
+            }
+            if error == nil { self.sessionsQueue.sync { if self.sessions[sid] === session { self.sessions.removeValue(forKey: sid) } } }
+            reply?(error.map { WireFormat.failure("provider_failed", "native stream cleanup failed: \($0.localizedDescription)") } ?? failureBox.value ?? WireFormat.success("ok"))
+        }
+        if let stream { stream.stopCapture(completionHandler: stopped) } else { stopped(nil) }
+        }
+        if let media {
+            media.whenResolved { response in closeNative(response["success"] as? Bool == true ? nil : response) }
+            media.end(reason: error)
+        } else { closeNative(nil) }
+    }
+
     private func stopStream(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let sid = action["sid"] as? String
-        if let sid = sid {
-            let session: StreamSession? = sessionsQueue.sync {
-                sessions.removeValue(forKey: sid)
+        let targets: [String: StreamSession] = sessionsQueue.sync {
+            if let sid = action["sid"] as? String { return sessions[sid].map { [sid: $0] } ?? [:] }
+            return sessions
+        }
+        if action["sid"] != nil && targets.isEmpty { completion(WireFormat.failure("target_gone", "stream session is not active")); return }
+        let finished = AtomicFlag(), group = DispatchGroup(), errors = LockedData()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+            if finished.set() { completion(["success": false, "code": "timeout_unknown_outcome", "error": "stream stop exceeded ten seconds; callbacks are revoked and admission remains occupied until native cleanup resolves"]) }
+        }
+        for (sid, session) in targets {
+            group.enter()
+            retire(sid, session: session) { response in
+                if response["success"] as? Bool != true { errors.append(Data((String(response["error"] as? String ?? "native stream cleanup failed").prefix(512) + "\n").utf8)) }
+                group.leave()
             }
-            if let session = session {
-                Task {
-                    try? await session.stream?.stopCapture()
-                    completion(WireFormat.success("ok"))
-                }
-            } else {
-                completion(WireFormat.error("session not found: \(sid)"))
-            }
-        } else {
-            let all: [StreamSession] = sessionsQueue.sync {
-                let vals = Array(sessions.values)
-                sessions.removeAll()
-                return vals
-            }
-            Task {
-                for s in all { try? await s.stream?.stopCapture() }
-                completion(WireFormat.success("ok"))
-            }
+        }
+        group.notify(queue: .global()) {
+            guard finished.set() else { return }
+            let error = errors.snapshot()
+            completion(error.isEmpty ? WireFormat.success("ok") : ["success": false, "code": "partial_result", "error": String(String(decoding: error, as: UTF8.self).prefix(512))])
         }
     }
 
     private func streamStatus(completion: @escaping @Sendable ([String: Any]) -> Void) {
         let status: [[String: Any]] = sessionsQueue.sync {
-            sessions.map { (sid, session) -> [String: Any] in
+            sessions.map { (sid, session) -> [String: Any] in session.lock.withLock {
                 [
                     "sid": sid,
                     "frameCount": session.frameCount,
@@ -159,146 +318,139 @@ final class StreamDomain: DomainHandler, @unchecked Sendable {
                     "duration": session.startTime.map { Date().timeIntervalSince($0) } ?? 0
                 ]
             }
+            }
         }
+        if let error = sessionsQueue.sync(execute: { sessions.values.compactMap { s in s.lock.withLock { s.problem } }.first }) { completion(WireFormat.failure(Self.code(for: error), error)); return }
         completion(WireFormat.success(status))
     }
 
     private func getFrame(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let result: (StreamSession?, String?) = sessionsQueue.sync {
-            let sid = action["sid"] as? String ?? sessions.keys.first
-            return (sid.flatMap { sessions[$0] }, sid)
+        guard let session = selectedSession(action) else { completion(WireFormat.failure("target_gone", "name one active stream; selection is missing or ambiguous")); return }
+        let result: [String: Any] = session.lock.withLock {
+            if let error = session.problem { return WireFormat.failure(Self.code(for: error), error) }
+            guard let frame = session.lastFrameData else { return WireFormat.failure("partial_result", "no native frame available yet") }
+            return WireFormat.success(["dataUrl": frame, "frameCount": session.frameCount])
         }
-        guard let session = result.0 else {
-            completion(WireFormat.error("no active stream"))
-            return
-        }
-        if let lastFrame = session.lastFrameData {
-            completion(WireFormat.success(["dataUrl": lastFrame, "frameCount": session.frameCount]))
-        } else {
-            completion(WireFormat.error("no frame available yet"))
-        }
+        completion(result)
     }
 
     private func getFPS(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let fps: Double = sessionsQueue.sync {
-            let sid = action["sid"] as? String ?? sessions.keys.first
-            return sid.flatMap { sessions[$0] }?.currentFPS ?? 0
-        }
-        completion(WireFormat.success(["fps": fps]))
+        guard let session = selectedSession(action) else { completion(WireFormat.failure("target_gone", "name one active stream; selection is missing or ambiguous")); return }
+        completion(session.lock.withLock { session.problem.map { WireFormat.failure(Self.code(for: $0), $0) } ?? WireFormat.success(["fps": session.currentFPS]) })
     }
 
     private func getResolution(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let res: (Int, Int) = sessionsQueue.sync {
-            let sid = action["sid"] as? String ?? sessions.keys.first
-            let session = sid.flatMap { sessions[$0] }
-            return (session?.lastWidth ?? 0, session?.lastHeight ?? 0)
-        }
-        completion(WireFormat.success(["width": res.0, "height": res.1]))
+        guard let session = selectedSession(action) else { completion(WireFormat.failure("target_gone", "name one active stream; selection is missing or ambiguous")); return }
+        completion(session.lock.withLock { session.problem.map { WireFormat.failure(Self.code(for: $0), $0) } ?? WireFormat.success(["width": session.lastWidth, "height": session.lastHeight]) })
     }
 
     private func injectInput(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let inputType = action["inputType"] as? String ?? "click"
-        guard let source = CGEventSource(stateID: .combinedSessionState) else {
-            completion(WireFormat.error("failed to create CGEvent source"))
-            return
-        }
-
-        switch inputType {
+        guard let selected = selectedSession(action) else { completion(WireFormat.failure("target_gone", "name one active stream; selection is missing or ambiguous")); return }
+        let (application, window, error) = selected.lock.withLock { (selected.application, selected.windowID, selected.problem) }
+        if let error { completion(WireFormat.failure(Self.code(for: error), error)); return }
+        guard let application, !application.isTerminated, let window, let router else { completion(WireFormat.failure("unsupported_target", "stream input requires one current owned application/window capture; no global input was delivered")); return }
+        let kind = action["inputType"] as? String ?? "click"
+        var child: [String: Any] = ["type": "desktop_\(kind)", "pid": Int(application.processIdentifier), "window": Int(window), "backgroundOnly": true]
+        switch kind {
         case "click":
-            let x = action["x"] as? Double ?? 0
-            let y = action["y"] as? Double ?? 0
-            let point = CGPoint(x: x, y: y)
-            let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
-            let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
-            down?.post(tap: .cghidEventTap)
-            usleep(50_000)
-            up?.post(tap: .cghidEventTap)
-            completion(WireFormat.success("click injected at \(Int(x)),\(Int(y))"))
-
-        case "type":
-            let text = action["text"] as? String ?? ""
-            for char in text {
-                let str = String(char)
-                var chars = Array(str.utf16)
-                let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-                let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-                keyDown?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
-                keyUp?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
-                keyDown?.post(tap: .cghidEventTap)
-                keyUp?.post(tap: .cghidEventTap)
-                usleep(20_000)
-            }
-            completion(WireFormat.success("typed \(text.count) chars"))
-
-        case "keys":
-            let combo = action["combo"] as? String ?? ""
-            // Parse key combo and post events
-            completion(WireFormat.success("keys injected: \(combo)"))
-
-        case "scroll":
-            let direction = action["direction"] as? String ?? "down"
-            let amount = action["amount"] as? Int32 ?? 3
-            let scrollAmount: Int32 = direction == "up" || direction == "left" ? amount : -amount
-            let isVertical = direction == "up" || direction == "down"
-            if let scrollEvent = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 1, wheel1: isVertical ? scrollAmount : 0, wheel2: isVertical ? 0 : scrollAmount, wheel3: 0) {
-                scrollEvent.post(tap: .cghidEventTap)
-            }
-            completion(WireFormat.success("scroll \(direction) \(amount)"))
-
-        default:
-            completion(WireFormat.error("unknown inject type: \(inputType)"))
+            guard let x = action["x"] as? NSNumber, let y = action["y"] as? NSNumber else { completion(WireFormat.failure("invalid_request", "stream click requires screen coordinates")); return }
+            // desktop_click coords are whole Int32 points ("170,338"); "170.0,338.0" fails its validation.
+            guard let px = Int32(exactly: x.doubleValue.rounded()), let py = Int32(exactly: y.doubleValue.rounded()) else { completion(WireFormat.failure("invalid_request", "invalid coordinates")); return }
+            child["coords"] = "\(px),\(py)"
+        case "type": child["text"] = action["text"]; child["ref"] = action["ref"]
+        case "keys": child["keys"] = action["combo"]
+        case "scroll": child["direction"] = action["direction"]; child["amount"] = action["amount"]
+        default: completion(WireFormat.failure("invalid_request", "unknown stream input type")); return
         }
+        router.route(action: child, completion: completion)
     }
 
     private func handleRecord(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        guard let session = selectedSession(action) else { completion(WireFormat.failure("target_gone", "name one active stream; selection is missing or ambiguous")); return }
         let op = action["recordOp"] as? String ?? "status"
-        switch op {
-        case "start":
-            guard let sid = action["sid"] as? String ?? sessionsQueue.sync(execute: { sessions.keys.first }) else {
-                completion(WireFormat.error("no active stream to record"))
-                return
+        if op == "start", action["media"] as? Bool == true {
+            let generation = UUID().uuidString
+            var native: (SCStream, SCStreamConfiguration, [String: Any])?
+            let admitted: [String: Any]? = session.lock.withLock {
+                if let error = session.problem { return WireFormat.failure(Self.code(for: error), error) }
+                guard !session.recording, session.mediaRecord?.resolved != false, let stream = session.stream, let configuration = session.configuration else { return WireFormat.failure("resource_limit", "stream recording admission or cleanup is already active") }
+                let audio = action["recordAudio"] as? String ?? "none"
+                if audio == "system", !session.explicitDisplay || session.displayID == nil { return WireFormat.failure("invalid_request", "system audio recording requires one explicitly selected native display; no unrelated application audio was captured") }
+                var source: [String: Any]
+                if let window = session.windowID {
+                    guard let application = session.application, !application.isTerminated else { return WireFormat.failure("target_gone", "stream window owner is unavailable; no replacement source was recorded") }
+                    source = ["kind": "window", "window": Int(window), "pid": Int(application.processIdentifier)]
+                } else if let display = session.displayID { source = ["kind": "display", "display": Int(display)] }
+                else { return WireFormat.failure("target_gone", "stream has no retained native media source identity") }
+                session.mediaRecord = nil; session.recording = true; session.recordGeneration = generation
+                session.recordingStartTime = Date(); session.recordedFrameCount = 0; session.recordDuration = 0
+                native = (stream, configuration, source); return nil
             }
-            let session: StreamSession? = sessionsQueue.sync { sessions[sid] }
-            guard let session = session else {
-                completion(WireFormat.error("session not found: \(sid)"))
-                return
+            if let admitted { completion(admitted); return }
+            guard let native else { completion(WireFormat.failure("provider_failed", "native media admission was not reserved")); return }
+            do {
+                let media = try StreamMediaRecording(sid: session.sid, audio: action["recordAudio"] as? String ?? "none",
+                    source: native.2, stream: native.0, configuration: native.1,
+                    isCurrent: { [weak session] in session?.lock.withLock { session?.recordGeneration == generation && session?.retiring == false } ?? false },
+                    onResolved: { [weak session] in
+                        session?.lock.withLock { if session?.recordGeneration == generation { session?.recording = false; session?.recordGeneration = nil; session?.recordingStartTime = nil } }
+                    })
+                let current = session.lock.withLock { () -> Bool in
+                    guard session.recordGeneration == generation, session.recording, !session.retiring else { return false }
+                    session.mediaRecord = media; return true
+                }
+                guard current else { completion(WireFormat.failure("provider_failed", "media admission was cancelled before native attachment")); return }
+                media.begin(completion: completion)
+            } catch {
+                session.lock.withLock { if session.recordGeneration == generation { session.recordGeneration = nil; session.recording = false; session.recordingStartTime = nil } }
+                completion(WireFormat.failure("provider_failed", "native media archive admission failed: \(error.localizedDescription)"))
             }
-            session.recording = true
-            session.recordingStartTime = Date()
-            session.recordedFrameCount = 0
-            completion(WireFormat.success(["recording": true, "sid": sid]))
-
-        case "stop":
-            let sid = action["sid"] as? String ?? sessionsQueue.sync(execute: { sessions.keys.first }) ?? ""
-            let session: StreamSession? = sessionsQueue.sync { sessions[sid] }
-            if let session = session {
-                session.recording = false
-                let duration = session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-                completion(WireFormat.success([
-                    "recording": false,
-                    "frames": session.recordedFrameCount,
-                    "duration": duration
-                ]))
-            } else {
-                completion(WireFormat.success(["recording": false]))
-            }
-
-        case "status":
-            let sid = action["sid"] as? String ?? sessionsQueue.sync(execute: { sessions.keys.first }) ?? ""
-            let session: StreamSession? = sessionsQueue.sync { sessions[sid] }
-            let recording = session?.recording ?? false
-            let frames = session?.recordedFrameCount ?? 0
-            let duration = session?.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-            completion(WireFormat.success(["recording": recording, "frames": frames, "duration": duration]))
-
-        default:
-            notImplemented("stream record \(op)", completion: completion)
+            return
         }
+        if op != "start", let media = session.lock.withLock({ session.mediaRecord }) {
+            if op == "stop" { media.stop(completion: completion) } else { completion(media.snapshot()) }
+            return
+        }
+        let response: [String: Any] = session.lock.withLock {
+            if let error = session.problem { return WireFormat.failure(Self.code(for: error), error) }
+            if op == "start" {
+                guard !session.recording, session.mediaRecord?.resolved != false else { return WireFormat.failure("resource_limit", "stream recording or native media cleanup is already active") }
+                session.mediaRecord = nil; session.recordGeneration = nil
+                session.recording = true; session.recordingStartTime = Date(); session.recordedFrameCount = 0; session.recordDuration = 0
+                return WireFormat.success(["recording": true, "sid": session.sid])
+            }
+            if op == "stop", session.recording {
+                session.recording = false
+                session.recordGeneration = nil
+                session.recordDuration = session.recordingStartTime.map { max(0, Date().timeIntervalSince($0)) } ?? 0
+                session.recordingStartTime = nil
+            }
+            let duration = session.recordingStartTime.map { max(0, Date().timeIntervalSince($0)) } ?? session.recordDuration
+            return WireFormat.success(["recording": session.recording, "frames": session.recordedFrameCount, "duration": duration])
+        }
+        completion(response)
     }
 }
 
 @available(macOS 13.0, *)
-final class StreamSession: NSObject, SCStreamOutput, @unchecked Sendable {
+final class StreamSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+    let lock = NSLock()
+    var sid = ""
+    var starting = true
+    var retiring = false
+    var stopping = false
+    var captureAttempted = false
+    var startReply: (@Sendable ([String: Any]) -> Void)?
+    var stopReply: (@Sendable ([String: Any]) -> Void)?
+    var onFailure: (@Sendable (String) -> Void)?
+    var problem: String? { error ?? (retiring ? "stream native cleanup is resolving" : starting ? "stream startup is resolving" : nil) }
+    var appName: String?
+    var windowID: CGWindowID?
+    var application: NSRunningApplication?
+    var displayID: CGDirectDisplayID?, explicitDisplay = false
+    var configuration: SCStreamConfiguration?
+    var mediaRecord: StreamMediaRecording?, recordGeneration: String?
+    var error: String?
     var stream: SCStream?
     var startTime: Date?
     var frameCount: Int = 0
@@ -308,39 +460,51 @@ final class StreamSession: NSObject, SCStreamOutput, @unchecked Sendable {
     var currentFPS: Double = 0
     private var fpsCounter: Int = 0
     private var fpsTimestamp: Date = Date()
+    private let imageContext = CIContext()
     var latestCGImage: CGImage?
     var recording = false
     var recordingStartTime: Date?
     var recordedFrameCount: Int = 0
+    var recordDuration: Double = 0
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen else { return }
-        frameCount += 1
-        if recording { recordedFrameCount += 1 }
-        fpsCounter += 1
+        guard type == .screen, lock.withLock({ self.stream === stream }) else { return }
+        consume(sampleBuffer)
+    }
 
-        let now = Date()
-        let elapsed = now.timeIntervalSince(fpsTimestamp)
-        if elapsed >= 1.0 {
-            currentFPS = Double(fpsCounter) / elapsed
-            fpsCounter = 0
-            fpsTimestamp = now
-        }
-
-        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+    func consume(_ sampleBuffer: CMSampleBuffer) {
+        var failure: String?
+        lock.lock()
+        defer { let callback = onFailure; lock.unlock(); if let failure { callback?(failure) } }
+        guard error == nil, !retiring, CMSampleBufferIsValid(sampleBuffer),
+              let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              let status = attachments.first?[.status] as? Int, SCFrameStatus(rawValue: status) == .complete,
+              let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let width = CVPixelBufferGetWidth(imageBuffer)
         let height = CVPixelBufferGetHeight(imageBuffer)
-        lastWidth = width
-        lastHeight = height
-
+        guard width > 0, height > 0, width <= DESKTOP_CAPTURE_MAX_PIXELS / height else { failure = "stream frame exceeds its pixel bound"; error = failure; latestCGImage = nil; lastFrameData = nil; return }
         let ciImage = CIImage(cvPixelBuffer: imageBuffer)
-        let context = CIContext()
-        if let cgImage = context.createCGImage(ciImage, from: CGRect(x: 0, y: 0, width: width, height: height)) {
-            latestCGImage = cgImage
-            let rep = NSBitmapImageRep(cgImage: cgImage)
-            if let jpegData = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.5]) {
-                lastFrameData = "data:image/jpeg;base64," + jpegData.base64EncodedString()
-            }
+        guard let cgImage = imageContext.createCGImage(ciImage, from: CGRect(x: 0, y: 0, width: width, height: height)),
+              let jpegData = NSBitmapImageRep(cgImage: cgImage).representation(using: .jpeg, properties: [.compressionFactor: 0.5]) else { failure = "native stream JPEG encoding failed"; error = failure; latestCGImage = nil; lastFrameData = nil; return }
+        let url = "data:image/jpeg;base64," + jpegData.base64EncodedString()
+        guard url.utf8.count < DESKTOP_MAX_RESULT_BYTES, frameCount < 9007199254740991 else { failure = "stream frame/counter exceeds its wire bound"; error = failure; latestCGImage = nil; lastFrameData = nil; return }
+        latestCGImage = cgImage; lastFrameData = url; lastWidth = width; lastHeight = height
+        frameCount += 1; fpsCounter += 1
+        if recording { recordedFrameCount += 1 }
+        let now = Date(), elapsed = now.timeIntervalSince(fpsTimestamp)
+        if elapsed >= 1.0 {
+            currentFPS = Double(fpsCounter) / elapsed
+            fpsCounter = 0; fpsTimestamp = now
         }
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        let failure = "native stream stopped: \(error.localizedDescription)"
+        let callback = lock.withLock { () -> (@Sendable (String) -> Void)? in
+            guard !retiring else { return nil }
+            self.error = failure; latestCGImage = nil; lastFrameData = nil; recording = false
+            return onFailure
+        }
+        callback?(failure)
     }
 }
