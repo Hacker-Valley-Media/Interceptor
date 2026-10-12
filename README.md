@@ -99,7 +99,7 @@ If several browser contexts are connected, run `interceptor contexts` and add `-
 
 ### Connect your agent
 
-For a shell-capable agent, adopt the browser, macOS, iOS, and research skills into detected agent runtimes. Mac and Windows installers bundle them; Linux archive users can run adoption from a source checkout containing `.agents/skills/`:
+For a shell-capable agent, adopt the bundled skills into detected agent runtimes. The Mac and Windows installers and the Linux archives each bundle the skills for their operating system:
 
 ```bash
 interceptor skills adopt
@@ -248,7 +248,7 @@ interceptor diagnose              # Runtime and extension diagnostics
 
 ### Updates and troubleshooting
 
-On a Full Mac installation, `interceptor update` checks for an update and `interceptor update status` reports progress. Browser-only users can run a newer installer; `interceptor upgrade --full` adds native capabilities. Windows updates use the newer signed installer. Linux updates use the matching release archive.
+On a Full Mac installation, `interceptor update` checks for an update and `interceptor update status` reports progress. The Windows/Linux Full source now checks the stable release feed for a newer package matching the native provider architecture; current build and installed qualification remain open. Release metadata does not establish package signatures. Verify the downloaded Windows installer or Linux signed archive before installation. Browser-only users can run a newer installer; `interceptor upgrade --full` adds Mac native capabilities.
 
 If no browser context connects, check that both the runtime and extension are installed and enabled. `interceptor diagnose` distinguishes store and unpacked versions. `interceptor reload --context <id>` reloads an unpacked extension; a store copy remains subject to store publication. For missing native permissions, use `interceptor macos trust --walkthrough`.
 
