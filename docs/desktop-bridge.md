@@ -2,7 +2,7 @@
 author: agent
 generated_by: "claude-opus-5-5 (Maestro)"
 created: 2026-10-02
-updated: 2026-10-11
+updated: 2026-10-12
 status: active
 reviewed: false
 source: "capabilities.json and the signed-install parity batches; shared/desktop-contract.ts; cli/commands/desktop.ts; interceptor-desktop/src"
@@ -135,13 +135,15 @@ The `INTERCEPTOR_*` settings named above are read by the Interceptor provider, w
 
 ## How it is tested
 
-`bun scripts/desktop-parity/launch.ts windows|linux|mac` runs the same 910-case catalog (every verb and flag in the inventory) against the installed CLI on each host. On Windows the catalog runs in the signed-in session through an interactive scheduled task, and on Linux in the Hyprland session through `systemd-run --user`. Each case also checks that the foreground window and cursor did not move. The vision cases use three photos with known content, and the AI cases wait for the model download first.
+`bun scripts/desktop-parity/launch.ts windows|linux|mac` runs the same 910-case catalog (every verb and flag in the inventory) against the installed CLI on each host. The Windows and Linux hosts come from `PARITY_*` environment variables (`PARITY_WINDOWS_HOST`, `PARITY_LINUX_HOST`, their keys, and `PARITY_WAYLAND_DISPLAY`), and evidence goes to `.interceptor/parity/`. On Windows the catalog runs in the signed-in session through an interactive scheduled task, and on Linux in the Hyprland session through `systemd-run --user`. Each case also checks that the foreground window and cursor did not move. The vision cases use three photos with known content, and the AI cases wait for the model download first.
 
-On 2026-10-11, against the signed builds installed the way a user installs them:
-- Windows 11 ARM64: 909 pass, 0 fail, 1 skipped. The skip deletes a URL reminder, which Windows refuses to create: Windows tasks have no URL field. The catalog ran in family chunks, because another project shares that VM and shuts it down. Two cases failed once (`value.read-only-write`, `trust.walkthrough`) and passed when their families were run again.
-- Linux ARM64 (Omarchy, Hyprland): 910 pass, 0 fail, in one run.
-- macOS: 613 pass, 0 fail. The Mac runs the same catalog on the person's own desktop and skips cases that would take the screen, play sound, or change their real Photos, Calendar, Contacts or Reminders. Two cases failed once right after the Mac restarted (`monitor.start.vision-text`, `overlay.list.read`) and passed when their families were run again.
+On 2026-10-12, against the signed 2.0.0 builds installed the way a user installs them:
+- Windows 11 ARM64: 909 pass, 0 fail, 1 skipped. The skip deletes a URL reminder, which Windows refuses to create: Windows tasks have no URL field. The catalog ran in family chunks. One case (`app.launch-with-pid`) failed once when Character Map took the foreground as it opened, and passed when its family was run again.
+- Linux ARM64 (Arch Linux ARM, Hyprland 0.56.1 on Wayland): 910 pass, 0 fail, in one run.
+- macOS: 613 pass, 0 fail, 297 skipped. The Mac runs the same catalog on the person's own desktop and skips cases that would take the screen, play sound, or change their real Photos, Calendar, Contacts or Reminders. Three `url` cases failed while httpbin.org answered 503 and `monitor.start.vision-text` failed once; all passed when their families were run again. `files.open.limit` found a reply check that capped the skipped-process count on a busy Mac, which 2.0.0 fixes.
 
-Rust unit tests pass on each host: Windows ARM64 144, Linux ARM64 165, macOS 137. On Windows and Linux they include the hand, body, classify, saliency, sound and embedding models run against the installed engine bundle and checked against known photos and recordings.
+The x64 Windows and Linux providers are built from the same source; the catalog was run on the ARM64 hosts.
+
+Rust unit tests pass on each host with the 2.0.0 source: Windows ARM64 144, Linux ARM64 166, macOS 137. On Windows and Linux they include the hand, body, classify, saliency, sound and embedding models run against the installed engine bundle and checked against known photos and recordings.
 
 What the local AI model does not do well: `detect` for dates, addresses, money, flights, tracking numbers and measurements is best effort. A match the provider cannot check against the text is dropped, so a result can be incomplete (an address without its city, a weight not reported), but it does not contain invented values.
