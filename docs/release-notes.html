@@ -36,7 +36,7 @@
       <li>Each operating system now ships only its own agent skills, help, and MCP menu. Windows and Linux get a new <code>interceptor-desktop</code> skill, and the Linux archives now install the skills too.</li>
       <li>MCP tool calls are classified on the arguments the CLI will actually run. A global flag's value can no longer make a destructive or exec verb look like a read.</li>
       <li>Element refs from <code>interceptor macos</code> reads stay valid after a later <code>find</code> or <code>tree</code>. <code>type</code> into a read-only field refuses instead of typing into another field.</li>
-      <li>Calendar: <code>--span future</code> on a recurring event no longer deletes past occurrences, and one occurrence can be updated or deleted on its own. An event whose end equals its start no longer fails the whole list.</li>
+      <li>Calendar: <code>--span future</code> on a recurring event no longer deletes past occurrences, and one occurrence can be updated or deleted on its own.</li>
       <li>New on the Mac: <code>stream record --media</code> writes an H.264 MP4, <code>type --keycodes-us</code> types into virtual machines that ignore text events, <code>music now-playing --include-system</code> reads Music.app, and <code>contacts list --keys</code> picks the fields returned. OCR runs in a helper process, so a stuck Vision call no longer hangs the bridge.</li>
       <li>A notification attachment is copied before it is posted, so your original file stays where it was.</li>
       <li>The Browser and Full packages find the signed-in user even when the console belongs to the login window, so their post-install steps (native messaging links, and the bridge restart on Full) run for that user.</li>
