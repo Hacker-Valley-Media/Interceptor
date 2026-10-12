@@ -153,3 +153,20 @@ extension InputTargetSelector {
         )
     }
 }
+
+extension CGEvent {
+    /// `postToPid(_:)` with the timestamp set to now. CGEvent initializers
+    /// leave `timestamp` at 0, and per-pid delivery skips the WindowServer
+    /// stamping a tap-posted event gets, so the target app would read a time
+    /// from just after boot. Chromium traps on such a click when it starts a
+    /// same-document navigation (an interaction older than its own page).
+    func postToPidNow(_ pid: pid_t) {
+        stampNow()
+        postToPid(pid)
+    }
+
+    /// Sets `timestamp` on the uptime clock that `NSEvent.timestamp` reads.
+    func stampNow() {
+        timestamp = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    }
+}

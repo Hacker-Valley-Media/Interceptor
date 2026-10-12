@@ -1,5 +1,6 @@
 import XCTest
 import ApplicationServices
+import AppKit
 @testable import interceptor_bridge
 
 final class InputTargetSelectionTests: XCTestCase {
@@ -161,4 +162,16 @@ final class InputTargetSelectionTests: XCTestCase {
         XCTAssertNil(selector.explicitTargetProblem(ref: nil, appName: nil, pid: nil))
     }
 
+}
+
+final class PostToPidTimestampTests: XCTestCase {
+    // postToPid hands the event to the app as is, so an unstamped event
+    // (timestamp 0) reads in AppKit as an event from boot.
+    func testStampNowMatchesAppKitUptime() throws {
+        let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: .zero, mouseButton: .left))
+        event.timestamp = 0
+        event.stampNow()
+        let appKitTime = try XCTUnwrap(NSEvent(cgEvent: event)).timestamp
+        XCTAssertEqual(appKitTime, ProcessInfo.processInfo.systemUptime, accuracy: 1.0)
+    }
 }

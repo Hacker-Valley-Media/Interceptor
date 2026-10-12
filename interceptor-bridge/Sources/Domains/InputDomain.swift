@@ -178,7 +178,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             // explicitly. Falling through here would be a bug.
             break
         case .postToPid(let pid):
-            event.postToPid(pid)
+            event.postToPidNow(pid)
         case .cghidEventTap:
             event.post(tap: .cghidEventTap)
         }
@@ -596,7 +596,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         for i in 0..<times {
             if let scrollEvent = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0) {
                 if let pid = pidFromAction {
-                    scrollEvent.postToPid(pid)
+                    scrollEvent.postToPidNow(pid)
                 } else {
                     scrollEvent.post(tap: .cghidEventTap)
                 }

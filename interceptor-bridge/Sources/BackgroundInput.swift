@@ -242,7 +242,7 @@ final class BackgroundInputSession: @unchecked Sendable {
                            phase: Int64 = 3, clickState: Int64 = 1, subtype: Int64 = 3) {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button) else { return }
         stamp(event, phase: phase, clickState: clickState, button: button == .right ? 1 : 0, subtype: subtype)
-        event.postToPid(pid)
+        event.postToPidNow(pid)
     }
 
     // MARK: Gestures
@@ -297,7 +297,7 @@ final class BackgroundInputSession: @unchecked Sendable {
                 event.location = point
                 cgsStampEvent(event, fields: [(40, Int64(pid)), (51, wid), (91, wid), (92, wid)],
                               windowLocation: CGPoint(x: point.x - window.bounds.minX, y: point.y - window.bounds.minY))
-                event.postToPid(pid)
+                event.postToPidNow(pid)
             }
             if i < times - 1, intervalMs > 0 { usleep(useconds_t(intervalMs * 1000)) }
         }
