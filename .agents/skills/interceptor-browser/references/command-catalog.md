@@ -45,13 +45,13 @@ interceptor find "privacy" --include-frames        # Frame IDs + framed refs suc
 interceptor act e7                                 # Click + read after
 interceptor act e9 "example user"                  # Type into field
 interceptor act e11 --keys "Enter"
-interceptor act e15 --trusted                      # HID-sourced click; page sees isTrusted: true. ESCALATION ONLY.
+interceptor act e15 --trusted                      # HID-sourced click; page sees isTrusted: true. ESCALATION ONLY. <!-- os:darwin -->
 interceptor act e20 --no-read
 # act takes the ref directly (act e5, never act click e5). A timeout or closed channel after dispatch
 # is reported as unverified delivery: read the target before retrying so you do not click twice.
 ```
 
-**After `act --trusted` reports success, read the page once and commit.** Do not re-execute the same click via a different surface (`interceptor macos click ...`, manual coordinates, etc.) to "verify" — the page's own state is the verification, and the trusted event is the same trusted event regardless of which surface posted it. Escalating to a different surface to redo a successful browser action is the most common way to blow the command budget. `interceptor macos` remains the right surface for native-app tasks; this rule only constrains within-task redo behavior on the browser.
+**After `act --trusted` reports success, read the page once and commit.** Do not re-execute the same click via a different surface (`interceptor macos click ...`, manual coordinates, etc.) to "verify" — the page's own state is the verification, and the trusted event is the same trusted event regardless of which surface posted it. Escalating to a different surface to redo a successful browser action is the most common way to blow the command budget. `interceptor macos` remains the right surface for native-app tasks; this rule only constrains within-task redo behavior on the browser. <!-- os:darwin -->
 
 Unqualified `find` returns two typed current-page sections: literal case-insensitive matches from the complete `document.body.innerText` snapshot, and semantic accessible-element matches. It does not navigate, scroll, focus, or highlight. `--limit` caps returned matches per category while preserving total counts. Low-level actions when `act` is not enough:
 
@@ -173,7 +173,8 @@ interceptor canvas diff 1
 interceptor canvas ocr 1                           # Native canvas text: aria/fallback + semantic model (no pixel OCR)
 ```
 
-`canvas ocr` returns the canvas's *native* accessible text (aria-label / aria-labelledby / fallback subtree / figcaption) plus the page's semantic textbox model — no pixel OCR. For a canvas-rendered editor prefer `scene text`; for genuine pixel-only text use `interceptor macos vision text` (native macOS Vision OCR).
+`canvas ocr` returns the canvas's *native* accessible text (aria-label / aria-labelledby / fallback subtree / figcaption) plus the page's semantic textbox model — no pixel OCR. For a canvas-rendered editor prefer `scene text`; for genuine pixel-only text use `interceptor macos vision text` (native macOS Vision OCR). <!-- os:darwin -->
+`canvas ocr` returns the canvas's *native* accessible text (aria-label / aria-labelledby / fallback subtree / figcaption) plus the page's semantic textbox model — no pixel OCR. For a canvas-rendered editor prefer `scene text`; for genuine pixel-only text use `interceptor desktop vision text` (the operating system's OCR). <!-- os:win32,linux -->
 
 Canvas indexes are DOM canvas indexes.
 
@@ -185,7 +186,8 @@ For Canva, Google Docs/Slides/Sheets. Run `scene profile` first.
 interceptor scene profile [--verbose]
 interceptor scene list [--type text]
 interceptor scene hit 400 300
-interceptor scene click <scene-ref> [--trusted]   # --trusted posts OS-level input for isTrusted-gated canvases
+interceptor scene click <scene-ref> [--trusted]   # --trusted posts OS-level input for isTrusted-gated canvases <!-- os:darwin -->
+interceptor scene click <scene-ref> <!-- os:win32,linux -->
 interceptor scene dblclick | select | cursor-to <scene-ref>
 interceptor scene selected
 interceptor scene text <scene-ref> [--with-html]
@@ -287,12 +289,14 @@ export INTERCEPTOR_CONTEXT=<id>                     # Lane default when several 
 interceptor --context <id> read                     # Route command to a specific profile
 interceptor --context <id> open <url>
 interceptor --context <id> act e7 "value"
-interceptor --context safari read                   # Safari uses a stable context id
+interceptor --context safari read                   # Safari uses a stable context id <!-- os:darwin -->
 ```
 
-Chrome/Brave profiles auto-generate stable UUIDs on first run (stored in `chrome.storage.local`); Safari registers the fixed id `safari`. `contexts` lists all currently connected IDs. Without `--context`, commands auto-route only when exactly one context is connected; zero or multiple connected contexts fail fast and require `--context <id>`.
+Chrome/Brave profiles auto-generate stable UUIDs on first run (stored in `chrome.storage.local`); Safari registers the fixed id `safari`. `contexts` lists all currently connected IDs. Without `--context`, commands auto-route only when exactly one context is connected; zero or multiple connected contexts fail fast and require `--context <id>`. <!-- os:darwin -->
+Chrome/Brave profiles auto-generate stable UUIDs on first run (stored in `chrome.storage.local`). `contexts` lists all currently connected IDs. Without `--context`, commands auto-route only when exactly one context is connected; zero or multiple connected contexts fail fast and require `--context <id>`. <!-- os:win32,linux -->
 
-Primary use cases: multiple Chrome profiles logged in to different accounts, or Chrome/Brave and Safari connected to the same daemon simultaneously.
+Primary use cases: multiple Chrome profiles logged in to different accounts, or Chrome/Brave and Safari connected to the same daemon simultaneously. <!-- os:darwin -->
+Primary use cases: multiple Chrome profiles logged in to different accounts, or Chrome and Brave connected to the same daemon simultaneously. <!-- os:win32,linux -->
 
 ## Recently closed tabs
 

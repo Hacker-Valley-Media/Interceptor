@@ -457,10 +457,9 @@ run ditto "$REPO_ROOT/extension/dist-mv2" "$STAGING_DIR/extension/$DEST_EXTENSIO
 # (~/.claude/skills, ~/.agents/skills, etc.). Every pkg gets the top-level
 # router skill, the browser-surface skill, and the deep-research methodology
 # skill; Full pkg also includes the macOS-surface skill.
+# scripts/gen-skills.ts writes the Mac's copy: the sources also hold Windows and Linux lines.
 run mkdir -p "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/skills"
-run ditto "$REPO_ROOT/.agents/skills/interceptor" "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/skills/interceptor"
-run ditto "$REPO_ROOT/.agents/skills/interceptor-browser" "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/skills/interceptor-browser"
-run ditto "$REPO_ROOT/.agents/skills/interceptor-research" "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/skills/interceptor-research"
+run bun "$REPO_ROOT/scripts/gen-skills.ts" darwin "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR/skills" interceptor interceptor-browser interceptor-research
 
 # Bridge components only when building full mode. The Full daemon component
 # additionally carries the LaunchAgent plist + the interceptor-macos skill
@@ -479,10 +478,7 @@ if [[ "$BUILD_FULL" == "1" ]]; then
   run ditto "$REPO_ROOT/scripts/release/com.interceptor.bridge.plist" \
     "$STAGING_DIR/daemon-full/Library/LaunchAgents/com.interceptor.bridge.plist"
   run chmod 644 "$STAGING_DIR/daemon-full/Library/LaunchAgents/com.interceptor.bridge.plist"
-  run ditto "$REPO_ROOT/.agents/skills/interceptor-macos" \
-    "$STAGING_DIR/daemon-full/$DEST_SUPPORT_DIR/skills/interceptor-macos"
-  run ditto "$REPO_ROOT/.agents/skills/interceptor-ios" \
-    "$STAGING_DIR/daemon-full/$DEST_SUPPORT_DIR/skills/interceptor-ios"
+  run bun "$REPO_ROOT/scripts/gen-skills.ts" darwin "$STAGING_DIR/daemon-full/$DEST_SUPPORT_DIR/skills" interceptor-macos interceptor-ios
 
   if [[ "$INCLUDE_AGENT_DYLIBS" == "1" ]]; then
     # Runtime Agent surface (research profile): ship the agent dylib(s) at

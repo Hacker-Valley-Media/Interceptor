@@ -230,6 +230,7 @@ vs floor, distinct domains, claims still needing corroboration, saturation, and 
 
 - Pulling a single value off one known page → use `interceptor-browser`'s
   `workflows/read-and-extract.md` (3-command budget). This skill is for breadth.
-- Native apps / OS dialogs / browser chrome → `interceptor-macos`.
+- Native apps / OS dialogs / browser chrome → `interceptor-macos`. <!-- os:darwin -->
+- Native apps / OS dialogs / browser chrome → `interceptor-desktop`. <!-- os:win32,linux -->
 - Logging in, submitting forms, or anything beyond public pages without the
   user's explicit authorization → out of scope.

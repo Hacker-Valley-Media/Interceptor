@@ -87,10 +87,11 @@ Backed by `FSEvents`. Use when an agent needs to react to file system changes (d
 ## Notifications
 
 ```bash
-interceptor macos notifications tail             # Live notification stream from Notification Center
+interceptor macos notifications tail --name com.example.changed # Observe this exact distributed notification name
+interceptor macos notifications untail --name com.example.changed # Stop this named subscription
 ```
 
-Reads delivered notifications with title, body, app, and timestamp. Use it to react to alerts, calendar reminders, and long-running task completions.
+`tail` observes exact DistributedNotificationCenter names and `log` returns their name, object string, and timestamp. These are application broadcasts, not other apps' visible alerts. Unfiltered `tail` returns an explicit refusal because it captured no events on the qualified macOS 27 host. Use `delivered` to read the bridge app's own posted user notifications.
 
 ## Clipboard (extended)
 

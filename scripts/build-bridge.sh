@@ -47,6 +47,9 @@ if [[ "${INTERCEPTOR_ENABLE_PLATFORM_TARGETS:-0}" == "1" ]]; then
 else
   echo "==> Native platform target support: disabled (public build)"
 fi
+swift package resolve
+VM_PATCH_BUN="${INTERCEPTOR_BUN_BIN:-bun}"
+"$VM_PATCH_BUN" "$SCRIPT_DIR/patch-containerization-vm.ts"
 swift build -c release "${SWIFT_FLAGS[@]}" 2>&1
 
 BINARY="$BRIDGE_DIR/.build/release/interceptor-bridge"

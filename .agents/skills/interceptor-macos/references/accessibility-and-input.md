@@ -55,7 +55,7 @@ interceptor macos open "Finder"                  # Background open + tree + wind
 interceptor macos read                           # Tree + frontmost app info
 interceptor macos act e5                         # Click + wait + updated tree
 interceptor macos act e3 "hello"                 # Type + wait + updated tree
-interceptor macos inspect                        # Tree + apps + frontmost info
+interceptor macos inspect                        # Tree + apps + target (the inspected app) + frontmost (the app the user is in)
 ```
 
 `act` mirrors the browser side: read, change, re-read in one call. Use the narrower commands (`click`, `type`, `keys`) when you specifically don't want a follow-up tree read.
