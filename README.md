@@ -26,13 +26,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Elastic%202.0-blue" alt="Elastic License 2.0"></a>
 </p>
 
-Interceptor connects an AI agent or script to your signed-in browser, native Mac apps, and a physical iPhone. It combines structured UI reads and actions with access to page traffic, rich editors, app internals, and device state. The agent can inspect what happened after an action and use that evidence for its next step.
+Interceptor connects an AI agent or script to your signed-in browser, native apps on macOS, Windows, and Linux, and a physical iPhone. It combines structured UI reads and actions with access to page traffic, rich editors, app internals, and device state. The agent can inspect what happened after an action and use that evidence for its next step.
 
 | Work you can build with Interceptor | Tools available |
 |---|---|
 | Research in your existing browser session | Page text, tables, links, browser search, multiple contexts, and a source-ledger research workflow. |
 | Edit a document, slide, or design and save the result | Rich-editor scenes, canvas input, file uploads, and direct capture of page-produced export bytes. |
-| Complete a native Mac task while you keep working | Accessibility controls, background input, Apple Events, and capture of covered windows. |
+| Complete a native desktop task while you keep working | Accessibility controls, background input, and capture of covered windows on macOS, Windows, and Linux; Apple Events on the Mac. |
 | Operate an app on a real iPhone and inspect its state | Element trees, taps, text entry, screenshots, process telemetry, and WebKit inspection. |
 | Turn a demonstrated workflow into reusable commands | Browser and Mac recording, event timelines, and replay-plan export. |
 
@@ -56,9 +56,11 @@ Download an installer from [Releases](https://github.com/Hacker-Valley-Media/Int
 | macOS: `Interceptor-Full-<version>.pkg` | Browser package plus the native Mac bridge and iPhone tooling. The bridge requires macOS 15+. |
 | macOS: `Interceptor-Safari-<version>.pkg` | Safari extension add-on, installed after either core package. |
 | Windows 11 24H2+: `Interceptor-Browser-<version>-windows-{x64,arm64}.exe` | Browser automation. [Windows installation guide](docs/windows-install.md). |
+| Windows 11 24H2+: `Interceptor-Full-<version>-windows-{x64,arm64}.exe` | Browser automation plus native app control with `interceptor desktop`. [Desktop guide](docs/desktop-bridge.md). |
 | Linux: `Interceptor-Browser-<version>-linux-{x64,arm64}.tar.gz` | Browser automation and install scripts. |
+| Linux: `Interceptor-Full-<version>-linux-{x64,arm64}.tar.gz` | Browser automation plus native app control with `interceptor desktop`, with a signed release manifest. |
 
-The macOS release binaries target Apple silicon. Windows and Linux support browser automation; native desktop control and iPhone setup require a Mac.
+The macOS release binaries target Apple silicon. On Windows and Linux, the Full packages add native app control through `interceptor desktop`; run `interceptor desktop capabilities` to see what works on that computer. iPhone setup requires a Mac.
 
 ### macOS installation
 
@@ -82,6 +84,8 @@ bash scripts/install.sh --browser-only --brave
 ```
 
 Follow the installer's extension-loading instructions. The archive includes compiled binaries, so a separate Bun installation is not needed for this release path.
+
+For native app control on Linux, download the Full archive with `SHA256SUMS` and `SHA256SUMS.cms`, verify them with `bash scripts/verify-release-manifest.sh <folder>`, then run `bash scripts/install.sh --full` from your graphical session. On Windows, run the Full installer instead of the Browser one. The [desktop guide](docs/desktop-bridge.md) lists what each OS supports and the optional Linux packages that light up OCR, face detection, and personal data.
 
 ### Your first browser task
 
@@ -248,7 +252,7 @@ interceptor diagnose              # Runtime and extension diagnostics
 
 ### Updates and troubleshooting
 
-On a Full Mac installation, `interceptor update` checks for an update and `interceptor update status` reports progress. The Windows/Linux Full source now checks the stable release feed for a newer package matching the native provider architecture; current build and installed qualification remain open. Release metadata does not establish package signatures. Verify the downloaded Windows installer or Linux signed archive before installation. Browser-only users can run a newer installer; `interceptor upgrade --full` adds Mac native capabilities.
+On a Full Mac installation, `interceptor update` checks for an update and `interceptor update status` reports progress. On Windows and Linux Full, `interceptor update` checks the stable release feed for a newer package for your architecture; download it, verify it (the Windows installer is Authenticode-signed, the Linux archives come with a signed manifest), and install it. Browser-only users can run a newer installer; `interceptor upgrade --full` adds Mac native capabilities.
 
 If no browser context connects, check that both the runtime and extension are installed and enabled. `interceptor diagnose` distinguishes store and unpacked versions. `interceptor reload --context <id>` reloads an unpacked extension; a store copy remains subject to store publication. For missing native permissions, use `interceptor macos trust --walkthrough`.
 
