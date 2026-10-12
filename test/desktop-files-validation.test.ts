@@ -11,6 +11,8 @@ test('file service trust boundary preserves zero limits and refuses misplaced se
   const open={type:'desktop_files',sub:'open',pid:123,limit:1}
   const data={files:['/tmp/owned'],count:1,partial:true,scope:process.platform==='darwin'?'current-user':'current-user-login',processesInspected:1,handlesInspected:2,skippedProcesses:0,reason:'bounded descriptor inventory'}
   expect(desktopFilesActionError(open)).toBeUndefined();expect(desktopFilesResultError(open,data)).toBeUndefined()
+  // A busy login has more processes than one inventory inspects; the rest are reported as skipped.
+  expect(desktopFilesResultError({type:'desktop_files',sub:'open',limit:5},{...data,processesInspected:512,skippedProcesses:900})).toBeUndefined()
   for(const patch of [{count:2},{count:1.5},{files:['relative']},{files:['/tmp/a','/tmp/a'],count:2},{processesInspected:2},{handlesInspected:16385},{skippedProcesses:-1},{partial:true,reason:''},{partial:false},{scope:'invented'},{unexpected:true}])expect(desktopFilesResultError(open,{...data,...patch})).toBeString()
   expect(desktopFilesResultError(open,{watching:'/tmp/owned',eventPath:'/tmp/events'})).toBeString()
   expect(desktopFilesResultError({type:'desktop_files',sub:'recent',limit:0},[{path:'/tmp/a',timestamp:'2026-10-05T12:00:00Z',event:'change'}])).toBeString()

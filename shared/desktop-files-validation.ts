@@ -39,7 +39,7 @@ export function desktopFilesResultError(action:Record<string,unknown>,data:unkno
     const r=data as DesktopFilesOpenData
     if(r.scope!==(process.platform==='darwin'?'current-user':'current-user-login'))return 'open file inventory scope differs from the host boundary'
     if(!Number.isSafeInteger(r.count)||r.count!==r.files.length||r.count>Number(action.limit??DESKTOP_FILES_MAX_OPEN)||r.files.some(f=>!path(f))||new Set(r.files).size!==r.count)return 'open file inventory paths/count exceed their bounds'
-    if(!Number.isSafeInteger(r.processesInspected)||r.processesInspected<0||r.processesInspected>DESKTOP_FILES_MAX_PROCESSES||!Number.isSafeInteger(r.handlesInspected)||r.handlesInspected<0||r.handlesInspected>DESKTOP_FILES_MAX_HANDLES||!Number.isSafeInteger(r.skippedProcesses)||r.skippedProcesses<0||r.skippedProcesses>DESKTOP_FILES_MAX_PROCESSES)return 'open file inventory coverage counts exceed their bounds'
+    if(!Number.isSafeInteger(r.processesInspected)||r.processesInspected<0||r.processesInspected>DESKTOP_FILES_MAX_PROCESSES||!Number.isSafeInteger(r.handlesInspected)||r.handlesInspected<0||r.handlesInspected>DESKTOP_FILES_MAX_HANDLES||!Number.isSafeInteger(r.skippedProcesses)||r.skippedProcesses<0)return 'open file inventory coverage counts exceed their bounds'
     if(action.pid!==undefined&&r.processesInspected>1)return 'exact-PID inventory inspected more than its target'
     if(r.partial&&(!r.reason||Buffer.byteLength(r.reason)>4096)||!r.partial&&r.reason!==undefined)return 'partial file inventory must report a bounded reason'
   }
