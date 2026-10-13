@@ -252,7 +252,7 @@ interceptor diagnose              # Runtime and extension diagnostics
 
 ### Updates and troubleshooting
 
-On a Full Mac installation, `interceptor update` checks for an update and `interceptor update status` reports progress. On Windows and Linux Full, `interceptor update` checks the stable release feed for a newer package for your architecture; download it, verify it (the Windows installer is Authenticode-signed, the Linux archives come with a signed manifest), and install it. Browser-only users can run a newer installer; `interceptor upgrade --full` adds Mac native capabilities.
+On a Full Mac installation, `interceptor update` checks for an update and `interceptor update status` reports progress. Windows and Linux Full installs update themselves, the way Sparkle updates a Mac. The native provider checks the signed feed on `updates.hackervalley.media` every 15 minutes, verifies the installer (the signed SHA-256 and length, plus the Authenticode signature on Windows), and installs it silently once Interceptor has been idle for 10 minutes. `interceptor update status` shows what it found and the last install; `interceptor update install` installs a newer release now. Set `INTERCEPTOR_AUTO_UPDATE=off` in the provider's login environment to turn it off. Browser-only users can run a newer installer; `interceptor upgrade --full` adds Mac native capabilities.
 
 If no browser context connects, check that both the runtime and extension are installed and enabled. `interceptor diagnose` distinguishes store and unpacked versions. `interceptor reload --context <id>` reloads an unpacked extension; a store copy remains subject to store publication. For missing native permissions, use `interceptor macos trust --walkthrough`.
 

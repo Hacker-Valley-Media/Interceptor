@@ -39,6 +39,8 @@ interceptor desktop capabilities   # one row per operation; effective:false rows
 | evolution-data-server | `contacts`, `calendar`, `reminders` |
 | a Freedesktop notification server | `notifications` |
 
+**Automatic updates.** Full installs update themselves. The provider checks the signed feed on `updates.hackervalley.media` (`/windows/latest.json`, `/linux/latest.json`) 2 minutes after login and every 15 minutes, downloads a newer Full installer, checks the SHA-256 and length the feed signs (and on Windows the Authenticode signature), and installs it silently once Interceptor has gone 10 minutes without a request. `interceptor update status` reports the last check and install, `interceptor update install` installs now, and `INTERCEPTOR_AUTO_UPDATE=off` in the provider's login environment turns it off. Downloads and logs live in `%LOCALAPPDATA%\Interceptor\Updates` or `~/.cache/interceptor/updates`.
+
 **Agent skills.** Both installs carry the agent skills, including `interceptor-desktop` for native apps: in `skills` under the Windows install folder, and in `~/.local/share/interceptor/skills` on Linux. Each OS gets its own copy, built by `scripts/gen-skills.ts`: the Windows copy names no Linux or Mac commands, and the Linux copy no Windows or Mac ones. The commands an OS lacks come from `shared/desktop-support.json`, which also trims `interceptor desktop --help` and the MCP desktop menu there. The skills are not linked automatically. `interceptor skills adopt` links them into Claude Code, Codex and other detected agents, and uninstall removes those links.
 
 ## What works on all three

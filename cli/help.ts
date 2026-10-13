@@ -12,14 +12,19 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "  interceptor update             Check now; reports selected release, eligibility or observed error",
     "  interceptor update status      Read the retained check lifecycle, feed and schedule",
+    "  interceptor update install     Windows/Linux Full: download, verify and install a newer release now",
     "",
     "Notes:",
     "  - macOS: requires the full install (the updater lives in the bridge app); browser-only",
     "    installs get 'interceptor upgrade --full' guidance instead. A found update keeps",
     "    Sparkle's visible prompt; a slow check returns 'checking' and status records its result.",
-    "  - Full Windows/Linux: check the stable release feed for a matching newer Full package.",
-    "    Checks do not download or install; metadata does not establish signatures.",
-    "    Verify Windows Authenticode or Linux CMS/checksums before running the installer.",
+    "  - Windows/Linux Full update themselves: the provider checks the signed feed on",
+    "    updates.hackervalley.media 2 minutes after login and every 15 minutes, verifies the",
+    "    installer (signed SHA-256 and length; Authenticode on Windows), and installs it silently",
+    "    once Interceptor has been idle for 10 minutes. A failed version is not retried by itself.",
+    "  - update install skips only the idle wait; it returns at once, so follow it with update status.",
+    "  - INTERCEPTOR_AUTO_UPDATE=off in the provider's login environment stops background updates.",
+    "  - Browser-only Windows/Linux installs update by running a newer installer.",
   ].join("\n"),
   daemon: [
     "interceptor daemon — local daemon lifecycle control",
@@ -207,7 +212,7 @@ const MAP_UPGRADE = `macOS + iPhone control are NOT enabled on this browser-only
 
 const MAP_FOOTER = `LOCAL (no browser needed):
   status · init · daemon stop · skills (adopt packs into Claude Code / Codex / ~/.agents) · manifest · research · upgrade · help
-  update: check Interceptor releases; 'update status' shows retained state and schedule
+  update: check Interceptor releases (Windows/Linux Full install them on their own); 'update status' shows retained state and schedule
 
 GLOBAL FLAGS (any command, any position — flag order never changes meaning):
   --json  --context <id>  --tab <id>  --group <label>  --frame <id>  --all-surfaces

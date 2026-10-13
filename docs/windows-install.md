@@ -1,6 +1,6 @@
 # Install Interceptor on Windows
 
-Interceptor for Windows is browser-only. It supports Windows 11 24H2 or newer on x64 and ARM64, installs for the current user without elevation, and supports one active interactive user per machine.
+Interceptor for Windows comes in two signed installers: Browser-only (`Interceptor-Browser-X.Y.Z-windows-<arch>.exe`) and Full (`Interceptor-Full-X.Y.Z-windows-<arch>.exe`), which adds the native desktop provider for `interceptor desktop` and automatic updates. This guide covers both; the steps below use the Browser-only name, and the Full installer runs the same way. Both support Windows 11 24H2 or newer on x64 and ARM64, install for the current user without elevation, and support one active interactive user per machine.
 
 ## Install
 
@@ -39,7 +39,7 @@ Use `/SILENT` instead of `/VERYSILENT` for progress UI. Silent setup opens no br
 
 ## Repair, update, and downgrade
 
-Run the same signed version to repair, or a newer architecture-matched installer to update. Downgrades are refused. Windows ARM64 users should use the ARM64 package even if an older x64 build was previously installed under emulation.
+Run the same signed version to repair, or a newer architecture-matched installer to update. Downgrades are refused. A Full install updates itself: its provider checks `https://updates.hackervalley.media/windows/latest.json` every 15 minutes, verifies the newer installer (signed digest and Authenticode signature), and runs it silently once Interceptor has been idle for 10 minutes. `interceptor update status` shows the result and `interceptor update install` installs now; `setx INTERCEPTOR_AUTO_UPDATE off`, then sign out and back in, turns it off. The update folder is `%LOCALAPPDATA%\Interceptor\Updates`, and uninstall removes it. Windows ARM64 users should use the ARM64 package even if an older x64 build was previously installed under emulation.
 
 ## Uninstall
 

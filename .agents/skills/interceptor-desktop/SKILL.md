@@ -120,6 +120,8 @@ interceptor desktop cdp detach --context <contextId>
 The `INTERCEPTOR_*` variables a `reason` names are read by the provider when the user signs in. Setting them in a terminal does not reach it. Set them as user environment variables (`setx NAME value`), then sign out and back in. <!-- os:win32 -->
 The `INTERCEPTOR_*` variables a `reason` names are read by the provider when the user logs in. Setting them in a terminal does not reach it. Put them in `~/.config/environment.d/interceptor.conf`, one `NAME=value` per line, then log out and back in. <!-- os:linux -->
 
+The Full install updates itself: the provider installs a newer release once Interceptor has gone 10 minutes without a request. `interceptor update status` shows the last check and install, and `interceptor update install` installs a newer release now (it returns at once; follow it with `update status`). `INTERCEPTOR_AUTO_UPDATE=off`, set the same way, turns the background updater off.
+
 ## Recovery Reflexes
 
 | You see | Do this |
@@ -133,6 +135,7 @@ The `INTERCEPTOR_*` variables a `reason` names are read by the provider when the
 | `not_installed`, `present: false` | The row names the missing package. Report it. |
 | An AI command refuses and reports download progress | `interceptor desktop ai status`. Retry when it prints `available: true`. |
 | `no_interactive_session` | You are outside the desktop session. |
+| A command fails with the provider unreachable, then works again a minute later | An automatic update may have just installed. Run the command again; `interceptor update status` shows `lastInstallVersion`. |
 
 ## When To Switch Surfaces
 

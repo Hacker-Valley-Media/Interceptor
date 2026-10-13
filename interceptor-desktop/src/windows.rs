@@ -326,6 +326,8 @@ pub fn run() -> std::io::Result<()> {
             pipes.push(OwnedHandle(pipe));
         }
         LocalFree(Some(HLOCAL(descriptor.0)));
+        // The first pipe instance is ours; only the installed Full provider starts updating.
+        crate::update::start();
         let workers: Vec<_> = pipes.into_iter().map(|pipe| {
             let handle = pipe.0.0 as usize;
             std::mem::forget(pipe);

@@ -21,6 +21,8 @@ pub(crate) const LANGUAGES:[&str;19]=["ar","de","en","es","fr","hi","id","it","j
 
 enum Download{Idle,Running(u64),Failed(String)}
 static DOWNLOAD:Mutex<Download>=Mutex::new(Download::Idle);
+/// The model download is running (the updater does not install over it).
+pub(crate) fn downloading()->bool{DOWNLOAD.try_lock().map_or(true,|d|matches!(*d,Download::Running(_)))}
 struct Server{child:Child,url:Url,key:String}
 static SERVER:Mutex<Option<Server>>=Mutex::new(None);
 

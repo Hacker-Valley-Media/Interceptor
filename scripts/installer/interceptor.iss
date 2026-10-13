@@ -139,6 +139,8 @@ Type: files; Name: "{localappdata}\Interceptor\Models\gemma-4-E2B-it-Q4_0.gguf"
 Type: files; Name: "{localappdata}\Interceptor\Models\gemma-4-E2B-it-Q4_0.gguf.sha256"
 Type: files; Name: "{localappdata}\Interceptor\Models\gemma-4-E2B-it-Q4_0.part"
 Type: dirifempty; Name: "{localappdata}\Interceptor\Models"
+; The provider's update folder: downloaded installers, the update watcher copy, logs and state (update.rs).
+Type: filesandordirs; Name: "{localappdata}\Interceptor\Updates"
 Type: dirifempty; Name: "{localappdata}\Interceptor"
 ; recursesubdirs leaves the extension's (empty) subdir tree behind on uninstall;
 ; remove the whole staged extension folder explicitly. filesandordirs also clears
