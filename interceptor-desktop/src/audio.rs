@@ -8,8 +8,6 @@ use std::{fs::File, io::{self, Seek, SeekFrom, Write}, process::{ChildStdin, Chi
 // ponytail: one input/output pair matches the Mac API; use separate session
 // IDs only if the public API gains simultaneous captures on one channel.
 static SESSIONS:Mutex<[Option<AudioSession>;2]>=Mutex::new([None,None]);
-/// A capture is running (the updater does not install over it).
-pub(crate) fn active()->bool{SESSIONS.try_lock().map_or(true,|s|s.iter().any(Option::is_some))}
 const MAX_SAMPLES:usize=1_048_576;
 const MAX_SAVED_BYTES:u64=512*1024*1024;
 

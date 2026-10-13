@@ -10,17 +10,16 @@ test('update selectors refuse fields and preserve read/install boundaries',()=>{
     expect(parse()).toEqual({type:'desktop_update',sub:'status'})
     expect(parse('check').sub).toBe('check')
     for(const args of [['--app','check'],['check','extra'],['install','now'],['download']])expect(()=>parse(...args)).toThrow()
-    // Windows and Linux Full install releases themselves; macOS keeps Sparkle's prompt.
-    if(process.platform==='darwin')expect(()=>parse('install')).toThrow(/Sparkle/)
-    else expect(parse('install').sub).toBe('install')
+    // Like Sparkle on the Mac, every OS installs from the update window: no install verb anywhere.
+    expect(()=>parse('install')).toThrow(/Install Update in its update window/)
   }
   for(const surface of ['local','macos','desktop'] as const){for(const args of [[],['check'],['status']])expect(classify(surface,'update',args).tier).toBe('read');expect(classify(surface,'update',['install']).tier).toBe('destructive')}
   expect(desktopUpdateActionError({type:'desktop_update',sub:'status',url:'https://other.invalid'})).toBeDefined()
-  expect(desktopUpdateActionError({type:'desktop_update',sub:'install'})).toBeUndefined()
+  expect(desktopUpdateActionError({type:'desktop_update',sub:'install'})).toBeDefined()
   for(const type of ['macos_update','desktop_update'])expect(pickTimeoutForAction({type,sub:'check'})).toBeGreaterThanOrEqual(20000)
 })
 test('update metadata cannot masquerade as artifact verification or a finished active session',()=>{
-  const status={phase:'idle',outcome:'none',concluded:true,feed:'https://updates.hackervalley.media/windows/latest.json',automaticChecks:true,checkInterval:900,canCheckForUpdates:true,sessionInProgress:false,currentVersion:'2.1.0'}
+  const status={phase:'idle',outcome:'none',concluded:true,feed:'https://updates.hackervalley.media/windows/latest.json',automaticChecks:true,checkInterval:86400,canCheckForUpdates:true,sessionInProgress:false,currentVersion:'2.1.0'}
   const action={type:'desktop_update',sub:'status'}
   expect(desktopUpdateResultError(action,status)).toBeUndefined()
   for(const changes of [{sessionInProgress:true},{checkInterval:-1},{lastCheck:'not a timestamp'},{nextCheckAt:'soon'},{outcome:'error'},{outcome:'update_available'},{artifactURL:'https://unsafe.invalid/setup.exe',artifactName:'setup.exe',signatureVerified:false},{message:'bad\0text'},{signatureVerified:true},{lastInstallOutcome:'maybe'}])expect(desktopUpdateResultError(action,{...status,...changes})).toBeDefined()
@@ -30,7 +29,9 @@ test('update metadata cannot masquerade as artifact verification or a finished a
   expect(desktopUpdateResultError(action,available)).toBeUndefined()
   // A check reads signed metadata only; verified describes downloaded bytes.
   expect(desktopUpdateResultError(action,{...available,signatureVerified:true})).toBeDefined()
-  for(const phase of ['downloaded','deferred','installing'])expect(desktopUpdateResultError(action,{...available,phase,outcome:phase==='downloaded'?'update_available':phase,sessionInProgress:true,concluded:false,signatureVerified:true})).toBeUndefined()
+  for(const phase of ['downloaded','ready_to_install','installing'])expect(desktopUpdateResultError(action,{...available,phase,outcome:phase==='installing'?'installing':'install_chosen',sessionInProgress:true,concluded:false,signatureVerified:true})).toBeUndefined()
+  // Remind Me Later after the download: verified bytes stay on disk, but the state no longer claims them.
+  expect(desktopUpdateResultError(action,{...available,phase:'deferred',outcome:'deferred',signatureVerified:true})).toBeDefined()
   for(const changes of [{selectedVersion:'2.2.1'},{artifactURL:url+'?redirect=other'},{artifactName:'Interceptor-Full-2.2.0-windows-arm64.tar.gz'},{artifactURL:'http://updates.hackervalley.media/windows/Interceptor-Full-2.2.0-windows-arm64.exe'},{artifactURL:'https://updates.hackervalley.media/windows/other.exe'}])expect(desktopUpdateResultError(action,{...available,...changes})).toBeDefined()
   // A lab feed on a private address may use plain HTTP; the provider still checks the signature and digest.
   expect(desktopUpdateResultError(action,{...available,artifactURL:'http://192.168.64.1:8099/windows/Interceptor-Full-2.2.0-windows-arm64.exe'})).toBeUndefined()

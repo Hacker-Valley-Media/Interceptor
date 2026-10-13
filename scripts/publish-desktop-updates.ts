@@ -15,7 +15,9 @@ export const HOST = "https://updates.hackervalley.media"
 export const ARCHES = ["arm64", "x64"] as const
 export type Os = "windows" | "linux"
 export type Artifact = { file: string; url: string; sha256: string; length: number }
-export type Payload = { schema: "interceptor.update.latest/1"; os: Os; version: string; issuedAt: string; notes?: string; artifacts: Record<string, Artifact> }
+export type Payload = { schema: "interceptor.update.latest/1"; os: Os; version: string; issuedAt: string; notes?: string; notesSha256?: string; artifacts: Record<string, Artifact> }
+/** The release notes page the update window shows; the feed pins its digest, as Sparkle signs releaseNotesLink. */
+export type Notes = { url: string; sha256: string }
 
 const root = resolve(import.meta.dir, "..")
 export const fileName = (version: string, os: Os, arch: string) => `Interceptor-Full-${version}-${os}-${arch}.${os === "windows" ? "exe" : "tar.gz"}`
@@ -29,7 +31,7 @@ export function publicKey(): string {
   return match[1]
 }
 /// `base` and `arches` exist for a lab feed (a provider with INTERCEPTOR_UPDATE_FEED); releases use the defaults.
-export function buildPayload(os: Os, version: string, assets: Record<string, Buffer>, issuedAt: string, notes?: string, base = HOST, arches: readonly string[] = ARCHES): Payload {
+export function buildPayload(os: Os, version: string, assets: Record<string, Buffer>, issuedAt: string, notes?: Notes, base = HOST, arches: readonly string[] = ARCHES): Payload {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`version ${version} is not X.Y.Z`)
   const artifacts: Record<string, Artifact> = {}
   for (const arch of arches) {
@@ -40,7 +42,7 @@ export function buildPayload(os: Os, version: string, assets: Record<string, Buf
     const file = fileName(version, os, arch)
     artifacts[arch] = { file, url: `${base}/${os}/${file}`, sha256: createHash("sha256").update(bytes).digest("hex"), length: bytes.length }
   }
-  return { schema: "interceptor.update.latest/1", os, version, issuedAt, ...(notes ? { notes } : {}), artifacts }
+  return { schema: "interceptor.update.latest/1", os, version, issuedAt, ...(notes ? { notes: notes.url, notesSha256: notes.sha256 } : {}), artifacts }
 }
 export function envelope(payload: Buffer, signature: Buffer): string {
   return JSON.stringify({ schema: "interceptor.update.envelope/1", payload: payload.toString("base64"), signature: signature.toString("base64") }) + "\n"
@@ -97,6 +99,10 @@ async function verifyLive(version: string): Promise<void> {
     if (!/no-store/.test(response.headers.get("cache-control") ?? "")) throw new Error(`${os}/latest.json is cacheable (${response.headers.get("cache-control")})`)
     const payload = verifyEnvelope(await response.text(), key)
     if (payload.version !== version || payload.os !== os) throw new Error(`${os}/latest.json offers ${payload.os} ${payload.version}, not ${version}`)
+    if (!payload.notes || !payload.notesSha256) throw new Error(`${os}/latest.json names no release notes for the update window`)
+    const notes = Buffer.from(await (await fetch(payload.notes)).arrayBuffer())
+    if (createHash("sha256").update(notes).digest("hex") !== payload.notesSha256) throw new Error(`${payload.notes} differs from the signed notesSha256`)
+    console.log(`verified ${os} release notes: ${payload.notes}`)
     for (const arch of ARCHES) {
       const artifact = payload.artifacts[arch]
       const download = await fetch(artifact.url, { redirect: "follow" })
@@ -120,7 +126,8 @@ if (import.meta.main) {
   checkLinuxManifest(assets, version)
   for (const arch of ARCHES) checkWindowsSigner(join(assets, fileName(version, "windows", arch)))
   const key = publicKey(), issuedAt = new Date().toISOString().replace(/\.\d+Z$/, "Z")
-  const notes = existsSync(join(publicDir, `release-notes-${version}.html`)) ? `${HOST}/release-notes-${version}.html` : undefined
+  const notesFile = join(publicDir, `release-notes-${version}.html`)
+  const notes = existsSync(notesFile) ? { url: `${HOST}/release-notes-${version}.html`, sha256: createHash("sha256").update(readFileSync(notesFile)).digest("hex") } : undefined
   for (const os of ["windows", "linux"] as Os[]) {
     const target = join(publicDir, os, "latest.json")
     if (existsSync(target)) {

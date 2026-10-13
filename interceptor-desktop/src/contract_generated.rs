@@ -976,8 +976,6 @@ pub enum DesktopUpdateVerb {
     V0,
     #[serde(rename = "status")]
     V1,
-    #[serde(rename = "install")]
-    V2,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

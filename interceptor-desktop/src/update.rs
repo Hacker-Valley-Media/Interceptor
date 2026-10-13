@@ -1,24 +1,28 @@
-//! Automatic updates for the Windows and Linux Full provider: the Sparkle of this host.
-//! The provider polls a feed on the update host that also serves Sparkle's appcast. Sparkle's
-//! Ed25519 key signs the feed, which names the Full installer and pins its SHA-256 and length;
-//! Windows also requires the installer's Authenticode signature. A verified installer runs from a
-//! detached copy of this binary once Interceptor has been idle, because the installer stops and
-//! replaces the running provider.
+//! Updates for the Windows and Linux Full provider, the way Sparkle updates the Mac bridge.
+//! Once a day (Sparkle's SUScheduledCheckInterval) the provider reads a feed on the update host that
+//! also serves Sparkle's appcast. Sparkle's Ed25519 key signs the feed, which names the Full installer
+//! and pins its SHA-256 and length. A newer release opens Interceptor's update window (update_ui.rs);
+//! nothing downloads or installs until the user clicks Install Update, and nothing installs until
+//! Install and Relaunch. Windows also requires the installer's Authenticode signature. The installer
+//! stops and replaces this provider, so a detached copy of this binary runs it (`--update-apply`).
 use crate::{contract_generated::*,failure,success};
 use base64::Engine;
 use serde_json::{json,Value};
 use sha2::{Digest,Sha256};
-use std::{io::{Read,Write},path::{Path,PathBuf},process::{Command,Stdio},sync::{Condvar,Mutex,atomic::{AtomicBool,AtomicU64,AtomicUsize,Ordering}},time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
+use std::{io::{Read,Write},path::{Path,PathBuf},process::{Command,Stdio},sync::{Condvar,Mutex,mpsc,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
 type Result<T>=std::result::Result<T,Value>;
 
 const HOST:&str="https://updates.hackervalley.media";
 /// Sparkle's SUPublicEDKey (scripts/build-bridge.sh): one key signs the appcast and these feeds.
 const FEED_KEY:&str="dnUnuHGCO4obHb44Khlf2TZQFUMmFGGpm2c6j+EqmdU=";
-const CHECK_INTERVAL:Duration=Duration::from_secs(900);
+/// SUScheduledCheckInterval in scripts/build-bridge.sh.
+const CHECK_INTERVAL:Duration=Duration::from_secs(86_400);
 const FIRST_CHECK:Duration=Duration::from_secs(120);
-const IDLE:Duration=Duration::from_secs(600);
+/// UpdateDomain.swift waits this long for Sparkle's answer to `interceptor update`.
+const CHECK_WAIT:Duration=Duration::from_secs(10);
 const INSTALL_DEADLINE:Duration=Duration::from_secs(1800);
 const MAX_FEED:u64=64*1024;
+const MAX_NOTES:u64=1<<20;
 const MAX_ARTIFACT:u64=1<<30;
 #[cfg(windows)]const OS:&str="windows";
 #[cfg(not(windows))]const OS:&str="linux";
@@ -27,13 +31,12 @@ const VERSION:&str=env!("CARGO_PKG_VERSION");
 
 static STATE:Mutex<Option<Value>>=Mutex::new(None);
 static WORK:Mutex<()>=Mutex::new(());
-struct Control{wake:bool,install:bool}
-static CONTROL:Mutex<Control>=Mutex::new(Control{wake:false,install:false});
+static WAKE:Mutex<bool>=Mutex::new(false);
 static SIGNAL:Condvar=Condvar::new();
 static WORKER:AtomicBool=AtomicBool::new(false);
+static SESSION:AtomicBool=AtomicBool::new(false);
 static STARTED_MS:AtomicU64=AtomicU64::new(0);
-static IN_FLIGHT:AtomicUsize=AtomicUsize::new(0);
-static LAST_REQUEST_MS:AtomicU64=AtomicU64::new(0);
+static CHECKS:AtomicU64=AtomicU64::new(0);
 
 fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).map_or(0,|d|d.as_millis() as u64)}
 fn timestamp()->String{time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_else(|_|"1970-01-01T00:00:00Z".to_owned())}
@@ -105,20 +108,25 @@ fn directory()->std::result::Result<PathBuf,String>{
     Ok(dir)
 }
 
+
 // --- status ---------------------------------------------------------------------------------
+fn rfc3339(ms:u64)->Option<String>{
+    time::OffsetDateTime::from_unix_timestamp_nanos(ms as i128*1_000_000).ok()?.format(&time::format_description::well_known::Rfc3339).ok()
+}
 fn initial()->Value{
     let (feed,_)=feed();let automatic=automatic();
     let mut state=json!({"phase":"idle","outcome":"none","concluded":true,"feed":feed,"automaticChecks":automatic.is_ok(),
-        "checkInterval":if automatic.is_ok(){CHECK_INTERVAL.as_secs()}else{0},"canCheckForUpdates":true,"sessionInProgress":false,"currentVersion":VERSION});
-    if let Err(reason)=automatic{state["message"]=json!(format!("Automatic updates are not running: {reason}."));}
+        "checkInterval":CHECK_INTERVAL.as_secs(),"canCheckForUpdates":true,"sessionInProgress":false,"currentVersion":VERSION});
+    if let Err(reason)=automatic{state["message"]=json!(format!("Scheduled update checks are not running: {reason}."));}
     state
 }
 fn snapshot()->Value{
     let mut state=STATE.lock().unwrap().clone().unwrap_or_else(initial);
     if installed().is_ok()&&let Ok(dir)=directory(){
-        let last=&read_state(&dir)["last"];
+        let saved=read_state(&dir);
+        if state.get("lastCheck").is_none()&&let Some(at)=saved["lastCheckMs"].as_u64().and_then(rfc3339){state["lastCheck"]=json!(at);}
         for(field,key)in[("lastInstallVersion","version"),("lastInstallOutcome","outcome"),("lastInstallAt","at")]{
-            if let Some(value)=last[key].as_str().filter(|v|!v.is_empty()){state[field]=json!(value);}
+            if let Some(value)=saved["last"][key].as_str().filter(|v|!v.is_empty()){state[field]=json!(value);}
         }
     }
     state
@@ -132,7 +140,16 @@ fn set(change:impl FnOnce(&mut Value)){
 fn phase(state:&mut Value,phase:&str,outcome:&str,active:bool){
     state["phase"]=json!(phase);state["outcome"]=json!(outcome);state["sessionInProgress"]=json!(active);state["concluded"]=json!(!active);
     // Verified describes downloaded bytes, which only these phases hold (shared/desktop-update-validation.ts).
-    if state["signatureVerified"]==true&&!matches!(phase,"downloaded"|"deferred"|"installing"){state["signatureVerified"]=json!(false);}
+    if state["signatureVerified"]==true&&!matches!(phase,"downloaded"|"ready_to_install"|"installing"){state["signatureVerified"]=json!(false);}
+}
+/// The user's answer in the update window, in SparkleUpdateState's vocabulary.
+fn choice(state:&mut Value,choice:&str,stage:&str){
+    state["userChoice"]=json!(choice);state["updateStage"]=json!(stage);
+    match choice{
+        "install"=>phase(state,if stage=="downloaded"{"ready_to_install"}else{"downloading"},"install_chosen",true),
+        "skip"=>phase(state,"idle","skipped",false),
+        _=>phase(state,"deferred","deferred",false),
+    }
 }
 fn fail(error:&Value){
     let message=error["error"].as_str().unwrap_or("update failed").to_owned();
@@ -170,9 +187,10 @@ fn fetch_feed(url:&str,lab:bool)->Result<Value>{
     verify_envelope(&bytes,&key)
 }
 #[derive(Clone,Debug,PartialEq)]
-struct Release{version:String,file:String,url:String,sha256:String,length:u64}
+struct Release{version:String,file:String,url:String,sha256:String,length:u64,notes:Option<(String,String)>}
 #[derive(Debug,PartialEq)]
-enum Decision{Current(String),Missing(String,String),Update(Release)}
+enum Decision{Current(String),Missing(String,String),Update(Release),Skipped(String)}
+fn sha256_hex(text:&str)->bool{text.len()==64&&text.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))}
 fn select(payload:&Value,os:&str,arch:&str,current:&str,lab:bool)->Result<Decision>{
     let refuse=|reason:&str|failure("provider_failed",format!("signed update feed refused: {reason}"));
     if payload["schema"]!="interceptor.update.latest/1"{return Err(refuse("unknown schema"));}
@@ -187,25 +205,56 @@ fn select(payload:&Value,os:&str,arch:&str,current:&str,lab:bool)->Result<Decisi
     if artifact["file"]!=file.as_str(){return Err(refuse("the artifact name does not match its version, OS and architecture"));}
     let url=artifact["url"].as_str().and_then(|u|url::Url::parse(u).ok()).filter(|u|allowed(u,lab)&&u.query().is_none()&&u.fragment().is_none()&&u.path().ends_with(&format!("/{file}")))
         .ok_or_else(||refuse("the artifact URL is not an https URL for that file"))?;
-    let sha256=artifact["sha256"].as_str().filter(|s|s.len()==64&&s.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))).ok_or_else(||refuse("the artifact digest is not lowercase SHA-256 hex"))?;
+    let sha256=artifact["sha256"].as_str().filter(|s|sha256_hex(s)).ok_or_else(||refuse("the artifact digest is not lowercase SHA-256 hex"))?;
     let length=artifact["length"].as_u64().filter(|n|*n>0&&*n<=MAX_ARTIFACT).ok_or_else(||refuse("the artifact length is outside 1 byte to 1 GiB"))?;
-    Ok(Decision::Update(Release{version:text.to_owned(),file,url:url.to_string(),sha256:sha256.to_owned(),length}))
+    // Release notes are signed the way Sparkle signs releaseNotesLink: the feed pins their SHA-256.
+    let notes=match(payload["notes"].as_str().and_then(|u|url::Url::parse(u).ok()).filter(|u|allowed(u,lab)),payload["notesSha256"].as_str().filter(|s|sha256_hex(s))){
+        (Some(url),Some(sha))=>Some((url.to_string(),sha.to_owned())),_=>None};
+    Ok(Decision::Update(Release{version:text.to_owned(),file,url:url.to_string(),sha256:sha256.to_owned(),length,notes}))
+}
+/// A version the user skipped in the update window is not offered again (Sparkle's skipped
+/// version); a newer one is.
+fn offered(decision:Decision,skipped:Option<&str>)->Decision{
+    match decision{Decision::Update(release) if skipped==Some(release.version.as_str())=>Decision::Skipped(release.version),other=>other}
+}
+fn skipped_version()->Option<String>{
+    installed().ok().and_then(|_|directory().ok()).and_then(|dir|read_state(&dir)["skippedVersion"].as_str().map(str::to_owned))
 }
 /// Check the feed and record what it offers this provider.
 fn check_now()->Result<Decision>{
     let (url,lab)=feed();
-    set(|s|{phase(s,"checking","checking",true);s["feed"]=json!(url);s["checkStartedAt"]=json!(timestamp());for key in["lastError","noUpdateReason","selectedVersion","selectedDisplayVersion","artifactName","artifactURL","signatureVerified","message"]{if let Some(o)=s.as_object_mut(){o.remove(key);}}});
-    let decision=fetch_feed(&url,lab).and_then(|payload|select(&payload,OS,ARCH,VERSION,lab));
-    let at=timestamp();
+    set(|s|{phase(s,"checking","checking",true);s["feed"]=json!(url);s["checkStartedAt"]=json!(timestamp());
+        for key in["lastError","noUpdateReason","selectedVersion","selectedDisplayVersion","artifactName","artifactURL","signatureVerified","message","userChoice","updateStage","latestFeedVersion"]{if let Some(o)=s.as_object_mut(){o.remove(key);}}});
+    let decision=fetch_feed(&url,lab).and_then(|payload|select(&payload,OS,ARCH,VERSION,lab)).map(|d|offered(d,skipped_version().as_deref()));
+    let now=now_ms();let at=rfc3339(now).unwrap_or_else(timestamp);
+    // Sparkle records the time of every check, scheduled or not; the next scheduled check counts from it.
+    if installed().is_ok()&&let Ok(dir)=directory(){let mut saved=read_state(&dir);saved["lastCheckMs"]=json!(now);let _=write_state(&dir,&saved);}
     match &decision{
-        Ok(Decision::Current(latest))=>set(|s|{phase(s,"idle","up_to_date",false);s["latestFeedVersion"]=json!(latest);s["noUpdateReason"]=json!("This is the newest release in the signed feed.");}),
+        Ok(Decision::Current(latest))=>set(|s|{phase(s,"idle","up_to_date",false);s["latestFeedVersion"]=json!(latest);
+            s["noUpdateReason"]=json!(if version(latest)==version(VERSION){"on_latest_version"}else{"on_newer_than_latest_version"});}),
         Ok(Decision::Missing(latest,reason))=>set(|s|{phase(s,"idle","no_eligible_update",false);s["latestFeedVersion"]=json!(latest);s["noUpdateReason"]=json!(reason);}),
+        Ok(Decision::Skipped(latest))=>set(|s|{phase(s,"idle","skipped",false);s["latestFeedVersion"]=json!(latest);s["noUpdateReason"]=json!("skipped_version");
+            s["message"]=json!(format!("Interceptor {latest} was skipped in the update window; a newer release will be offered."));}),
         Ok(Decision::Update(r))=>set(|s|{phase(s,"update_available","update_available",false);s["latestFeedVersion"]=json!(r.version);s["selectedVersion"]=json!(r.version);s["selectedDisplayVersion"]=json!(r.version);
-            s["artifactName"]=json!(r.file);s["artifactURL"]=json!(r.url);s["signatureVerified"]=json!(false);s["updateStage"]=json!("signed_feed");}),
+            s["artifactName"]=json!(r.file);s["artifactURL"]=json!(r.url);s["signatureVerified"]=json!(false);s["updateStage"]=json!("not_downloaded");}),
         Err(error)=>{fail(error);}
     }
     set(|s|{s["lastCheck"]=json!(at);if s["sessionInProgress"]!=true{s["cycleFinishedAt"]=json!(timestamp());}});
+    CHECKS.fetch_add(1,Ordering::SeqCst);
     decision
+}
+/// The cumulative release notes Sparkle shows: the signed page with the installed release and every
+/// older one hidden by the page's own `sparkle-installed-version` rule.
+fn release_notes(release:&Release,lab:bool)->Option<String>{
+    let (url,sha)=release.notes.as_ref()?;
+    let mut response=client(Duration::from_secs(15),lab,true).ok()?.get(url).send().ok()?;
+    if response.status()!=reqwest::StatusCode::OK{return None;}
+    let mut bytes=Vec::new();response.by_ref().take(MAX_NOTES+1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64>MAX_NOTES||hex(&Sha256::digest(&bytes))!=*sha{return None;}
+    Some(mark_installed(&String::from_utf8(bytes).ok()?,VERSION))
+}
+fn mark_installed(notes:&str,current:&str)->String{
+    notes.replacen(&format!("<section data-sparkle-version=\"{current}\""),&format!("<section class=\"sparkle-installed-version\" data-sparkle-version=\"{current}\""),1)
 }
 
 // --- download -------------------------------------------------------------------------------------
@@ -216,7 +265,10 @@ fn digest_file(path:&Path)->Option<String>{
 }
 /// Stream the installer to `<file>.partial`, never past the signed length, and publish it only
 /// when the signed SHA-256 and length match (and, on Windows, its Authenticode signature).
-fn download(release:&Release,dir:&Path,lab:bool)->Result<PathBuf>{
+/// Stream the installer to `<file>.partial`, never past the signed length, and publish it only
+/// when the signed SHA-256 and length match (and, on Windows, its Authenticode signature).
+/// `progress` sees the bytes received so far and returns false to cancel.
+fn download(release:&Release,dir:&Path,lab:bool,progress:&mut dyn FnMut(u64)->bool)->Result<PathBuf>{
     let target=dir.join(&release.file);
     if std::fs::metadata(&target).is_ok_and(|m|m.len()==release.length)&&digest_file(&target).as_deref()==Some(release.sha256.as_str()){
         if let Err(error)=platform_check(&target){let _=std::fs::remove_file(&target);return Err(error);}
@@ -232,6 +284,7 @@ fn download(release:&Release,dir:&Path,lab:bool)->Result<PathBuf>{
             let n=response.read(&mut buffer).map_err(|e|failure("provider_failed",format!("installer download was interrupted: {e}")))?;if n==0{break;}
             total+=n as u64;if total>release.length{return Err(failure("permission_denied","the download is longer than the signed feed's length"));}
             hash.update(&buffer[..n]);out.write_all(&buffer[..n]).map_err(|e|failure("provider_failed",format!("installer file write failed: {e}")))?;
+            if !progress(total){return Err(failure("cancelled","the download was cancelled"));}
         }
         out.sync_all().map_err(|e|failure("provider_failed",e))?;
         if total!=release.length{return Err(failure("permission_denied",format!("the download is {total} bytes, not the signed {}",release.length)));}
@@ -299,62 +352,6 @@ pub(crate) fn authenticode(path:&Path)->Result<()>{unsafe{
     Ok(())
 }}
 
-// --- idle gate ----------------------------------------------------------------------------------
-/// Held while the provider serves a request; status and discovery requests are not activity.
-pub(crate) struct Activity;
-impl Drop for Activity{fn drop(&mut self){IN_FLIGHT.fetch_sub(1,Ordering::SeqCst);LAST_REQUEST_MS.store(now_ms(),Ordering::SeqCst);}}
-pub(crate) fn activity(request:&Value)->Option<Activity>{
-    if matches!(request["action"]["type"].as_str(),Some("desktop_hello"|"desktop_capabilities"|"desktop_update")|None){return None;}
-    IN_FLIGHT.fetch_add(1,Ordering::SeqCst);LAST_REQUEST_MS.store(now_ms(),Ordering::SeqCst);Some(Activity)
-}
-fn quiet(in_flight:usize,last_ms:u64,now:u64)->std::result::Result<(),String>{
-    if in_flight>0{return Err(format!("{in_flight} provider request(s) are running"));}
-    let idle=now.saturating_sub(last_ms);
-    if idle<IDLE.as_millis() as u64{return Err(format!("the provider served a request {}s ago",idle/1000));}
-    Ok(())
-}
-/// The daemon's GET /health reports `pending` and `idleMs` (daemon/index.ts); a daemon that is not
-/// running, an older daemon without those fields, or another listener on the port reports nothing.
-fn daemon_quiet(body:&str)->std::result::Result<(),String>{
-    let health=serde_json::from_str::<Value>(body).unwrap_or(Value::Null);
-    if health["service"]!="interceptor-daemon"{return Ok(());}
-    if let Some(pending)=health["pending"].as_u64().filter(|n|*n>0){return Err(format!("{pending} daemon request(s) are running"));}
-    if let Some(idle)=health["idleMs"].as_u64().filter(|ms|*ms<IDLE.as_millis() as u64){return Err(format!("the daemon served a CLI request {}s ago",idle/1000));}
-    Ok(())
-}
-/// shared/platform.ts derivePorts: Windows (no uid) is slot 0; Unix slots follow the uid.
-fn ws_port(uid:Option<i64>)->u16{
-    let slot=uid.map_or(0,|uid|((uid-501)%500+500)%500);
-    (19222+2*slot) as u16
-}
-fn daemon_port()->u16{
-    if let Some(port)=std::env::var("INTERCEPTOR_WS_PORT").ok().and_then(|p|p.parse::<u16>().ok()){return port;}
-    #[cfg(windows)]{ws_port(None)}
-    #[cfg(not(windows))]{ws_port(Some(unsafe{libc::geteuid()} as i64))}
-}
-fn daemon_health()->std::result::Result<(),String>{
-    use std::net::{SocketAddr,TcpStream};
-    let port=daemon_port();
-    // A daemon nobody can reach is serving no agent. Windows answers a closed loopback port only after
-    // about two seconds of SYN retries, so a refusal and a timeout both mean "not running" here.
-    let Ok(mut stream)=TcpStream::connect_timeout(&SocketAddr::from(([127,0,0,1],port)),Duration::from_secs(5))else{return Ok(());};
-    let _=stream.set_read_timeout(Some(Duration::from_secs(3)));let _=stream.set_write_timeout(Some(Duration::from_secs(3)));
-    if stream.write_all(format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\n\r\n").as_bytes()).is_err(){return Ok(());}
-    let mut reply=Vec::new();let _=stream.take(65536).read_to_end(&mut reply);
-    let text=String::from_utf8_lossy(&reply);
-    daemon_quiet(text.split_once("\r\n\r\n").map_or("",|(_,body)|body))
-}
-/// Interceptor is idle when no agent used it for 10 minutes and no long session would be cut off.
-/// ponytail: a stream recording or monitor with no request for 10 minutes counts as idle; add an
-/// `active()` beside vm/audio/local_ai when one of those must survive unattended.
-fn idle()->std::result::Result<(),String>{
-    let last=LAST_REQUEST_MS.load(Ordering::SeqCst).max(STARTED_MS.load(Ordering::SeqCst));
-    quiet(IN_FLIGHT.load(Ordering::SeqCst),last,now_ms())?;
-    if crate::vm::active(){return Err("a virtual machine is running".into());}
-    if crate::audio::active(){return Err("an audio capture is running".into());}
-    if crate::local_ai::downloading(){return Err("the local AI model is downloading".into());}
-    daemon_health()
-}
 
 // --- state shared with the watcher -----------------------------------------------------------------
 fn read_state(dir:&Path)->Value{
@@ -368,91 +365,181 @@ fn write_state(dir:&Path,state:&Value)->std::io::Result<()>{
 }
 /// Record a finished install; a failed version joins `failedVersions` (newest 16) so the
 /// background updater does not try it again (Recursift's canary rule).
+/// Record a finished install for the provider that starts next; a failure is shown to the user once.
 fn record(state:&mut Value,last:Value){
-    if last["outcome"]=="failed"&&let Some(version)=last["version"].as_str(){
-        let mut failed=state["failedVersions"].as_array().cloned().unwrap_or_default();
-        failed.retain(|v|v!=version);failed.push(json!(version));
-        let skip=failed.len().saturating_sub(16);state["failedVersions"]=json!(failed[skip..].to_vec());
-    }
     state["last"]=last;if let Some(o)=state.as_object_mut(){o.remove("pending");}
 }
-fn failed_before(state:&Value,version:&str)->bool{state["failedVersions"].as_array().is_some_and(|v|v.iter().any(|f|f==version))}
-/// An install another watcher started in the last 45 minutes and has not finished.
 fn pending(state:&Value)->bool{
     state["pending"]["startedMs"].as_u64().is_some_and(|started|now_ms().saturating_sub(started)<(INSTALL_DEADLINE.as_millis() as u64)+900_000)
 }
+
 
 // --- background worker ---------------------------------------------------------------------------------
 /// Start the updater in the provider that owns the session endpoint (windows.rs run, unix_server).
 pub(crate) fn start(){
     STARTED_MS.store(now_ms(),Ordering::SeqCst);
-    if installed().is_err()||WORKER.swap(true,Ordering::SeqCst){return;}
+    if WORKER.swap(true,Ordering::SeqCst){return;}
     if std::thread::Builder::new().name("interceptor-update".into()).spawn(worker).is_err(){WORKER.store(false,Ordering::SeqCst);}
 }
-fn wake(install:bool){let mut control=CONTROL.lock().unwrap();control.wake=true;control.install|=install;SIGNAL.notify_all();}
-/// Wait until `deadline` or a wake; returns (woken, install requested).
-fn wait_until(deadline:Instant)->(bool,bool){
-    let mut control=CONTROL.lock().unwrap();
+/// Sparkle's schedule: one day after the last check, and never sooner than two minutes after start.
+/// A clock that moved backwards never postpones a check by more than a day.
+fn next_check(last:Option<u64>,started:u64,now:u64)->u64{
+    let interval=CHECK_INTERVAL.as_millis() as u64;let first=started+FIRST_CHECK.as_millis() as u64;
+    match last{Some(last)=>(last+interval).min(now+interval).max(first),None=>first}
+}
+fn wake(){*WAKE.lock().unwrap()=true;SIGNAL.notify_all();}
+/// Wait until `deadline` (milliseconds since the epoch; None waits for a wake). True when woken.
+fn wait_until(deadline:Option<u64>)->bool{
+    let mut woken=WAKE.lock().unwrap();
     loop{
-        if control.wake{let install=control.install;control.wake=false;control.install=false;return(true,install);}
-        let left=deadline.saturating_duration_since(Instant::now());if left.is_zero(){return(false,false);}
-        control=SIGNAL.wait_timeout(control,left).unwrap().0;
+        if *woken{*woken=false;return true;}
+        let left=match deadline{Some(at)=>Duration::from_millis(at.saturating_sub(now_ms())),None=>Duration::from_secs(3600)};
+        if deadline.is_some()&&left.is_zero(){return false;}
+        woken=SIGNAL.wait_timeout(woken,left).unwrap().0;
     }
 }
 fn worker(){
-    if let Ok(dir)=directory(){cleanup(&dir);}
-    let mut next=Instant::now()+FIRST_CHECK;
+    // A fresh Windows install starts the provider before Setup records the install, so wait for
+    // the record; a development build never gets one and stops here.
+    let deadline=Instant::now()+Duration::from_secs(600);
+    while installed().is_err(){if Instant::now()>=deadline{WORKER.store(false,Ordering::SeqCst);return;}std::thread::sleep(Duration::from_secs(5));}
+    let Ok(dir)=directory()else{WORKER.store(false,Ordering::SeqCst);return;};
+    cleanup(&dir);
+    report_failed_install(&dir);
     loop{
-        set(|s|{s["nextCheckAt"]=json!((time::OffsetDateTime::now_utc()+next.saturating_duration_since(Instant::now())).format(&time::format_description::well_known::Rfc3339).unwrap_or_default());});
-        let (woken,install)=wait_until(next);
-        if !woken&&Instant::now()<next{continue;}
-        if install||automatic().is_ok(){cycle(install);}
-        next=Instant::now()+CHECK_INTERVAL;
+        let due=automatic().is_ok().then(||next_check(read_state(&dir)["lastCheckMs"].as_u64(),STARTED_MS.load(Ordering::SeqCst),now_ms()));
+        set(|s|{match due.and_then(rfc3339){Some(at)=>s["nextCheckAt"]=json!(at),None=>{if let Some(o)=s.as_object_mut(){o.remove("nextCheckAt");}}}});
+        let woken=wait_until(due);
+        if woken||automatic().is_ok(){cycle();}
     }
 }
-/// One update cycle: check, download and verify, wait for idle (unless asked to install now),
-/// then hand the installer to the watcher.
-fn cycle(mut manual:bool){
+/// One check; a newer release that was not skipped opens the update window.
+fn cycle(){
     let (provider,dir)=match installed().and_then(|p|directory().map(|d|(p,d))){Ok(v)=>v,Err(reason)=>{fail(&failure("unsupported_operation",reason));return;}};
     cleanup(&dir);
     let release={
         let Ok(_work)=WORK.lock()else{return;};
         match check_now(){Ok(Decision::Update(release))=>release,_=>return}
     };
-    let state=read_state(&dir);
-    if pending(&state){set(|s|{phase(s,"installing","installing",true);s["message"]=json!("An install started earlier is still running.");});return;}
-    if !manual&&failed_before(&state,&release.version){
-        set(|s|{phase(s,"idle","skipped",false);s["message"]=json!(format!("{} failed to install earlier; the updater will not retry it. Run interceptor update install to retry.",release.version));});return;
-    }
-    set(|s|{phase(s,"downloading","update_available",true);s["updateStage"]=json!("downloading");});
-    let (_,lab)=feed();
-    let installer=match download(&release,&dir,lab){Ok(path)=>path,Err(error)=>{fail(&error);return;}};
-    set(|s|{phase(s,"downloaded","update_available",true);s["signatureVerified"]=json!(true);s["updateStage"]=json!("verified");
-        s["message"]=json!(if cfg!(windows){"The installer matches the signed feed and its Authenticode signature."}else{"The archive matches the signed feed."});});
-    while !manual{
-        match idle(){
-            Ok(())=>break,
-            Err(reason)=>{
-                set(|s|{phase(s,"deferred","deferred",true);s["message"]=json!(format!("Waiting to install {} until Interceptor is idle for 10 minutes: {reason}.",release.version));});
-                let (_,install)=wait_until(Instant::now()+Duration::from_secs(60));manual|=install;
+    if pending(&read_state(&dir)){set(|s|{phase(s,"installing","installing",true);s["message"]=json!("An install started earlier is still running.");});return;}
+    SESSION.store(true,Ordering::SeqCst);
+    session(&release,&dir,&provider);
+    SESSION.store(false,Ordering::SeqCst);
+}
+
+/// The update window (update_ui.rs), run as an owned helper: it dies with this provider.
+struct Window{_helper:crate::thumbnail::OwnedHelper,input:std::process::ChildStdin,choices:mpsc::Receiver<(String,String)>}
+impl Window{
+    fn open(view:&Value)->std::result::Result<Self,String>{
+        let mut helper=crate::thumbnail::OwnedHelper::spawn("--update-ui").map_err(|e|format!("the update window could not start: {e}"))?;
+        let mut input=helper.child.0.stdin.take().ok_or("the update window has no input")?;
+        let mut output=helper.child.0.stdout.take().ok_or("the update window has no output")?;
+        crate::write_frame(&mut input,&serde_json::to_vec(view).map_err(|e|e.to_string())?).map_err(|e|format!("the update window could not start: {e}"))?;
+        let(tx,rx)=mpsc::channel();
+        std::thread::spawn(move||{
+            while let Ok(Some(frame))=crate::read_frame(&mut output){
+                let message=serde_json::from_slice::<Value>(&frame).unwrap_or(Value::Null);
+                if let (Some(choice),Some(view))=(message["choice"].as_str(),message["view"].as_str()){if tx.send((choice.to_owned(),view.to_owned())).is_err(){return;}}
             }
+        });
+        // The helper answers "shown" once its window exists; a missing WebView ends it first.
+        match rx.recv_timeout(Duration::from_secs(30)){
+            Ok((shown,_)) if shown=="shown"=>Ok(Self{_helper:helper,input,choices:rx}),
+            _=>Err("the update window could not open (WebView2 on Windows; WebKitGTK 4.1 and the interceptor-overlay helper on Linux)".into()),
         }
     }
-    set(|s|{phase(s,"installing","installing",true);s["updateStage"]=json!("installing");s["message"]=json!(format!("Installing {}; the provider restarts when it finishes.",release.version));});
-    if let Err(error)=spawn_watcher(&dir,&provider,&release,&installer){fail(&error);return;}
-    // The installer stops this provider. When it refuses before that (for example a newer
-    // version is already installed), the watcher's result arrives here instead.
+    fn show(&mut self,view:&Value)->bool{serde_json::to_vec(view).is_ok_and(|bytes|crate::write_frame(&mut self.input,&bytes).is_ok())}
+    /// The user's next click in `view`; None when the window is gone (closing it answers "later" in any
+    /// view). A click made in an earlier view, such as a double click on Install Update, never answers
+    /// a later one, so Install and Relaunch always takes its own click.
+    fn choice(&self,view:&str)->Option<String>{next_choice(&self.choices,view)}
+}
+fn next_choice(choices:&mpsc::Receiver<(String,String)>,view:&str)->Option<String>{
+    loop{let (choice,made_in)=choices.recv().ok()?;if made_in=="*"||made_in==view{return Some(choice);}}
+}
+/// Linux without the overlay helper's WebKitGTK: say an update is available, where to get it.
+fn fallback(release:&Release){
+    #[cfg(target_os="linux")]{
+        let notice=json!({"type":"desktop_notifications","sub":"post","title":format!("Interceptor {} is available",release.version),
+            "body":format!("Download it from https://github.com/Hacker-Valley-Media/Interceptor/releases/tag/v{}. Install webkit2gtk-4.1 to update from Interceptor's update window.",release.version)});
+        if crate::notifications_validation::validate(&notice).is_ok(){let _=crate::notifications_linux::dispatch(&notice);}
+    }
+    #[cfg(not(target_os="linux"))]let _=release;
+}
+fn end(change:impl FnOnce(&mut Value)){set(|s|{change(s);s["cycleFinishedAt"]=json!(timestamp());});}
+/// Sparkle's update session: the window offers the release; nothing is downloaded until Install
+/// Update and nothing installs until Install and Relaunch.
+fn session(release:&Release,dir:&Path,provider:&Path){
+    let (_,lab)=feed();
+    set(|s|{phase(s,"update_available","update_available",true);s["message"]=json!(format!("Interceptor {} is available; the update window is open.",release.version));});
+    let notes=release_notes(release,lab);
+    let mut window=match Window::open(&json!({"view":"available","version":release.version,"current":VERSION,"notes":notes})){
+        Ok(window)=>window,
+        Err(reason)=>{fallback(release);end(|s|{phase(s,"update_available","update_available",false);s["message"]=json!(format!("Interceptor {} is available, but {reason}.",release.version));});return;}
+    };
+    match window.choice("available").as_deref(){
+        Some("skip")=>{
+            let mut saved=read_state(dir);saved["skippedVersion"]=json!(release.version);let _=write_state(dir,&saved);
+            end(|s|choice(s,"skip","not_downloaded"));
+        }
+        Some("install")=>install(release,dir,provider,lab,&mut window),
+        _=>end(|s|choice(s,"dismiss","not_downloaded")),
+    }
+}
+fn install(release:&Release,dir:&Path,provider:&Path,lab:bool,window:&mut Window){
+    set(|s|choice(s,"install","not_downloaded"));
+    window.show(&json!({"view":"downloading","received":0,"total":release.length}));
+    let mut shown=Instant::now();let mut cancelled=false;
+    let downloaded=download(release,dir,lab,&mut |received|{
+        while let Ok((choice,view))=window.choices.try_recv(){if choice=="later"&&(view=="downloading"||view=="*"){cancelled=true;return false;}}
+        if shown.elapsed()>=Duration::from_millis(200){shown=Instant::now();window.show(&json!({"view":"downloading","received":received,"total":release.length}));}
+        true
+    });
+    let installer=match downloaded{
+        Ok(path)=>path,
+        Err(_) if cancelled=>{end(|s|choice(s,"dismiss","not_downloaded"));return;}
+        Err(error)=>{
+            window.show(&json!({"view":"error","message":format!("An error occurred while downloading the update. Please try again later. ({})",error["error"].as_str().unwrap_or("download failed"))}));
+            window.choice("error");fail(&error);return;
+        }
+    };
+    set(|s|{phase(s,"ready_to_install","install_chosen",true);s["updateStage"]=json!("downloaded");s["signatureVerified"]=json!(true);
+        s["message"]=json!(if cfg!(windows){"The installer matches the signed feed and its Authenticode signature."}else{"The archive matches the signed feed."});});
+    window.show(&json!({"view":"ready","version":release.version}));
+    if window.choice("ready").as_deref()!=Some("install"){end(|s|choice(s,"dismiss","downloaded"));return;}
+    set(|s|{phase(s,"installing","installing",true);s["updateStage"]=json!("installing");s["message"]=json!(format!("Installing {}; Interceptor restarts when it finishes.",release.version));});
+    window.show(&json!({"view":"installing"}));
+    if let Err(error)=spawn_watcher(dir,provider,release,&installer){
+        window.show(&json!({"view":"error","message":format!("An error occurred while installing the update. Please try again later. ({})",error["error"].as_str().unwrap_or("install failed"))}));
+        window.choice("error");fail(&error);return;
+    }
+    // The installer stops this provider, and with it this window. When it refuses before that
+    // (a newer version is already installed), the watcher's result arrives here instead.
     let deadline=Instant::now()+INSTALL_DEADLINE+Duration::from_secs(60);
     while Instant::now()<deadline{
-        std::thread::sleep(Duration::from_secs(5));
-        let state=read_state(&dir);
-        if !pending(&state)&&state["last"]["version"]==release.version.as_str(){
-            let outcome=state["last"]["outcome"].as_str().unwrap_or("failed").to_owned();
-            if outcome=="installed"{set(|s|{phase(s,"idle","none",false);s["message"]=json!(format!("Installed {}.",release.version));});}
-            else{let error=state["last"]["error"].as_str().unwrap_or("the installer did not complete").to_owned();fail(&failure("provider_failed",format!("installing {} failed: {error}",release.version)));}
-            return;
-        }
+        std::thread::sleep(Duration::from_secs(2));
+        let mut saved=read_state(dir);
+        if pending(&saved)||saved["last"]["version"]!=release.version.as_str(){continue;}
+        if saved["last"]["outcome"]=="installed"{end(|s|phase(s,"idle","none",false));return;}
+        saved["last"]["reported"]=json!(true);let _=write_state(dir,&saved);
+        let error=saved["last"]["error"].as_str().unwrap_or("the installer did not complete").to_owned();
+        window.show(&json!({"view":"error","message":format!("An error occurred while installing the update. Please try again later. ({error})")}));
+        window.choice("error");fail(&failure("provider_failed",format!("installing {} failed: {error}",release.version)));return;
     }
+}
+/// After an install that failed and stopped this provider, the provider that starts next shows
+/// Sparkle's error once.
+fn report_failed_install(dir:&Path){
+    // A watcher may still be finishing the install that restarted this provider.
+    let deadline=Instant::now()+Duration::from_secs(120);
+    let mut saved=read_state(dir);
+    while pending(&saved)&&Instant::now()<deadline{std::thread::sleep(Duration::from_secs(2));saved=read_state(dir);}
+    if saved["last"]["outcome"]!="failed"||saved["last"]["reported"]==true{return;}
+    saved["last"]["reported"]=json!(true);let _=write_state(dir,&saved);
+    let target=saved["last"]["version"].as_str().unwrap_or("the update").to_owned();
+    let error=saved["last"]["error"].as_str().unwrap_or("the installer did not complete").to_owned();
+    fail(&failure("provider_failed",format!("installing {target} failed: {error}")));
+    if let Ok(window)=Window::open(&json!({"view":"error","message":format!("An error occurred while installing Interceptor {target}. Please try again later. ({error})")})){window.choice("error");}
 }
 fn watcher_path(dir:&Path)->PathBuf{dir.join(if cfg!(windows){"interceptor-update.exe"}else{"interceptor-update"})}
 /// The installer stops and replaces this provider, so a copy of this binary outside the install
@@ -526,15 +613,17 @@ pub(crate) fn apply(dir:Option<&str>)->std::io::Result<()>{
     if let Err(error)=&ran{log_line(&dir,&format!("installer: {error}"));}
     let installed=Command::new(&provider).arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()
         .map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default();
-    let mut running=wait_alive(&provider,Duration::from_secs(30));
-    if !running{log_line(&dir,"no provider answered after the install; starting it");restart(&provider);running=wait_alive(&provider,Duration::from_secs(30));}
     let exit=ran.as_ref().ok().copied().flatten();
     let outcome=if exit==Some(0)&&installed==target{"installed"}else{"failed"};
     let error=match(&ran,exit){(Err(e),_)=>Some(e.clone()),(Ok(_),Some(0))if installed!=target=>Some(format!("the installer finished but the provider reports {installed}")),(Ok(_),Some(code))if code!=0=>Some(format!("the installer exited with code {code}; see install-{target}.log")),(Ok(_),None)=>Some("the installer did not finish within 30 minutes".to_owned()),_=>None};
-    log_line(&dir,&format!("{outcome}: installed version {installed}, provider running {running}{}",error.as_deref().map(|e|format!(", {e}")).unwrap_or_default()));
+    // Record the outcome before any provider starts: the one that starts next reads it to show the error.
     let mut state=read_state(&dir);
-    record(&mut state,json!({"version":target,"outcome":outcome,"exitCode":exit,"installedVersion":installed,"providerRunning":running,"at":timestamp(),"error":error}));
+    record(&mut state,json!({"version":target,"outcome":outcome,"exitCode":exit,"installedVersion":installed,"at":timestamp(),"error":error,"reported":false}));
     write_state(&dir,&state)?;
+    let mut running=wait_alive(&provider,Duration::from_secs(30));
+    if !running{log_line(&dir,"no provider answered after the install; starting it");restart(&provider);running=wait_alive(&provider,Duration::from_secs(30));}
+    let mut state=read_state(&dir);state["last"]["providerRunning"]=json!(running);let _=write_state(&dir,&state);
+    log_line(&dir,&format!("{outcome}: installed version {installed}, provider running {running}{}",error.as_deref().map(|e|format!(", {e}")).unwrap_or_default()));
     if outcome=="installed"{let _=std::fs::remove_file(&installer);}
     let _=std::fs::remove_dir_all(dir.join(format!("stage-{target}")));
     Ok(())
@@ -549,8 +638,9 @@ fn wait_child(mut child:std::process::Child)->std::result::Result<Option<i32>,St
 }
 #[cfg(windows)]
 fn run_installer(dir:&Path,target:&str,installer:&Path)->std::result::Result<Option<i32>,String>{
-    // Inno Setup's silent install: no wizard, no message boxes, no reboot, with a log beside the download.
-    let child=Command::new(installer).args(["/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-"]).arg(format!("/LOG={}",dir.join(format!("install-{target}.log")).display()))
+    // The user chose Install and Relaunch, so Inno Setup shows its progress (/SILENT): no wizard pages,
+    // no message boxes, no reboot, and a log beside the download.
+    let child=Command::new(installer).args(["/SILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-"]).arg(format!("/LOG={}",dir.join(format!("install-{target}.log")).display()))
         .current_dir(dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e|format!("the installer could not start: {e}"))?;
     wait_child(child)
 }
@@ -604,32 +694,47 @@ fn restart(provider:&Path){
     }
 }
 
-// --- verbs -----------------------------------------------------------------------------------------------
+
+// --- verbs ---------------------------------------------------------------------------------------------
+/// `interceptor update` says what UpdateDomain.swift says for the same outcome.
+fn message(state:&Value)->String{
+    match state["outcome"].as_str(){
+        Some("update_available")=>format!("Interceptor {} is available; the update window is open",state["selectedVersion"].as_str().unwrap_or("update")),
+        Some("up_to_date")=>"Interceptor is up to date".into(),
+        Some("no_eligible_update")=>"found no eligible update".into(),
+        Some("skipped")=>state["message"].as_str().unwrap_or("this version was skipped").into(),
+        Some("error")=>"update check failed".into(),
+        Some("checking")=>"update check is still running; use `interceptor update status` for the result".into(),
+        _=>"update check concluded".into(),
+    }
+}
 pub fn dispatch(a:&Value)->Value{
     if let Some(e)=desktop_update_shape_error(a){return failure("invalid_request",e);}
     if ["group","groupColor"].iter().any(|key|a.get(key).is_some_and(|v|v.as_str().is_none_or(|s|s.trim().is_empty()||s.len()>256||s.contains('\0')))){return failure("invalid_request","invalid update group metadata");}
-    match a["sub"].as_str(){
-        Some("check")=>{
-            let busy=STATE.lock().unwrap().as_ref().is_some_and(|s|s["sessionInProgress"]==true);
-            let Some(_work)=WORK.try_lock().ok().filter(|_|!busy)else{let mut s=snapshot();s["started"]=json!(false);s["message"]=json!("An update session is already in progress; follow it with interceptor update status.");return success(s);};
-            let found=matches!(check_now(),Ok(Decision::Update(_)));
-            if found&&automatic().is_ok()&&WORKER.load(Ordering::SeqCst){wake(false);}
-            let mut s=snapshot();s["started"]=json!(true);success(s)
+    if a["sub"]!="check"{return success(snapshot());}
+    if SESSION.load(Ordering::SeqCst){let mut s=snapshot();s["started"]=json!(false);s["message"]=json!("an update session is already in progress");return success(s);}
+    if WORKER.load(Ordering::SeqCst){
+        // The worker checks and, for a newer release, opens the update window, as Sparkle does.
+        let before=CHECKS.load(Ordering::SeqCst);wake();
+        let deadline=Instant::now()+CHECK_WAIT;
+        while CHECKS.load(Ordering::SeqCst)==before&&Instant::now()<deadline{std::thread::sleep(Duration::from_millis(50));}
+    }else{
+        let Some(_work)=WORK.try_lock().ok()else{let mut s=snapshot();s["started"]=json!(false);s["message"]=json!("an update session is already in progress");return success(s);};
+        if let Ok(Decision::Update(release))=check_now(){
+            let mut s=snapshot();s["started"]=json!(true);
+            s["message"]=json!(format!("Interceptor {} is available; the update window opens only in the installed Full provider",release.version));
+            return success(s);
         }
-        Some("install")=>{
-            if let Err(reason)=installed(){return failure("unsupported_operation",format!("update install runs in the installed Full provider: {reason}"));}
-            if !WORKER.load(Ordering::SeqCst){return failure("unsupported_operation","the updater is not running in this provider process");}
-            wake(true);
-            let mut s=snapshot();s["started"]=json!(true);s["message"]=json!("Install started: the provider checks the signed feed, downloads and verifies the installer, and installs it now. Follow it with interceptor update status.");success(s)
-        }
-        _=>success(snapshot()),
     }
+    let mut s=snapshot();s["started"]=json!(true);
+    if s.get("message").is_none()||s["outcome"]!="skipped"{s["message"]=json!(message(&s));}
+    success(s)
 }
 pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":true,"present":true,"effective":false,"permission":"not_applicable","session":session,"background":"semantic","provider":"signed update feed on the Sparkle update host","versions":{"contract":"1","product":env!("CARGO_PKG_VERSION"),"api":"interceptor.update.latest/1"},"limits":[
-    "The installed Full provider checks updates.hackervalley.media 2 minutes after login and every 15 minutes; INTERCEPTOR_AUTO_UPDATE=off stops background checks and installs",
+    "The installed Full provider checks updates.hackervalley.media once a day, like Sparkle on the Mac; INTERCEPTOR_AUTO_UPDATE=off stops the scheduled checks",
+    "A newer release opens Interceptor's update window (Skip This Version, Remind Me Later, Install Update); nothing downloads or installs until the user clicks, and nothing installs until Install and Relaunch",
     "The feed is signed with Interceptor's Sparkle Ed25519 key and pins the installer's SHA-256 and length; Windows installers must also pass Authenticode for Hacker Valley Media LLC",
-    "Installs run silently once Interceptor has been idle 10 minutes (no CLI request, nothing in flight, no VM, audio capture or model download); update install skips only that wait",
-    "A failed version is not retried automatically; the provider is restarted and the outcome is kept in update status"]})}
+    "The window needs WebView2 on Windows, and on Linux WebKitGTK 4.1 with the interceptor-overlay helper; without them Linux posts a notification with the download link"]})}
 
 #[cfg(test)] mod tests{
     use super::*;
@@ -644,6 +749,7 @@ pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":tr
     }
     fn payload(version:&str,url:&str)->Value{
         json!({"schema":"interceptor.update.latest/1","os":"windows","version":version,"issuedAt":"2026-10-12T00:00:00Z",
+            "notes":"https://updates.hackervalley.media/release-notes-2.1.1.html","notesSha256":"b".repeat(64),
             "artifacts":{"arm64":{"file":format!("Interceptor-Full-{version}-windows-arm64.exe"),"url":url,"sha256":"a".repeat(64),"length":42}}})
     }
     const URL:&str="https://updates.hackervalley.media/windows/Interceptor-Full-2.1.0-windows-arm64.exe";
@@ -670,15 +776,16 @@ pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":tr
     }
     #[test] fn selection_refuses_everything_but_a_newer_matching_https_installer(){
         let update=select(&payload("2.1.0",URL),"windows","arm64","2.0.0",false).unwrap();
-        assert!(matches!(&update,Decision::Update(r) if r.file=="Interceptor-Full-2.1.0-windows-arm64.exe"&&r.length==42));
+        assert!(matches!(&update,Decision::Update(r) if r.file=="Interceptor-Full-2.1.0-windows-arm64.exe"&&r.length==42&&r.notes.as_ref().is_some_and(|(u,_)|u.ends_with("release-notes-2.1.1.html"))));
         assert_eq!(select(&payload("2.0.0",URL),"windows","arm64","2.0.0",false).unwrap(),Decision::Current("2.0.0".into()));
         assert_eq!(select(&payload("1.9.9",URL),"windows","arm64","2.0.0",false).unwrap(),Decision::Current("1.9.9".into()));
         assert!(matches!(select(&payload("2.1.0",URL),"windows","x64","2.0.0",false).unwrap(),Decision::Missing(..)));
         assert!(select(&payload("2.1.0",URL),"linux","arm64","2.0.0",false).is_err());
         let mut p=payload("2.1.0",URL);p["artifacts"]["arm64"]["file"]=json!("setup.exe");assert!(select(&p,"windows","arm64","2.0.0",false).is_err());
-        for url in ["http://updates.hackervalley.media/windows/Interceptor-Full-2.1.0-windows-arm64.exe","https://updates.hackervalley.media/windows/other.exe","https://u:p@updates.hackervalley.media/windows/Interceptor-Full-2.1.0-windows-arm64.exe",URL.to_owned().as_str()]{
-            let result=select(&payload("2.1.0",url),"windows","arm64","2.0.0",false);
-            assert_eq!(result.is_ok(),url==URL,"{url}");
+        // Notes without a pinned digest are not shown.
+        let mut p=payload("2.1.0",URL);p["notesSha256"]=json!("short");assert!(matches!(select(&p,"windows","arm64","2.0.0",false).unwrap(),Decision::Update(r) if r.notes.is_none()));
+        for url in ["http://updates.hackervalley.media/windows/Interceptor-Full-2.1.0-windows-arm64.exe","https://updates.hackervalley.media/windows/other.exe","https://u:p@updates.hackervalley.media/windows/Interceptor-Full-2.1.0-windows-arm64.exe",URL]{
+            assert_eq!(select(&payload("2.1.0",url),"windows","arm64","2.0.0",false).is_ok(),url==URL,"{url}");
         }
         let lab="http://192.168.64.1:8099/windows/Interceptor-Full-2.1.0-windows-arm64.exe";
         assert!(select(&payload("2.1.0",lab),"windows","arm64","2.0.0",true).is_ok());
@@ -689,7 +796,38 @@ pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":tr
         }
         for version in ["v2.1.0","2.1","02.1.0","2.1.0-beta"]{assert!(select(&payload(version,URL),"windows","arm64","2.0.0",false).is_err(),"{version}");}
     }
-    #[test] fn download_publishes_only_matching_bytes(){
+    #[test] fn a_skipped_version_is_not_offered_but_a_newer_one_is(){
+        let url=URL.replace("2.1.0","2.1.1");let Decision::Update(release)=select(&payload("2.1.1",&url),"windows","arm64","2.1.0",false).unwrap()else{panic!()};
+        assert_eq!(offered(Decision::Update(release.clone()),Some("2.1.1")),Decision::Skipped("2.1.1".into()));
+        assert_eq!(offered(Decision::Update(release.clone()),Some("2.1.0")),Decision::Update(release.clone()));
+        assert_eq!(offered(Decision::Update(release.clone()),None),Decision::Update(release));
+        assert_eq!(offered(Decision::Current("2.1.1".into()),Some("2.1.1")),Decision::Current("2.1.1".into()));
+    }
+    #[test] fn a_double_click_on_install_update_never_answers_install_and_relaunch(){
+        let (tx,rx)=mpsc::channel();
+        for _ in 0..2{tx.send(("install".to_owned(),"available".to_owned())).unwrap();}
+        tx.send(("later".to_owned(),"ready".to_owned())).unwrap();
+        assert_eq!(next_choice(&rx,"ready").as_deref(),Some("later"));
+        tx.send(("install".to_owned(),"available".to_owned())).unwrap();tx.send(("later".to_owned(),"*".to_owned())).unwrap();
+        assert_eq!(next_choice(&rx,"ready").as_deref(),Some("later"));
+        tx.send(("install".to_owned(),"available".to_owned())).unwrap();drop(tx);
+        assert_eq!(next_choice(&rx,"ready"),None);
+    }
+    #[test] fn checks_follow_sparkles_daily_schedule(){
+        let (day,start)=(86_400_000_u64,1_000_000_000_000_u64);
+        assert_eq!(next_check(None,start,start),start+120_000);
+        assert_eq!(next_check(Some(start-3_600_000),start,start),start-3_600_000+day);
+        assert_eq!(next_check(Some(start-2*day),start,start),start+120_000);
+        assert_eq!(next_check(Some(start+5*day),start,start),start+day);
+    }
+    #[test] fn release_notes_hide_the_installed_release_the_way_sparkle_marks_it(){
+        let notes="<main><section data-sparkle-version=\"2.1.1\">a</section><section data-sparkle-version=\"2.1.0\">b</section></main>";
+        let marked=mark_installed(notes,"2.1.0");
+        assert!(marked.contains("<section class=\"sparkle-installed-version\" data-sparkle-version=\"2.1.0\">"));
+        assert!(marked.contains("<section data-sparkle-version=\"2.1.1\">"));
+        assert_eq!(mark_installed(notes,"2.0.98"),notes);
+    }
+    #[test] fn download_publishes_only_matching_bytes_and_stops_when_cancelled(){
         use std::net::TcpListener;
         let serve=|body:Vec<u8>|{
             let listener=TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();
@@ -699,55 +837,44 @@ pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":tr
         };
         let dir=std::env::temp_dir().join(format!("interceptor-update-test-{}",std::process::id()));let _=std::fs::remove_dir_all(&dir);std::fs::create_dir_all(&dir).unwrap();
         let body=b"signed installer bytes".to_vec();let sha=hex(&Sha256::digest(&body));
-        let release=|port:u16,sha:&str,length:u64|Release{version:"2.1.0".into(),file:"Interceptor-Full-2.1.0-linux-arm64.tar.gz".into(),url:format!("http://127.0.0.1:{port}/linux/Interceptor-Full-2.1.0-linux-arm64.tar.gz"),sha256:sha.into(),length};
+        let release=|port:u16,sha:&str,length:u64|Release{version:"2.1.0".into(),file:"Interceptor-Full-2.1.0-linux-arm64.tar.gz".into(),url:format!("http://127.0.0.1:{port}/linux/Interceptor-Full-2.1.0-linux-arm64.tar.gz"),sha256:sha.into(),length,notes:None};
+        let mut any=|_:u64|true;
         let wrong=release(serve(body.clone()),&"0".repeat(64),body.len() as u64);
-        assert_eq!(download(&wrong,&dir,true).unwrap_err()["code"],"permission_denied");
+        assert_eq!(download(&wrong,&dir,true,&mut any).unwrap_err()["code"],"permission_denied");
         assert!(!dir.join(&wrong.file).exists()&&!dir.join(format!("{}.partial",wrong.file)).exists());
         let short=release(serve(body.clone()),&sha,body.len() as u64-1);
-        assert_eq!(download(&short,&dir,true).unwrap_err()["code"],"permission_denied");
-        let good=release(serve(body.clone()),&sha,body.len() as u64);
-        assert_eq!(std::fs::read(download(&good,&dir,true).unwrap()).unwrap(),body);
+        assert_eq!(download(&short,&dir,true,&mut any).unwrap_err()["code"],"permission_denied");
+        let cancelled=release(serve(body.clone()),&sha,body.len() as u64);
+        assert_eq!(download(&cancelled,&dir,true,&mut |_|false).unwrap_err()["code"],"cancelled");
+        assert!(!dir.join(&cancelled.file).exists());
+        let good=release(serve(body.clone()),&sha,body.len() as u64);let mut seen=0;
+        assert_eq!(std::fs::read(download(&good,&dir,true,&mut |n|{seen=n;true}).unwrap()).unwrap(),body);assert_eq!(seen,body.len() as u64);
         // A verified file already present is reused without a request (no server is listening).
-        let reused=release(1,&sha,body.len() as u64);assert!(download(&reused,&dir,true).is_ok());
+        let reused=release(1,&sha,body.len() as u64);assert!(download(&reused,&dir,true,&mut any).is_ok());
         let _=std::fs::remove_dir_all(&dir);
     }
-    #[test] fn idle_gate_waits_for_ten_quiet_minutes_and_an_idle_daemon(){
-        let now=10_000_000;
-        assert!(quiet(1,0,now).is_err());
-        assert!(quiet(0,now-599_000,now).is_err());
-        assert!(quiet(0,now-600_000,now).is_ok());
-        assert!(daemon_quiet(r#"{"service":"interceptor-daemon","pid":1,"version":"2.1.0","pending":2,"idleMs":900000}"#).is_err());
-        assert!(daemon_quiet(r#"{"service":"interceptor-daemon","pid":1,"version":"2.1.0","pending":0,"idleMs":30000}"#).is_err());
-        assert!(daemon_quiet(r#"{"service":"interceptor-daemon","pid":1,"version":"2.1.0","pending":0,"idleMs":600000}"#).is_ok());
-        assert!(daemon_quiet(r#"{"service":"interceptor-daemon","pid":1,"version":"2.0.0"}"#).is_ok());
-        assert!(daemon_quiet("interceptor daemon").is_ok());
-        // The values test/platform-runtime.test.ts pins for derivePorts.
-        for (uid,port) in [(None,19222),(Some(501),19222),(Some(504),19228),(Some(1000),20220),(Some(0),20220),(Some(1001),19222)]{assert_eq!(ws_port(uid),port,"{uid:?}");}
-        assert!(activity(&json!({"action":{"type":"desktop_update","sub":"status"}})).is_none());
-        assert!(activity(&json!({"action":{"type":"desktop_hello"}})).is_none());
-        let before=IN_FLIGHT.load(Ordering::SeqCst);
-        {let _held=activity(&json!({"action":{"type":"desktop_tree"}}));assert_eq!(IN_FLIGHT.load(Ordering::SeqCst),before+1);}
-        assert_eq!(IN_FLIGHT.load(Ordering::SeqCst),before);
-    }
-    #[test] fn failed_versions_are_recorded_once_and_bounded(){
-        let mut state=json!({"pending":{"version":"2.1.0"}});
-        record(&mut state,json!({"version":"2.1.0","outcome":"failed"}));
-        record(&mut state,json!({"version":"2.1.0","outcome":"failed"}));
-        assert!(failed_before(&state,"2.1.0")&&state["failedVersions"].as_array().unwrap().len()==1&&state.get("pending").is_none());
-        for minor in 0..20{record(&mut state,json!({"version":format!("3.{minor}.0"),"outcome":"failed"}));}
-        assert_eq!(state["failedVersions"].as_array().unwrap().len(),16);assert!(!failed_before(&state,"2.1.0"));
-        record(&mut state,json!({"version":"4.0.0","outcome":"installed"}));assert!(!failed_before(&state,"4.0.0"));
+    #[test] fn a_finished_install_replaces_the_pending_record(){
+        let mut state=json!({"pending":{"version":"2.1.1"},"skippedVersion":"2.1.2","lastCheckMs":5});
+        record(&mut state,json!({"version":"2.1.1","outcome":"failed","reported":false}));
+        assert!(state.get("pending").is_none()&&state["last"]["outcome"]=="failed"&&state["skippedVersion"]=="2.1.2"&&state["lastCheckMs"]==5);
         assert!(!pending(&json!({})));assert!(pending(&json!({"pending":{"startedMs":now_ms()}})));
         assert!(!pending(&json!({"pending":{"startedMs":now_ms()-4*3_600_000}})));
     }
-    #[test] fn status_shapes_match_the_generated_contract(){
-        let mut s=initial();assert!(serde_json::from_value::<DesktopUpdateData>(s.clone()).is_ok(),"{s}");
-        phase(&mut s,"deferred","deferred",true);s["selectedVersion"]=json!("2.1.0");s["signatureVerified"]=json!(true);s["lastInstallOutcome"]=json!("installed");
+    #[test] fn status_uses_sparkles_vocabulary_and_matches_the_contract(){
+        let mut s=initial();assert!(serde_json::from_value::<DesktopUpdateData>(s.clone()).is_ok(),"{s}");assert_eq!(s["checkInterval"],86_400);
+        choice(&mut s,"install","not_downloaded");assert_eq!((s["phase"].as_str(),s["outcome"].as_str()),(Some("downloading"),Some("install_chosen")));
+        choice(&mut s,"install","downloaded");assert_eq!(s["phase"],"ready_to_install");
+        choice(&mut s,"dismiss","downloaded");assert_eq!((s["phase"].as_str(),s["outcome"].as_str(),s["sessionInProgress"].as_bool()),(Some("deferred"),Some("deferred"),Some(false)));
+        choice(&mut s,"skip","not_downloaded");assert_eq!((s["phase"].as_str(),s["outcome"].as_str()),(Some("idle"),Some("skipped")));
+        s["signatureVerified"]=json!(true);phase(&mut s,"ready_to_install","install_chosen",true);assert_eq!(s["signatureVerified"],true);
+        phase(&mut s,"deferred","deferred",false);assert_eq!(s["signatureVerified"],false);
+        s["lastInstallOutcome"]=json!("installed");s["nextCheckAt"]=json!("2026-10-13T00:00:00Z");
         assert!(serde_json::from_value::<DesktopUpdateData>(s.clone()).is_ok(),"{s}");
         assert_eq!(dispatch(&json!({"type":"desktop_update","sub":"status"}))["success"],true);
         assert_eq!(dispatch(&json!({"type":"desktop_update","sub":"status","url":"https://other.invalid"}))["code"],"invalid_request");
-        // This test binary is not the installed provider.
-        assert_eq!(dispatch(&json!({"type":"desktop_update","sub":"install"}))["code"],"unsupported_operation");
+        // Like the Mac, there is no install verb: the user clicks in the update window.
+        assert_eq!(dispatch(&json!({"type":"desktop_update","sub":"install"}))["code"],"invalid_request");
         assert!(installed().is_err());
+        assert_eq!(rfc3339(0).as_deref(),Some("1970-01-01T00:00:00Z"));
     }
 }

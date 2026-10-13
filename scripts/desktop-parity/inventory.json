@@ -115,7 +115,6 @@
 {"family":"display","sub":"move-window","flags":["--id"]},
 {"family":"update","sub":"status","flags":[]},
 {"family":"update","sub":"check","flags":[]},
-{"family":"update","sub":"install","flags":[]},
 {"family":"trust","sub":"-","flags":["--no-prompt","--prompt","--walkthrough","--accessibility-prompt","--screen-prompt","--microphone-prompt","--speech-prompt"]},
 {"family":"trust","sub":"speech","flags":["--prompt"]},
 {"family":"tcc","sub":"status","flags":["--target"]},

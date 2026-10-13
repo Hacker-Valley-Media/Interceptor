@@ -545,9 +545,9 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     // ── Update (Sparkle) ──
     case "update": {
       const op = filtered[2] || "status"
-      // Windows and Linux Full install releases themselves; macOS installs through Sparkle's prompt.
-      if(op==="install"&&process.platform==="darwin")throw new Error('macOS installs updates through Sparkle: run interceptor update, then accept its prompt')
-      if(filtered.length>3||!["check","status","install"].includes(op))throw new Error('update accepts only check, status or install, without fields')
+      // Every OS installs from its update window (Sparkle on macOS): the user clicks Install Update.
+      if(op==="install")throw new Error('Interceptor installs an update when you click Install Update in its update window; run interceptor update to check now')
+      if(filtered.length>3||!["check","status"].includes(op))throw new Error('update accepts only check or status, without fields')
       return {
         type: "macos_update",
         sub: op,

@@ -8,7 +8,7 @@ export function desktopUpdateActionError(a:Record<string,unknown>):string|undefi
 // applies the same rule before it downloads (interceptor-desktop/src/update.rs `allowed`).
 const labHost=(host:string)=>host==='localhost'||host==='[::1]'||/^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
 // Only bytes that passed the signed digest (and Authenticode on Windows) may be called verified.
-const VERIFIED_PHASES=new Set(['downloaded','ready_to_install','deferred','installing'])
+const VERIFIED_PHASES=new Set(['downloaded','ready_to_install','installing'])
 export function desktopUpdateResultError(a:Record<string,unknown>,data:unknown):string|undefined{
   if(a.type!=='desktop_update')return
   const shape=desktopContractShapeError(data,'DesktopUpdateData');if(shape)return shape

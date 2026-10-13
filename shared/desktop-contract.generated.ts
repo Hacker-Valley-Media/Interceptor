@@ -448,8 +448,7 @@ export const DESKTOP_CONTRACT_ALIASES = {
   ],
   "DesktopUpdateVerb": [
     "check",
-    "status",
-    "install"
+    "status"
   ],
   "DesktopUpdatePhase": [
     "idle",
