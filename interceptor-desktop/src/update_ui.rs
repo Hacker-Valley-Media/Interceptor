@@ -59,7 +59,8 @@ function render(v){current=v.view;const t=document.getElementById("title"),x=doc
   else if(v.view==="installing"){t.textContent="Installing update…";x.textContent="";document.getElementById("progress").removeAttribute("value");document.getElementById("bytes").textContent="";buttons([])}
   else if(v.view==="error"){t.textContent="Update Error!";x.textContent=v.message||"An error occurred while updating Interceptor. Please try again later.";
     buttons(["|",{label:"OK",choice:"ok",default:true,escape:true}])}}
-document.addEventListener("keydown",e=>{if(e.key==="Enter"&&enter){e.preventDefault();send(enter)}else if(e.key==="Escape"&&escape){e.preventDefault();send(escape)}});
+// Enter on a focused button presses that button; otherwise it presses the default one.
+document.addEventListener("keydown",e=>{if(e.key==="Enter"&&enter&&!(document.activeElement instanceof HTMLButtonElement)){e.preventDefault();send(enter)}else if(e.key==="Escape"&&escape){e.preventDefault();send(escape)}});
 render(window.__view);
 </script></body></html>"#;
 
