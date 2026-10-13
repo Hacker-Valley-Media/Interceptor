@@ -129,6 +129,8 @@ mod native{
             .with_min_inner_size(LogicalSize::new(480.0,360.0)).with_always_on_top(true).build(&event_loop).map_err(io::Error::other)?;
         let webview=builder(&view,out.clone()).build(&window).map_err(|e|io::Error::other(format!("WebView2 update window could not initialize: {e}")))?;
         window.set_focus();window.request_user_attention(Some(UserAttentionType::Critical));
+        // The provider waits for this before it counts the window as open.
+        choose(&out,"shown");
         event_loop.run(move|event,_,control_flow|{
             *control_flow=ControlFlow::WaitUntil(std::time::Instant::now()+Duration::from_millis(50));
             match event{
@@ -154,6 +156,7 @@ mod native{
         window.connect_delete_event(move|_,_|{choose(&closing,"later");std::process::exit(0)});
         let webview=builder(&view,out.clone()).build_gtk(&window).map_err(|e|io::Error::other(format!("WebKitGTK update window could not initialize: {e}")))?;
         window.show_all();window.present();
+        choose(&out,"shown");
         loop{
             for _ in 0..64{if !gtk::events_pending(){break;}gtk::main_iteration_do(false);}
             while let Ok(input)=rx.try_recv(){match input{Input::View(view)=>{apply(&webview,&view);},Input::Closed=>{window.close();return Ok(());}}}
