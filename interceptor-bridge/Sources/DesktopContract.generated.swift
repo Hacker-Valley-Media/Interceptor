@@ -583,6 +583,7 @@ enum DesktopUpdateOperation: String, Codable {
 enum DesktopUpdateVerb: String, Codable {
     case v0 = "check"
     case v1 = "status"
+    case v2 = "install"
 }
 
 enum DesktopUpdatePhase: String, Codable {
@@ -10762,6 +10763,10 @@ struct DesktopUpdateData: Codable {
     let `artifactName`: String?
     let `artifactURL`: String?
     let `signatureVerified`: Bool?
+    let `nextCheckAt`: String?
+    let `lastInstallVersion`: String?
+    let `lastInstallOutcome`: String?
+    let `lastInstallAt`: String?
 }
 
 extension DesktopUpdateData {
@@ -10793,6 +10798,10 @@ extension DesktopUpdateData {
         case f24 = "artifactName"
         case f25 = "artifactURL"
         case f26 = "signatureVerified"
+        case f27 = "nextCheckAt"
+        case f28 = "lastInstallVersion"
+        case f29 = "lastInstallOutcome"
+        case f30 = "lastInstallAt"
     }
     init(from decoder: Decoder) throws {
         let keys = try decoder.container(keyedBy: DesktopContractCodingKey.self)
@@ -10827,6 +10836,10 @@ extension DesktopUpdateData {
         self.`artifactName` = value.contains(.f24) ? try value.decode(String.self, forKey: .f24) : nil
         self.`artifactURL` = value.contains(.f25) ? try value.decode(String.self, forKey: .f25) : nil
         self.`signatureVerified` = value.contains(.f26) ? try value.decode(Bool.self, forKey: .f26) : nil
+        self.`nextCheckAt` = value.contains(.f27) ? try value.decode(String.self, forKey: .f27) : nil
+        self.`lastInstallVersion` = value.contains(.f28) ? try value.decode(String.self, forKey: .f28) : nil
+        self.`lastInstallOutcome` = value.contains(.f29) ? try value.decode(String.self, forKey: .f29) : nil
+        self.`lastInstallAt` = value.contains(.f30) ? try value.decode(String.self, forKey: .f30) : nil
     }
     func encode(to encoder: Encoder) throws {
         var value = encoder.container(keyedBy: CodingKeys.self)
@@ -10857,6 +10870,10 @@ extension DesktopUpdateData {
         try value.encodeIfPresent(self.`artifactName`, forKey: .f24)
         try value.encodeIfPresent(self.`artifactURL`, forKey: .f25)
         try value.encodeIfPresent(self.`signatureVerified`, forKey: .f26)
+        try value.encodeIfPresent(self.`nextCheckAt`, forKey: .f27)
+        try value.encodeIfPresent(self.`lastInstallVersion`, forKey: .f28)
+        try value.encodeIfPresent(self.`lastInstallOutcome`, forKey: .f29)
+        try value.encodeIfPresent(self.`lastInstallAt`, forKey: .f30)
     }
 }
 
@@ -24074,7 +24091,7 @@ enum DesktopUpdateShape {
     static let operations: Set<String> = ["desktop_update"]
     private static let schemas: [String: [String: String]] = [
         "DesktopUpdateAction": ["type": "DesktopUpdateOperation", "sub": "DesktopUpdateVerb", "group": "string", "groupColor": "string", "groupSoft": "boolean"],
-        "DesktopUpdateData": ["phase": "DesktopUpdatePhase", "outcome": "DesktopUpdateOutcome", "concluded": "boolean", "feed": "string", "automaticChecks": "boolean", "checkInterval": "number", "canCheckForUpdates": "boolean", "sessionInProgress": "boolean", "currentVersion": "string", "selectedVersion": "string", "selectedDisplayVersion": "string", "latestFeedVersion": "string", "noUpdateReason": "string", "userChoice": "string", "updateStage": "string", "lastError": "string", "checkStartedAt": "string", "updatedAt": "string", "cycleFinishedAt": "string", "lastCheck": "string", "sessionAgeSeconds": "number", "recoveryHint": "string", "started": "boolean", "message": "string", "artifactName": "string", "artifactURL": "string", "signatureVerified": "boolean"],
+        "DesktopUpdateData": ["phase": "DesktopUpdatePhase", "outcome": "DesktopUpdateOutcome", "concluded": "boolean", "feed": "string", "automaticChecks": "boolean", "checkInterval": "number", "canCheckForUpdates": "boolean", "sessionInProgress": "boolean", "currentVersion": "string", "selectedVersion": "string", "selectedDisplayVersion": "string", "latestFeedVersion": "string", "noUpdateReason": "string", "userChoice": "string", "updateStage": "string", "lastError": "string", "checkStartedAt": "string", "updatedAt": "string", "cycleFinishedAt": "string", "lastCheck": "string", "sessionAgeSeconds": "number", "recoveryHint": "string", "started": "boolean", "message": "string", "artifactName": "string", "artifactURL": "string", "signatureVerified": "boolean", "nextCheckAt": "string", "lastInstallVersion": "string", "lastInstallOutcome": "string", "lastInstallAt": "string"],
     ]
     static func validationError(_ action: [String: Any]) -> String? {
         let type = action["type"] as? String ?? ""

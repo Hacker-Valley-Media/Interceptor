@@ -157,7 +157,11 @@ export const system: Family[] = [
       // Rust check reads release metadata only; Sparkle on the Mac may raise its update window, so it stays off a Mac someone is using.
       { id: "update.check", sub: "check", args: ["update", "check"], disruptive: true, timeoutMs: 60_000,
         check: okc((r, ctx) => updateState(r, ctx) ?? (r.json?.signatureVerified === true ? "metadata check claims a verified signature" : undefined)) },
-      { id: "update.install-refused", sub: "check", args: ["update", "install"], expect: { all: bad } },
+      // Windows and Linux Full start the provider's own install cycle; a host already on the newest release checks and stops
+      // there. A development provider is not the installed one and refuses. macOS installs through Sparkle's prompt.
+      { id: "update.install", sub: "install", args: ["update", "install"], disruptive: true, timeoutMs: 60_000,
+        expect: { darwin: bad, all: { ok: true, orRefuse: { code: "unsupported_operation", error: /installed Full provider/ } } },
+        check: okc(r => r.json?.started === true ? undefined : "update install did not start a cycle") },
     ],
   },
   {

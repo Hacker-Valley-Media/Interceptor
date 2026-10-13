@@ -385,6 +385,9 @@ if [[ "$MODE" == --uninstall ]]; then
   # install folder so upgrades keep it. Only the files the provider wrote are removed.
   MODELS="${XDG_DATA_HOME:-$HOME/.local/share}/interceptor-models"
   if [[ -d "$MODELS" && ! -L "$MODELS" ]]; then rm -f "$MODELS"/gemma-4-E2B-it-Q4_0.gguf "$MODELS"/gemma-4-E2B-it-Q4_0.gguf.sha256 "$MODELS"/gemma-4-E2B-it-Q4_0.part; rmdir "$MODELS" 2>/dev/null || true; fi
+  # The provider's update folder: downloaded archives, the update watcher copy, logs and state (update.rs).
+  UPDATES="${XDG_CACHE_HOME:-$HOME/.cache}/interceptor/updates"
+  if [[ -d "$UPDATES" && ! -L "$UPDATES" ]]; then rm -rf "$UPDATES"; rmdir "$(dirname "$UPDATES")" 2>/dev/null || true; fi
   if [[ -f "$POINTER_STATE" ]]; then rm -f "$POINTER/manifest.json" "$POINTER_PAYLOAD" "$POINTER_STATE"; rmdir "$POINTER"; fi
   [[ ! -f "$OVERLAY_STATE" ]] || rm -f "$OVERLAY" "$OVERLAY_STATE"
   [[ ! -f "$STATE" ]] || rm -f "$BINARY" "$AUTOSTART" "$STATE"

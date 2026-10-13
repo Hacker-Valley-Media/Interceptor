@@ -312,6 +312,8 @@ fn serve<R: Read, W: Write>(reader: &mut R, writer: &mut W, authorized: bool) ->
         let malformed = !value.is_object() ||
             value.get("protocolVersion").is_some_and(|v| !v.is_number()) ||
             value.get("token").is_some_and(|v| !v.is_string());
+        // The updater installs only after the provider has been idle (update.rs).
+        let _activity = if authorized && !malformed { update::activity(&value) } else { None };
         // Read the bounded initial frame before rejecting a peer. Closing with
         // unread handshake bytes can reset the socket before it gets the denial.
         let result = if !authorized { failure("permission_denied", "native provider requires the same user and login session") }
@@ -366,6 +368,8 @@ fn serve<R: Read, W: Write>(reader: &mut R, writer: &mut W, authorized: bool) ->
     }
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    // This process owns the session endpoint; only the installed Full provider starts updating.
+    update::start();
     #[cfg(target_os = "linux")] let login = linux::login_identity(0)
         .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "provider requires a login session; user-service callers need an authorized GUI broker"))?;
     #[cfg(target_os = "linux")] listener.set_nonblocking(true)?;
@@ -412,6 +416,8 @@ fn client_io_timeout(args: &[String]) -> io::Result<u32> {
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|s| s == "--version") { println!("{}", env!("CARGO_PKG_VERSION")); return Ok(()); }
+    // The detached update watcher runs before any native initialization (update.rs).
+    if args.get(1).is_some_and(|s| s == "--update-apply") { return update::apply(args.get(2).map(String::as_str)); }
     if args.get(1).is_some_and(|s|s=="--engines-check"){
         if args.len()!=3{return Err(io::Error::other("usage: --engines-check <absolute-engine-directory>"));}
         // Read-only disposable diagnostics may block inside filesystem APIs.

@@ -802,7 +802,7 @@ export type DesktopSensitiveData = DesktopSensitiveCheck | DesktopSensitiveMonit
 
 export const DESKTOP_UPDATE_DEADLINE_MS = 15_000
 export type DesktopUpdateOperation = "desktop_update"
-export type DesktopUpdateVerb = "check" | "status"
+export type DesktopUpdateVerb = "check" | "status" | "install"
 export type DesktopUpdatePhase = "idle" | "checking" | "update_available" | "downloading" | "downloaded" | "extracting" | "ready_to_install" | "installing" | "deferred" | "error"
 export type DesktopUpdateOutcome = "none" | "checking" | "update_available" | "up_to_date" | "no_eligible_update" | "install_chosen" | "deferred" | "skipped" | "installing" | "error"
 export interface DesktopUpdateAction {
@@ -840,6 +840,10 @@ export interface DesktopUpdateData {
   artifactName?: string
   artifactURL?: string
   signatureVerified?: boolean
+  nextCheckAt?: string
+  lastInstallVersion?: string
+  lastInstallOutcome?: string
+  lastInstallAt?: string
 }
 
 export const DESKTOP_LOCATION_DEADLINE_MS = 35_000

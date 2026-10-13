@@ -976,6 +976,8 @@ pub enum DesktopUpdateVerb {
     V0,
     #[serde(rename = "status")]
     V1,
+    #[serde(rename = "install")]
+    V2,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5527,6 +5529,14 @@ pub struct DesktopUpdateData {
     pub r#artifactURL: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "desktop_contract_optional_non_null")]
     pub r#signatureVerified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "desktop_contract_optional_non_null")]
+    pub r#nextCheckAt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "desktop_contract_optional_non_null")]
+    pub r#lastInstallVersion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "desktop_contract_optional_non_null")]
+    pub r#lastInstallOutcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "desktop_contract_optional_non_null")]
+    pub r#lastInstallAt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10542,7 +10552,7 @@ pub fn desktop_update_shape_error(action: &serde_json::Value) -> Option<String> 
         }
         let fields: &[(&str, &str)] = match schema {
             "DesktopUpdateAction" => &[("type", "DesktopUpdateOperation"), ("sub", "DesktopUpdateVerb"), ("group", "string"), ("groupColor", "string"), ("groupSoft", "boolean")],
-            "DesktopUpdateData" => &[("phase", "DesktopUpdatePhase"), ("outcome", "DesktopUpdateOutcome"), ("concluded", "boolean"), ("feed", "string"), ("automaticChecks", "boolean"), ("checkInterval", "number"), ("canCheckForUpdates", "boolean"), ("sessionInProgress", "boolean"), ("currentVersion", "string"), ("selectedVersion", "string"), ("selectedDisplayVersion", "string"), ("latestFeedVersion", "string"), ("noUpdateReason", "string"), ("userChoice", "string"), ("updateStage", "string"), ("lastError", "string"), ("checkStartedAt", "string"), ("updatedAt", "string"), ("cycleFinishedAt", "string"), ("lastCheck", "string"), ("sessionAgeSeconds", "number"), ("recoveryHint", "string"), ("started", "boolean"), ("message", "string"), ("artifactName", "string"), ("artifactURL", "string"), ("signatureVerified", "boolean")],
+            "DesktopUpdateData" => &[("phase", "DesktopUpdatePhase"), ("outcome", "DesktopUpdateOutcome"), ("concluded", "boolean"), ("feed", "string"), ("automaticChecks", "boolean"), ("checkInterval", "number"), ("canCheckForUpdates", "boolean"), ("sessionInProgress", "boolean"), ("currentVersion", "string"), ("selectedVersion", "string"), ("selectedDisplayVersion", "string"), ("latestFeedVersion", "string"), ("noUpdateReason", "string"), ("userChoice", "string"), ("updateStage", "string"), ("lastError", "string"), ("checkStartedAt", "string"), ("updatedAt", "string"), ("cycleFinishedAt", "string"), ("lastCheck", "string"), ("sessionAgeSeconds", "number"), ("recoveryHint", "string"), ("started", "boolean"), ("message", "string"), ("artifactName", "string"), ("artifactURL", "string"), ("signatureVerified", "boolean"), ("nextCheckAt", "string"), ("lastInstallVersion", "string"), ("lastInstallOutcome", "string"), ("lastInstallAt", "string")],
             _ => return None,
         };
         if let Some(object) = value.as_object() { for (key, child) in object {

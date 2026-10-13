@@ -183,9 +183,9 @@ export const COMMAND_SPECS: CommandSpec[] = [
   },
   {
     name: "update", surface: "local",
-    usage: "interceptor update [status]",
-    summary: "Update Interceptor itself — checks with Sparkle and reports its selected version or no-update result (full install only)",
-    returns: "check: started, concluded, outcome, phase, selected/latest version or error, and feed. status: the same observed lifecycle plus lastCheck, automaticChecks, checkInterval, canCheckForUpdates, and sessionInProgress.",
+    usage: "interceptor update [status|check|install]",
+    summary: "Update Interceptor itself: checks the update feed and reports its selected version or no-update result (Sparkle on macOS; Windows/Linux Full also install newer releases on their own once Interceptor is idle; full install only)",
+    returns: "check: started, concluded, outcome, phase, selected/latest version or error, and feed. status: the same observed lifecycle plus lastCheck, nextCheckAt, automaticChecks, checkInterval, canCheckForUpdates, sessionInProgress and the last install (lastInstallVersion, lastInstallOutcome, lastInstallAt). install (Windows/Linux Full): starts a check, verified download and silent install now and returns started.",
     example: "interceptor update",
   },
   { name: "network", surface: "browser", usage: "interceptor net [--filter <pattern>] [--limit <n>] [--format har|json|pcapng --out <path>]", summary: "Passive network log", returns: "Recent requests (method, url, status, type); exportable to HAR/pcapng." },

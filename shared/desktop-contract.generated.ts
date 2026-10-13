@@ -448,7 +448,8 @@ export const DESKTOP_CONTRACT_ALIASES = {
   ],
   "DesktopUpdateVerb": [
     "check",
-    "status"
+    "status",
+    "install"
   ],
   "DesktopUpdatePhase": [
     "idle",
@@ -7466,6 +7467,26 @@ export const DESKTOP_CONTRACT_FIELDS = {
       "name": "signatureVerified",
       "optional": true,
       "type": "boolean"
+    },
+    {
+      "name": "nextCheckAt",
+      "optional": true,
+      "type": "string"
+    },
+    {
+      "name": "lastInstallVersion",
+      "optional": true,
+      "type": "string"
+    },
+    {
+      "name": "lastInstallOutcome",
+      "optional": true,
+      "type": "string"
+    },
+    {
+      "name": "lastInstallAt",
+      "optional": true,
+      "type": "string"
     }
   ],
   "DesktopLocationAction": [

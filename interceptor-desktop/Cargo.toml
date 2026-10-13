@@ -1,6 +1,6 @@
 [package]
 name = "interceptor-desktop"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 license = "Elastic-2.0"
 default-run = "interceptor-desktop"
@@ -32,6 +32,8 @@ pdfium-render = { version = "=0.9.4", default-features = false, features = ["pdf
 image = { version = "=0.25.9", default-features = false, features = ["png", "jpeg", "webp"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "rustls-tls", "cookies", "gzip", "brotli", "deflate"] }
 url = "=2.5.8"
+# Ed25519 for the signed update feed (update.rs); already in the tree through rustls.
+ring = "=0.17.14"
 regex = "=1.13.1"
 tract-onnx = { version = "=0.23.8", default-features = false }
 icu_normalizer = "=2.3.0"

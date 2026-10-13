@@ -78,6 +78,9 @@ let bridgeSocket: ReturnType<typeof Bun.connect> extends Promise<infer T> ? T | 
 let bridgeBuffer = Buffer.alloc(0)
 let bridgeConnecting = false
 let bridgeSpawnAttempted = false
+// When a CLI last sent a request. GET /health reports it as idleMs: the Windows and Linux
+// updater installs only after agents have left Interceptor alone for a while.
+let lastCliRequestAt = Date.now()
 const bridgePending = new Map<string, {
   resolve: (response: string) => void
   timer: ReturnType<typeof setTimeout>
@@ -2010,6 +2013,7 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           }
 
           const id = request.id ?? crypto.randomUUID()
+          lastCliRequestAt = Date.now()
           let action = request.action as { type?: string; [key: string]: unknown } | undefined
           if (isSecretBearing(action) && !constantTimeTokenEquals(request.vaultToken, daemonIdentity.shutdownToken)) {
             socketWriteFramed(socket, JSON.stringify({id,result:{success:false,code:"permission_denied",error:"authenticated local vault request required"}}))
@@ -2299,7 +2303,8 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
     fetch(req, server) {
       if (server.upgrade(req, {})) return
       if (new URL(req.url).pathname === "/health") {
-        return Response.json({ service: DAEMON_HEALTH_SERVICE, pid: process.pid, version: VERSION, wsPort: WS_PORT, healed: healRuntimeFiles("health probe") })
+        return Response.json({ service: DAEMON_HEALTH_SERVICE, pid: process.pid, version: VERSION, wsPort: WS_PORT, healed: healRuntimeFiles("health probe"),
+          pending: pendingRequests.size + bridgePending.size, idleMs: Date.now() - lastCliRequestAt })
       }
       return new Response(LEGACY_HEALTH_BODY, { status: 200 })
     },
@@ -2474,6 +2479,7 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         }
 
         const id = request.id ?? crypto.randomUUID()
+        lastCliRequestAt = Date.now()
         log(`ws request: ${id} ${actionLogSummary(request.action)}`)
 
         const actionType = (request.action as { type?: string })?.type || "unknown"

@@ -33,12 +33,12 @@ function visibleVersions(document: Document): string[] {
 
 describe("cumulative Sparkle release notes", () => {
   test("one-version-behind shows only the target release", () => {
-    expect(visibleVersions(releaseDocument("1.0.24"))).toEqual(["2.0.0"])
+    expect(visibleVersions(releaseDocument("2.0.0"))).toEqual(["2.1.0"])
   })
 
   test("older install shows every newer release", () => {
     expect(visibleVersions(releaseDocument("1.0.3"))).toEqual([
-      "2.0.0", "1.0.24", "1.0.21", "1.0.19", "1.0.17", "1.0.15", "1.0.13", "1.0.11", "1.0.9",
+      "2.1.0", "2.0.0", "1.0.24", "1.0.21", "1.0.19", "1.0.17", "1.0.15", "1.0.13", "1.0.11", "1.0.9",
     ])
   })
 

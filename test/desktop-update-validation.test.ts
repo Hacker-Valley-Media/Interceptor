@@ -9,18 +9,29 @@ test('update selectors refuse fields and preserve read/install boundaries',()=>{
     const parse=(...args:string[])=>desktopAction(parseMacosCommand(['macos','update',...args],undefined,desktop)!)
     expect(parse()).toEqual({type:'desktop_update',sub:'status'})
     expect(parse('check').sub).toBe('check')
-    for(const args of [['install'],['--app','check'],['check','extra']])expect(()=>parse(...args)).toThrow()
+    for(const args of [['--app','check'],['check','extra'],['install','now'],['download']])expect(()=>parse(...args)).toThrow()
+    // Windows and Linux Full install releases themselves; macOS keeps Sparkle's prompt.
+    if(process.platform==='darwin')expect(()=>parse('install')).toThrow(/Sparkle/)
+    else expect(parse('install').sub).toBe('install')
   }
   for(const surface of ['local','macos','desktop'] as const){for(const args of [[],['check'],['status']])expect(classify(surface,'update',args).tier).toBe('read');expect(classify(surface,'update',['install']).tier).toBe('destructive')}
   expect(desktopUpdateActionError({type:'desktop_update',sub:'status',url:'https://other.invalid'})).toBeDefined()
+  expect(desktopUpdateActionError({type:'desktop_update',sub:'install'})).toBeUndefined()
   for(const type of ['macos_update','desktop_update'])expect(pickTimeoutForAction({type,sub:'check'})).toBeGreaterThanOrEqual(20000)
 })
 test('update metadata cannot masquerade as artifact verification or a finished active session',()=>{
-  const status={phase:'idle',outcome:'none',concluded:true,feed:'https://api.github.com/repos/Hacker-Valley-Media/Interceptor/releases/latest',automaticChecks:false,checkInterval:0,canCheckForUpdates:true,sessionInProgress:false,currentVersion:'1.0.26'}
+  const status={phase:'idle',outcome:'none',concluded:true,feed:'https://updates.hackervalley.media/windows/latest.json',automaticChecks:true,checkInterval:900,canCheckForUpdates:true,sessionInProgress:false,currentVersion:'2.1.0'}
   const action={type:'desktop_update',sub:'status'}
   expect(desktopUpdateResultError(action,status)).toBeUndefined()
-  for(const changes of [{sessionInProgress:true},{checkInterval:-1},{lastCheck:'not a timestamp'},{outcome:'error'},{outcome:'update_available'},{artifactURL:'https://unsafe.invalid/setup.exe',artifactName:'setup.exe',signatureVerified:false},{message:'bad\0text'}])expect(desktopUpdateResultError(action,{...status,...changes})).toBeDefined()
-  const available={...status,phase:'update_available',outcome:'update_available',selectedVersion:'1.0.27',artifactName:'Interceptor-Full-1.0.27-windows-arm64.exe',artifactURL:'https://github.com/Hacker-Valley-Media/Interceptor/releases/download/v1.0.27/Interceptor-Full-1.0.27-windows-arm64.exe',signatureVerified:false}
-  expect(desktopUpdateResultError(action,available)).toBeUndefined();expect(desktopUpdateResultError(action,{...available,signatureVerified:true})).toBeDefined()
-  for(const changes of [{selectedVersion:'1.0.28'},{artifactURL:available.artifactURL+'?redirect=other'},{artifactName:'Interceptor-Full-1.0.27-windows-arm64.tar.gz'}])expect(desktopUpdateResultError(action,{...available,...changes})).toBeDefined()
+  for(const changes of [{sessionInProgress:true},{checkInterval:-1},{lastCheck:'not a timestamp'},{nextCheckAt:'soon'},{outcome:'error'},{outcome:'update_available'},{artifactURL:'https://unsafe.invalid/setup.exe',artifactName:'setup.exe',signatureVerified:false},{message:'bad\0text'},{signatureVerified:true},{lastInstallOutcome:'maybe'}])expect(desktopUpdateResultError(action,{...status,...changes})).toBeDefined()
+  expect(desktopUpdateResultError(action,{...status,lastInstallVersion:'2.0.99',lastInstallOutcome:'installed',lastInstallAt:'2026-10-12T20:00:00Z',nextCheckAt:'2026-10-12T20:15:00Z'})).toBeUndefined()
+  const url='https://updates.hackervalley.media/windows/Interceptor-Full-2.2.0-windows-arm64.exe'
+  const available={...status,phase:'update_available',outcome:'update_available',selectedVersion:'2.2.0',artifactName:'Interceptor-Full-2.2.0-windows-arm64.exe',artifactURL:url,signatureVerified:false}
+  expect(desktopUpdateResultError(action,available)).toBeUndefined()
+  // A check reads signed metadata only; verified describes downloaded bytes.
+  expect(desktopUpdateResultError(action,{...available,signatureVerified:true})).toBeDefined()
+  for(const phase of ['downloaded','deferred','installing'])expect(desktopUpdateResultError(action,{...available,phase,outcome:phase==='downloaded'?'update_available':phase,sessionInProgress:true,concluded:false,signatureVerified:true})).toBeUndefined()
+  for(const changes of [{selectedVersion:'2.2.1'},{artifactURL:url+'?redirect=other'},{artifactName:'Interceptor-Full-2.2.0-windows-arm64.tar.gz'},{artifactURL:'http://updates.hackervalley.media/windows/Interceptor-Full-2.2.0-windows-arm64.exe'},{artifactURL:'https://updates.hackervalley.media/windows/other.exe'}])expect(desktopUpdateResultError(action,{...available,...changes})).toBeDefined()
+  // A lab feed on a private address may use plain HTTP; the provider still checks the signature and digest.
+  expect(desktopUpdateResultError(action,{...available,artifactURL:'http://192.168.64.1:8099/windows/Interceptor-Full-2.2.0-windows-arm64.exe'})).toBeUndefined()
 })
