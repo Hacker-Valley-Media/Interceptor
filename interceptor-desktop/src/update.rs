@@ -525,7 +525,10 @@ fn install(release:&Release,dir:&Path,provider:&Path,lab:bool,window:&mut Window
 /// After an install that failed and stopped this provider, the provider that starts next shows
 /// Sparkle's error once.
 fn report_failed_install(dir:&Path){
+    // A watcher may still be finishing the install that restarted this provider.
+    let deadline=Instant::now()+Duration::from_secs(120);
     let mut saved=read_state(dir);
+    while pending(&saved)&&Instant::now()<deadline{std::thread::sleep(Duration::from_secs(2));saved=read_state(dir);}
     if saved["last"]["outcome"]!="failed"||saved["last"]["reported"]==true{return;}
     saved["last"]["reported"]=json!(true);let _=write_state(dir,&saved);
     let target=saved["last"]["version"].as_str().unwrap_or("the update").to_owned();
@@ -605,15 +608,17 @@ pub(crate) fn apply(dir:Option<&str>)->std::io::Result<()>{
     if let Err(error)=&ran{log_line(&dir,&format!("installer: {error}"));}
     let installed=Command::new(&provider).arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()
         .map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default();
-    let mut running=wait_alive(&provider,Duration::from_secs(30));
-    if !running{log_line(&dir,"no provider answered after the install; starting it");restart(&provider);running=wait_alive(&provider,Duration::from_secs(30));}
     let exit=ran.as_ref().ok().copied().flatten();
     let outcome=if exit==Some(0)&&installed==target{"installed"}else{"failed"};
     let error=match(&ran,exit){(Err(e),_)=>Some(e.clone()),(Ok(_),Some(0))if installed!=target=>Some(format!("the installer finished but the provider reports {installed}")),(Ok(_),Some(code))if code!=0=>Some(format!("the installer exited with code {code}; see install-{target}.log")),(Ok(_),None)=>Some("the installer did not finish within 30 minutes".to_owned()),_=>None};
-    log_line(&dir,&format!("{outcome}: installed version {installed}, provider running {running}{}",error.as_deref().map(|e|format!(", {e}")).unwrap_or_default()));
+    // Record the outcome before any provider starts: the one that starts next reads it to show the error.
     let mut state=read_state(&dir);
-    record(&mut state,json!({"version":target,"outcome":outcome,"exitCode":exit,"installedVersion":installed,"providerRunning":running,"at":timestamp(),"error":error,"reported":false}));
+    record(&mut state,json!({"version":target,"outcome":outcome,"exitCode":exit,"installedVersion":installed,"at":timestamp(),"error":error,"reported":false}));
     write_state(&dir,&state)?;
+    let mut running=wait_alive(&provider,Duration::from_secs(30));
+    if !running{log_line(&dir,"no provider answered after the install; starting it");restart(&provider);running=wait_alive(&provider,Duration::from_secs(30));}
+    let mut state=read_state(&dir);state["last"]["providerRunning"]=json!(running);let _=write_state(&dir,&state);
+    log_line(&dir,&format!("{outcome}: installed version {installed}, provider running {running}{}",error.as_deref().map(|e|format!(", {e}")).unwrap_or_default()));
     if outcome=="installed"{let _=std::fs::remove_file(&installer);}
     let _=std::fs::remove_dir_all(dir.join(format!("stage-{target}")));
     Ok(())
