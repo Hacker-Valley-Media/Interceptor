@@ -26,6 +26,18 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.1">
+    <h2>Interceptor 2.1.1</h2>
+    <time datetime="2026-10-13">October 13, 2026</time>
+    <ul>
+      <li>Windows and Linux now update the way the Mac does with Sparkle. Once a day Interceptor checks for a new release, and when there is one it opens its update window with the release notes and <strong>Skip This Version</strong>, <strong>Remind Me Later</strong>, and <strong>Install Update</strong>. Nothing downloads or installs until you click. After the download, <strong>Install and Relaunch</strong> installs it and Interceptor restarts.</li>
+      <li>2.1.0 installed updates on its own once Interceptor had been idle for 10 minutes. That is gone, and so is <code>interceptor update install</code>: on every OS you install from the update window, and <code>interceptor update</code> checks now and opens the window when there is an update.</li>
+      <li>The installer is still checked before it runs: its SHA-256 and length must match the signed feed, and on Windows it must carry the Hacker Valley Media signature. The release notes in the window are pinned by the same signed feed.</li>
+      <li>Remind Me Later asks again the next day. Skip This Version stops asking about that release; a newer one is still offered. If an install fails, Interceptor keeps the version you had and tells you the next time it starts.</li>
+      <li>On Linux the update window needs WebKitGTK 4.1, the same library overlays use. Without it, Interceptor posts a notification that links the new release.</li>
+      <li>Computers already on 2.1.0 take this one update on their own, because 2.1.0's updater does that. From 2.1.1 on, every update waits for your click.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="2.1.0">
     <h2>Interceptor 2.1.0</h2>
     <time datetime="2026-10-12">October 12, 2026</time>

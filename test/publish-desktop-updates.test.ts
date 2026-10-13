@@ -10,7 +10,9 @@ const keys = () => {
 }
 
 test("each feed names one Full installer per architecture with its digest and length", () => {
-  const payload = buildPayload("windows", "2.1.0", { arm64: exe(10), x64: exe(20) }, "2026-10-12T00:00:00Z", "https://updates.hackervalley.media/release-notes-2.1.0.html")
+  const payload = buildPayload("windows", "2.1.0", { arm64: exe(10), x64: exe(20) }, "2026-10-12T00:00:00Z", { url: "https://updates.hackervalley.media/release-notes-2.1.0.html", sha256: "c".repeat(64) })
+  expect(payload.notes).toBe("https://updates.hackervalley.media/release-notes-2.1.0.html")
+  expect(payload.notesSha256).toBe("c".repeat(64))
   expect(payload.artifacts.arm64).toEqual({ file: "Interceptor-Full-2.1.0-windows-arm64.exe", url: "https://updates.hackervalley.media/windows/Interceptor-Full-2.1.0-windows-arm64.exe", sha256: expect.stringMatching(/^[0-9a-f]{64}$/), length: 12 })
   expect(buildPayload("linux", "2.1.0", { arm64: gz(1), x64: gz(2) }, "2026-10-12T00:00:00Z").artifacts.x64.url).toBe("https://updates.hackervalley.media/linux/Interceptor-Full-2.1.0-linux-x64.tar.gz")
   expect(fileName("2.1.0", "linux", "arm64")).toBe("Interceptor-Full-2.1.0-linux-arm64.tar.gz")

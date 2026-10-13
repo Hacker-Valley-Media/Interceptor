@@ -159,19 +159,19 @@ impl OwnedHelper{
         // The provider retains its unpackaged toast identity. Only the Contacts
         // copy carries the sparse-package Contacts, calendar and task identity.
         #[cfg(windows)]let executable=if matches!(mode,"--contacts-engine"|"--eventkit-engine"){executable.with_file_name("interceptor-contacts-native.exe")}else{executable};
-        // A Linux provider built without the overlay feature runs overlays in its sibling helper,
+        // A Linux provider built without the overlay feature runs overlays and the update window in its sibling helper,
         // which links WebKitGTK and gtk-layer-shell so the provider itself does not.
-        #[cfg(all(target_os="linux",not(feature="overlay")))]let executable=if mode=="--overlay-engine"{executable.with_file_name("interceptor-overlay")}else{executable};
+        #[cfg(all(target_os="linux",not(feature="overlay")))]let executable=if matches!(mode,"--overlay-engine"|"--update-ui"){executable.with_file_name("interceptor-overlay")}else{executable};
         // And the reverse: face tracking runs in that helper, but its WebKitGTK-linked binary takes ~20s to
         // answer one --vision-ocr request (the provider takes ~90ms), so per-frame vision uses the provider.
         #[cfg(all(target_os="linux",feature="overlay"))]let executable=if mode=="--vision-ocr"{executable.with_file_name("interceptor-desktop")}else{executable};
         let mut command=Command::new(executable);command.arg(mode).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        #[cfg(unix)]let grouped=matches!(mode,"--script-engine"|"--audio-engine"|"--audio-devices"|"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking");
+        #[cfg(unix)]let grouped=matches!(mode,"--script-engine"|"--audio-engine"|"--audio-devices"|"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking"|"--update-ui");
         #[cfg(unix)]if grouped{use std::os::unix::process::CommandExt;command.process_group(0);}
-        if mode.starts_with("--audio-")||matches!(mode,"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking"){command.arg(std::process::id().to_string());}
+        if mode.starts_with("--audio-")||matches!(mode,"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking"|"--update-ui"){command.arg(std::process::id().to_string());}
         #[cfg(windows)]{use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
         let mut helper=Self{child:crate::auth::AuthChild(command.spawn()?),#[cfg(unix)]grouped,#[cfg(windows)]job:None};
-        #[cfg(windows)]if matches!(mode,"--script-engine"|"--audio-engine"|"--audio-devices"|"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking"){unsafe{
+        #[cfg(windows)]if matches!(mode,"--script-engine"|"--audio-engine"|"--audio-devices"|"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking"|"--update-ui"){unsafe{
             use std::os::windows::io::AsRawHandle;
             use windows::Win32::{Foundation::{HANDLE,CloseHandle},System::JobObjects::*};
             let job=CreateJobObjectW(None,None).map_err(std::io::Error::other)?;

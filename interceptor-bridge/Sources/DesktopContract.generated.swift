@@ -583,7 +583,6 @@ enum DesktopUpdateOperation: String, Codable {
 enum DesktopUpdateVerb: String, Codable {
     case v0 = "check"
     case v1 = "status"
-    case v2 = "install"
 }
 
 enum DesktopUpdatePhase: String, Codable {

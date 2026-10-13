@@ -38,6 +38,7 @@ mod stream_media;
 mod sounds;
 mod sensitive;
 mod update;
+mod update_ui;
 mod location;
 mod maps;
 mod music;
@@ -312,8 +313,6 @@ fn serve<R: Read, W: Write>(reader: &mut R, writer: &mut W, authorized: bool) ->
         let malformed = !value.is_object() ||
             value.get("protocolVersion").is_some_and(|v| !v.is_number()) ||
             value.get("token").is_some_and(|v| !v.is_string());
-        // The updater installs only after the provider has been idle (update.rs).
-        let _activity = if authorized && !malformed { update::activity(&value) } else { None };
         // Read the bounded initial frame before rejecting a peer. Closing with
         // unread handshake bytes can reset the socket before it gets the denial.
         let result = if !authorized { failure("permission_denied", "native provider requires the same user and login session") }
@@ -435,10 +434,10 @@ fn main() -> io::Result<()> {
     if args.len()==2&&args[1]=="--thumbnail-pdf"{return thumbnail::pdf_helper();}
     if args.len()==2&&args[1]=="--script-engine"{return script::helper();}
     if args.len()==2&&args[1]=="--pdf-engine"{return pdf::helper();}
-    if args.get(1).is_some_and(|mode|matches!(mode.as_str(),"--audio-engine"|"--audio-devices"|"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking")){
+    if args.get(1).is_some_and(|mode|matches!(mode.as_str(),"--audio-engine"|"--audio-devices"|"--translation-engine"|"--speech-engine"|"--trust-state"|"--sound-engine"|"--vision-ocr"|"--sensitive-engine"|"--location-engine"|"--maps-open-engine"|"--music-engine"|"--music-system-engine"|"--share-engine"|"--contacts-engine"|"--eventkit-engine"|"--photos-engine"|"--vm-engine"|"--vm-image-engine"|"--overlay-engine"|"--overlay-tracking"|"--update-ui")){
         if args.len()!=3{return Err(io::Error::other("native helper requires one provider process ID"));}
         let parent=args[2].parse::<u32>().map_err(|_|io::Error::other("native helper requires its provider process ID"))?;
-        return match args[1].as_str(){"--translation-engine"=>language::translation_helper(parent),"--speech-engine"=>speech::helper(parent),"--trust-state"=>trust::helper(parent),"--sound-engine"=>sounds::helper(parent),"--vision-ocr"=>vision::helper(parent),"--sensitive-engine"=>sensitive::helper(parent),"--location-engine"=>location::helper(parent),"--maps-open-engine"=>maps::open_helper(parent),"--music-engine"=>music::helper(parent),"--music-system-engine"=>music::system_helper(parent),"--share-engine"=>share::helper(parent),"--contacts-engine"=>contacts::helper(parent),"--eventkit-engine"=>eventkit::helper(parent),"--photos-engine"=>photos::helper(parent),"--vm-engine"=>vm::system_helper(parent),"--vm-image-engine"=>vm::image_helper(parent),"--overlay-engine"=>overlay::helper(parent),"--overlay-tracking"=>overlay_tracking::helper(parent),_=>audio::helper(args[1]=="--audio-devices",parent)};
+        return match args[1].as_str(){"--translation-engine"=>language::translation_helper(parent),"--speech-engine"=>speech::helper(parent),"--trust-state"=>trust::helper(parent),"--sound-engine"=>sounds::helper(parent),"--vision-ocr"=>vision::helper(parent),"--sensitive-engine"=>sensitive::helper(parent),"--location-engine"=>location::helper(parent),"--maps-open-engine"=>maps::open_helper(parent),"--music-engine"=>music::helper(parent),"--music-system-engine"=>music::system_helper(parent),"--share-engine"=>share::helper(parent),"--contacts-engine"=>contacts::helper(parent),"--eventkit-engine"=>eventkit::helper(parent),"--photos-engine"=>photos::helper(parent),"--vm-engine"=>vm::system_helper(parent),"--vm-image-engine"=>vm::image_helper(parent),"--overlay-engine"=>overlay::helper(parent),"--update-ui"=>update_ui::helper(parent),"--overlay-tracking"=>overlay_tracking::helper(parent),_=>audio::helper(args[1]=="--audio-devices",parent)};
     }
     if args.len()==2&&args[1]=="--third-party-notices"{return std::io::stdout().lock().write_all(include_bytes!("../THIRD-PARTY-NOTICES.txt"));}
     if args.len()==2&&args[1]=="--files-open"{return files::inventory_helper();}

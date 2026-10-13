@@ -1259,12 +1259,6 @@ struct Manager {
     vms: BTreeMap<PathBuf, Runtime>,
 }
 static MANAGER: OnceLock<Mutex<Manager>> = OnceLock::new();
-/// A VM this provider started is still running (the updater does not install over it).
-pub(crate) fn active() -> bool {
-    let Some(mgr) = MANAGER.get() else { return false };
-    let Ok(mut mgr) = mgr.try_lock() else { return true };
-    mgr.vms.values_mut().any(|r| !r.exited().unwrap_or(false))
-}
 fn disk_info(path: &Path, deadline: Instant) -> Result<u64> {
     let info = image_job("info", path, None, None, 0, deadline)?;
     info["virtual-size"]
