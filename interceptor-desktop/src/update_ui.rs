@@ -127,7 +127,12 @@ mod native{
         // and flashes its taskbar button; it stops being topmost once the user focuses it.
         let window=WindowBuilder::new().with_title("Interceptor Software Update").with_inner_size(LogicalSize::new(640.0,470.0))
             .with_min_inner_size(LogicalSize::new(480.0,360.0)).with_always_on_top(true).build(&event_loop).map_err(io::Error::other)?;
-        let webview=builder(&view,out.clone()).build(&window).map_err(|e|io::Error::other(format!("WebView2 update window could not initialize: {e}")))?;
+        // Chromium builds the page's accessibility tree only when asked; without it UI Automation sees
+        // no buttons, and an agent could not click Install Update the way it does in Sparkle's window.
+        // wry's default arguments are kept.
+        use wry::WebViewBuilderExtWindows;
+        let webview=builder(&view,out.clone()).with_additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force-renderer-accessibility")
+            .build(&window).map_err(|e|io::Error::other(format!("WebView2 update window could not initialize: {e}")))?;
         window.set_focus();window.request_user_attention(Some(UserAttentionType::Critical));
         // The provider waits for this before it counts the window as open.
         choose(&out,"shown");
