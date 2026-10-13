@@ -516,3 +516,93 @@ export function sendCommandWs(rawAction: Action, tabId?: number, contextId?: str
     }
   })
 }
+
+export type DaemonStream = {
+  /** The answer to the opening action. */
+  response: DaemonResponse
+  /** Resolves when the socket closes, from either end. */
+  closed: Promise<void>
+  close: () => void
+}
+
+/**
+ * Send one action on the IPC socket and keep the socket open. The frame that
+ * carries the action's id resolves the promise; every other frame goes to
+ * `onFrame` in arrival order. The daemon ends a subscription when the socket
+ * closes, so there is no unsubscribe step.
+ */
+export function openDaemonStream(
+  rawAction: Action,
+  tabId: number | undefined,
+  contextId: string | undefined,
+  onFrame: (frame: Record<string, unknown>) => void,
+): Promise<DaemonStream> {
+  const action = withGroup(rawAction)
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID()
+    process.stderr.write(`[${id.slice(0, 8)}] → ${action.type}\n`)
+    let buffer = Buffer.alloc(0)
+    let opened = false
+    let socketRef: Bun.Socket<undefined> | null = null
+    let markClosed: () => void = () => {}
+    const closed = new Promise<void>((done) => { markClosed = done })
+    const close = (): void => { try { socketRef?.end() } catch {} }
+    const timer = setTimeout(() => {
+      if (opened) return
+      close()
+      reject(new Error(timeoutMessage(action.type, INTERCEPTOR_TIMEOUT_MS)))
+    }, INTERCEPTOR_TIMEOUT_MS)
+
+    const handlers: Bun.SocketHandler<undefined> = {
+      open(socket: Bun.Socket<undefined>) {
+        socketRef = socket
+        const encoded = Buffer.from(JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }), ...(contextId !== undefined && { contextId }) }), "utf-8")
+        const header = Buffer.alloc(4)
+        header.writeUInt32LE(encoded.byteLength, 0)
+        // The opening action is a few hundred bytes, under the 8 KiB send buffer.
+        socket.write(Buffer.concat([header, encoded]))
+      },
+      data(_socket: Bun.Socket<undefined>, raw: Buffer<ArrayBufferLike>) {
+        buffer = buffer.length === 0 ? Buffer.from(raw) : Buffer.concat([buffer, Buffer.from(raw)])
+        while (buffer.length >= 4) {
+          const msgLen = buffer.readUInt32LE(0)
+          if (msgLen === 0 || msgLen > MAX_UPLOAD_FRAME_BYTES) {
+            close()
+            if (!opened) reject(new Error("invalid frame from daemon"))
+            return
+          }
+          if (buffer.length < 4 + msgLen) return
+          const json = buffer.subarray(4, 4 + msgLen).toString("utf-8")
+          buffer = buffer.subarray(4 + msgLen)
+          let frame: Record<string, unknown>
+          try { frame = JSON.parse(json) as Record<string, unknown> } catch { continue }
+          if (!opened && frame.id === id) {
+            opened = true
+            clearTimeout(timer)
+            resolve({ response: frame as unknown as DaemonResponse, closed, close })
+          } else {
+            onFrame(frame)
+          }
+        }
+      },
+      close() {
+        clearTimeout(timer)
+        markClosed()
+        if (!opened) reject(new Error("connection closed before response"))
+      },
+      connectError() {
+        clearTimeout(timer)
+        reject(new Error("daemon not running. Open Chrome with the Interceptor extension loaded."))
+      },
+      error(_socket: Bun.Socket<undefined>, err: Error) {
+        clearTimeout(timer)
+        if (!opened) reject(err)
+      },
+    }
+
+    const connecting = IS_WIN
+      ? Bun.connect({ hostname: "127.0.0.1", port: IPC_PORT, socket: handlers })
+      : Bun.connect({ unix: SOCKET_PATH, socket: handlers })
+    void connecting.catch(() => {})
+  })
+}

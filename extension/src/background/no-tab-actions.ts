@@ -6,7 +6,8 @@ export const NO_TAB_ACTIONS = new Set([
   "session_list", "session_restore", "notification_create", "notification_clear",
   "search_capability", "monitor_status", "monitor_start", "monitor_pause", "monitor_resume",
   "monitor_stop", "brand_set_tab_group", "group_list", "group_close",
-  "keepawake", "idle_state"
+  "keepawake", "idle_state",
+  "cdp_tab_status", "cdp_tab_unsubscribe", "cdp_tab_renew"
 ])
 
 export function needsTab(type: string): boolean {

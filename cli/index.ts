@@ -35,6 +35,7 @@ import { parseSseCommand } from "./commands/sse"
 import { parseBrowserCommand } from "./commands/browser"
 import { runCompoundCommand, webSearchQuery, webSearchTimeout } from "./commands/compound"
 import { runOverride } from "./commands/override"
+import { runTabCdpCommand } from "./commands/tab-cdp"
 import { runMacosCommand } from "./commands/macos"
 import { runDesktopCommand } from "./commands/desktop"
 import { desktopProviderBinary } from "../shared/desktop-provider"
@@ -456,6 +457,12 @@ async function main() {
 
   if (OVERRIDE_CMDS.has(cmd)) {
     await runOverride(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
+    return
+  }
+
+  // `tab cdp` streams and always uses the IPC socket, so it runs itself.
+  if (cmd === "tab" && filtered[1] === "cdp") {
+    await runTabCdpCommand(filtered.slice(1), { jsonMode, globalTabId, anyTab, contextId: globalContextId })
     return
   }
 

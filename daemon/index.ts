@@ -24,7 +24,12 @@ import { extensionIdFromOrigin, installTypeLabel } from "../shared/extension-ide
 import { bridgePidPath, bridgeSocketPath } from "../shared/bridge-paths"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 import { consoleUser, currentUserName, probeGuiSession, type BridgeLaunchOpts } from "../shared/gui-session"
-import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
+import { socketWriteAll, drainSocketQueue, releaseSocketQueue, queuedByteLength } from "./socket-write"
+import {
+  CdpSubscriptions, CDP_EVENT_TYPE, CDP_EVENT_FRAME_PREFIX, SUBSCRIBER_MAX_QUEUED_BYTES,
+  SUBSCRIPTION_RENEW_INTERVAL_MS, encodeIpcFrame, isRawCdpAction, subscriptionEndedFrame,
+  type CdpSubscriber,
+} from "./cdp-tab-events"
 import { callDesktopProvider } from "./desktop-provider"
 import {desktopContainerActionError,desktopContainerDeadline} from "../shared/desktop-container-validation"
 import {callNativeRegistration} from './native-registration'
@@ -491,6 +496,71 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
 
   sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
 }
+
+// Raw CDP event subscriptions (daemon/cdp-tab-events.ts). Frames go to the
+// subscriber's IPC socket and never to the events file: a screencast is
+// megabytes per second.
+const cdpSubscriptions = new CdpSubscriptions<Bun.Socket<undefined>>()
+
+function endCdpSubscription(subscriber: CdpSubscriber<Bun.Socket<undefined>>, reason: string, notify: boolean): void {
+  if (!cdpSubscriptions.remove(subscriber.subscription)) return
+  log(`cdp subscription ${subscriber.subscription.slice(0, 8)} ended: ${reason}`)
+  if (notify) {
+    try { socketWriteAll(subscriber.socket, encodeIpcFrame(subscriptionEndedFrame(subscriber, reason))) } catch {}
+  }
+  void extensionCall({ type: "cdp_tab_unsubscribe", subscription: subscriber.subscription }, subscriber.contextId, undefined, 5_000)
+}
+
+function deliverCdpEvent(msg: Record<string, unknown>): void {
+  for (const { subscriber, frame } of cdpSubscriptions.route(msg)) {
+    if (queuedByteLength(subscriber.socket) > SUBSCRIBER_MAX_QUEUED_BYTES) {
+      endCdpSubscription(subscriber, "subscriber_too_slow", false)
+      continue
+    }
+    try {
+      socketWriteAll(subscriber.socket, encodeIpcFrame(frame))
+    } catch {
+      endCdpSubscription(subscriber, "socket_error", false)
+    }
+  }
+}
+
+/** `cdp_tab_events`: subscribe this socket, answer once, then stream event frames on it. */
+function subscribeCdpEvents(id: string, request: CliRequest, socket: Bun.Socket<undefined>): void {
+  const subscription = crypto.randomUUID()
+  const action = { ...(request.action as Record<string, unknown>), type: "cdp_tab_subscribe", subscription }
+  void extensionCall(action, request.contextId, request.tabId, REQUEST_TIMEOUT_MS).then((result) => {
+    if (result.success) {
+      const subscriber = { subscription, socket, contextId: request.contextId, tabId: typeof result.tabId === "number" ? result.tabId : undefined }
+      if (socketBuffers.has(socket)) {
+        cdpSubscriptions.add(subscriber)
+      } else {
+        // The client left while the extension was attaching.
+        void extensionCall({ type: "cdp_tab_unsubscribe", subscription }, request.contextId, undefined, 5_000)
+      }
+    }
+    socketWriteFramed(socket, JSON.stringify({ id, result }))
+  })
+}
+
+// The extension drops a subscription the daemon stops renewing, so a debugger
+// never stays attached for a client that is gone. The answer names the ids the
+// extension has lost (its service worker restarted); those clients are told.
+setInterval(() => {
+  if (cdpSubscriptions.size === 0) return
+  for (const [contextId, ids] of cdpSubscriptions.byContext()) {
+    void extensionCall({ type: "cdp_tab_renew", subscriptions: ids }, contextId, undefined, 8_000).then((result) => {
+      const gone = result.success
+        ? ((result.data as { gone?: unknown } | undefined)?.gone as unknown[] | undefined) ?? []
+        : result.code === "target_gone" ? ids : []
+      const reason = result.success ? "extension_restarted" : "context_disconnected"
+      for (const subscription of gone) {
+        const subscriber = typeof subscription === "string" ? cdpSubscriptions.get(subscription) : undefined
+        if (subscriber) endCdpSubscription(subscriber, reason, true)
+      }
+    })
+  }
+}, SUBSCRIPTION_RENEW_INTERVAL_MS)
 
 const SECRET_DELIVERY_TYPES = new Set(["desktop_type", "macos_type", "macos_authdialog", "desktop_authdialog", "input_text", "find_and_type", "os_type", "ios_type", "ios_keys", "ios_unlock", "macos_sudo"])
 // issue #248: browser saved-login fills go to browser input legs only.
@@ -1336,7 +1406,7 @@ function processStdinBuffer() {
     stdinBuffer = stdinBuffer.subarray(4 + msgLen)
     try {
       const msg = JSON.parse(jsonBuf.toString("utf-8"))
-      log(`received: ${inboundLogSummary(msg)}`)
+      if (msg?.type !== CDP_EVENT_TYPE) log(`received: ${inboundLogSummary(msg)}`)
       handleNativeMessage(msg)
     } catch (err) {
       log(`json parse error: ${(err as Error).message}`)
@@ -1351,6 +1421,11 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
     // extension learns this user's WebSocket port (shared/platform.ts derivePorts).
     sendNativeMessage({ type: "pong", wsPort: WS_PORT })
     emitEvent("keepalive_ping")
+    return
+  }
+
+  if (msg.type === CDP_EVENT_TYPE) {
+    deliverCdpEvent(msg)
     return
   }
 
@@ -2191,6 +2266,14 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
             continue
           }
 
+          if (actionType === "cdp_tab_events") {
+            subscribeCdpEvents(id, request, socket)
+            continue
+          }
+          if (actionType === "cdp_tab_unsubscribe" && typeof action?.subscription === "string") {
+            cdpSubscriptions.remove(action.subscription)
+          }
+
           dispatchToExtension(id, request, socket, actionType)
         }
 
@@ -2209,6 +2292,9 @@ const socketHandlers: Bun.SocketHandler<undefined> = {
           } else {
             log("stale native relay closed — current relay registration kept")
           }
+        }
+        for (const subscriber of cdpSubscriptions.removeSocket(socket)) {
+          void extensionCall({ type: "cdp_tab_unsubscribe", subscription: subscriber.subscription }, subscriber.contextId, undefined, 5_000)
         }
         socketBuffers.delete(socket)
         releaseSocketQueue(socket)
@@ -2328,7 +2414,7 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           if (handleBinarySinkFrame(ws, bytes)) return
         }
         const rawStr = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8")
-        log(`ws recv: ${rawStr.length} bytes`)
+        if (!rawStr.startsWith(CDP_EVENT_FRAME_PREFIX)) log(`ws recv: ${rawStr.length} bytes`)
         let request: { id?: string; action?: unknown; tabId?: number; contextId?: string; type?: string; result?: unknown }
         try {
           request = JSON.parse(rawStr)
@@ -2348,6 +2434,12 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
 
         if (process.platform !== "darwin" && isDesktopActionType((request.action as { type?: unknown })?.type)) {
           ws.send(JSON.stringify({ id: request.id, result: { success: false, code: "permission_denied", error: "native desktop control requires authenticated local IPC in the interactive user session" } }))
+          return
+        }
+
+        // A page can open a loopback WebSocket; it cannot open the IPC socket.
+        if (isRawCdpAction(credentialType)) {
+          ws.send(JSON.stringify({ id: request.id, result: { success: false, code: "permission_denied", error: "raw CDP requires local IPC" } }))
           return
         }
 
@@ -2470,6 +2562,12 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         if (request.type === "event") {
           // Extension-originated event stream (monitor, keepalive_ping, etc.)
           handleNativeMessage(request as any)
+          return
+        }
+
+        if (request.type === CDP_EVENT_TYPE) {
+          // Only a registered extension context posts CDP events.
+          if ((ws as any).__contextId) handleNativeMessage(request as any)
           return
         }
 

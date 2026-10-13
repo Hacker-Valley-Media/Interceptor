@@ -8,27 +8,85 @@ import {
 export let debuggerAttached = new Set<number>()
 export let infoBannerHeight = 0
 
+// Tabs whose paused requests a raw CDP session answers (cdp-session.ts). The
+// override handler below leaves those requests alone: a second
+// Fetch.continueRequest for the same request id fails for the client.
+export const rawFetchOwners = new Set<number>()
+
+// Tabs this module attached on demand, and how many users each one has: one
+// per command in flight plus one per raw CDP session. Network capture and
+// request overrides attach through ensureDebuggerSession and stay attached,
+// so a tab they use is never detached here.
+const selfAttached = new Set<number>()
+const debuggerHolds = new Map<number, number>()
+const attachLocks = new Map<number, Promise<unknown>>()
+
+function withAttachLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> {
+  const run = (attachLocks.get(tabId) ?? Promise.resolve()).then(fn, fn)
+  const tail = run.catch(() => {})
+  attachLocks.set(tabId, tail)
+  void tail.then(() => { if (attachLocks.get(tabId) === tail) attachLocks.delete(tabId) })
+  return run
+}
+
+function debuggerUsedInternally(tabId: number): boolean {
+  return !!networkCaptureConfigs.get(tabId)?.enabled || (networkOverrideConfigs.get(tabId)?.length || 0) > 0
+}
+
+/**
+ * Attach the debugger to the tab if nothing in this extension has it yet, and
+ * count one more user. Every acquire needs one releaseDebugger.
+ */
+export function acquireDebugger(tabId: number): Promise<void> {
+  return withAttachLock(tabId, async () => {
+    if (!debuggerAttached.has(tabId)) {
+      try {
+        await chrome.debugger.attach({ tabId }, "1.3")
+      } catch (err) {
+        const message = (err as Error).message || String(err)
+        if (!/already attached/i.test(message)) throw err
+        // A tab takes one chrome.debugger client. Chrome gives the same answer
+        // when the client is this extension (a session that outlived a service
+        // worker restart) and when it is another one; only our own session
+        // accepts a command.
+        const ours = await chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo").then(() => true, () => false)
+        if (!ours) {
+          throw new Error(`tab ${tabId} already has a debugger client attached (another extension or automation tool); nothing was attached. Close that client and retry.`)
+        }
+      }
+      debuggerAttached.add(tabId)
+      selfAttached.add(tabId)
+    }
+    debuggerHolds.set(tabId, (debuggerHolds.get(tabId) ?? 0) + 1)
+  })
+}
+
+/** Drop one user. The last one detaches a tab this module attached. */
+export function releaseDebugger(tabId: number): Promise<void> {
+  return withAttachLock(tabId, async () => {
+    const holds = (debuggerHolds.get(tabId) ?? 0) - 1
+    if (holds > 0) {
+      debuggerHolds.set(tabId, holds)
+      return
+    }
+    debuggerHolds.delete(tabId)
+    if (!selfAttached.has(tabId) || debuggerUsedInternally(tabId)) return
+    selfAttached.delete(tabId)
+    debuggerAttached.delete(tabId)
+    try { await chrome.debugger.detach({ tabId }) } catch {}
+  })
+}
+
 export async function cdpCommand(
   tabId: number,
   method: string,
   params?: Record<string, unknown>
 ): Promise<unknown> {
-  const target = { tabId }
-  const isAttached = debuggerAttached.has(tabId)
-  if (!isAttached) {
-    await chrome.debugger.attach(target, "1.3")
-    debuggerAttached.add(tabId)
-  }
+  await acquireDebugger(tabId)
   try {
-    const result = await chrome.debugger.sendCommand(target, method, params)
-    return result
+    return await chrome.debugger.sendCommand({ tabId }, method, params)
   } finally {
-    if (!isAttached) {
-      try {
-        await chrome.debugger.detach(target)
-        debuggerAttached.delete(tabId)
-      } catch {}
-    }
+    await releaseDebugger(tabId)
   }
 }
 
@@ -74,6 +132,7 @@ export function registerCdpListeners(): void {
     const overrideRules = networkOverrideConfigs.get(tabId) || []
     try {
       if (method === "Fetch.requestPaused") {
+        if (rawFetchOwners.has(tabId)) return
         const request = (params as Record<string, any>).request || {}
         const rule = findMatchingNetworkOverrideRule(
           request.url || "", request.method,
@@ -148,6 +207,9 @@ export function registerCdpListeners(): void {
   chrome.debugger.onDetach.addListener((source, reason) => {
     if (source.tabId) {
       debuggerAttached.delete(source.tabId)
+      selfAttached.delete(source.tabId)
+      debuggerHolds.delete(source.tabId)
+      rawFetchOwners.delete(source.tabId)
       fetchInterceptionEnabled.delete(source.tabId)
       networkCaptureConfigs.delete(source.tabId)
       networkOverrideConfigs.delete(source.tabId)

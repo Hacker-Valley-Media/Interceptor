@@ -8,6 +8,7 @@ import { needsTab } from "./no-tab-actions"
 import { resolveWorkingTabId } from "./resolve-tab"
 import { recordGroupActivity } from "./tab-lifecycle"
 import { consumeSwitchBack } from "./switch-back"
+import { RAW_CDP_ACTIONS, isFollowedPopup } from "./cdp-session"
 
 export const MESSAGE_QUEUE_CAP = 50
 export const messageQueue: Array<{
@@ -239,6 +240,7 @@ export async function handleDaemonMessage(msg: {
   }
 
   let switchBack = false
+  let followedPopup = false
   if (tabId && needsTab(action.type) && !action.anyTab) {
     const membershipError = await managedTabGateError(tabId, groupLabel, groupHard)
     if (membershipError) {
@@ -246,7 +248,10 @@ export async function handleDaemonMessage(msg: {
       // showing before Interceptor's own switch. The user's tab is never
       // persisted as an auto-target below.
       switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId, groupLabel)
-      if (!switchBack) {
+      // And one for raw CDP: a tab opened from a tab in a raw session (an
+      // OAuth popup) is reachable while that session lasts.
+      followedPopup = RAW_CDP_ACTIONS.has(action.type) && isFollowedPopup(tabId)
+      if (!switchBack && !followedPopup) {
         fail(membershipError)
         return
       }
@@ -256,7 +261,7 @@ export async function handleDaemonMessage(msg: {
   // Persist the auto-target only AFTER the group gate has passed — a rejected
   // cross-group request must never poison another group's (or the global)
   // auto-target key.
-  if (tabId && !switchBack) setActiveTabId(tabId, groupLabel)
+  if (tabId && !switchBack && !followedPopup) setActiveTabId(tabId, groupLabel)
 
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
     const urlErr = await verifyTabUrl(tabId, action.expectedUrl as string)

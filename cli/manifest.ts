@@ -171,14 +171,19 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "tabs", surface: "browser", usage: "interceptor tabs", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
   {
     name: "tab", surface: "browser",
-    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id> | tab keepalive <id> [--off]",
-    summary: "Create, reuse, activate, keep rendering, or close managed tabs",
-    returns: "Tab metadata for creation, or ok / error for exact-ID lifecycle actions; keepalive returns the flag state and its limits.",
+    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id> | tab keepalive <id> [--off] | tab cdp send <Domain.method> [jsonParams] | tab cdp events [--filter <prefixes>] [--no-attach] [--limit N] [--timeout ms] | tab cdp attach|detach|status",
+    summary: "Create, reuse, activate, keep rendering, or close managed tabs; send raw CDP to one",
+    returns: "Tab metadata for creation, or ok / error for exact-ID lifecycle actions; keepalive returns the flag state and its limits. tab cdp send returns the CDP result object; tab cdp events prints one NDJSON line per event, {tabId, method, params}, until the stream ends.",
     flags: [
       { name: "--reuse", description: "reuse the most recent tab in the caller's managed group" },
       { name: "--no-reuse", description: "force creation of a new managed tab" },
       { name: "--activate", description: "activate the created or reused tab (default is background-first)" },
       { name: "--off", description: "tab keepalive: clear the flag so the page reads its real visibility again" },
+      { name: "--filter", value: "prefixes", description: "tab cdp events: keep CDP methods that start with one of these comma-separated prefixes" },
+      { name: "--no-attach", description: "tab cdp events: listen without attaching the debugger" },
+      { name: "--limit", value: "n", description: "tab cdp events: stop after n events" },
+      { name: "--timeout", value: "ms", description: "tab cdp events: stop after this long" },
+      { name: "--session", value: "id", description: "tab cdp send: target a child CDP session (iframe, worker)" },
     ],
   },
   {

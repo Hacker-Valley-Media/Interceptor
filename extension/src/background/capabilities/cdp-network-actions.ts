@@ -3,6 +3,7 @@ import {
   networkOverrideConfigs, refreshFetchInterception
 } from "../network-capture"
 import type { NetworkOverrideRule } from "../network-capture"
+import { rawFetchOwners } from "../cdp"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -34,6 +35,9 @@ export async function handleCdpNetworkActions(
       const rules = action.enabled === false
         ? []
         : ((action.rules as NetworkOverrideRule[] | undefined) || [])
+      if (rules.length > 0 && rawFetchOwners.has(tabId)) {
+        return { success: false, error: `tab ${tabId}: a raw CDP session has Fetch interception enabled and answers its paused requests. Override rules apply after that session sends Fetch.disable or detaches.` }
+      }
       networkOverrideConfigs.set(tabId, rules)
       await refreshFetchInterception(tabId)
       return { success: true, data: { enabled: rules.length > 0, ruleCount: rules.length, rules } }

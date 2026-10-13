@@ -89,6 +89,8 @@ const DAEMON = ["--reason", "--timeout"]
 // these unlisted hoisted `--width 800`'s operand into the positionals, where
 // it misparsed as a window id.
 const WINDOW = ["--left", "--top", "--width", "--height", "--state"]
+// `tab cdp` (cli/commands/tab-cdp.ts) is the only tab sub-verb with value flags.
+const TAB_CDP = ["--filter", "--limit", "--session", "--timeout"]
 // brand tab-group --title/--color take values (cli/commands/brand.ts).
 const BRAND = ["--title", "--color"]
 // keepawake/idle (cli/commands/power.ts) parse with indexOf and work on the
@@ -109,7 +111,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   // navigation
   navigate: NAV, back: NAV, forward: NAV, scroll: NAV, wait: NAV, "wait-stable": NAV, wait_for: NAV,
   // tabs (window carries the resize value flags; the rest are boolean-only)
-  tabs: [], tab: [], window: WINDOW, frames: [], session: [],
+  tabs: [], tab: TAB_CDP, window: WINDOW, frames: [], session: [],
   // network
   network: NET, net: NET, headers: NET,
   // screenshot
@@ -142,6 +144,7 @@ const STATE_BOOL = ["--elements-only", "--full", "--include-frames", "--markdown
 const ACTIONS_BOOL = ["--append", "--dropzone", "--picker", "--trusted", "--os", "--user"]
 const TABS_BOOL = ["--incognito"]
 const TAB_BOOL = ["--activate", "--no-reuse", "--off", "--reuse"]
+const TAB_CDP_BOOL = ["--no-attach"]
 const WINDOW_BOOL = ["--activate", "--incognito"]
 const NET_BOOL = ["--from-start", "--persist", "--reload", "--redact-auth"]
 const SCREENSHOT_BOOL = ["--background", "--full", "--image", "--no-fallback", "--pixel", "--save", "--webgl"]
@@ -164,7 +167,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   hover: ACTIONS_BOOL, drag: ACTIONS_BOOL, dblclick: ACTIONS_BOOL, rightclick: ACTIONS_BOOL,
   check: ACTIONS_BOOL, keys: ACTIONS_BOOL, "click-at": ACTIONS_BOOL, "what-at": ACTIONS_BOOL, regions: ACTIONS_BOOL,
   navigate: [], back: [], forward: [], scroll: [], wait: [], "wait-stable": [], wait_for: [],
-  tabs: TABS_BOOL, tab: TAB_BOOL, window: WINDOW_BOOL, frames: [], session: [],
+  tabs: TABS_BOOL, tab: [...TAB_BOOL, ...TAB_CDP_BOOL], window: WINDOW_BOOL, frames: [], session: [],
   network: NET_BOOL, net: NET_BOOL, headers: NET_BOOL,
   screenshot: SCREENSHOT_BOOL, canvas: SCREENSHOT_BOOL, capture: SCREENSHOT_BOOL, ocr: SCREENSHOT_BOOL,
   cookies: DATA_BOOL, storage: DATA_BOOL, history: DATA_BOOL, bookmarks: DATA_BOOL, downloads: DATA_BOOL, clear: DATA_BOOL, clipboard: DATA_BOOL,
@@ -271,11 +274,15 @@ export function normalizeArgsSplit(filtered: string[]): NormalizedArgs {
 
   if (cmd === "tab") {
     // Per-subverb: `tab new` takes the create flags, `tab keepalive` takes
-    // --off, the rest take none.
-    const allowed = positionals[0] === "new" ? TAB_BOOL.filter((flag) => flag !== "--off") : positionals[0] === "keepalive" ? ["--off"] : []
-    const unsupported = TAB_BOOL.find((flag) => flags.includes(flag) && !allowed.includes(flag))
+    // --off, `tab cdp` takes its own, the rest take none.
+    const cdpFlags = [...TAB_CDP_BOOL, ...TAB_CDP]
+    const allowed = positionals[0] === "new" ? TAB_BOOL.filter((flag) => flag !== "--off")
+      : positionals[0] === "keepalive" ? ["--off"]
+      : positionals[0] === "cdp" ? cdpFlags : []
+    const unsupported = [...TAB_BOOL, ...cdpFlags].find((flag) => flags.includes(flag) && !allowed.includes(flag))
     if (unsupported) {
-      throw new Error(`flag '${unsupported}' is only valid with 'tab ${unsupported === "--off" ? "keepalive" : "new"}'.`)
+      const owner = unsupported === "--off" ? "keepalive" : cdpFlags.includes(unsupported) ? "cdp" : "new"
+      throw new Error(`flag '${unsupported}' is only valid with 'tab ${owner}'.`)
     }
   }
 

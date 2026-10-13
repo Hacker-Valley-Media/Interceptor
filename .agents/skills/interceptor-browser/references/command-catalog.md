@@ -324,6 +324,19 @@ interceptor brand tab-group --title "Acme" --color blue   # Title + color (grey|
 
 Runtime-configurable — no rebuild, no options page. Resolved from `chrome.storage` (precedence `managed` > `local` > built-in default `interceptor`/`cyan`) and applied live to the tab-strip group. Settable here, from the toolbar popup, or via an enterprise managed policy.
 
+## Raw CDP (escape hatch)
+
+```bash
+interceptor tab cdp send Page.captureScreenshot '{"format":"jpeg"}' --tab <id>   # One CDP method; prints the CDP result
+interceptor tab cdp events --tab <id> --filter Page.,Fetch.                       # NDJSON event stream; holds the debugger attached until it ends
+interceptor tab cdp events --tab <id> --limit 5 --timeout 10000                   # Bounded: stop after 5 events or 10 s
+interceptor tab cdp attach --tab <id>                                             # Keep the debugger attached across sends
+interceptor tab cdp detach --tab <id>
+interceptor tab cdp status
+```
+
+`chrome.debugger` on the tab, in the background: no tab switch, no window focus. Use only when no named verb covers the task (screencast, trusted input into a tab that is not showing, your own Fetch interception). Without a session, `send` attaches, runs and detaches; `Page.startScreencast` and `Fetch.enable` need `events` running or `attach` first. While attached, Chrome shows its debugging bar in that profile, and the person can click Cancel (`Interceptor.detached {reason:"canceled_by_user"}` on the stream). A tab another debugger client holds is refused. Chromium only. Socket contract for programs: `docs/raw-cdp.md`.
+
 ## Eval (escape hatch)
 
 ```bash

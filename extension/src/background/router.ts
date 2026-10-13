@@ -24,6 +24,8 @@ import { handleMetaActions } from "./capabilities/meta"
 import { handlePassiveNetActions, restorePageCommCaptureConfig } from "./capabilities/passive-net"
 import { handleCdpNetworkActions } from "./capabilities/cdp-network-actions"
 import { handleMonitorActions, registerMonitorListeners } from "./capabilities/monitor"
+import { handleRawCdpActions } from "./capabilities/raw-cdp"
+import { RAW_CDP_ACTIONS } from "./cdp-session"
 import { handlePowerIdleActions } from "./keepawake"
 import { registerKeepaliveListeners } from "./tab-keepalive"
 
@@ -126,6 +128,7 @@ export async function routeAction(
   if (META_ACTIONS.has(action.type)) return handleMetaActions(action, tabId)
   if (PASSIVE_NET_ACTIONS.has(action.type)) return handlePassiveNetActions(action, tabId)
   if (CDP_NETWORK_ACTIONS.has(action.type)) return handleCdpNetworkActions(action, tabId)
+  if (RAW_CDP_ACTIONS.has(action.type)) return handleRawCdpActions(action, tabId)
   if (MONITOR_ACTIONS.has(action.type)) return handleMonitorActions(action, tabId)
   if (POWER_IDLE_ACTIONS.has(action.type)) return handlePowerIdleActions(action)
 

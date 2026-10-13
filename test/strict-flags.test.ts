@@ -88,6 +88,16 @@ describe("strict unknown-flag rejection (#212)", () => {
     }
   })
 
+  test("tab cdp takes its own flags, and no other tab sub-verb accepts them", () => {
+    expect(normalizeArgs(["tab", "cdp", "events", "--filter", "Page.,Fetch.", "--no-attach", "--limit", "5"]))
+      .toEqual(["tab", "cdp", "events", "--filter", "Page.,Fetch.", "--no-attach", "--limit", "5"])
+    expect(normalizeArgs(["tab", "cdp", "--session", "abc", "send", "Runtime.enable"]))
+      .toEqual(["tab", "cdp", "send", "Runtime.enable", "--session", "abc"])
+    expect(() => normalizeArgs(["tab", "new", "https://example.com", "--no-attach"])).toThrow("is only valid with 'tab cdp'")
+    expect(() => normalizeArgs(["tab", "close", "123", "--filter", "Page."])).toThrow("is only valid with 'tab cdp'")
+    expect(() => normalizeArgs(["tab", "cdp", "attach", "--activate"])).toThrow("is only valid with 'tab new'")
+  })
+
   test("INTERCEPTOR_LAX_FLAGS=1 downgrades to a warning and keeps going", () => {
     process.env.INTERCEPTOR_LAX_FLAGS = "1"
     const argv = normalizeArgs(["screenshot", "--zzz-lax-flag"])
@@ -138,7 +148,7 @@ const MODULE_COMMANDS: Record<string, string[]> = {
   "meta.ts": ["status", "reload", "meta", "links", "images", "forms", "info", "page_info", "query", "exists", "count", "table", "attr", "style", "events", "notify", "sessions", "capabilities", "modals", "panels"],
   "eval.ts": ["eval"], "save.ts": ["save"], "brand.ts": ["brand"], "group.ts": ["group"],
   "batch.ts": ["batch", "raw"], "monitor.ts": ["monitor"], "scene.ts": ["scene"], "sse.ts": ["sse"],
-  "override.ts": ["override"], "upgrade.ts": ["upgrade"], "init.ts": ["init"],
+  "override.ts": ["override"], "tab-cdp.ts": ["tab"], "upgrade.ts": ["upgrade"], "init.ts": ["init"],
   "research.ts": ["research"], "extensions.ts": ["extensions", "contexts"], "skills.ts": ["skills"],
   "daemon.ts": ["daemon"], "power.ts": ["keepawake", "idle"],
 }
@@ -189,11 +199,13 @@ describe("the whole inventory is accepted (table-driven)", () => {
     test(`every declared flag parses for '${cmd}'`, () => {
       const prefix = cmd === "tab" ? [cmd, "new"] : [cmd]
       for (const flag of valueFlags) {
-        normalizeArgsSplit([...prefix, flag, "x"])
+        // tab's value flags all belong to `tab cdp`.
+        normalizeArgsSplit([...(cmd === "tab" ? [cmd, "cdp"] : prefix), flag, "x"])
       }
       for (const flag of FLAG_INVENTORY.boolean[cmd] || []) {
-        // tab flags are per subverb: --off belongs to keepalive, the rest to new.
-        normalizeArgsSplit([...(cmd === "tab" && flag === "--off" ? [cmd, "keepalive"] : prefix), flag])
+        // tab flags are per subverb: --off belongs to keepalive, --no-attach to cdp, the rest to new.
+        const sub = flag === "--off" ? "keepalive" : flag === "--no-attach" ? "cdp" : "new"
+        normalizeArgsSplit([...(cmd === "tab" ? [cmd, sub] : prefix), flag])
       }
       for (const flag of FLAG_INVENTORY.globalValue) {
         normalizeArgsSplit([...prefix, flag, "x"])

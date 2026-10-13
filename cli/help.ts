@@ -177,6 +177,7 @@ const MAP_BROWSER = `BROWSER — a signed-in Chrome/Brave profile, background ta
   Navigate   navigate <url> · back · forward · scroll · wait <ms> · wait-stable
   Tabs       tabs · tab new|close|switch · window · frames · session · group (per-agent isolation) · contexts
   Network    net (passive log → HAR/pcapng) · headers · override (rewrite requests) · sse
+  Protocol   tab cdp send <Domain.method> [json] · tab cdp events (NDJSON stream) · tab cdp attach|detach     raw CDP on a tab
   Capture    screenshot [--element <ref>] · canvas · ocr · save --out <path> <expr>  (page bytes straight to disk) · eval <js> [--main]
   Data       cookies · storage · history · bookmarks · downloads · clipboard · clear
   Record     monitor (record → replay) · scene (canvas / rich editors) · batch (many actions, one call) · brand`
@@ -464,6 +465,15 @@ SSE Stream Capture:
   interceptor sse log [--filter <pattern>] [--limit N]   Show completed SSE streams
   interceptor sse streams                                  List active SSE streams
   interceptor sse tail [--filter <pattern>] [--timeout ms] Wait for a stream, print it to its last chunk
+
+Raw CDP (chrome.debugger on a tab; Chromium browsers; local IPC only):
+  interceptor tab cdp send <Domain.method> [jsonParams]   Run one CDP method on the tab, print its result
+  interceptor tab cdp events [--filter Page.,Fetch.]      Stream the tab's CDP events as NDJSON; holds the debugger attached
+  interceptor tab cdp events --no-attach                  Listen without attaching
+  interceptor tab cdp events --limit N --timeout ms       Stop after N events or after ms
+  interceptor tab cdp attach                              Keep the debugger attached across 'tab cdp send' calls
+  interceptor tab cdp detach                              End the tab's raw session
+  interceptor tab cdp status                              List raw sessions in this profile
 
 Headers:
   interceptor headers add <name> <value>     Add request header

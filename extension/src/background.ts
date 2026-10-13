@@ -1,5 +1,6 @@
 import { connectToHost, connectWsChannel, registerAlarmListener, registerSwKeepaliveListener, registerStorageContextListener } from "./background/transport"
 import { registerCdpListeners } from "./background/cdp"
+import { registerRawCdpListeners } from "./background/cdp-session"
 import { registerTabGroupListeners, ensureInterceptorGroup } from "./background/tab-group"
 import { registerBrandTabGroup } from "./background/brand-tab-group"
 import { registerTabLifecycle } from "./background/tab-lifecycle"
@@ -10,6 +11,7 @@ import { initializeActionRouter } from "./background/router"
 // Register all event listeners
 initializeActionRouter()
 registerCdpListeners()
+registerRawCdpListeners()
 registerTabGroupListeners()
 registerAlarmListener()
 registerSwKeepaliveListener()

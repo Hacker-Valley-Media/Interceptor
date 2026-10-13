@@ -58,6 +58,8 @@ READ_VERBS.desktop = new Set([...READ_VERBS.macos, "status", "capabilities", "pr
 // ── ARBITRARY-EXEC (runs attacker-or-model-authored code) ─────────────────────
 const EXEC: TierMap = {
   "browser:eval": "exec", "browser:save": "exec", "browser:raw": "exec",
+  // Raw CDP on a tab: Runtime.evaluate, Page.navigate, Network.getCookies and the rest.
+  "browser:tab:cdp": "exec",
   "macos:script": "exec", "macos:intent": "exec", "macos:container": "exec",
   // issue #244: sudo runs an arbitrary command as root; reveal prints a secret
   // to a human and is refused for model callers anyway (INTERCEPTOR_MCP).
