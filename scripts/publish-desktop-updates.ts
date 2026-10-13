@@ -99,7 +99,9 @@ async function verifyLive(version: string): Promise<void> {
     if (payload.version !== version || payload.os !== os) throw new Error(`${os}/latest.json offers ${payload.os} ${payload.version}, not ${version}`)
     for (const arch of ARCHES) {
       const artifact = payload.artifacts[arch]
-      const bytes = Buffer.from(await (await fetch(artifact.url, { redirect: "follow" })).arrayBuffer())
+      const download = await fetch(artifact.url, { redirect: "follow" })
+      if (!download.ok) throw new Error(`${artifact.url}: HTTP ${download.status}`)
+      const bytes = Buffer.from(await download.arrayBuffer())
       const sha = createHash("sha256").update(bytes).digest("hex")
       if (bytes.length !== artifact.length || sha !== artifact.sha256) throw new Error(`${artifact.url}: ${bytes.length} bytes ${sha} differ from the signed ${artifact.length} ${artifact.sha256}`)
       console.log(`verified ${os}/${arch}: ${artifact.file} ${artifact.length} bytes ${sha}`)

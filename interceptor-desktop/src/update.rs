@@ -322,11 +322,15 @@ fn daemon_quiet(body:&str)->std::result::Result<(),String>{
     if let Some(idle)=health["idleMs"].as_u64().filter(|ms|*ms<IDLE.as_millis() as u64){return Err(format!("the daemon served a CLI request {}s ago",idle/1000));}
     Ok(())
 }
+/// shared/platform.ts derivePorts: Windows (no uid) is slot 0; Unix slots follow the uid.
+fn ws_port(uid:Option<i64>)->u16{
+    let slot=uid.map_or(0,|uid|((uid-501)%500+500)%500);
+    (19222+2*slot) as u16
+}
 fn daemon_port()->u16{
     if let Some(port)=std::env::var("INTERCEPTOR_WS_PORT").ok().and_then(|p|p.parse::<u16>().ok()){return port;}
-    // shared/platform.ts derivePorts: Windows is slot 0; Unix slots follow the uid.
-    #[cfg(windows)]{19222}
-    #[cfg(not(windows))]{let uid=unsafe{libc::geteuid()} as i64;(19222+2*(((uid-501)%500)+500)%500) as u16}
+    #[cfg(windows)]{ws_port(None)}
+    #[cfg(not(windows))]{ws_port(Some(unsafe{libc::geteuid()} as i64))}
 }
 fn daemon_health()->std::result::Result<(),String>{
     use std::net::{SocketAddr,TcpStream};
@@ -717,6 +721,8 @@ pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":tr
         assert!(daemon_quiet(r#"{"service":"interceptor-daemon","pid":1,"version":"2.1.0","pending":0,"idleMs":600000}"#).is_ok());
         assert!(daemon_quiet(r#"{"service":"interceptor-daemon","pid":1,"version":"2.0.0"}"#).is_ok());
         assert!(daemon_quiet("interceptor daemon").is_ok());
+        // The values test/platform-runtime.test.ts pins for derivePorts.
+        for (uid,port) in [(None,19222),(Some(501),19222),(Some(504),19228),(Some(1000),20220),(Some(0),20220),(Some(1001),19222)]{assert_eq!(ws_port(uid),port,"{uid:?}");}
         assert!(activity(&json!({"action":{"type":"desktop_update","sub":"status"}})).is_none());
         assert!(activity(&json!({"action":{"type":"desktop_hello"}})).is_none());
         let before=IN_FLIGHT.load(Ordering::SeqCst);

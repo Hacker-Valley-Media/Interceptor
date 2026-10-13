@@ -32,7 +32,7 @@
     <ul>
       <li>Windows and Linux Full installs now update themselves, the way Sparkle updates a Mac. The native provider checks the update server every 15 minutes, downloads a newer installer, proves it is the one Hacker Valley Media published (a signed digest, plus the Authenticode signature on Windows), and installs it silently once Interceptor has gone 10 minutes without a request, so it never cuts off an agent in the middle of a command.</li>
       <li>New <code>interceptor update install</code> on Windows and Linux Full installs a newer release right away. <code>interceptor update status</code> shows the last check and the last install.</li>
-      <li>If an install fails, the computer keeps the version it had, the provider comes back, and that version is not tried again on its own.</li>
+      <li>If the installer fails, it rolls back to the version you had, the provider comes back, and the failed version is not tried again on its own.</li>
       <li>Set <code>INTERCEPTOR_AUTO_UPDATE=off</code> in the provider's login environment to turn automatic updates off.</li>
       <li>Windows and Linux computers on 2.0.0 have no updater yet. Install 2.1.0 once by hand; later releases arrive on their own.</li>
     </ul>
