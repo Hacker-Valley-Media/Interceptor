@@ -213,10 +213,13 @@ mod native{
         render(&view);
         window.show_all();render(&view);window.present();
         choose(&out,"shown");
+        // Block on the main context so AT-SPI requests are answered at once (a polling sleep made a
+        // tree walk time out); the timer wakes it to read the provider's next view.
+        let _tick=glib::timeout_add_local(Duration::from_millis(50),||glib::ControlFlow::Continue);
+        let context=glib::MainContext::default();
         loop{
-            for _ in 0..64{if !gtk::events_pending(){break;}gtk::main_iteration_do(false);}
+            context.iteration(true);
             while let Ok(input)=rx.try_recv(){match input{Input::View(view)=>render(&view),Input::Closed=>{window.close();return Ok(());}}}
-            glib::MainContext::default().iteration(false);std::thread::sleep(Duration::from_millis(15));
         }
     }
 }
