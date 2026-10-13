@@ -122,7 +122,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   attr: META, style: META, events: META, notify: META, sessions: META,
   capabilities: META, modals: META, panels: META,
   // singles
-  eval: [], save: SAVE, brand: BRAND, group: [], batch: BATCH, raw: BATCH,
+  eval: [], save: SAVE, brand: BRAND, group: ["--app", "--brand"], batch: BATCH, raw: BATCH,
   monitor: MONITOR, scene: SCENE, sse: SSE, override: ["--status", "--body", "--delay", "--content-type"],
   upgrade: [], init: [], research: RESEARCH, extensions: [], contexts: [],
   skills: SKILLS, daemon: DAEMON, manifest: [],
@@ -172,7 +172,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   info: META_BOOL, page_info: META_BOOL, query: META_BOOL, exists: META_BOOL, count: META_BOOL, table: META_BOOL,
   attr: META_BOOL, style: META_BOOL, events: META_BOOL, notify: META_BOOL, sessions: [...META_BOOL, "--activate"],
   capabilities: META_BOOL, modals: META_BOOL, panels: META_BOOL,
-  eval: EVAL_BOOL, save: SAVE_BOOL, brand: [], group: [], batch: BATCH_BOOL, raw: BATCH_BOOL,
+  eval: EVAL_BOOL, save: SAVE_BOOL, brand: [], group: ["--allow-frontmost", "--dry-run"], batch: BATCH_BOOL, raw: BATCH_BOOL,
   monitor: MONITOR_BOOL, scene: SCENE_BOOL, sse: [], override: [],
   upgrade: ["--full"], init: ["--explain", "--verbose"], research: RESEARCH_BOOL, extensions: ["--remove"], contexts: ["--verbose"],
   skills: SKILLS_BOOL, daemon: [], manifest: [],
