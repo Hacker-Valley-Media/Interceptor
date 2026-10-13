@@ -169,7 +169,9 @@ mod native{
         let scroller=gtk::ScrolledWindow::new(gtk::Adjustment::NONE,gtk::Adjustment::NONE);scroller.set_vexpand(true);scroller.set_shadow_type(gtk::ShadowType::In);scroller.add(&notes);
         let progress=gtk::ProgressBar::new();progress.set_show_text(true);
         let buttons=gtk::Box::new(gtk::Orientation::Horizontal,8);
-        for widget in [title.upcast_ref::<gtk::Widget>(),text.upcast_ref(),notes_label.upcast_ref(),scroller.upcast_ref(),progress.upcast_ref(),buttons.upcast_ref()]{column.pack_start(widget,widget==scroller.upcast_ref::<gtk::Widget>(),true,0);}
+        for widget in [title.upcast_ref::<gtk::Widget>(),text.upcast_ref(),notes_label.upcast_ref(),scroller.upcast_ref(),progress.upcast_ref()]{column.pack_start(widget,widget==scroller.upcast_ref::<gtk::Widget>(),true,0);}
+        // The buttons stay at the bottom of the dialog in every view, as in Sparkle's window.
+        column.pack_end(&buttons,false,true,0);
         window.add(&column);
         let escape=Rc::new(RefCell::new(String::from("later")));
         let closing=out.clone();
