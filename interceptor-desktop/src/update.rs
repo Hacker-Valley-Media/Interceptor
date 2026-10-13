@@ -378,7 +378,7 @@ fn pending(state:&Value)->bool{
 /// Start the updater in the provider that owns the session endpoint (windows.rs run, unix_server).
 pub(crate) fn start(){
     STARTED_MS.store(now_ms(),Ordering::SeqCst);
-    if installed().is_err()||WORKER.swap(true,Ordering::SeqCst){return;}
+    if WORKER.swap(true,Ordering::SeqCst){return;}
     if std::thread::Builder::new().name("interceptor-update".into()).spawn(worker).is_err(){WORKER.store(false,Ordering::SeqCst);}
 }
 /// Sparkle's schedule: one day after the last check, and never sooner than two minutes after start.
@@ -399,6 +399,10 @@ fn wait_until(deadline:Option<u64>)->bool{
     }
 }
 fn worker(){
+    // A fresh Windows install starts the provider before Setup records the install, so wait for
+    // the record; a development build never gets one and stops here.
+    let deadline=Instant::now()+Duration::from_secs(600);
+    while installed().is_err(){if Instant::now()>=deadline{WORKER.store(false,Ordering::SeqCst);return;}std::thread::sleep(Duration::from_secs(5));}
     let Ok(dir)=directory()else{WORKER.store(false,Ordering::SeqCst);return;};
     cleanup(&dir);
     report_failed_install(&dir);
@@ -706,7 +710,11 @@ pub fn dispatch(a:&Value)->Value{
         while CHECKS.load(Ordering::SeqCst)==before&&Instant::now()<deadline{std::thread::sleep(Duration::from_millis(50));}
     }else{
         let Some(_work)=WORK.try_lock().ok()else{let mut s=snapshot();s["started"]=json!(false);s["message"]=json!("an update session is already in progress");return success(s);};
-        let _=check_now();
+        if let Ok(Decision::Update(release))=check_now(){
+            let mut s=snapshot();s["started"]=json!(true);
+            s["message"]=json!(format!("Interceptor {} is available; the update window opens only in the installed Full provider",release.version));
+            return success(s);
+        }
     }
     let mut s=snapshot();s["started"]=json!(true);
     if s.get("message").is_none()||s["outcome"]!="skipped"{s["message"]=json!(message(&s));}
