@@ -136,7 +136,7 @@ The Full install updates the way Sparkle updates a Mac: once a day it checks for
 | `not_installed`, `present: false` | The row names the missing package. Report it. |
 | An AI command refuses and reports download progress | `interceptor desktop ai status`. Retry when it prints `available: true`. |
 | `no_interactive_session` | You are outside the desktop session. |
-| A command fails with the provider unreachable, then works again a minute later | An automatic update may have just installed. Run the command again; `interceptor update status` shows `lastInstallVersion`. |
+| A command fails with the provider unreachable, then works again a minute later | Someone may have clicked Install and Relaunch in the update window. Run the command again; `interceptor update status` shows `lastInstallVersion`. |
 
 ## When To Switch Surfaces
 

@@ -35,7 +35,9 @@ button.default{background:#2563eb;border-color:#2563eb;color:#fff}
 </div></main>
 <footer id="buttons"></footer>
 <script>
-const send=c=>window.ipc.postMessage(JSON.stringify({choice:c}));
+let current="";
+// Each click names the view it was made in, so a late or double click cannot answer the next view.
+const send=c=>window.ipc.postMessage(JSON.stringify({choice:c,view:current}));
 const mb=n=>(n/1048576).toFixed(1)+" MB";
 let enter=null,escape=null;
 function buttons(list){const f=document.getElementById("buttons");f.textContent="";enter=escape=null;
@@ -43,7 +45,7 @@ function buttons(list){const f=document.getElementById("buttons");f.textContent=
     const e=document.createElement("button");e.textContent=b.label;if(b.default){e.className="default";enter=b.choice}if(b.escape)escape=b.choice;e.onclick=()=>send(b.choice);f.append(e);
     if(b.default)setTimeout(()=>e.focus(),0)}}
 function show(id,on){document.getElementById(id).hidden=!on}
-function render(v){const t=document.getElementById("title"),x=document.getElementById("text");
+function render(v){current=v.view;const t=document.getElementById("title"),x=document.getElementById("text");
   show("notes-area",v.view==="available");show("notes",v.view==="available");show("progress-area",v.view==="downloading"||v.view==="installing");
   if(v.view==="available"){t.textContent="A new version of Interceptor is available!";
     x.textContent="Interceptor "+v.version+" is now available. You have "+v.current+". Would you like to download it now?";
@@ -89,9 +91,10 @@ mod native{
     enum Input{View(Value),Closed}
 
     fn writer()->Arc<Mutex<io::Stdout>>{Arc::new(Mutex::new(io::stdout()))}
-    fn choose(out:&Arc<Mutex<io::Stdout>>,choice:&str){
+    /// One click, with the view it was made in (`*` answers any view: closing the window, "shown").
+    fn choose(out:&Arc<Mutex<io::Stdout>>,choice:&str,view:&str){
         let mut out=out.lock().unwrap();
-        let _=crate::write_frame(&mut *out,&serde_json::to_vec(&json!({"choice":choice})).unwrap_or_default());let _=out.flush();
+        let _=crate::write_frame(&mut *out,&serde_json::to_vec(&json!({"choice":choice,"view":view})).unwrap_or_default());let _=out.flush();
     }
     /// Views from the provider; the provider closing the pipe ends the window.
     fn inputs()->mpsc::Receiver<Input>{
@@ -109,8 +112,9 @@ mod native{
     #[cfg(windows)]fn builder(view:&Value,out:Arc<Mutex<io::Stdout>>)->WebViewBuilder<'static>{
         WebViewBuilder::new().with_html(page(view)).with_incognito(true).with_devtools(false)
             .with_ipc_handler(move|request|{
-                let choice=serde_json::from_str::<Value>(request.body()).ok().and_then(|v|v["choice"].as_str().map(str::to_owned));
-                if let Some(choice)=choice.filter(|c|matches!(c.as_str(),"install"|"later"|"skip"|"ok")){choose(&out,&choice);}
+                let message=serde_json::from_str::<Value>(request.body()).unwrap_or(Value::Null);
+                let (Some(choice),Some(view))=(message["choice"].as_str(),message["view"].as_str())else{return;};
+                if matches!(choice,"install"|"later"|"skip"|"ok")&&matches!(view,"available"|"downloading"|"ready"|"error"){choose(&out,choice,view);}
             })
             .with_new_window_req_handler(|_,_|NewWindowResponse::Deny)
     }
@@ -137,11 +141,11 @@ mod native{
             .build(&window).map_err(|e|io::Error::other(format!("WebView2 update window could not initialize: {e}")))?;
         window.set_focus();window.request_user_attention(Some(UserAttentionType::Critical));
         // The provider waits for this before it counts the window as open.
-        choose(&out,"shown");
+        choose(&out,"shown","*");
         event_loop.run(move|event,_,control_flow|{
             *control_flow=ControlFlow::WaitUntil(std::time::Instant::now()+Duration::from_millis(50));
             match event{
-                Event::WindowEvent{event:WindowEvent::CloseRequested,..}=>{choose(&out,"later");*control_flow=ControlFlow::Exit;}
+                Event::WindowEvent{event:WindowEvent::CloseRequested,..}=>{choose(&out,"later","*");*control_flow=ControlFlow::Exit;}
                 Event::WindowEvent{event:WindowEvent::Focused(true),..}=>window.set_always_on_top(false),
                 _=>{}
             }
@@ -173,12 +177,12 @@ mod native{
         // The buttons stay at the bottom of the dialog in every view, as in Sparkle's window.
         column.pack_end(&buttons,false,true,0);
         window.add(&column);
-        let escape=Rc::new(RefCell::new(String::from("later")));
+        let escape=Rc::new(RefCell::new((String::from("later"),String::from("available"))));
         let closing=out.clone();
-        window.connect_delete_event(move|_,_|{choose(&closing,"later");std::process::exit(0)});
+        window.connect_delete_event(move|_,_|{choose(&closing,"later","*");std::process::exit(0)});
         let (key_out,key_escape)=(out.clone(),escape.clone());
         window.connect_key_press_event(move|_,event|{
-            if event.keyval()==gtk::gdk::keys::constants::Escape{let choice=key_escape.borrow().clone();if !choice.is_empty(){choose(&key_out,&choice);}return glib::Propagation::Stop;}
+            if event.keyval()==gtk::gdk::keys::constants::Escape{let (choice,view)=key_escape.borrow().clone();if !choice.is_empty(){choose(&key_out,&choice,&view);}return glib::Propagation::Stop;}
             glib::Propagation::Proceed
         });
         let render=|view:&Value|{
@@ -192,29 +196,29 @@ mod native{
                 "available"=>{heading("A new version of Interceptor is available!");
                     text.set_text(&format!("Interceptor {} is now available. You have {}. Would you like to download it now?",view["version"].as_str().unwrap_or(""),view["current"].as_str().unwrap_or("")));
                     notes.buffer().unwrap().set_text(&view["notes"].as_str().map(super::notes_text).unwrap_or_else(||"Release notes are not available.".into()));
-                    list=vec![("Skip This Version","skip",false),("","",false),("Remind Me Later","later",false),("Install Update","install",true)];*escape.borrow_mut()="later".into();}
+                    list=vec![("Skip This Version","skip",false),("","",false),("Remind Me Later","later",false),("Install Update","install",true)];*escape.borrow_mut()=("later".into(),kind.into());}
                 "downloading"=>{heading("Downloading update\u{2026}");text.set_text("");
                     let (received,total)=(view["received"].as_f64().unwrap_or(0.0),view["total"].as_f64().unwrap_or(0.0));
                     if total>0.0{progress.set_fraction((received/total).clamp(0.0,1.0));progress.set_text(Some(&format!("{:.1} MB of {:.1} MB",received/1_048_576.0,total/1_048_576.0)));}else{progress.pulse();}
-                    list=vec![("","",false),("Cancel","later",false)];*escape.borrow_mut()="later".into();}
+                    list=vec![("","",false),("Cancel","later",false)];*escape.borrow_mut()=("later".into(),kind.into());}
                 "ready"=>{heading("Ready to Install");text.set_text(&format!("Interceptor {} has been downloaded and verified. Interceptor restarts after the update installs.",view["version"].as_str().unwrap_or("")));
-                    list=vec![("","",false),("Install and Relaunch","install",true)];*escape.borrow_mut()="later".into();}
-                "installing"=>{heading("Installing update\u{2026}");text.set_text("");progress.set_text(None);progress.pulse();escape.borrow_mut().clear();}
+                    list=vec![("","",false),("Install and Relaunch","install",true)];*escape.borrow_mut()=("later".into(),kind.into());}
+                "installing"=>{heading("Installing update\u{2026}");text.set_text("");progress.set_text(None);progress.pulse();*escape.borrow_mut()=(String::new(),String::new());}
                 "error"=>{heading("Update Error!");text.set_text(view["message"].as_str().unwrap_or("An error occurred while updating Interceptor. Please try again later."));
-                    list=vec![("","",false),("OK","ok",true)];*escape.borrow_mut()="ok".into();}
+                    list=vec![("","",false),("OK","ok",true)];*escape.borrow_mut()=("ok".into(),kind.into());}
                 _=>{}
             }
             for (label,choice,default) in list{
                 if label.is_empty(){let spacer=gtk::Label::new(None);spacer.set_hexpand(true);buttons.pack_start(&spacer,true,true,0);continue;}
-                let button=gtk::Button::with_label(label);let (owned,choice)=(out.clone(),choice.to_owned());
-                button.connect_clicked(move|_|choose(&owned,&choice));buttons.pack_start(&button,false,false,0);
+                let button=gtk::Button::with_label(label);let (owned,choice,view)=(out.clone(),choice.to_owned(),kind.to_owned());
+                button.connect_clicked(move|_|choose(&owned,&choice,&view));buttons.pack_start(&button,false,false,0);
                 if default{button.set_can_default(true);button.style_context().add_class("suggested-action");window.set_default(Some(&button));button.grab_focus();}
             }
             column.show_all();notes_label.set_visible(available);scroller.set_visible(available);progress.set_visible(kind=="downloading"||kind=="installing");
         };
         render(&view);
         window.show_all();render(&view);window.present();
-        choose(&out,"shown");
+        choose(&out,"shown","*");
         // Block on the main context so AT-SPI requests are answered at once (a polling sleep made a
         // tree walk time out); the timer wakes it to read the provider's next view.
         let _tick=glib::timeout_add_local(Duration::from_millis(50),||glib::ControlFlow::Continue);

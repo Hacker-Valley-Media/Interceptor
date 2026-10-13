@@ -428,7 +428,7 @@ fn cycle(){
 }
 
 /// The update window (update_ui.rs), run as an owned helper: it dies with this provider.
-struct Window{_helper:crate::thumbnail::OwnedHelper,input:std::process::ChildStdin,choices:mpsc::Receiver<String>}
+struct Window{_helper:crate::thumbnail::OwnedHelper,input:std::process::ChildStdin,choices:mpsc::Receiver<(String,String)>}
 impl Window{
     fn open(view:&Value)->std::result::Result<Self,String>{
         let mut helper=crate::thumbnail::OwnedHelper::spawn("--update-ui").map_err(|e|format!("the update window could not start: {e}"))?;
@@ -438,19 +438,24 @@ impl Window{
         let(tx,rx)=mpsc::channel();
         std::thread::spawn(move||{
             while let Ok(Some(frame))=crate::read_frame(&mut output){
-                let choice=serde_json::from_slice::<Value>(&frame).ok().and_then(|v|v["choice"].as_str().map(str::to_owned));
-                if let Some(choice)=choice{if tx.send(choice).is_err(){return;}}
+                let message=serde_json::from_slice::<Value>(&frame).unwrap_or(Value::Null);
+                if let (Some(choice),Some(view))=(message["choice"].as_str(),message["view"].as_str()){if tx.send((choice.to_owned(),view.to_owned())).is_err(){return;}}
             }
         });
         // The helper answers "shown" once its window exists; a missing WebView ends it first.
         match rx.recv_timeout(Duration::from_secs(30)){
-            Ok(shown) if shown=="shown"=>Ok(Self{_helper:helper,input,choices:rx}),
+            Ok((shown,_)) if shown=="shown"=>Ok(Self{_helper:helper,input,choices:rx}),
             _=>Err("the update window could not open (WebView2 on Windows; WebKitGTK 4.1 and the interceptor-overlay helper on Linux)".into()),
         }
     }
     fn show(&mut self,view:&Value)->bool{serde_json::to_vec(view).is_ok_and(|bytes|crate::write_frame(&mut self.input,&bytes).is_ok())}
-    /// The user's next click; None when the window is gone (closing it answers "later").
-    fn choice(&self)->Option<String>{self.choices.recv().ok()}
+    /// The user's next click in `view`; None when the window is gone (closing it answers "later" in any
+    /// view). A click made in an earlier view, such as a double click on Install Update, never answers
+    /// a later one, so Install and Relaunch always takes its own click.
+    fn choice(&self,view:&str)->Option<String>{next_choice(&self.choices,view)}
+}
+fn next_choice(choices:&mpsc::Receiver<(String,String)>,view:&str)->Option<String>{
+    loop{let (choice,made_in)=choices.recv().ok()?;if made_in=="*"||made_in==view{return Some(choice);}}
 }
 /// Linux without the overlay helper's WebKitGTK: say an update is available, where to get it.
 fn fallback(release:&Release){
@@ -472,7 +477,7 @@ fn session(release:&Release,dir:&Path,provider:&Path){
         Ok(window)=>window,
         Err(reason)=>{fallback(release);end(|s|{phase(s,"update_available","update_available",false);s["message"]=json!(format!("Interceptor {} is available, but {reason}.",release.version));});return;}
     };
-    match window.choice().as_deref(){
+    match window.choice("available").as_deref(){
         Some("skip")=>{
             let mut saved=read_state(dir);saved["skippedVersion"]=json!(release.version);let _=write_state(dir,&saved);
             end(|s|choice(s,"skip","not_downloaded"));
@@ -486,7 +491,7 @@ fn install(release:&Release,dir:&Path,provider:&Path,lab:bool,window:&mut Window
     window.show(&json!({"view":"downloading","received":0,"total":release.length}));
     let mut shown=Instant::now();let mut cancelled=false;
     let downloaded=download(release,dir,lab,&mut |received|{
-        if window.choices.try_recv().is_ok_and(|c|c=="later"){cancelled=true;return false;}
+        while let Ok((choice,view))=window.choices.try_recv(){if choice=="later"&&(view=="downloading"||view=="*"){cancelled=true;return false;}}
         if shown.elapsed()>=Duration::from_millis(200){shown=Instant::now();window.show(&json!({"view":"downloading","received":received,"total":release.length}));}
         true
     });
@@ -495,18 +500,18 @@ fn install(release:&Release,dir:&Path,provider:&Path,lab:bool,window:&mut Window
         Err(_) if cancelled=>{end(|s|choice(s,"dismiss","not_downloaded"));return;}
         Err(error)=>{
             window.show(&json!({"view":"error","message":format!("An error occurred while downloading the update. Please try again later. ({})",error["error"].as_str().unwrap_or("download failed"))}));
-            window.choice();fail(&error);return;
+            window.choice("error");fail(&error);return;
         }
     };
     set(|s|{phase(s,"ready_to_install","install_chosen",true);s["updateStage"]=json!("downloaded");s["signatureVerified"]=json!(true);
         s["message"]=json!(if cfg!(windows){"The installer matches the signed feed and its Authenticode signature."}else{"The archive matches the signed feed."});});
     window.show(&json!({"view":"ready","version":release.version}));
-    if window.choice().as_deref()!=Some("install"){end(|s|choice(s,"dismiss","downloaded"));return;}
+    if window.choice("ready").as_deref()!=Some("install"){end(|s|choice(s,"dismiss","downloaded"));return;}
     set(|s|{phase(s,"installing","installing",true);s["updateStage"]=json!("installing");s["message"]=json!(format!("Installing {}; Interceptor restarts when it finishes.",release.version));});
     window.show(&json!({"view":"installing"}));
     if let Err(error)=spawn_watcher(dir,provider,release,&installer){
         window.show(&json!({"view":"error","message":format!("An error occurred while installing the update. Please try again later. ({})",error["error"].as_str().unwrap_or("install failed"))}));
-        window.choice();fail(&error);return;
+        window.choice("error");fail(&error);return;
     }
     // The installer stops this provider, and with it this window. When it refuses before that
     // (a newer version is already installed), the watcher's result arrives here instead.
@@ -519,7 +524,7 @@ fn install(release:&Release,dir:&Path,provider:&Path,lab:bool,window:&mut Window
         saved["last"]["reported"]=json!(true);let _=write_state(dir,&saved);
         let error=saved["last"]["error"].as_str().unwrap_or("the installer did not complete").to_owned();
         window.show(&json!({"view":"error","message":format!("An error occurred while installing the update. Please try again later. ({error})")}));
-        window.choice();fail(&failure("provider_failed",format!("installing {} failed: {error}",release.version)));return;
+        window.choice("error");fail(&failure("provider_failed",format!("installing {} failed: {error}",release.version)));return;
     }
 }
 /// After an install that failed and stopped this provider, the provider that starts next shows
@@ -534,7 +539,7 @@ fn report_failed_install(dir:&Path){
     let target=saved["last"]["version"].as_str().unwrap_or("the update").to_owned();
     let error=saved["last"]["error"].as_str().unwrap_or("the installer did not complete").to_owned();
     fail(&failure("provider_failed",format!("installing {target} failed: {error}")));
-    if let Ok(window)=Window::open(&json!({"view":"error","message":format!("An error occurred while installing Interceptor {target}. Please try again later. ({error})")})){window.choice();}
+    if let Ok(window)=Window::open(&json!({"view":"error","message":format!("An error occurred while installing Interceptor {target}. Please try again later. ({error})")})){window.choice("error");}
 }
 fn watcher_path(dir:&Path)->PathBuf{dir.join(if cfg!(windows){"interceptor-update.exe"}else{"interceptor-update"})}
 /// The installer stops and replaces this provider, so a copy of this binary outside the install
@@ -797,6 +802,16 @@ pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":tr
         assert_eq!(offered(Decision::Update(release.clone()),Some("2.1.0")),Decision::Update(release.clone()));
         assert_eq!(offered(Decision::Update(release.clone()),None),Decision::Update(release));
         assert_eq!(offered(Decision::Current("2.1.1".into()),Some("2.1.1")),Decision::Current("2.1.1".into()));
+    }
+    #[test] fn a_double_click_on_install_update_never_answers_install_and_relaunch(){
+        let (tx,rx)=mpsc::channel();
+        for _ in 0..2{tx.send(("install".to_owned(),"available".to_owned())).unwrap();}
+        tx.send(("later".to_owned(),"ready".to_owned())).unwrap();
+        assert_eq!(next_choice(&rx,"ready").as_deref(),Some("later"));
+        tx.send(("install".to_owned(),"available".to_owned())).unwrap();tx.send(("later".to_owned(),"*".to_owned())).unwrap();
+        assert_eq!(next_choice(&rx,"ready").as_deref(),Some("later"));
+        tx.send(("install".to_owned(),"available".to_owned())).unwrap();drop(tx);
+        assert_eq!(next_choice(&rx,"ready"),None);
     }
     #[test] fn checks_follow_sparkles_daily_schedule(){
         let (day,start)=(86_400_000_u64,1_000_000_000_000_u64);
