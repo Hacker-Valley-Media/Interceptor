@@ -36,7 +36,10 @@
  * accessors, and registerTabLifecycle() is called ONLY from the MV3 background.ts entry.
  */
 
-import { hasTabGroupApi, ensureInterceptorGroup, hydrateNamedGroups, namedGroups, readoptNamedGroups } from "./tab-group"
+import {
+  hasTabGroupApi, ensureInterceptorGroup, hydrateNamedGroups, namedGroups, readoptNamedGroups,
+  removeTabsAndEmptiedGroups
+} from "./tab-group"
 
 export type TabLifecycle = { reuse: boolean; idleCloseMinutes: number; closeGroupWhenDone: boolean }
 export type TabLifecycleSource = "managed" | "local" | "default"
@@ -431,7 +434,9 @@ export async function runTabLifecycleSweep(now = Date.now()): Promise<void> {
       .filter((t) => typeof t.id === "number" && closeIds.includes(t.id))
       .map((t) => t.url ?? "")
     try {
-      await chrome.tabs.remove(closeIds)
+      // Ungroups first when this empties the group, so Chrome deletes it instead
+      // of keeping a closed saved group per session (issue #301).
+      await removeTabsAndEmptiedGroups(closeIds)
     } catch (err) {
       console.warn(`tab-lifecycle sweep: remove failed for group '${label || "(default)"}':`, err)
       continue

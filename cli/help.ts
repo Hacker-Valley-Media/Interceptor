@@ -584,7 +584,7 @@ Branding:
 Tab groups (per-agent isolation):
   interceptor open <url> --group <label>     Open into the named group "<brand>-<label>" (created on first use)
   interceptor group list                     All live tab groups: label, title, color, tab count
-  interceptor group close <label>            Atomically close every tab in a named group (other groups untouched)`
+  interceptor group close <label>            Atomically close every tab in a named group and delete the group (other groups untouched)`
 
 const HELP_MACOS = `macOS App Internals:
   interceptor macos cdp connect <port> [--host H] [--app NAME] [--url HINT]

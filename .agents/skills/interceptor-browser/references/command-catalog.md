@@ -225,7 +225,7 @@ interceptor read --group <label>         # Any command scopes to that group's ta
                                          # No explicit scope: supported agent shells get a soft session group (s-<hash16>).
 interceptor open <url> --shared-group     # Suppress session scope; use the shared default Interceptor group.
 interceptor group list                   # All live tab groups: label, title, color, tab count
-interceptor group close <label>          # Atomically close every tab in a named group (other groups untouched)
+interceptor group close <label>          # Atomically close every tab in a named group and delete the group (other groups untouched)
 interceptor window list
 interceptor window new [url]                              # Background window (ordered below the user's); your tab group moves into it,
                                                           # so its tab paints and takes trusted clicks without touching the user's view

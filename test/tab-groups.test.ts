@@ -321,12 +321,15 @@ describe("tab groups: dispatch never falls back to the browser-active tab for gr
 })
 
 describe("tab groups: group_close is one atomic tabs.remove over the group's own ids", () => {
-  test("handler exists and uses a single chrome.tabs.remove(ids)", () => {
+  test("handler exists and uses a single removeTabsAndEmptiedGroups(ids)", () => {
     const closeCase = tabsSrc.slice(tabsSrc.indexOf('case "group_close"'))
     expect(closeCase.length).toBeGreaterThan(10)
     const body = closeCase.slice(0, closeCase.indexOf("case ", 10))
-    expect(body).toContain("chrome.tabs.remove(ids)")
-    expect((body.match(/chrome\.tabs\.remove/g) || []).length).toBe(1)
+    // Ungroup-then-remove, so Chrome deletes the group instead of saving it
+    // closed (issue #301); behavior is pinned in tab-group-delete-on-close.test.ts.
+    expect(body).toContain("removeTabsAndEmptiedGroups(ids)")
+    expect((body.match(/removeTabsAndEmptiedGroups\(/g) || []).length).toBe(1)
+    expect(body).not.toContain("chrome.tabs.remove")
     expect(body).not.toContain("chrome.windows.remove")
   })
 })

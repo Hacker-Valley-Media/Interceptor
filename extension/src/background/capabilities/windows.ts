@@ -1,4 +1,4 @@
-import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE, moveNamedGroupToWindow } from "../tab-group"
+import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE, moveNamedGroupToWindow, ungroupBeforeClose } from "../tab-group"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -117,6 +117,10 @@ export async function handleWindowActions(
       case "window_close": {
         const windowId = windowIdFromAction(action)
         if (windowId === undefined) return { success: false, error: "window_close requires a window id" }
+        // A window that closes with a managed group inside leaves that group
+        // behind as a closed saved group (issue #301).
+        const windowTabs = await chrome.tabs.query({ windowId }).catch(() => [])
+        await ungroupBeforeClose(windowTabs.map(t => t.id).filter((id): id is number => typeof id === "number"))
         await withWindowTimeout("window_close", chrome.windows.remove(windowId))
         return { success: true }
       }
