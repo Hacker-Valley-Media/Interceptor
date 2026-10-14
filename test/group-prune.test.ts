@@ -3,7 +3,7 @@
 // makes. The tree fixtures are lines copied from a live `macos tree` of Chrome.
 import { describe, expect, test } from "bun:test"
 import {
-  findSavedGroupMenu, isManagedTitle, parseGroupPruneOptions, parseRunningBrowsers,
+  findSavedGroupMenu, isManagedTitle, NO_VISIBLE_BROWSER, parseGroupPruneOptions, parseRunningBrowsers,
   countWindowsWithoutBar, parseSavedGroupChips, runGroupPrune, selectPrunable, unsupportedPlatformError,
   type PruneHost,
 } from "../cli/commands/group-prune"
@@ -381,6 +381,17 @@ describe("on Windows and Linux", () => {
       const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, LINUX)
       expect(r.error).toContain("chrome.exe is the frontmost app")
       expect(calls).toEqual(["tree:interactive"])
+    }
+  })
+
+  // Observed on Hyprland: Chromium was running and the Linux provider's `apps`
+  // listed only xdg-desktop-portal-gtk, quickshell and udiskie.
+  test("a provider that lists no browser says the groups were not checked", async () => {
+    for (const host of [WINDOWS, LINUX]) {
+      const { send } = fakeBridge({ trees: [], apps: [{ name: "quickshell", pid: 678 }, { name: "udiskie", pid: 674 }] })
+      const r = await runGroupPrune({ dryRun: true, allowFrontmost: false }, send, host)
+      expect(r.success).toBe(true)
+      expect(r.warning).toBe(NO_VISIBLE_BROWSER)
     }
   })
 

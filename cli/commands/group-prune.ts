@@ -168,6 +168,10 @@ export function parseRunningBrowsers(apps: unknown): BrowserApp[] {
 
 export const PRUNE_PLATFORMS = ["darwin", "win32", "linux"]
 
+export const NO_VISIBLE_BROWSER = "the desktop provider lists no Chromium browser, so no closed groups were checked. "
+  + "A browser that exposes no accessibility tree is invisible to it (Chromium under Wayland, for one); "
+  + "delete its groups by hand (right-click the chip, then Delete group)"
+
 export function unsupportedPlatformError(platform: string): string {
   return `group prune is not available on ${platform}: it deletes a closed saved tab group through the browser's own UI, `
     + "which needs Interceptor's native desktop provider (macOS, Windows, Linux). "
@@ -373,7 +377,13 @@ export async function runGroupPrune(
     apps = apps.filter((a) => a.name.toLowerCase() === wanted)
     if (apps.length === 0) return { success: false, error: `group prune: no running Chromium browser is named '${opts.app}'` }
   }
-  if (apps.length === 0) return { success: true, data: { dryRun: opts.dryRun, deleted: 0, browsers: [] } }
+  if (apps.length === 0) {
+    // macOS lists every running app. The Windows and Linux providers list the
+    // apps their accessibility layer can see, and Chromium under Wayland is not
+    // one of them, so an empty list there is not proof that nothing was left.
+    const unseen = host.platform === "darwin" ? {} : { warning: NO_VISIBLE_BROWSER }
+    return { success: true, data: { dryRun: opts.dryRun, deleted: 0, browsers: [] }, ...unseen }
+  }
 
   const isFrontmost = async (pid: number): Promise<boolean> => {
     // One window on macOS and Windows; Linux can answer with a list.
