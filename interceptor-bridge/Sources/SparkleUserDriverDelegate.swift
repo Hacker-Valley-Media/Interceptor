@@ -43,8 +43,8 @@ final class SparkleUserDriverDelegate: NSObject, SPUStandardUserDriverDelegate {
 
     // Returning `true` keeps Sparkle in charge of showing the alert UI.
     // We only intervene to make the alert window visible — we don't try
-    // to replace Sparkle's own UI with our own (that's Path B / a future
-    // PRD that uses UNUserNotificationCenter).
+    // to replace Sparkle's own UI with our own (that would be a separate path
+    // that uses UNUserNotificationCenter).
     func standardUserDriverShouldHandleShowingScheduledUpdate(
         _ update: SUAppcastItem,
         andInImmediateFocus immediateFocus: Bool

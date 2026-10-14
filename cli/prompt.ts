@@ -35,9 +35,25 @@ export function readHiddenLine(prompt: string): Promise<string> {
 }
 
 /** Read all of stdin (pipe or file), dropping one trailing newline. */
-export async function readStdinValue(): Promise<string> {
-  const text = await new Response(Bun.stdin.stream()).text()
-  return text.replace(/\r?\n$/, "")
+export async function readStdinValue(opts: {maxBytes?:number;trimNewline?:boolean} = {}): Promise<string> {
+  let text: string
+  if (opts.maxBytes === undefined) text = await new Response(Bun.stdin.stream()).text()
+  else {
+    if (!Number.isSafeInteger(opts.maxBytes) || opts.maxBytes < 1 || opts.maxBytes > 9_999_999) throw new Error("invalid stdin byte limit")
+    const reader = Bun.stdin.stream().getReader(), chunks: Uint8Array[] = []
+    let bytes = 0
+    try {
+      for (;;) {
+        const {done,value} = await reader.read()
+        if (done) break
+        bytes += value.byteLength
+        if (bytes > opts.maxBytes) throw new Error("stdin exceeds its byte limit")
+        chunks.push(value)
+      }
+      text = new TextDecoder("utf-8",{fatal:true}).decode(Buffer.concat(chunks))
+    } finally { await reader.cancel().catch(()=>{}); reader.releaseLock() }
+  }
+  return opts.trimNewline === false ? text : text.replace(/\r?\n$/, "")
 }
 
 /**

@@ -1,0 +1,29 @@
+{
+  "valid": [
+    {"event":"mon_start","scope":{"mode":"all"},"coverage":[{"source":"lifecycle","available":true}],"partial":false},
+    {"event":"mon_pause"}, {"event":"mon_resume"}, {"event":"mon_stop","reason":"user_stop"},
+    {"event":"file_change","path":"/owned/fixture.txt"},
+    {"event":"clipboard_change","changeCount":1,"types":["text/plain"],"preview":"Owned clipboard"},
+    {"event":"input","source":"ax","app":"Owned fixture","pid":1,"r":"AXTextField","n":"Owned input","secure":false,"notification":"owned-change","v":"Owned value"},
+    {"event":"input","source":"ax","app":"Owned fixture","pid":1,"r":"AXTextField","n":"***SECURE***","secure":true,"notification":"owned-change","v":"***SECURE***"},
+    {"event":"focus","source":"ax","app":"Owned fixture","pid":1,"r":"AXTextField","n":"Owned input","secure":false,"notification":"owned-change"},
+    {"event":"frontmost","source":"workspace","app":"Owned fixture","pid":1,"r":"AXWindow","n":"Owned window","secure":false,"notification":"owned-change","frame":{"x":-1,"y":0,"width":1,"height":1},"windowId":1},
+    {"event":"source_error","source":"native_observation","dropped":1},
+    {"event":"source_error","source":"files","error":{"success":false,"code":"provider_failed","error":"Owned file failure"}},
+    {"event":"source_error","source":"clipboard","error":{"success":false,"code":"permission_denied","error":"Owned clipboard failure"}},
+    {"event":"owned_extension_fixture","opaquePayload":{"nullable":null,"array":[1,"Owned"]}}
+  ],
+  "invalid": [
+    {"event":"file_change","path":17}, {"event":"file_change","path":""},
+    {"event":"clipboard_change","changeCount":1,"types":[true],"preview":"Owned"},
+    {"event":"clipboard_change","changeCount":-1,"types":[],"preview":""},
+    {"event":"source_error","source":"native_observation","dropped":"1"},
+    {"event":"source_error","source":"native_observation","dropped":0},
+    {"event":"source_error","source":"clipboard","error":null},
+    {"event":"source_error","source":"files","error":{"success":true,"code":"provider_failed","error":"Owned failure"}},
+    {"event":"mon_start","scope":{"mode":"invented"},"coverage":[],"partial":false},
+    {"event":"mon_start","scope":{"mode":"all"},"coverage":[{"source":"ax","available":false}],"partial":false},
+    {"event":"mon_start","scope":{"mode":"apps"},"coverage":[{"source":"ax","available":true}],"partial":false},
+    {"event":"mon_pause","unexpected":true}, {"event":"mon_stop","reason":null}
+  ]
+}

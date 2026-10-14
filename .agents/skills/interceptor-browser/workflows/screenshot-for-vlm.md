@@ -1,6 +1,7 @@
 # ScreenshotForVlm
 
-You are taking a screenshot of a webpage for a vision-language model (VLM) to read. Use this when pixels are genuinely the answer — visual layout, color, a chart artifact, a rendered glyph — and no structured read (`read`, `text`, `inspect`, `scene text`, `canvas log`, `macos tree`) can produce the same information.
+You are taking a screenshot of a webpage for a vision-language model (VLM) to read. Use this when pixels are genuinely the answer — visual layout, color, a chart artifact, a rendered glyph — and no structured read (`read`, `text`, `inspect`, `scene text`, `canvas log`, `macos tree`) can produce the same information. <!-- os:darwin -->
+You are taking a screenshot of a webpage for a vision-language model (VLM) to read. Use this when pixels are genuinely the answer — visual layout, color, a chart artifact, a rendered glyph — and no structured read (`read`, `text`, `inspect`, `scene text`, `canvas log`, `desktop tree`) can produce the same information. <!-- os:win32,linux -->
 
 **Screenshots are a last-resort read surface.** Structured reads cost roughly 10× fewer tokens per turn and survive DOM churn better than pixels. Try every other read first.
 
@@ -42,7 +43,8 @@ This writes a small WebP to disk (~50–100 KB for a typical full page) and retu
 - `--pixel` — pixel-true compositor capture via `chrome.tabs.captureVisibleTab`. The browser does not need to be the focused app and the window does not need focus: the capture switches the window's active tab to the target and back by itself, and it worked on an unfocused, fully covered Brave window. Do not `tab switch` or `window focus` for it. To keep even that brief tab borrow out of the user's window, put the page in your own window first (`interceptor window new <url>`). Use `--pixel` only when DOM-render fidelity is insufficient (compositor effects, hardware video frames, canvas apps).
 - `--pixel --full` — scroll-and-stitch full page. Throttled to clear Chrome's 2/sec `captureVisibleTab` quota; expect ~1.1s per viewport strip.
 
-Default DOM-render works from a backgrounded Chrome on a different macOS Space — no focus required.
+Default DOM-render works from a backgrounded Chrome on a different macOS Space — no focus required. <!-- os:darwin -->
+Default DOM-render works from a background tab, with no focus required. <!-- os:win32,linux -->
 
 ## Before you reach for a screenshot
 
@@ -53,7 +55,8 @@ Try these first:
 - `interceptor inspect` — tree + text + passive network.
 - `interceptor scene text <ref>` — text inside a rich editor.
 - `interceptor canvas log <n>` — observer log of canvas draw calls.
-- `interceptor macos tree --app "X"` — when the target is outside the page.
+- `interceptor macos tree --app "X"` — when the target is outside the page. <!-- os:darwin -->
+- `interceptor desktop tree --app "X"` — when the target is outside the page. <!-- os:win32,linux -->
 
 If any of those returns the answer, you do not need pixels.
 

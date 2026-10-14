@@ -11,7 +11,8 @@
  * browser-only mode too (unlike `interceptor macos *`).
  */
 
-import { sendCommand, type DaemonResponse, type DaemonResult } from "../transport"
+import { sendCommand, jsonFailure, type DaemonResponse, type DaemonResult } from "../transport"
+import {callDesktopProvider} from "../../daemon/desktop-provider"
 
 type Action = { type: string; [key: string]: unknown }
 
@@ -33,6 +34,10 @@ function unwrap(resp: DaemonResponse): DaemonResult {
 
 async function send(action: Action, contextId?: string): Promise<DaemonResult> {
   try {
+    if (process.platform === "win32" || process.platform === "linux") {
+      const login = await callDesktopProvider({type:"desktop_apps"})
+      if (!login.success) return login
+    }
     return unwrap(await sendCommand(action, undefined, contextId))
   } catch (err) {
     return { success: false, error: (err as Error).message }
@@ -41,11 +46,7 @@ async function send(action: Action, contextId?: string): Promise<DaemonResult> {
 
 function emit(result: DaemonResult, jsonMode: boolean): void {
   if (jsonMode) {
-    const errPayload =
-      result.data && typeof result.data === "object" && !Array.isArray(result.data)
-        ? { error: result.error, ...(result.data as Record<string, unknown>) }
-        : { error: result.error }
-    console.log(JSON.stringify(result.success ? (result.data ?? null) : errPayload))
+        console.log(JSON.stringify(result.success ? (result.data ?? null) : jsonFailure(result)))
     return
   }
   if (!result.success) {
@@ -70,7 +71,11 @@ const CDP_HELP = `interceptor macos cdp <subcommand>   (Path A — direct CDP ov
   status                                                list connected CDP contexts
   raw <Method> [jsonParams] [--context cdp:<id>]        send any CDP method
   discover                                              list running Electron apps
-  launch <app> [--port N] --confirm                     relaunch app w/ debug flag (loses unsaved state)
+  launch <app> [--port N] [--inspect-port N] --confirm   relaunch app w/ debug flags (loses unsaved state)
+
+On Windows/Linux use interceptor desktop cdp. Discovery and launch require
+the native provider and a packaged Electron app in the current GUI login.
+Windows Path 0 requires an existing --inspect port; it never sends SIGUSR1.
 
 Then drive it with the normal verbs:
   interceptor eval --context cdp:<id> --main "location.href"
@@ -121,8 +126,8 @@ export async function runCdpCommand(
 async function runCdp(sub: string, args: string[], contextId: string | undefined, jsonMode: boolean): Promise<void> {
   switch (sub) {
     case "connect": {
-      const port = parseInt(args[2] ?? "", 10)
-      if (Number.isNaN(port)) { console.error("error: macos cdp connect requires a numeric port"); process.exit(1) }
+      const port = Number(args[2])
+      if (!/^\d+$/.test(args[2] ?? "") || !Number.isSafeInteger(port) || port < 1 || port > 65535) { console.error("error: cdp connect requires an integer port 1..65535"); process.exit(1) }
       const result = await send({
         type: "cdp_connect",
         port,
@@ -168,12 +173,13 @@ async function runCdp(sub: string, args: string[], contextId: string | undefined
       if (!app || app.startsWith("--")) { console.error("error: macos cdp launch requires an app name"); process.exit(1) }
       const port = flagValue(args, "--port")
       if (!hasFlag(args, "--confirm")) {
-        console.error(`Relaunching "${app}" will QUIT it and lose any unsaved state.`)
-        console.error(`Re-run with --confirm to proceed:`)
-        console.error(`  interceptor macos cdp launch ${app}${port ? ` --port ${port}` : ""} --confirm`)
-        process.exit(1)
+        const rerun = `interceptor ${process.argv.includes("desktop") ? "desktop" : "macos"} cdp launch ${/\s/.test(app) ? JSON.stringify(app) : app}${port ? ` --port ${port}` : ""} --confirm`
+        emitExit({ success: false, code: "invalid_request", error: `relaunching "${app}" quits it and loses any unsaved state; nothing was launched. Re-run with --confirm to proceed: ${rerun}`, data: { confirmRequired: true, remediation: rerun } }, jsonMode)
+        return
       }
-      emitExit(await send({ type: "cdp_launch", app, port: port ? parseInt(port, 10) : undefined }), jsonMode)
+      const inspectPort = flagValue(args, "--inspect-port")
+      emitExit(await send({ type: "cdp_launch", app, port: port ? Number(port) : undefined,
+        inspectPort: inspectPort ? Number(inspectPort) : undefined, confirm: true }), jsonMode)
       return
     }
     default:
@@ -186,11 +192,11 @@ async function runApp(sub: string, args: string[], contextId: string | undefined
     case "attach": {
       const app = args[2] && !args[2].startsWith("--") ? args[2] : undefined
       const pidStr = flagValue(args, "--pid")
-      const pid = pidStr ? parseInt(pidStr, 10) : undefined
-      if (pidStr && !Number.isFinite(pid)) { console.error("error: --pid must be numeric"); process.exit(1) }
+      const pid = pidStr ? Number(pidStr) : undefined
+      if (pidStr && (!/^\d+$/.test(pidStr) || !Number.isSafeInteger(pid) || pid! < 1 || pid! > 0xffffffff)) { console.error("error: --pid must be a positive32-bit integer"); process.exit(1) }
       const inspectStr = flagValue(args, "--inspect-port")
-      const inspectPort = inspectStr ? parseInt(inspectStr, 10) : undefined
-      if (inspectStr && !Number.isFinite(inspectPort)) { console.error("error: --inspect-port must be numeric"); process.exit(1) }
+      const inspectPort = inspectStr ? Number(inspectStr) : undefined
+      if (inspectStr && (!/^\d+$/.test(inspectStr) || !Number.isSafeInteger(inspectPort) || inspectPort! < 1 || inspectPort! > 65535)) { console.error("error: --inspect-port must be an integer 1..65535"); process.exit(1) }
       if (!app && pid === undefined) { console.error("error: macos cdp app attach requires an app name or numeric --pid"); process.exit(1) }
       const result = await send({
         type: "app_attach",

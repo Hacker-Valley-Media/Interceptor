@@ -4,6 +4,7 @@
 // NSMetadataQuery for indexed search via Spotlight.
 
 import Foundation
+import Darwin.POSIX
 #if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
 #endif
@@ -30,10 +31,34 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
         }
         let encoding = (action["encoding"] as? String) ?? "utf8"
         let byteRange = action["byteRange"] as? [String: Any]
+        let neutral = action["type"] as? String == "desktop_fs_read"
+
+        // Router validates the neutral discriminator and fields first. Open
+        // without blocking on a FIFO, then verify the opened object itself.
+        var opened: FileHandle?
+        var openedStat = stat()
+        if neutral {
+            let fd = Darwin.open(absolutePath, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+            guard fd >= 0 else {
+                completion(["success": false, "code": errno == ENOENT ? "target_gone" : (errno == EACCES || errno == EPERM ? "permission_denied" : "provider_failed"),
+                            "error": "fs_read: \(String(cString: strerror(errno)))"])
+                return
+            }
+            opened = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            guard fstat(fd, &openedStat) == 0 else {
+                completion(["success": false, "code": "provider_failed", "error": "fs_read: could not inspect the opened file"])
+                return
+            }
+            guard openedStat.st_mode & S_IFMT == S_IFREG else {
+                completion(["success": false, "code": "unsupported_target", "error": "filesystem read requires a regular file"])
+                return
+            }
+        }
+        defer { try? opened?.close() }
 
         let fm = FileManager.default
         var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: absolutePath, isDirectory: &isDir) else {
+        guard neutral || fm.fileExists(atPath: absolutePath, isDirectory: &isDir) else {
             completion(WireFormat.error("fs_read: file not found: \(absolutePath)"))
             return
         }
@@ -42,9 +67,9 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
             return
         }
         do {
-            let attrs = try fm.attributesOfItem(atPath: absolutePath)
-            let size = (attrs[.size] as? NSNumber)?.intValue ?? 0
-            let modified = (attrs[.modificationDate] as? Date)?.iso8601 ?? ""
+            let attrs = neutral ? [:] : try fm.attributesOfItem(atPath: absolutePath)
+            let size = neutral ? Int(openedStat.st_size) : ((attrs[.size] as? NSNumber)?.intValue ?? 0)
+            let modified = neutral ? Date(timeIntervalSince1970: Double(openedStat.st_mtimespec.tv_sec) + Double(openedStat.st_mtimespec.tv_nsec) / 1_000_000_000).iso8601 : ((attrs[.modificationDate] as? Date)?.iso8601 ?? "")
             let url = URL(fileURLWithPath: absolutePath)
             var contentType: String = "public.data"
             #if canImport(UniformTypeIdentifiers)
@@ -56,7 +81,16 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
             #endif
 
             let data: Data
-            if let br = byteRange {
+            if let handle = opened {
+                let start = (byteRange?["start"] as? Int) ?? 0
+                let length = (byteRange?["length"] as? Int) ?? max(0, size - start)
+                guard length <= DESKTOP_MAX_FRAME_BYTES else {
+                    completion(["success": false, "code": "resource_limit", "error": "read exceeds frame size; request a smaller byte range"])
+                    return
+                }
+                try handle.seek(toOffset: UInt64(start))
+                data = try handle.read(upToCount: length) ?? Data()
+            } else if let br = byteRange {
                 let start = (br["start"] as? Int) ?? 0
                 let length = (br["length"] as? Int) ?? max(0, size - start)
                 let handle = try FileHandle(forReadingFrom: url)
@@ -88,37 +122,54 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
                 ]
             ]))
         } catch {
-            completion(WireFormat.error("fs_read failed: \(error.localizedDescription)"))
+            if neutral {
+                let code = (error as NSError).code
+                completion(["success": false, "code": code == NSFileReadNoSuchFileError ? "target_gone" : (code == NSFileReadNoPermissionError ? "permission_denied" : "provider_failed"), "error": "fs_read failed: \(error.localizedDescription)"])
+            } else {
+                completion(WireFormat.error("fs_read failed: \(error.localizedDescription)"))
+            }
         }
     }
 
     // MARK: fs_write
     private func handleWrite(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let neutral = action["type"] as? String == "desktop_fs_write"
+        func fail(_ code: String, _ message: String) {
+            var result = WireFormat.error(message)
+            if neutral { result["code"] = code }
+            completion(result)
+        }
         guard let absolutePath = resolvePath(action) else {
-            completion(WireFormat.error("fs_write: missing path or unresolvable ref"))
+            fail("invalid_request", "fs_write: missing path or unresolvable ref")
             return
         }
         guard let content = action["content"] as? String else {
-            completion(WireFormat.error("fs_write: missing content"))
+            fail("invalid_request", "fs_write: missing content")
             return
         }
         // Defense in depth — never write to system paths regardless of permission rules.
         let denylist = ["/etc/", "/usr/", "/System/", "/private/var/"]
         for d in denylist {
             if absolutePath.hasPrefix(d) {
-                completion(WireFormat.error("fs_write: refused — path is in protected denylist: \(absolutePath)"))
+                fail("restricted_by_os", "fs_write: refused \u{2014} path is in protected denylist: \(absolutePath)")
                 return
             }
         }
         let encoding = (action["encoding"] as? String) ?? "utf8"
         let url = URL(fileURLWithPath: absolutePath)
+        // Say so, as Linux does, instead of "the file doesn't exist".
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: absolutePath, isDirectory: &isDirectory), isDirectory.boolValue {
+            fail("unsupported_target", "fs_write: \(absolutePath) is a directory; nothing was written")
+            return
+        }
 
         // Optional ifMatch precondition based on modified timestamp.
         if let ifMatch = action["ifMatch"] as? [String: Any],
            let expected = ifMatch["modified"] as? String {
             if let attrs = try? FileManager.default.attributesOfItem(atPath: absolutePath),
                let actual = (attrs[.modificationDate] as? Date)?.iso8601, actual != expected {
-                completion(WireFormat.error("fs_write: ifMatch precondition failed (file modified at \(actual))"))
+                fail("invalid_request", "fs_write: ifMatch precondition failed (file modified at \(actual))")
                 return
             }
         }
@@ -127,7 +178,7 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
         switch encoding {
         case "base64":
             guard let d = Data(base64Encoded: content) else {
-                completion(WireFormat.error("fs_write: content is not valid base64"))
+                fail("invalid_request", "fs_write: content is not valid base64")
                 return
             }
             data = d
@@ -149,7 +200,8 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
                 "modified": modified
             ]))
         } catch {
-            completion(WireFormat.error("fs_write failed: \(error.localizedDescription)"))
+            let code = (error as NSError).code
+            fail(code == NSFileWriteNoPermissionError || code == NSFileReadNoPermissionError ? "permission_denied" : (code == NSFileNoSuchFileError ? "target_gone" : "provider_failed"), "fs_write failed: \(error.localizedDescription)")
         }
     }
 
@@ -398,11 +450,12 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
         for path in paths {
             if matches.count >= limit { break }
             let url = URL(fileURLWithPath: path)
-            let vals = try? url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .contentModificationDateKey])
+            let vals = try? url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .contentModificationDateKey, .isDirectoryKey])
             let kindLabel = vals?.contentType?.localizedDescription
             if !self.matchesKinds(requestedKinds, at: url, kindLabel: kindLabel) { continue }
             var entry: [String: Any] = ["path": path, "name": url.lastPathComponent]
-            if let kindLabel { entry["kind"] = kindLabel }
+            // The contract requires a kind; Spotlight has none for some files (a .vim syntax file).
+            entry["kind"] = kindLabel ?? (vals?.isDirectory == true ? "directory" : "file")
             if let size = vals?.fileSize { entry["size"] = size }
             if let modified = vals?.contentModificationDate {
                 entry["modified"] = iso.string(from: modified)
@@ -620,6 +673,11 @@ final class FsDomain: DomainHandler, @unchecked Sendable {
                     if isDir { return true }
                     continue
                 }
+                #if canImport(UniformTypeIdentifiers)
+                if let type = UTType(requested),
+                   let actual = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType,
+                   actual.conforms(to: type) { return true }
+                #endif
                 if !normalizedKindLabel.isEmpty && normalizedKindLabel.contains(requested) {
                     return true
                 }

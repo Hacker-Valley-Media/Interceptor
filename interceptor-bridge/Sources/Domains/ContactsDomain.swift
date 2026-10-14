@@ -1,19 +1,84 @@
-// PRD-66 Domain 7 — Contacts. macOS 10.11+; CNChangeHistoryFetchRequest macOS 10.15+.
+// Contacts. macOS 10.11+; CNChangeHistoryFetchRequest macOS 10.15+.
 // References: apple-developer-docs/Contacts/{CNContactStore,CNContact,CNContactFetchRequest,
 // CNSaveRequest,CNGroup,CNAuthorizationStatus,CNChangeHistoryFetchRequest,...}.md.
 
 import Foundation
 import Contacts
+import ImageIO
+import UniformTypeIdentifiers
+import ShareNative
+import Darwin
 
 final class ContactsDomain: DomainHandler, @unchecked Sendable {
-    private let store = CNContactStore()
-    private let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
+    private let requestLock = NSLock()
+    private var currentStore = CNContactStore()
+    private var store: CNContactStore { requestLock.lock(); defer { requestLock.unlock() }; return currentStore }
+    private var requestQueue = DispatchQueue(label: "interceptor.contacts.native")
+    private var active: (id: UUID, sub: String, since: Date, timedOut: Bool)?
+    // A native call macOS never returns (a group save sat in the kernel's access() on
+    // AddressBook's metadata lock file for 90 minutes) is given up at the 55 s deadline: later calls
+    // get a fresh queue and store. At most one call is given up at a time, so a second stuck call
+    // keeps the family refusing (with what is stuck and how to recover) instead of piling up threads.
+    private var abandoned: (id: UUID, sub: String, since: Date)?
+    // Tests shorten the deadline and stand in for the native call.
+    var deadline: TimeInterval = 55
+    var nativeForTesting: ((@escaping @Sendable ([String: Any]) -> Void) -> Void)?
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        var input = action; input["type"] = "desktop_contacts"; input["sub"] = action["sub"] as? String ?? command
+        if let error = DesktopContactsValidation.actionError(input) { completion(WireFormat.failure("invalid_request", error)); return }
+        if input["note"] != nil { completion(WireFormat.failure("permission_denied", "Contacts notes require the Apple notes entitlement; no mutation was performed")); return }
+        if input["sub"] as? String == "status" { status(completion: completion); return }
+        if input["sub"] as? String != "request" {
+            let authorization = CNContactStore.authorizationStatus(for: .contacts)
+            guard authorization == .authorized else {
+                completion(WireFormat.failure("permission_denied", "Contacts access is \(authStatusString(authorization)); only the explicit request selector may request consent")); return
+            }
+        }
+        let id = UUID(), once = AtomicFlag(), box = UncheckedSendableBox(input), sub = input["sub"] as? String ?? command
+        requestLock.lock(); let busy = active; if busy == nil { active = (id, sub, Date(), false) }; let queue = requestQueue; requestLock.unlock()
+        if let busy {
+            let message = busy.timedOut
+                ? "a Contacts \(busy.sub) call started at \(DesktopEventKitValidation.iso(busy.since)) is still blocked inside macOS Contacts, and an earlier stuck call has not returned either; no work queued. If it does not recover, restart the bridge: launchctl kickstart -k gui/\(getuid())/com.interceptor.bridge"
+                : "another Contacts request (\(busy.sub)) is still running; no work queued"
+            completion(WireFormat.failure("resource_limit", message)); return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
+        let timerBox = UncheckedSendableBox(timer)
+        let finish: @Sendable ([String: Any]) -> Void = { result in
+            timerBox.value.cancel()
+            let error = DesktopContactsValidation.resultError(result, sub: box.value["sub"] as! String, action: box.value)
+            self.requestLock.lock(); if self.active?.id == id { self.active = nil }; if self.abandoned?.id == id { self.abandoned = nil }; self.requestLock.unlock()
+            if once.set() { completion(error.map { WireFormat.failure("partial_result", $0) } ?? result) }
+        }
+        timer.schedule(deadline: .now() + deadline)
+        timer.setEventHandler {
+            self.requestLock.lock()
+            var gaveUp = false
+            if let current = self.active, current.id == id {
+                if self.abandoned == nil {
+                    self.abandoned = (id, current.sub, current.since); self.active = nil; gaveUp = true
+                    self.requestQueue = DispatchQueue(label: "interceptor.contacts.native"); self.currentStore = CNContactStore()
+                } else { self.active?.timedOut = true }
+            }
+            self.requestLock.unlock()
+            if once.set() { completion(WireFormat.failure("timeout_unknown_outcome", gaveUp
+                ? "Contacts native completion exceeded 55 seconds; macOS has not returned the call, so it was given up and later Contacts calls use a fresh store. Its outcome is unknown and nothing was replayed"
+                : "Contacts native completion exceeded 55 seconds while an earlier call is still stuck; Contacts calls are refused until one returns. Its outcome is unknown and nothing was replayed")) }
+        }
+        timer.resume()
+        queue.async {
+            self.requestLock.lock(); let revoked = self.active?.id != id || self.active?.timedOut == true; self.requestLock.unlock()
+            if revoked { finish(WireFormat.failure("cancelled", "Contacts request retired before native dispatch")); return }
+            if let native = self.nativeForTesting { native(finish); return }
+            if let error = InterceptorContactOperation({ self.dispatch(command, action: box.value, completion: finish) }) {
+                let native = error as NSError
+                finish(WireFormat.failure("provider_failed", native.localizedDescription, details: ["nativeDomain": native.domain, "nativeCode": native.code, "nativeException": native.userInfo["exceptionName"] as? String ?? "unknown"]))
+            }
+        }
+    }
+
+    private func dispatch(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let sub = action["sub"] as? String ?? command
         switch sub {
         case "status":               status(completion: completion)
@@ -50,13 +115,12 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
         case .restricted:    return "restricted"
         case .denied:        return "denied"
         case .authorized:    return "authorized"
-        case .limited:       return "limited"
         @unknown default:    return "unknown"
         }
     }
 
     private func defaultKeys() -> [CNKeyDescriptor] {
-        var keys: [CNKeyDescriptor] = [
+        let keys: [CNKeyDescriptor] = [
             CNContactIdentifierKey as CNKeyDescriptor,
             CNContactGivenNameKey as CNKeyDescriptor,
             CNContactFamilyNameKey as CNKeyDescriptor,
@@ -92,7 +156,27 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
         return keys
     }
 
-    private func contactDict(_ c: CNContact, includeNote: Bool = false, includeImage: Bool = false, includeThumbnail: Bool = true) -> [String: Any] {
+    static func imageDataURL(_ data: Data) throws -> String {
+        guard !data.isEmpty, data.count <= 196608,
+              let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let identifier = CGImageSourceGetType(source),
+              let type = UTType(identifier as String), type.conforms(to: .image),
+              let mime = type.preferredMIMEType,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0, height > 0, width <= 16384, height <= 16384,
+              width <= DESKTOP_THUMBNAIL_MAX_PIXELS / height else {
+            throw NSError(domain: "InterceptorContactsImage", code: 1, userInfo: [NSLocalizedDescriptionKey: "native Contact image is invalid or exceeds encoded/pixel bounds; select fields without image data"])
+        }
+        let value = "data:\(mime);base64,\(data.base64EncodedString())"
+        guard value.utf8.count <= 262144 else {
+            throw NSError(domain: "InterceptorContactsImage", code: 2, userInfo: [NSLocalizedDescriptionKey: "native Contact image URL exceeds 256KiB; select fields without image data"])
+        }
+        return value
+    }
+
+    private func contactDict(_ c: CNContact, includeImage: Bool = false, includeThumbnail: Bool = true) throws -> [String: Any] {
         var out: [String: Any] = [
             "id": c.identifier,
             "contactType": c.contactType == .person ? "person" : "organization",
@@ -145,23 +229,19 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
             ]
         }
         out["dates"] = c.dates.map { lp -> [String: Any] in
-            ["label": labelString(lp.label), "date": isoFormatter.string(from: dateFrom(lp.value) ?? Date(timeIntervalSince1970: 0))]
+            ["label": labelString(lp.label), "date": Self.calendarDate(lp.value as DateComponents) as Any? ?? NSNull()]
         }
-        if let bday = c.birthday, let d = bday.date {
-            out["birthday"] = isoFormatter.string(from: d)
+        if let bday = c.birthday, let value = Self.calendarDate(bday) {
+            out["birthday"] = value
         }
         if includeThumbnail, let data = c.thumbnailImageData {
-            out["thumbnailDataUrl"] = "data:image/jpeg;base64,\(data.base64EncodedString())"
+            out["thumbnailDataUrl"] = try Self.imageDataURL(data)
         }
         if includeImage, let data = c.imageData {
-            out["imageDataUrl"] = "data:image/jpeg;base64,\(data.base64EncodedString())"
+            out["imageDataUrl"] = try Self.imageDataURL(data)
         }
-        if includeNote {
-            out["note"] = (try? c.value(forKey: CNContactNoteKey) as? String) ?? NSNull()
-        } else {
-            out["note"] = NSNull()
-            out["requires_entitlement"] = "com.apple.developer.contacts.notes"
-        }
+        out["note"] = NSNull()
+        out["requires_entitlement"] = "com.apple.developer.contacts.notes"
         return out
     }
 
@@ -170,8 +250,18 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
         return CNLabeledValue<NSString>.localizedString(forLabel: raw)
     }
 
-    private func dateFrom(_ comps: NSDateComponents) -> Date? {
-        Calendar.current.date(from: comps as DateComponents)
+    static func calendarDate(_ components: DateComponents) -> String? {
+        guard let month = components.month, let day = components.day else { return nil }
+        let year = components.year
+        var calendar = components.calendar ?? Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let candidate = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: year ?? 2000, month: month, day: day)
+        guard let date = calendar.date(from: candidate) else { return nil }
+        let checked = calendar.dateComponents([.year, .month, .day], from: date)
+        guard checked.year == candidate.year, checked.month == month, checked.day == day else { return nil }
+        if year == nil { return String(format: "--%02d-%02d", month, day) }
+        guard calendar.identifier == .gregorian, let year, (1...9999).contains(year) else { return nil }
+        return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
     // MARK: - Verbs
@@ -198,7 +288,7 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
         do {
             let result = try store.containers(matching: nil)
             let arr = result.map { c -> [String: Any] in
-                ["id": c.identifier, "name": c.name, "type": String(describing: c.type)]
+                ["id": c.identifier, "name": c.name, "type": NativeNames.name(c.type.rawValue, NativeNames.containerType)]
             }
             completion(WireFormat.success(["containers": arr]))
         } catch {
@@ -218,6 +308,11 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
             return nil
         }()
         do {
+            if let container = action["container"] as? String {
+                guard try store.containers(matching: CNContainer.predicateForContainers(withIdentifiers: [container])).contains(where: { $0.identifier == container }) else {
+                    completion(WireFormat.failure("unsupported_target", "Contacts container identity does not exist")); return
+                }
+            }
             let result = try store.groups(matching: pred)
             let arr = result.map { ["id": $0.identifier, "name": $0.name] }
             completion(WireFormat.success(["groups": arr]))
@@ -295,10 +390,16 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
             let groups = try store.groups(matching: CNGroup.predicateForGroups(withIdentifiers: [gid]))
             guard let g = groups.first else { completion(WireFormat.error("group not found")); return }
             let contacts = try store.unifiedContacts(matching: CNContact.predicateForContacts(withIdentifiers: [cid]), keysToFetch: defaultKeys())
-            guard let c = contacts.first else { completion(WireFormat.error("contact not found")); return }
+            guard let c = contacts.first else { completion(WireFormat.failure("target_gone", "contact not found")); return }
+            let listed = { () throws -> Bool in try self.store.unifiedContacts(matching: CNContact.predicateForContactsInGroup(withIdentifier: gid), keysToFetch: [CNContactIdentifierKey as CNKeyDescriptor]).contains { $0.identifier == cid } }
+            if !add, try !listed() { completion(WireFormat.failure("target_gone", "that contact is not a member of the group")); return }
             let req = CNSaveRequest()
             if add { req.addMember(c, to: g) } else { req.removeMember(c, from: g) }
             try store.execute(req)
+            // Read the membership back before reporting ok. On macOS 27 an iCloud group kept the member
+            // after a removal that returned no error (the member card, mutable copies and a
+            // fresh store all behaved the same), and the reply said ok.
+            guard try listed() == add else { completion(WireFormat.failure("provider_failed", "macOS Contacts accepted the request but the group still \(add ? "lacks" : "lists") the contact; nothing else was changed")); return }
             completion(WireFormat.success(["ok": true, "group": gid, "contact": cid, "added": add]))
         } catch {
             completion(WireFormat.error("contacts.group-member: \(error.localizedDescription)"))
@@ -306,29 +407,63 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func parseKeys(_ s: String?) -> [CNKeyDescriptor] {
-        if s == nil { return defaultKeys() }
-        return defaultKeys() // The minimal "always-fetch" set; --keys filtering is informational only
+        var keys = defaultKeys()
+        if s?.components(separatedBy: ",").contains("imageDataUrl") == true { keys.append(CNContactImageDataKey as CNKeyDescriptor) }
+        return keys
+    }
+
+    // Default rows carry a base64 thumbnail, and a full page of them passes the 1MiB reply cap.
+    // Thumbnails that would cross the budget are left out (optional in the contract; imageDataAvailable
+    // still reports the photo), so every row and the paging stay intact. Explicit --keys rows are unchanged.
+    static func fitDefaultThumbnails(_ rows: [[String: Any]], budget: Int = 1_000_000) -> [[String: Any]] {
+        var remaining = budget
+        return rows.map { row in
+            var row = row
+            var size = (try? JSONSerialization.data(withJSONObject: row).count) ?? 0
+            if size > remaining, row.removeValue(forKey: "thumbnailDataUrl") != nil { size = (try? JSONSerialization.data(withJSONObject: row).count) ?? 0 }
+            remaining -= size
+            return row
+        }
     }
 
     private func listContacts(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let keys = parseKeys(action["keys"] as? String)
         let request = CNContactFetchRequest(keysToFetch: keys)
         request.unifyResults = true
-        let limit = action["limit"] as? Int
+        if let group = action["group"] as? String { request.predicate = CNContact.predicateForContactsInGroup(withIdentifier: group) }
+        else if let container = action["container"] as? String { request.predicate = CNContact.predicateForContactsInContainer(withIdentifier: container) }
+        let limit = action["limit"] as? Int ?? 100
         let offset = (action["offset"] as? Int) ?? 0
         var results: [CNContact] = []
         var visited = 0
         do {
+            if let group = action["group"] as? String {
+                guard try store.groups(matching: CNGroup.predicateForGroups(withIdentifiers: [group])).contains(where: { $0.identifier == group }) else {
+                    completion(WireFormat.failure("unsupported_target", "Contacts group identity does not exist")); return
+                }
+            } else if let container = action["container"] as? String {
+                guard try store.containers(matching: CNContainer.predicateForContainers(withIdentifiers: [container])).contains(where: { $0.identifier == container }) else {
+                    completion(WireFormat.failure("unsupported_target", "Contacts container identity does not exist")); return
+                }
+            }
             try store.enumerateContacts(with: request) { c, stop in
                 visited += 1
                 if visited <= offset { return }
                 results.append(c)
-                if let limit = limit, results.count >= limit { stop.pointee = true }
+                if results.count >= limit { stop.pointee = true }
+            }
+            let selected = (action["keys"] as? String)?.components(separatedBy: ",")
+            let rows = try results.map { contact in
+                let row = try self.contactDict(contact, includeImage: selected?.contains("imageDataUrl") == true, includeThumbnail: selected == nil || selected!.contains("thumbnailDataUrl"))
+                guard let selected else { return row }
+                var allowed = Set(selected); allowed.insert("id")
+                if allowed.contains("note") { allowed.insert("requires_entitlement") }
+                return row.filter { allowed.contains($0.key) }
             }
             completion(WireFormat.success([
-                "limit": limit as Any? ?? NSNull(),
+                "limit": limit,
                 "offset": offset,
-                "contacts": results.map { self.contactDict($0) },
+                "contacts": selected == nil ? Self.fitDefaultThumbnails(rows) : rows,
             ]))
         } catch {
             completion(WireFormat.error("contacts.list: \(error.localizedDescription)"))
@@ -343,7 +478,7 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
                 keysToFetch: defaultKeys()
             )
             guard let c = contacts.first else { completion(WireFormat.error("contacts.contact: not found")); return }
-            completion(WireFormat.success(contactDict(c)))
+            completion(WireFormat.success(try contactDict(c)))
         } catch {
             completion(WireFormat.error("contacts.contact: \(error.localizedDescription)"))
         }
@@ -352,7 +487,7 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
     private func meContact(completion: @escaping @Sendable ([String: Any]) -> Void) {
         do {
             let me = try store.unifiedMeContactWithKeys(toFetch: defaultKeys())
-            completion(WireFormat.success(contactDict(me)))
+            completion(WireFormat.success(try contactDict(me)))
         } catch {
             completion(WireFormat.error("contacts.me: \(error.localizedDescription)"))
         }
@@ -374,7 +509,8 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
                 return
             }
             let contacts = try store.unifiedContacts(matching: pred, keysToFetch: defaultKeys())
-            completion(WireFormat.success(["matches": contacts.map { self.contactDict($0) }]))
+            guard contacts.count <= 1000 else { completion(WireFormat.failure("resource_limit", "Contacts search exceeds 1000 native matches; narrow the query")); return }
+            completion(WireFormat.success(["matches": try contacts.map { try self.contactDict($0) }]))
         } catch {
             completion(WireFormat.error("contacts.find: \(error.localizedDescription)"))
         }
@@ -395,7 +531,7 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
             // home:"1 Apple Park Way;Cupertino;CA;95014;USA"
             let parts = raw.split(separator: ":", maxSplits: 1)
             if parts.count == 2 {
-                let parts2 = String(parts[1]).split(separator: ";").map(String.init)
+                let parts2 = String(parts[1]).split(separator: ";", omittingEmptySubsequences: false).map(String.init)
                 let p = CNMutablePostalAddress()
                 if parts2.count >= 1 { p.street = parts2[0] }
                 if parts2.count >= 2 { p.city = parts2[1] }
@@ -405,8 +541,9 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
                 m.postalAddresses = [CNLabeledValue(label: String(parts[0]), value: p)]
             }
         }
-        if let raw = action["birthday"] as? String, let d = ISO8601DateFormatter().date(from: raw + "T00:00:00Z") {
-            m.birthday = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        if let raw = action["birthday"] as? String {
+            let parts = raw.split(separator: "-").compactMap { Int($0) }
+            m.birthday = DateComponents(year: parts[0], month: parts[1], day: parts[2])
         }
         return m
     }
@@ -427,7 +564,9 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
         req.add(m, toContainerWithIdentifier: action["container"] as? String)
         do {
             try store.execute(req)
-            completion(WireFormat.success(contactDict(m)))
+            let saved = try store.unifiedContacts(matching: CNContact.predicateForContacts(withIdentifiers: [m.identifier]), keysToFetch: defaultKeys())
+            guard saved.count == 1 else { completion(WireFormat.failure("partial_result", "native Contact saved but exact readback is absent or ambiguous; no mutation was replayed")); return }
+            completion(WireFormat.success(try contactDict(saved[0])))
         } catch {
             completion(WireFormat.error("contacts.create: \(error.localizedDescription)"))
         }
@@ -447,7 +586,9 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
             let req = CNSaveRequest()
             req.update(m)
             try store.execute(req)
-            completion(WireFormat.success(contactDict(m)))
+            let saved = try store.unifiedContacts(matching: CNContact.predicateForContacts(withIdentifiers: [m.identifier]), keysToFetch: defaultKeys())
+            guard saved.count == 1 else { completion(WireFormat.failure("partial_result", "native Contact updated but exact readback is absent or ambiguous; no mutation was replayed")); return }
+            completion(WireFormat.success(try contactDict(saved[0])))
         } catch {
             completion(WireFormat.error("contacts.update: \(error.localizedDescription)"))
         }
@@ -480,9 +621,10 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
                 keysToFetch: [CNContactVCardSerialization.descriptorForRequiredKeys()]
             )
             let data = try CNContactVCardSerialization.data(with: contacts)
+            guard data.count <= 262144, let text = String(data: data, encoding: .utf8) else { completion(WireFormat.failure("resource_limit", "Contacts vCard requires UTF8 up to 256KiB")); return }
             completion(WireFormat.success([
                 "id": id,
-                "vcard": String(data: data, encoding: .utf8) ?? "",
+                "vcard": text,
                 "bytes": data.count,
             ]))
         } catch {
@@ -493,19 +635,25 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
     private func importVcard(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let path = action["path"] as? String else { completion(WireFormat.error("contacts.import-vcard: <path> required")); return }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { completion(WireFormat.failure("permission_denied", "Contacts import file cannot be retained")); return }
+        let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? file.close() }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG, metadata.st_size >= 0, metadata.st_size <= 262144 else { completion(WireFormat.failure("resource_limit", "Contacts import requires a regular nonsymlink file up to 256KiB")); return }
         do {
-            let data = try Data(contentsOf: url)
+            guard let data = try file.read(upToCount: 262145), data.count <= 262144, String(data: data, encoding: .utf8) != nil else { completion(WireFormat.failure("resource_limit", "Contacts import requires UTF8 up to 256KiB")); return }
             let imported = try CNContactVCardSerialization.contacts(with: data)
+            guard !imported.isEmpty, imported.count <= 100 else { completion(WireFormat.failure("resource_limit", "Contacts import requires 1..100 native contacts")); return }
             let req = CNSaveRequest()
             // Hold the mutables so we can read their identifiers after save.
             // CNSaveRequest.add() assigns the identifier on save, and the
             // mutable's identifier reflects that assignment in-place.
             var mutables: [CNMutableContact] = []
             for c in imported {
-                if let m = c.mutableCopy() as? CNMutableContact {
-                    req.add(m, toContainerWithIdentifier: action["container"] as? String)
-                    mutables.append(m)
-                }
+                guard let m = c.mutableCopy() as? CNMutableContact else { completion(WireFormat.failure("provider_failed", "Native imported contact could not be made mutable; no save performed")); return }
+                req.add(m, toContainerWithIdentifier: action["container"] as? String)
+                mutables.append(m)
             }
             try store.execute(req)
             completion(WireFormat.success([
@@ -534,13 +682,16 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
             if let raw = action["since"] as? String, let data = Data(base64Encoded: raw) {
                 request.startingToken = data
             }
-            // `enumeratorForChangeHistoryFetchRequest` is unavailable in Swift on macOS;
-            // surface the token + a structured note instead of misrepresenting the API.
-            let token = store.currentHistoryToken?.base64EncodedString() ?? ""
+            request.includeGroupChanges = true
+            let result = InterceptorContactHistory(store, request, UInt(action["limit"] as? Int ?? 1000))
+            if let error = result["nativeError"] as? NSError { completion(WireFormat.failure("provider_failed", error.localizedDescription, details: ["nativeDomain": error.domain, "nativeCode": error.code])); return }
+            if let code = result["code"] as? String { completion(WireFormat.failure(code, result["error"] as? String ?? "Native Contacts history failed")); return }
+            guard let events = result["events"] as? [CNChangeHistoryEvent] else { completion(WireFormat.failure("provider_failed", "Native Contacts history returned invalid events")); return }
+            let encoded = events.compactMap(eventDict)
+            guard encoded.count == events.count else { completion(WireFormat.failure("unsupported_operation", "Native Contacts history contains an unknown event type; the history token was not advanced")); return }
             completion(WireFormat.success([
-                "currentToken": token,
-                "events": [Any](),
-                "note": "Swift on macOS does not expose enumeratorForChangeHistoryFetchRequest; use NSContactsChangeNotification observers from the daemon for live updates.",
+                "currentToken": result["currentToken"] ?? NSNull(),
+                "events": encoded,
             ]))
         } else {
             completion(WireFormat.error("contacts.changes: requires macOS 10.15+"))
@@ -548,7 +699,7 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
     }
 
     @available(macOS 10.15, *)
-    private func eventDict(_ e: CNChangeHistoryEvent) -> [String: Any] {
+    private func eventDict(_ e: CNChangeHistoryEvent) -> [String: Any]? {
         switch e {
         case let e as CNChangeHistoryAddContactEvent:
             return ["type": "addContact", "contactId": e.contact.identifier]
@@ -573,7 +724,7 @@ final class ContactsDomain: DomainHandler, @unchecked Sendable {
         case _ as CNChangeHistoryDropEverythingEvent:
             return ["type": "dropEverything"]
         default:
-            return ["type": String(describing: type(of: e))]
+            return nil
         }
     }
 }

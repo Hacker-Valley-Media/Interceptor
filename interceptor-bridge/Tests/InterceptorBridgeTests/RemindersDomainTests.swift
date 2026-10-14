@@ -1,4 +1,4 @@
-// PRD-66 — RemindersDomain unit tests.
+// RemindersDomain unit tests.
 
 import XCTest
 @testable import interceptor_bridge

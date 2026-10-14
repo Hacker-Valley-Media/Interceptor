@@ -1,6 +1,6 @@
 # Install Interceptor on Windows
 
-Interceptor for Windows is browser-only. It supports Windows 11 24H2 or newer on x64 and ARM64, installs for the current user without elevation, and supports one active interactive user per machine.
+Interceptor for Windows comes in two signed installers: Browser-only (`Interceptor-Browser-X.Y.Z-windows-<arch>.exe`) and Full (`Interceptor-Full-X.Y.Z-windows-<arch>.exe`), which adds the native desktop provider for `interceptor desktop` and automatic updates. This guide covers both; the steps below use the Browser-only name, and the Full installer runs the same way. Both support Windows 11 24H2 or newer on x64 and ARM64, install for the current user without elevation, and support one active interactive user per machine.
 
 ## Install
 
@@ -39,7 +39,7 @@ Use `/SILENT` instead of `/VERYSILENT` for progress UI. Silent setup opens no br
 
 ## Repair, update, and downgrade
 
-Run the same signed version to repair, or a newer architecture-matched installer to update. Downgrades are refused. Windows ARM64 users should use the ARM64 package even if an older x64 build was previously installed under emulation.
+Run the same signed version to repair, or a newer architecture-matched installer to update. Downgrades are refused. A Full install updates the way Sparkle updates a Mac: once a day its provider checks `https://updates.hackervalley.media/windows/latest.json`, and a newer release opens the **Interceptor Software Update** window with the release notes and **Skip This Version**, **Remind Me Later**, and **Install Update**. Nothing downloads until you click Install Update; the installer must match the signed feed and carry the Hacker Valley Media Authenticode signature, then **Install and Relaunch** runs it and Interceptor restarts. `interceptor update` checks now; `setx INTERCEPTOR_AUTO_UPDATE off`, then sign out and back in, stops the daily checks. The update folder is `%LOCALAPPDATA%\Interceptor\Updates`, and uninstall removes it. Windows ARM64 users should use the ARM64 package even if an older x64 build was previously installed under emulation.
 
 ## Uninstall
 

@@ -46,11 +46,31 @@ refresh_interceptor_daemon
 
 # ── Identify the installing user ──────────────────────────────────────────────
 # The installer sets $USER to root; we need the GUI user who initiated the
-# install. macOS exposes that via the console-owning user.
-TARGET_USER="$(stat -f '%Su' /dev/console)"
-if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
-  TARGET_USER="${USER:-}"
-fi
+# install. Console ownership can be root/loginwindow while a GUI login still
+# exists, so accept a fallback only when one distinct console login has a live
+# GUI domain (the same selection as postinstall-full).
+resolve_installing_gui_user() {
+  local candidate="" uid="" terminal="" rest="" selected=""
+  candidate="$(stat -f '%Su' /dev/console)"
+  uid="$(id -u "$candidate" 2>/dev/null || true)"
+  if [[ "$uid" =~ ^[0-9]+$ && "$uid" != "0" ]] && \
+      launchctl print "gui/$uid" >/dev/null 2>&1; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  while read -r candidate terminal rest; do
+    [[ "$terminal" == "console" ]] || continue
+    uid="$(id -u "$candidate" 2>/dev/null || true)"
+    [[ "$uid" =~ ^[0-9]+$ && "$uid" != "0" ]] || continue
+    launchctl print "gui/$uid" >/dev/null 2>&1 || continue
+    [[ -z "$selected" || "$selected" == "$candidate" ]] || return 1
+    selected="$candidate"
+  done < <(who 2>/dev/null || true)
+  [[ -n "$selected" ]] || return 1
+  printf '%s\n' "$selected"
+}
+
+TARGET_USER="$(resolve_installing_gui_user || true)"
 
 if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
   # No GUI user (e.g. headless install). Payload is laid down; per-user

@@ -4,8 +4,8 @@ import ImageIO
 import UniformTypeIdentifiers
 @testable import interceptor_bridge
 
-// PRD-63 Spec 4 regression: `capture frame` previously returned
-// {dataUrl} only. Spec 4 brings it to parity with `screenshot`'s shape:
+// Regression: `capture frame` previously returned
+// {dataUrl} only. This brings it to parity with `screenshot`'s shape:
 // {dataUrl, bytes, width, height, format}. These tests cover both the
 // pure decoder helper and the buildFramePayload assembly used by
 // handleFrame's fast and slow paths.
@@ -75,7 +75,7 @@ final class CaptureFrameMetadataTests: XCTestCase {
 
     func testBuildFramePayloadFallsBackToHeaderDecodeWhenSizeNil() {
         // When the cached size isn't available (e.g. legacy frame ingested
-        // pre-PRD-63), the helper should still recover dimensions from the
+        // before this change), the helper should still recover dimensions from the
         // JPEG header so the payload is never missing width/height.
         guard let jpeg = makeJPEG(width: 100, height: 50) else {
             return XCTFail("failed to synthesize JPEG fixture")

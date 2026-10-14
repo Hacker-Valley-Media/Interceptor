@@ -1,4 +1,4 @@
-// PRD-66 — TranslateDomain unit tests. Live tests gated behind LIVE_TRANSLATE.
+// TranslateDomain unit tests. Live tests gated behind LIVE_TRANSLATE.
 
 import XCTest
 @testable import interceptor_bridge

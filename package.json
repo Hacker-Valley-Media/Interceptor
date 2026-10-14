@@ -1,6 +1,6 @@
 {
   "name": "interceptor",
-  "version": "1.0.24",
+  "version": "2.1.1",
   "type": "module",
   "license": "Elastic-2.0",
   "bin": {
@@ -9,7 +9,7 @@
   "scripts": {
     "build": "./scripts/build.sh",
     "typecheck": "bun x tsc -p tsconfig.host.json && bun x tsc -p tsconfig.extension.json && bun x tsc -p tsconfig.json",
-    "test": "bun test",
+    "test": "bun test ./test/",
     "audit:capability-blind": "bash scripts/audit-capability-blind.sh",
     "daemon": "bun run daemon/index.ts",
     "cli": "bun run cli/index.ts"

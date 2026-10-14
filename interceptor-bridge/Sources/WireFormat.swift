@@ -32,4 +32,11 @@ enum WireFormat {
     static func error(_ message: String) -> [String: Any] {
         return ["success": false, "error": message]
     }
+
+    static func failure(_ code: String, _ message: String, details: [String: Any]? = nil) -> [String: Any] {
+        var result = error(String(message.prefix(4096)))
+        result["code"] = code
+        if let details { result["details"] = details }
+        return result
+    }
 }

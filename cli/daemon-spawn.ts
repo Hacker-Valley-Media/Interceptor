@@ -146,9 +146,14 @@ export async function ensureDaemon(): Promise<void> {
     if (resolvedDaemon) {
       process.stderr.write("daemon not running — spawning...\n")
       const child = Bun.spawn([resolvedDaemon, "--standalone"], {
+        cwd: dirname(dirname(resolvedDaemon)),
         stdout: "ignore",
         stderr: "ignore",
         stdin: "ignore",
+        // Its own process group on every OS: Windows ties an undetached child to its
+        // parent's lifetime, and on macOS/Linux a caller that kills this CLI's group on
+        // a timeout (the MCP adapter's captureSubprocess) must not take the daemon with it.
+        detached: true,
       })
       child.unref()
 

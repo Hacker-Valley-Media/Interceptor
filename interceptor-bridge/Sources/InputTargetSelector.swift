@@ -106,7 +106,7 @@ struct InputTargetSelector {
         var refOwner: pid_t? = nil
         if let ref = ref, !ref.isEmpty {
             guard let entry = resolveRef(ref) else {
-                return "ref \(ref) not found — refs expire when the tree changes or after a newer tree/find read; run 'interceptor macos tree' or 'macos find' again and use a fresh ref (nothing was delivered)"
+                return Self.expiredReferenceProblem(ref)
             }
             refOwner = entry.pid
         }
@@ -124,6 +124,12 @@ struct InputTargetSelector {
             return "ref \(ref) belongs to pid \(owner), not the requested app/pid \(explicitPid); re-read that app's tree (nothing was delivered)"
         }
         return nil
+    }
+
+    // One diagnostic for the input preflight and neutral reply classification.
+    // Its wording remains identical to the legacy refusal.
+    static func expiredReferenceProblem(_ ref: String) -> String {
+        "ref \(ref) not found \u{2014} its element was removed, or the ref came from an earlier bridge run; run 'interceptor macos tree' or 'macos find' again and use a fresh ref (nothing was delivered)"
     }
 
     // Ref-aware PID resolution: when a ref is provided and registered,

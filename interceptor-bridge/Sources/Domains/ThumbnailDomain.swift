@@ -1,4 +1,4 @@
-// PRD-66 Domain 4 — QuickLookThumbnailing. macOS 10.15+. Implements all 8
+// QuickLookThumbnailing. macOS 10.15+. Implements all 8
 // CLI verbs (info / generate / batch + flags). References:
 // apple-developer-docs/QuickLookThumbnailing/QLThumbnailGenerator.md.
 
@@ -10,6 +10,7 @@ import ImageIO
 
 final class ThumbnailDomain: DomainHandler, @unchecked Sendable {
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let error = DesktopThumbnailValidation.validate(action) { completion(error); return }
         let sub = action["sub"] as? String ?? command
         switch sub {
         case "generate":  generate(action, completion: completion)
@@ -52,6 +53,10 @@ final class ThumbnailDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func generate(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if action["type"] as? String == "desktop_thumbnail" {
+            generateNeutral(action, completion: completion)
+            return
+        }
         guard let path = action["path"] as? String else { completion(WireFormat.error("thumbnail: missing path")); return }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         let size = parseSize(action["size"] as? String)
@@ -124,6 +129,10 @@ final class ThumbnailDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func batch(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if action["type"] as? String == "desktop_thumbnail" {
+            batchNeutral(action, index: 0, results: [], completion: completion)
+            return
+        }
         guard let paths = action["paths"] as? [String], !paths.isEmpty else {
             completion(WireFormat.error("thumbnail.batch: requires <paths>")); return
         }
@@ -148,6 +157,106 @@ final class ThumbnailDomain: DomainHandler, @unchecked Sendable {
         }
         group.notify(queue: .global()) {
             completion(WireFormat.success(["results": acc.results]))
+        }
+    }
+
+    private func generateNeutral(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let path = action["path"] as! String
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+        let fail = DesktopThumbnailValidation.failure
+        do {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentTypeKey])
+            guard values.isRegularFile == true else { completion(fail("unsupported_target", "thumbnail requires a regular file")); return }
+            guard (values.fileSize ?? 0) <= DESKTOP_THUMBNAIL_MAX_SOURCE_BYTES else { completion(fail("resource_limit", "thumbnail source exceeds 64 MiB")); return }
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil)
+            let decodedType = source.flatMap { CGImageSourceGetType($0) }.flatMap { UTType($0 as String) }
+            if values.contentType?.conforms(to: .pdf) == true || decodedType?.conforms(to: .pdf) == true {
+                guard let document = CGPDFDocument(url as CFURL) else {
+                    completion(fail("unsupported_target", "PDF source has no readable document")); return
+                }
+                guard !document.isEncrypted || document.isUnlocked else {
+                    completion(fail("permission_denied", "PDF source requires a password; no document pixels were rendered")); return
+                }
+                guard document.numberOfPages > 0 else {
+                    completion(fail("unsupported_target", "PDF source has no pages")); return
+                }
+            } else if let source {
+                guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+                      let width = properties[kCGImagePropertyPixelWidth as String] as? NSNumber,
+                      let height = properties[kCGImagePropertyPixelHeight as String] as? NSNumber,
+                      width.doubleValue > 0, height.doubleValue > 0
+                else { completion(fail("unsupported_target", "image header has no valid pixel dimensions")); return }
+                if width.doubleValue * height.doubleValue > Double(DESKTOP_THUMBNAIL_MAX_PIXELS) {
+                    completion(fail("resource_limit", "thumbnail source exceeds 32 megapixels")); return
+                }
+            } else if values.contentType?.conforms(to: .image) == true {
+                completion(fail("unsupported_target", "image source has no readable header")); return
+            }
+        } catch {
+            let ns = error as NSError
+            completion(fail(ns.code == NSFileNoSuchFileError || ns.code == NSFileReadNoSuchFileError ? "target_gone" : ns.code == NSFileReadNoPermissionError ? "permission_denied" : "provider_failed", ns.localizedDescription))
+            return
+        }
+        let size = parseSize(action["size"] as? String)
+        let scale = (action["scale"] as? Int) ?? 2
+        let saving = action["save"] as? Bool == true
+        let (formatName, _, ext) = format(action["format"] as? String)
+        let destination = URL(fileURLWithPath: ((action["out"] as? String ?? url.path + ".thumb.\(ext)") as NSString).expandingTildeInPath).standardizedFileURL
+        if saving && destination.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() {
+            completion(fail("invalid_request", "thumbnail output must not replace its source image")); return
+        }
+        let request = QLThumbnailGenerator.Request(fileAt: url, size: size, scale: CGFloat(scale), representationTypes: parseTypes(action["types"] as? String))
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, error in
+            if let error { completion(fail("provider_failed", error.localizedDescription)); return }
+            // An icon renders at its own size (up to 1024 px) whatever was requested, and its nsImage carries every
+            // resolution, so encode the rendered cgImage fitted to the requested pixel bounds.
+            guard let representation else { completion(fail("provider_failed", "thumbnail representation could not be encoded")); return }
+            var rendered = representation.cgImage
+            let maxWidth = Int(size.width) * scale, maxHeight = Int(size.height) * scale
+            if rendered.width > maxWidth || rendered.height > maxHeight {
+                let fit = min(Double(maxWidth) / Double(rendered.width), Double(maxHeight) / Double(rendered.height))
+                if let fitted = CaptureDomain.resize(cgImage: rendered, width: max(1, Int(Double(rendered.width) * fit)), height: max(1, Int(Double(rendered.height) * fit))) { rendered = fitted }
+            }
+            guard let encoded = self.encode(NSImage(cgImage: rendered, size: NSSize(width: rendered.width, height: rendered.height)), format: formatName),
+                  let source = CGImageSourceCreateWithData(encoded as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+            else { completion(fail("provider_failed", "thumbnail representation could not be encoded")); return }
+            guard image.width > 0, image.height > 0, image.width * image.height <= DESKTOP_THUMBNAIL_MAX_PIXELS,
+                  image.width <= Int(size.width) * scale, image.height <= Int(size.height) * scale,
+                  encoded.count <= DESKTOP_MAX_RESULT_BYTES
+            else { completion(fail("resource_limit", "thumbnail image exceeds its dimensions or byte bound")); return }
+            var data: [String: Any] = ["path": path, "type": "thumbnail", "width": image.width, "height": image.height,
+                "scale": scale, "format": formatName, "bytes": encoded.count]
+            if saving {
+                let dataBox = UncheckedSendableBox(data)
+                FsDomain().handle("write", action: ["type": "desktop_fs_write", "path": destination.path, "content": encoded.base64EncodedString(), "encoding": "base64"]) { written in
+                    guard written["success"] as? Bool == true else {
+                        completion(fail("provider_failed", written["error"] as? String ?? "thumbnail save failed")); return
+                    }
+                    var saved = dataBox.value
+                    saved["filePath"] = destination.path
+                    completion(DesktopThumbnailValidation.bounded(WireFormat.success(saved), saving: true))
+                }
+            } else {
+                data["dataUrl"] = "data:image/\(formatName);base64,\(encoded.base64EncodedString())"
+                completion(DesktopThumbnailValidation.bounded(WireFormat.success(data), saving: false))
+            }
+        }
+    }
+
+    private func batchNeutral(_ action: [String: Any], index: Int, results: [[String: Any]], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        let paths = action["paths"] as! [String]
+        guard index < paths.count else { completion(WireFormat.success(["results": results])); return }
+        var single = action
+        single.removeValue(forKey: "paths")
+        single["path"] = paths[index]
+        single["sub"] = "generate"
+        let input = UncheckedSendableBox((action: action, results: results))
+        generateNeutral(single) { result in
+            let rows = input.value.results + [["path": paths[index], "ok": result["success"] as? Bool ?? false, "result": result]]
+            let bounded = DesktopThumbnailValidation.bounded(WireFormat.success(["results": rows]), saving: input.value.action["save"] as? Bool == true)
+            guard bounded["success"] as? Bool == true else { completion(bounded); return }
+            self.batchNeutral(input.value.action, index: index + 1, results: rows, completion: completion)
         }
     }
 }

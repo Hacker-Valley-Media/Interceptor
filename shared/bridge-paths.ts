@@ -13,7 +13,7 @@
  * (shared/platform.ts) resolve through the same `userTempDir`.
  */
 import { existsSync } from "node:fs"
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "./subprocess-sync"
 
 /** The current user's temporary directory: $TMPDIR, else the OS answer, else /tmp. */
 export function userTempDir(env: Record<string, string | undefined> = process.env, platform: string = process.platform): string {

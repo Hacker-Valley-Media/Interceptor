@@ -1,6 +1,7 @@
-// PRD-66 — DetectDomain unit tests.
+// DetectDomain unit tests.
 
 import XCTest
+import Darwin
 @testable import interceptor_bridge
 
 final class DetectDomainTests: XCTestCase {
@@ -58,5 +59,30 @@ final class DetectDomainTests: XCTestCase {
     func testFile_missingPath_errors() {
         let r = runVerb("file")
         XCTAssertEqual(r["success"] as? Bool, false)
+    }
+
+    func testStrictSelectionBoundsAndModernMoney() throws {
+        for action: [String: Any] in [["input": "hello", "types": "unknown"], ["input": "hello", "types": "phone,"], ["input": String(repeating: "x", count: 65_537)]] {
+            XCTAssertEqual(runVerb("run", action: action)["success"] as? Bool, false)
+        }
+        let filtered = runVerb("run", action: ["input": "Mail person@example.com or visit https://example.com", "types": "email"])
+        let matches = (filtered["data"] as? [String: Any])?["matches"] as? [[String: Any]] ?? []
+        XCTAssertFalse(matches.isEmpty)
+        XCTAssertTrue(matches.allSatisfy { $0["type"] as? String == "emailAddress" })
+        let money = runVerb("run", action: ["input": "The price is $42.50.", "types": "moneyAmount"])
+        if #available(macOS 26, *) {
+            XCTAssertEqual(money["success"] as? Bool, true)
+            let rows = (money["data"] as? [String: Any])?["matches"] as? [[String: Any]] ?? []
+            XCTAssertTrue(rows.contains { ($0["type"] as? String) == "moneyAmount" && ($0["components"] as? [String: Any])?["amount"] as? String == "42.5" })
+        } else { XCTAssertEqual(money["success"] as? Bool, false) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("interceptor-detect-\(UUID().uuidString).txt")
+        try Data(repeating: 120, count: 65_537).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertEqual(runVerb("file", action: ["path": file.path])["success"] as? Bool, false)
+        XCTAssertEqual(runVerb("file", action: ["path": file.path + "\0"])["success"] as? Bool, false)
+        let fifo = FileManager.default.temporaryDirectory.appendingPathComponent("interceptor-detect-\(UUID().uuidString).fifo")
+        XCTAssertEqual(Darwin.mkfifo(fifo.path, 0o600), 0)
+        defer { try? FileManager.default.removeItem(at: fifo) }
+        XCTAssertEqual(runVerb("file", action: ["path": fifo.path])["success"] as? Bool, false)
     }
 }

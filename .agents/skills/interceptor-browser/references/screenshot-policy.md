@@ -19,7 +19,8 @@ When the default DOM render fails outright on a heavy page, a whole-page `screen
 
 ## Token-cost reality
 
-Screenshots are a **last-resort** read surface. Structured reads (`read`, `text`, `inspect`, `scene text`, `canvas log`, `macos tree`) cost roughly **10× fewer tokens per turn** than pixels, and they survive DOM churn far better. Use a screenshot only when pixels are genuinely the answer:
+Screenshots are a **last-resort** read surface. Structured reads (`read`, `text`, `inspect`, `scene text`, `canvas log`, `macos tree`) cost roughly **10× fewer tokens per turn** than pixels, and they survive DOM churn far better. Use a screenshot only when pixels are genuinely the answer: <!-- os:darwin -->
+Screenshots are a **last-resort** read surface. Structured reads (`read`, `text`, `inspect`, `scene text`, `canvas log`, `desktop tree`) cost roughly **10× fewer tokens per turn** than pixels, and they survive DOM churn far better. Use a screenshot only when pixels are genuinely the answer: <!-- os:win32,linux -->
 - Explicit visual evidence requested (the user said "show me a screenshot")
 - Layout / color / chart issue that cannot be confirmed structurally
 - Specific render artifact must be captured (a font glyph, a CSS bug, a hardware-rendered frame)
@@ -67,7 +68,8 @@ Use `--save` whenever you don't need to re-attach the image immediately.
 - `--pixel` — pixel-true compositor capture via `chrome.tabs.captureVisibleTab`. The tab's window must be on screen (not minimized, not parked on another Space). A fully covered Brave window captured correctly; Chrome can pause a window that is completely covered and return a stale frame. The browser does not need to be the focused app, and the capture switches the window's active tab to the target and back by itself. Do not `tab switch` or `window focus` for it. Use only when DOM-render fidelity is insufficient (compositor effects, hardware video frames, the browser chrome itself).
 - `--pixel --full` — scroll-and-stitch full page. Throttled to clear Chrome's 2/sec `captureVisibleTab` quota; expect ~1.1s per viewport strip.
 
-Default DOM-render works from a backgrounded Chrome on a different macOS Space — no focus required.
+Default DOM-render works from a backgrounded Chrome on a different macOS Space — no focus required. <!-- os:darwin -->
+Default DOM-render works from a background tab, with no focus required. <!-- os:win32,linux -->
 
 ## Quick decision rules
 

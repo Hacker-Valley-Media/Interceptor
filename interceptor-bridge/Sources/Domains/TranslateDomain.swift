@@ -1,4 +1,4 @@
-// PRD-66 Domain 3 — Translation framework. macOS 15+. Headless via
+// Translation framework. macOS 15+. Headless via
 // init(installedSource:target:). On macOS < 15, every verb returns a
 // structured "Translation requires macOS 15.0+" payload (no notImplemented).
 // References: apple-developer-docs/Translation/{TranslationSession,LanguageAvailability}.md.
@@ -105,22 +105,22 @@ final class TranslateDomain: DomainHandler, @unchecked Sendable {
     /// a structured "open System Settings to install" message when the
     /// pair is `.supported` but not yet `.installed`.
     @available(macOS 26, *)
-    private func ensureInstalled(from fromCode: String?, to toCode: String) async -> String? {
+    private func ensureInstalled(from fromCode: String?, to toCode: String) async -> (code: String, reason: String)? {
         let availability = LanguageAvailability()
         let target = Locale.Language(identifier: toCode)
         let source = Locale.Language(identifier: fromCode ?? "en")
         guard let status = try? await availability.status(from: source, to: target) else {
-            return "language pair (\(fromCode ?? "en") → \(toCode)) availability could not be determined"
+            return ("provider_failed", "language pair (\(fromCode ?? "en") → \(toCode)) availability could not be determined")
         }
         switch status {
         case .installed:
             return nil
         case .supported:
-            return "language pair (\(fromCode ?? "en") → \(toCode)) is supported but not installed. Open System Settings → General → Language & Region → Translation Languages to download it. The headless TranslationSession.init(installedSource:target:) cannot trigger downloads from a daemon — only the SwiftUI translationTask path can."
+            return ("not_installed", "language pair (\(fromCode ?? "en") → \(toCode)) is supported but not installed. Open System Settings → General → Language & Region → Translation Languages to download it. The headless TranslationSession.init(installedSource:target:) cannot trigger downloads from a daemon — only the SwiftUI translationTask path can.")
         case .unsupported:
-            return "language pair (\(fromCode ?? "en") → \(toCode)) is not supported by Apple's Translation framework on this OS"
+            return ("unsupported_operation", "language pair (\(fromCode ?? "en") → \(toCode)) is not supported by Apple's Translation framework on this OS")
         @unknown default:
-            return "language pair (\(fromCode ?? "en") → \(toCode)) status unknown"
+            return ("provider_failed", "language pair (\(fromCode ?? "en") → \(toCode)) status unknown")
         }
     }
 
@@ -130,8 +130,8 @@ final class TranslateDomain: DomainHandler, @unchecked Sendable {
             completion(WireFormat.error("translate.prepare: requires --from and --to")); return
         }
         Task {
-            if let reason = await ensureInstalled(from: from, to: to) {
-                completion(WireFormat.error("translate.prepare: \(reason)")); return
+            if let refusal = await ensureInstalled(from: from, to: to) {
+                completion(WireFormat.failure(refusal.code, "translate.prepare: \(refusal.reason)")); return
             }
             let session = TranslationSession(installedSource: Locale.Language(identifier: from),
                                               target: Locale.Language(identifier: to))
@@ -153,8 +153,8 @@ final class TranslateDomain: DomainHandler, @unchecked Sendable {
         let from = action["from"] as? String
         let target = Locale.Language(identifier: to)
         Task {
-            if let reason = await ensureInstalled(from: from, to: to) {
-                completion(WireFormat.error("translate.text: \(reason)")); return
+            if let refusal = await ensureInstalled(from: from, to: to) {
+                completion(WireFormat.failure(refusal.code, "translate.text: \(refusal.reason)")); return
             }
             let source: Locale.Language = from.map { Locale.Language(identifier: $0) } ?? Locale.Language(identifier: "en")
             let session = TranslationSession(installedSource: source, target: target)
@@ -195,8 +195,8 @@ final class TranslateDomain: DomainHandler, @unchecked Sendable {
         }
         let from = action["from"] as? String
         Task {
-            if let reason = await ensureInstalled(from: from, to: to) {
-                completion(WireFormat.error("translate.batch: \(reason)")); return
+            if let refusal = await ensureInstalled(from: from, to: to) {
+                completion(WireFormat.failure(refusal.code, "translate.batch: \(refusal.reason)")); return
             }
             let source: Locale.Language = from.map { Locale.Language(identifier: $0) } ?? Locale.Language(identifier: "en")
             let session = TranslationSession(installedSource: source, target: Locale.Language(identifier: to))

@@ -7,7 +7,7 @@ test.skipIf(process.platform === "win32")("a busy inspector port is refused befo
   // SIGUSR1 kills `sleep` (default action), so survival proves no signal was sent.
   const target = Bun.spawn(["sleep", "30"])
   try {
-    expect(inspectPortHolder(port)?.pid).toBe(process.pid)
+    expect((await inspectPortHolder(port))?.pid).toBe(process.pid)
 
     const result = await bootstrapLoadExtension({ pid: target.pid, extPath: "/nonexistent", inspectPort: port })
     expect(result.success).toBe(false)
@@ -24,11 +24,11 @@ test.skipIf(process.platform === "win32")("a busy inspector port is refused befo
   }
 })
 
-test.skipIf(process.platform === "win32")("a free port has no holder", () => {
+test.skipIf(process.platform === "win32")("a free port has no holder", async () => {
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") })
   const port = server.port as number
   server.stop(true)
-  expect(inspectPortHolder(port)).toBeUndefined()
+  expect(await inspectPortHolder(port)).toBeUndefined()
 })
 
 test("relaunch only counts processes whose executable is inside the app bundle", async () => {

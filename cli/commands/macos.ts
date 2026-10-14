@@ -1,3 +1,5 @@
+import {desktopOverlayActionError} from '../../shared/desktop-overlay-validation'
+import {desktopAuthDialogActionError} from '../../shared/desktop-authdialog-validation'
 /**
  * cli/commands/macos.ts — interceptor macos <subcommand>
  *
@@ -7,8 +9,9 @@
 
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
+import {desktopVmCopySelection} from "../../shared/desktop-vm-validation"
 import { bridgePidPathForDetection, bridgeSocketPathForDetection } from "../../shared/bridge-paths"
-import { sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
+import { jsonFailure, sendCommand, sendCommandWs, type DaemonResponse } from "../transport"
 import {
   attachMonitorTaskSource,
   listMonitorTasks,
@@ -26,11 +29,45 @@ import {
 } from "../../shared/monitor-tasks"
 import { runCdpCommand } from "./cdp"
 import { runNativeCommand } from "./native"
+import {desktopEventKitActionError,DESKTOP_CALENDAR_FIELDS,DESKTOP_REMINDERS_FIELDS} from "../../shared/desktop-eventkit-validation"
+import {desktopPhotosActionError,DESKTOP_PHOTOS_FIELDS} from "../../shared/desktop-photos-validation"
+import {desktopVmActionError,DESKTOP_VM_FIELDS} from "../../shared/desktop-vm-validation"
+import {desktopTrustActionError} from "../../shared/desktop-trust-validation"
+import {desktopStreamActionError} from "../../shared/desktop-stream-validation"
+import {desktopSensitiveActionError} from "../../shared/desktop-sensitive-validation"
+import {desktopMapsActionError} from "../../shared/desktop-maps-validation"
+import {desktopShareActionError} from "../../shared/desktop-share-validation"
+import {desktopContactsActionError} from "../../shared/desktop-contacts-validation"
+import {desktopMusicActionError} from "../../shared/desktop-music-validation"
+import {desktopLocationActionError} from "../../shared/desktop-location-validation"
+import {desktopSoundActionError} from "../../shared/desktop-sound-validation"
 import { extensionMacosPrefixes, extensionActionType } from "../../shared/extensions"
-import { readSecretValue } from "../prompt"
+import { readSecretValue,readStdinValue } from "../prompt"
+import { desktopAction,DESKTOP_LANGUAGE_MAX_TEXT_BYTES } from "../../shared/desktop-contract"
+import {desktopHttpActionError} from "../../shared/desktop-http-validation"
+import {desktopLogActionError} from "../../shared/desktop-log-validation"
+import {desktopThumbnailActionError} from "../../shared/desktop-thumbnail-validation"
+import {desktopSecretActionError} from "../../shared/desktop-secret-validation"
+import {desktopAuthActionError} from "../../shared/desktop-auth-validation"
+import {desktopContainerActionError,desktopContainerDeadline} from "../../shared/desktop-container-validation"
+import {desktopFilesActionError} from "../../shared/desktop-files-validation"
+import {desktopNotificationsActionError} from "../../shared/desktop-notifications-validation"
+import {desktopMonitorActionError,desktopMonitorArchiveError} from "../../shared/desktop-monitor-validation"
+import {desktopLanguageActionError} from "../../shared/desktop-language-validation"
+import {desktopVisionActionError} from "../../shared/desktop-vision-validation"
+import {desktopScriptActionError} from "../../shared/desktop-script-validation"
+import {desktopPdfActionError,DESKTOP_PDF_FIELDS} from "../../shared/desktop-pdf-validation"
+import {desktopVadActionError} from "../../shared/desktop-vad-validation"
+import {desktopSpeechActionError} from "../../shared/desktop-speech-validation"
+import {desktopAudioActionError} from "../../shared/desktop-audio-validation"
+import {parseTargets,parseDuration} from "../../daemon/secrets"
+import { DESKTOP_ACCESSIBILITY_OPERATIONS, DESKTOP_CLIPBOARD_OPERATIONS, DESKTOP_CAPTURE_OPERATIONS, DESKTOP_DISPLAY_OPERATIONS, DESKTOP_COMPOUND_OPERATIONS, DESKTOP_LOG_OPERATIONS, DESKTOP_THUMBNAIL_OPERATIONS } from "../../shared/desktop-contract.generated"
+import { desktopProviderBinary } from "../../shared/desktop-provider"
+import {readSessionMeta} from "../../shared/monitor-artifacts"
+import { callDesktopProvider } from "../../daemon/desktop-provider"
 
 type Action = { type: string; [key: string]: unknown }
-type Result = { success: boolean; error?: string; data?: unknown }
+type Result = { success: boolean; error?: string; code?: string; data?: unknown }
 
 function unwrap(resp: DaemonResponse): Result {
   return resp.result
@@ -82,8 +119,18 @@ function bridgePreflightFailure(): string | null {
 
 export async function runMacosCommand(
   filtered: string[],
-  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; contextId?: string }
+  opts: { jsonMode?: boolean; useWs?: boolean; globalTabId?: number; contextId?: string; desktop?: boolean }
 ): Promise<void> {
+  const detectionStdin = opts.desktop && filtered[1] === 'detect' && filtered[2] === 'stdin'
+  let stdinText: string | undefined
+  if(detectionStdin){
+    if(process.stdin.isTTY){console.error('error: desktop detect stdin requires piped UTF-8 input');process.exitCode=1;return}
+    // Validate syntax before consuming input; the parser receives the text after the read.
+    const values=compoundPositionals(filtered,new Set(['--types']))
+    if(values.length!==1)throw new Error('detect stdin accepts no text argument')
+    // The text is data for the parser, never argv: input such as `---` front matter is not a flag.
+    stdinText=await readStdinValue({maxBytes:DESKTOP_LANGUAGE_MAX_TEXT_BYTES,trimNewline:false})
+  }
   // Skip preflight only for "trust" — that subcommand is the user-driven
   // first-run permission walkthrough and may legitimately be the very first
   // call before anything else is wired up. The bridge will surface its own
@@ -98,9 +145,15 @@ export async function runMacosCommand(
     return
   }
 
-  if (sub !== "trust") {
-    const failure = bridgePreflightFailure()
+  if (sub !== "trust" && !(opts.desktop && sub === "secret")) {
+    const failure = opts.desktop && process.platform !== "darwin"
+      ? (desktopProviderBinary() ? null : "native desktop provider is not installed; install the full package for this host")
+      : bridgePreflightFailure()
     if (failure !== null) {
+      if (opts.desktop && opts.jsonMode) {
+        console.log(JSON.stringify({ success: false, code: "not_installed", error: failure }))
+        process.exitCode = 1; return
+      }
       console.error(`error: ${failure}`)
       process.exit(1)
     }
@@ -110,8 +163,36 @@ export async function runMacosCommand(
   // manifest-declared `macos <prefix>` subcommands so an installed extension's
   // verbs fall through to the generic builder instead of the hard `default`.
   const extPrefixes = extensionMacosPrefixes()
-  const action = parseMacosCommand(filtered, extPrefixes)
+  let action: Action | null
+  try { action = parseMacosCommand(filtered, extPrefixes, opts.desktop === true, stdinText) } catch (error) {
+    if (!opts.desktop) throw error
+    const failure = {success: false, code: "invalid_request", error: error instanceof Error ? error.message : "invalid desktop command"}
+    if (opts.jsonMode) console.log(JSON.stringify(failure))
+    else console.error(`error: ${failure.error}`)
+    process.exitCode = 1; return
+  }
   if (!action) process.exit(1)
+
+  if (action.type === "macos_monitor" && action.sub !== "start" && typeof action.taskRef === "string") {
+    try {
+      const taskId = resolveMonitorTaskId(action.taskRef)
+      const task = readMonitorTaskMeta(taskId)
+      const surface = opts.desktop && process.platform !== "darwin" ? "desktop" : "macos"
+      const sources = task?.sourceSessions.filter(source => source.surface === surface &&
+        (source.host === undefined || source.host === process.platform) && source.status !== "detached") ?? []
+      if (action.sid !== undefined) {
+        if (!sources.some(source => source.sid === action.sid)) throw new Error("monitor --sid is not a source of the requested task on this host")
+      } else {
+        if (sources.length !== 1) throw new Error("monitor task requires --sid when it has zero or multiple matching native sources")
+        action.sid = sources[0].sid
+      }
+    } catch (error) {
+      const failure = {success:false,code:"invalid_request",error:(error as Error).message}
+      if (opts.jsonMode) console.log(JSON.stringify(failure))
+      else console.error(`error: ${failure.error}`)
+      process.exitCode = 1; return
+    }
+  }
 
   let pendingMonitorTaskId: string | undefined
   if (action.type === "macos_monitor" && action.sub === "start" && typeof action.taskRef === "string") {
@@ -120,7 +201,7 @@ export async function runMacosCommand(
         taskRef: action.taskRef,
         mode: typeof action.taskMode === "string" ? action.taskMode : undefined,
         instruction: typeof action.instruction === "string" ? action.instruction : undefined,
-        createdBy: "macos-monitor",
+        createdBy: opts.desktop && process.platform !== "darwin" ? "desktop-monitor" : "macos-monitor",
         retentionPolicyId: typeof action.retentionPolicyId === "string" ? action.retentionPolicyId : undefined,
         guardPolicyId: typeof action.guardPolicyId === "string" ? action.guardPolicyId : undefined,
         verifierPolicyId: typeof action.verifierPolicyId === "string" ? action.verifierPolicyId : undefined,
@@ -145,11 +226,51 @@ export async function runMacosCommand(
     if (!process.stdout.isTTY) { console.error("error: secret reveal prints to a terminal only (stdout is not a TTY)"); process.exit(1) }
   }
 
-  const result = await send(action, opts.globalTabId, opts.useWs)
+  const nativeFilesystem = action.type.startsWith("macos_fs_")
+  // The generated declarations decide which neutral actions have native shape
+  // validation. Named-secret delivery retains the existing daemon vault path.
+  const nativeAccessibility = action.secret === undefined && DESKTOP_ACCESSIBILITY_OPERATIONS.some(
+    type => type === action.type.replace(/^macos_/, "desktop_")
+  )
+  const nativeClipboard = DESKTOP_CLIPBOARD_OPERATIONS.some(type => type === action.type.replace(/^macos_/, "desktop_"))
+  const nativeCapture = DESKTOP_CAPTURE_OPERATIONS.some(type => type === action.type.replace(/^macos_/, "desktop_"))
+  const nativeDisplay = DESKTOP_DISPLAY_OPERATIONS.some(type => type === action.type.replace(/^macos_/, "desktop_"))
+  const nativeCompound = DESKTOP_COMPOUND_OPERATIONS.some(type => type === action.type.replace(/^macos_/, "desktop_"))
+  const nativeLog = DESKTOP_LOG_OPERATIONS.some(type => type === action.type.replace(/^macos_/, "desktop_"))
+  const nativeThumbnail = DESKTOP_THUMBNAIL_OPERATIONS.some(type => type === action.type.replace(/^macos_/, "desktop_"))
+  const nativeAuth = action.type === "macos_auth"
+  const nativeContainer = action.type === "macos_container_run"
+  const nativeFiles = action.type === "macos_files"
+  const nativeNotifications = action.type === "desktop_notifications"
+  const nativeMonitor = action.type === "macos_monitor"
+  let nativeSecretFailure: Result | undefined
+  if(opts.desktop&&process.platform!=='darwin'&&action.type==='macos_type'&&typeof action.secret==='string'){
+    if(opts.useWs)nativeSecretFailure={success:false,code:'permission_denied',error:'native named-secret delivery requires direct local graphical-session access'}
+    else{
+      const probe:Record<string,unknown>={type:'desktop_inspect',ref:action.ref,secretBindingName:action.secret}
+      for(const key of ['app','pid','window'])if(action[key]!==undefined)probe[key]=action[key]
+      const binding=await callDesktopProvider(probe)
+      const lease=(binding.data as {secretLease?:unknown}|undefined)?.secretLease
+      if(!binding.success)nativeSecretFailure=binding
+      else if(typeof lease!=='string'||!/^[a-f0-9]{64}$/.test(lease))nativeSecretFailure={success:false,code:'permission_denied',error:'native graphical-session credential grant is unavailable'}
+      else action.secretLease=lease
+    }
+  }
+  const nativeLocal = opts.desktop && (nativeContainer || process.platform === "darwin" &&
+    (nativeFilesystem || nativeAccessibility || nativeClipboard || nativeCapture || nativeDisplay || nativeCompound || nativeLog || nativeThumbnail || nativeAuth || nativeFiles || nativeNotifications || nativeMonitor))
+  const result: Result = nativeSecretFailure ?? (nativeLocal
+    ? opts.useWs
+      ? { success: false, code: "permission_denied", error: `neutral ${nativeFilesystem ? "filesystem" : nativeFiles ? "files" : nativeClipboard ? "clipboard" : nativeCapture ? "capture" : nativeDisplay ? "display" : nativeCompound ? "compound" : nativeLog ? "log" : nativeThumbnail ? "thumbnail" : ["macos_resize", "macos_move"].includes(action.type) ? "window geometry" : "accessibility"} control requires the local native bridge; WebSocket proxying is unavailable` }
+      : await callDesktopProvider(action,nativeAuth?180_000:nativeContainer?desktopContainerDeadline(action):15_000)
+    : await send(opts.desktop && (process.platform !== "darwin" || action.type === "macos_secret") ? desktopAction(action) : action, opts.globalTabId, opts.useWs))
 
   if (!result.success) {
     if (pendingMonitorTaskId) {
       markMonitorTaskSourceAttachFailed(pendingMonitorTaskId, undefined, result.error || "macos monitor start failed")
+    }
+    // --json failures print one JSON line on every surface (`macos menu --json` used to print nothing on stdout).
+    if (opts.jsonMode) {
+      console.log(JSON.stringify(jsonFailure(result))); process.exitCode = 1; return
     }
     console.error("error:", result.error || "unknown error")
     // Bridge errors may carry an actionable `remediation` command (e.g. the
@@ -170,7 +291,7 @@ export async function runMacosCommand(
     if (sid) {
       try {
         attachMonitorTaskSource(pendingMonitorTaskId, sid, {
-          surface: "macos",
+          surface: opts.desktop && process.platform !== "darwin" ? "desktop" : "macos",
           rootPid: typeof data.rootPid === "number" ? data.rootPid : undefined,
           rootBundleId: typeof data.rootBundleId === "string" ? data.rootBundleId : undefined,
           rootApp: typeof data.rootApp === "string" ? data.rootApp : undefined,
@@ -203,6 +324,14 @@ export async function runMacosCommand(
   if (action.type === "macos_monitor" && action.sub === "stop" && typeof action.taskRef === "string") {
     try {
       const taskId = resolveMonitorTaskId(action.taskRef)
+      const task = readMonitorTaskMeta(taskId)
+      const unfinished = task?.sourceSessions.filter(source => source.sid !== action.sid && source.status !== "detached" &&
+        source.status !== "source_stopped" && readSessionMeta(source.sid)?.status !== "stopped") ?? []
+      if (unfinished.length) {
+        if (opts.jsonMode) console.log(JSON.stringify({...(result.data as Record<string,unknown>),taskId,taskStatus:task?.status,remainingSources:unfinished.map(source=>source.sid)}))
+        else console.log(`Stopped source ${action.sid}. Task ${taskId} remains ${task?.status}; ${unfinished.length} other sources have no confirmed stop.`)
+        return
+      }
       stopMonitorTask(taskId, {}) // snapshots + transcribes offline audio
       synthesizeMonitorTaskTranscript(taskId) // timeline + transcript + segments + grade
       generateMonitorTaskCaptureQuality(taskId)
@@ -248,8 +377,12 @@ export async function runMacosCommand(
     return
   }
 
-  if (opts.jsonMode) {
+  if (action.type === "macos_monitor" && action.raw === true && Array.isArray(result.data)) {
+    console.log(result.data.map(event => JSON.stringify(event)).join("\n"))
+  } else if (opts.jsonMode) {
     console.log(JSON.stringify(result.data, null, 2))
+  } else if (action.type === "macos_apps" && Array.isArray(result.data)) {
+    console.log(formatAppRows(result.data))
   } else if (typeof result.data === "string") {
     console.log(result.data)
   } else if (result.data !== undefined && result.data !== null) {
@@ -259,7 +392,12 @@ export async function runMacosCommand(
   }
 }
 
-export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<string>): Action | null {
+/** Plain-text `apps`: one `[pid] name * (hidden) — bundle id` line per app; the fields after the name only when the host reports them. */
+export function formatAppRows(rows: { pid?: unknown; name?: unknown; bundleId?: unknown; active?: unknown; hidden?: unknown }[]): string {
+  return rows.map(row => `[${row.pid}] ${row.name}${row.active === true ? " *" : ""}${row.hidden === true ? " (hidden)" : ""}${typeof row.bundleId === "string" ? ` — ${row.bundleId}` : ""}`).join("\n")
+}
+
+export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<string>, desktop = false, stdinText?: string): Action | null {
   const sub = filtered[1]
   if (!sub) {
     console.error("error: interceptor macos requires a subcommand. Examples:")
@@ -272,35 +410,47 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
   switch (sub) {
     // ── Accessibility ──
-    case "tree":
-      return {
+    case "tree": {
+      const action: Action = {
         type: "macos_tree",
         app: flagVal(filtered, "--app"),
-        pid: flagInt(filtered, "--pid"),
+        pid: flagInt(filtered, "--pid", desktop),
         filter: flagVal(filtered, "--filter") || "interactive",
-        depth: flagInt(filtered, "--depth") || 10,
+        depth: desktop ? flagInt(filtered, "--depth", true) ?? 10 : flagInt(filtered, "--depth") || 10,
         // help advertises `--max-chars`; forward it (was dropped).
-        maxChars: flagInt(filtered, "--max-chars") || 50000,
+        maxChars: desktop ? flagInt(filtered, "--max-chars", true) ?? 50000 : flagInt(filtered, "--max-chars") || 50000,
         // traversal bounds (bridge clamps to the safety hard caps; omit ⇒ defaults).
-        maxNodes: flagInt(filtered, "--max-nodes"),
-        maxMs: flagInt(filtered, "--max-ms"),
+        maxNodes: flagInt(filtered, "--max-nodes", desktop),
+        maxMs: flagInt(filtered, "--max-ms", desktop),
       }
+      withWindow(action, filtered, desktop)
+      // A tree read never moves focus, so --background-only has nothing to restrict and
+      // the tree contract has no such field; accept the flag without sending it.
+      delete action.backgroundOnly
+      return action
+    }
 
     case "find": {
       const query = filtered[2]
-      if (!query) { console.error("error: interceptor macos find requires a query"); process.exit(1) }
+      if (!query) { if (desktop) throw new Error("find requires a query"); console.error("error: interceptor macos find requires a query"); process.exit(1) }
       return {
         type: "macos_find",
         query,
         app: flagVal(filtered, "--app"),
-        pid: flagInt(filtered, "--pid"),          // was dropped
+        pid: flagInt(filtered, "--pid", desktop),
         role: flagVal(filtered, "--role"),
-        maxNodes: flagInt(filtered, "--max-nodes"),
-        maxMs: flagInt(filtered, "--max-ms"),
+        maxNodes: flagInt(filtered, "--max-nodes", desktop),
+        maxMs: flagInt(filtered, "--max-ms", desktop),
       }
     }
 
     case "inspect": {
+      if (desktop) {
+        const values = compoundPositionals(filtered, new Set(["--app", "--pid"]))
+        if (values.length > 1) throw new Error("inspect accepts at most one ref")
+        if (values.length) return { type: "macos_inspect", ref: values[0], app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid", true) }
+        return { type: "macos_inspect_app", app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid", true) }
+      }
       const ref = filtered[2]
       if (ref && !ref.startsWith("--")) return { type: "macos_inspect", ref }
       return {
@@ -312,47 +462,92 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     }
 
     case "value": {
+      if (desktop) {
+        const boundary = filtered.indexOf("--", 2)
+        const options = boundary < 0 ? filtered : filtered.slice(0, boundary)
+        const values = compoundPositionals(options, new Set(["--app", "--pid", "--window"]))
+        if (boundary >= 0) values.push(...filtered.slice(boundary + 1))
+        if (!values[0] || values.length > 2) throw new Error("value requires a ref and at most one value")
+        const action: Action = {
+          type: "macos_value", ref: values[0],
+          ...(values[1] !== undefined && { value: values[1] }),
+          app: flagVal(options, "--app"), pid: flagInt(options, "--pid", true),
+        }
+        withWindow(action, options, true)
+        return action
+      }
       const ref = filtered[2]
-      if (!ref) { console.error("error: interceptor macos value requires a ref"); process.exit(1) }
+      if (!ref) { if (desktop) throw new Error("value requires a ref"); console.error("error: interceptor macos value requires a ref"); process.exit(1) }
       const newValue = filtered[3]
       return { type: "macos_value", ref, ...(newValue !== undefined && { value: newValue }) }
     }
 
     case "action": {
+      if (desktop) {
+        const boundary = filtered.indexOf("--", 2)
+        const options = boundary < 0 ? filtered : filtered.slice(0, boundary)
+        if (options.filter(value => value === "--background-only").length > 1) throw new Error("action accepts one --background-only flag")
+        const backgroundIndex = options.indexOf("--background-only", 2)
+        if (backgroundIndex > 2 && ["--app", "--pid", "--window"].includes(options[backgroundIndex - 1])) throw new Error(`${options[backgroundIndex - 1]} requires a value`)
+        const values = compoundPositionals(options.filter(value => value !== "--background-only"), new Set(["--app", "--pid", "--window"]))
+        if (boundary >= 0) values.push(...filtered.slice(boundary + 1))
+        if (!values[0] || values.length > 2) throw new Error("action requires a ref and at most one action name")
+        const action: Action = {
+          type: "macos_action", ref: values[0], action: values[1] ?? "press",
+          app: flagVal(options, "--app"), pid: flagInt(options, "--pid", true),
+        }
+        withWindow(action, options, true)
+        return action
+      }
       const ref = filtered[2]
-      if (!ref) { console.error("error: interceptor macos action requires a ref"); process.exit(1) }
+      if (!ref) { if (desktop) throw new Error("action requires a ref"); console.error("error: interceptor macos action requires a ref"); process.exit(1) }
       const actionName = filtered[3] || "press"
       return { type: "macos_action", ref, action: actionName }
     }
 
     case "focused":
-      return { type: "macos_focused", app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid") }
+      return { type: "macos_focused", app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid", desktop) }
 
     case "windows":
-      return { type: "macos_windows", app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid") }
+      return { type: "macos_windows", app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid", desktop) }
 
     // ── Text ──
     case "text": {
       const ref = filtered[2]
-      if (!ref) { console.error("error: interceptor macos text requires a ref"); process.exit(1) }
+      if (!ref) { if (desktop) throw new Error("text requires a ref"); console.error("error: interceptor macos text requires a ref"); process.exit(1) }
       const mode = filtered.includes("--selection") ? "selection" : filtered.includes("--visible") ? "visible" : "full"
+      if (desktop) {
+        const modes = filtered.filter(value => value === "--selection" || value === "--visible")
+        if (modes.length > 1) throw new Error("text accepts one selection or visible mode flag")
+        const values = compoundPositionals(filtered.filter(value => value !== "--selection" && value !== "--visible"), new Set(["--app", "--pid", "--window"]))
+        if (values.length !== 1) throw new Error("text requires exactly one reference")
+        const app = flagVal(filtered, "--app")
+        const action: Action = { type: "macos_text", ref: values[0], mode, app, pid: flagInt(filtered, "--pid", true) }
+        withWindow(action, filtered, true)
+        return action
+      }
       return { type: "macos_text", ref, mode }
     }
 
     // ── Menu ──
     case "menu": {
-      const items = collectPositionals(filtered, 2, new Set(["--app", "--pid"]))
-      return {
+      const items = collectPositionals(filtered, 2, new Set(["--app", "--pid", "--window"]))
+      const action: Action = {
         type: "macos_menu",
         ...(items.length > 0 && { items }),
         app: flagVal(filtered, "--app"),
-        pid: flagInt(filtered, "--pid"),
+        pid: flagInt(filtered, "--pid", desktop),
       }
+      if (desktop) withWindow(action, filtered, true)
+      return action
     }
 
     // ── Update (Sparkle) ──
     case "update": {
       const op = filtered[2] || "status"
+      // Every OS installs from its update window (Sparkle on macOS): the user clicks Install Update.
+      if(op==="install")throw new Error('Interceptor installs an update when you click Install Update in its update window; run interceptor update to check now')
+      if(filtered.length>3||!["check","status"].includes(op))throw new Error('update accepts only check or status, without fields')
       return {
         type: "macos_update",
         sub: op,
@@ -361,6 +556,12 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     // ── Trust ──
     case "trust": {
+      if(desktop){
+        const flags=new Set(['--no-prompt','--prompt','--walkthrough','--accessibility-prompt','--screen-prompt','--microphone-prompt','--speech-prompt'])
+        const args=filtered.slice(2)
+        if(args.some((value,index)=>!flags.has(value)&&(index!==0||value!=='speech')))throw new Error('trust accepts only speech and its named permission flags')
+        for(const flag of flags)if(args.filter(value=>value===flag).length>1)throw new Error(`repeated flag: ${flag}`)
+      }
       // --no-prompt is defense-in-depth for read-only consumers: when set,
       // every prompt-triggering flag is forced false in the wire payload so
       // a future caller-side bug cannot accidentally modify TCC state.
@@ -369,7 +570,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       // `interceptor macos trust --speech-prompt`; both surface the distinct
       // Speech-Recognition TCC dialog.
       const speechSub = filtered[2] === "speech"
-      return {
+      const action:Action = {
         type: "macos_trust",
         noPrompt,
         prompt: !noPrompt && (filtered.includes("--prompt") || filtered.includes("--walkthrough")) && !speechSub,
@@ -379,6 +580,8 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         microphonePrompt: !noPrompt && filtered.includes("--microphone-prompt"),
         speechPrompt: !noPrompt && (filtered.includes("--speech-prompt") || (speechSub && (filtered.includes("--prompt") || filtered.length <= 3))),
       }
+      if(desktop){const error=desktopTrustActionError(desktopAction(action));if(error)throw new Error(error)}
+      return action
     }
 
     // ── TCC / PPPC profile management ──
@@ -426,14 +629,17 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       return { type: "macos_apps" }
 
     case "app": {
-      const subcommand = filtered[2] || "activate"
-      const appName = flagVal(filtered, "--app") || filtered[3]
+      // `app --pid N` has no subcommand: a leading flag means the default, activate.
+      const hasSub = filtered[2] !== undefined && !filtered[2].startsWith("--")
+      const subcommand = hasSub ? filtered[2] : "activate"
+      const positional = !hasSub || (desktop && filtered[3]?.startsWith("--")) ? undefined : filtered[3]
+      const appName = desktop && subcommand === "launch" ? undefined : flagVal(filtered, "--app") || positional
       return {
         type: "macos_app",
         subcommand,
         app: appName,
-        pid: flagInt(filtered, "--pid"),
-        bundleId: subcommand === "launch" ? (filtered[3] || flagVal(filtered, "--bundle")) : undefined,
+        pid: flagInt(filtered, "--pid", desktop),
+        bundleId: subcommand === "launch" ? (positional || flagVal(filtered, "--bundle")) : undefined,
       }
     }
 
@@ -443,7 +649,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     // ── Input ──
     case "click": {
       const target = filtered[2]
-      if (!target) { console.error("error: interceptor macos click requires a ref or coordinates"); process.exit(1) }
+      if (!target) { if (desktop) throw new Error("click requires a ref or coordinates"); console.error("error: interceptor macos click requires a ref or coordinates"); process.exit(1) }
       const isCoords = target.includes(",")
       const action: Action = {
         type: "macos_click",
@@ -455,58 +661,70 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       // CGEvents post via CGEvent.postToPid instead of the system HID
       // tap, keeping the click background-only.
       const clickApp = flagVal(filtered, "--app")
-      const clickPid = flagInt(filtered, "--pid")
+      const clickPid = flagInt(filtered, "--pid", desktop)
       if (clickApp) action.app = clickApp
       if (clickPid !== undefined) action.pid = clickPid
-      withWindow(action, filtered)
+      withWindow(action, filtered, desktop)
       return action
     }
 
     case "type": {
+      const keycodesUS = filtered.includes("--keycodes-us")
+      if (desktop && keycodesUS) throw new Error("--keycodes-us is available on macos type; desktop type uses the host's native text path")
+      if (keycodesUS && filtered.filter(value => value === "--keycodes-us").length !== 1) throw new Error("invalid or repeated flag: --keycodes-us")
+      const physicalValues = keycodesUS ? compoundPositionals(filtered.filter(value => value !== "--keycodes-us"), new Set(["--secret", "--app", "--pid", "--window"])) : undefined
       const typeApp = flagVal(filtered, "--app")
-      const typePid = flagInt(filtered, "--pid")
+      const typePid = flagInt(filtered, "--pid", desktop)
       // issue #244: `--secret <name>` delivers a vault value by name. The daemon
       // resolves it after logging; the CLI never sees the value.
       if (filtered.includes("--secret")) {
         const secretName = flagVal(filtered, "--secret")
         if (!secretName || secretName.startsWith("--")) { console.error("error: --secret requires a secret name"); process.exit(1) }
-        const positionals = collectPositionals(filtered, 2, new Set(["--secret", "--app", "--pid", "--window"]))
+        const positionals = physicalValues ?? (desktop ? compoundPositionals(filtered,new Set(["--secret","--app","--pid","--window"])) : collectPositionals(filtered, 2, new Set(["--secret", "--app", "--pid", "--window"])))
         const ref = positionals[0] && /^e\d+$/.test(positionals[0]) ? positionals[0] : undefined
         const literal = ref ? positionals.slice(1) : positionals
         if (literal.length) { console.error("error: --secret and literal text are mutually exclusive"); process.exit(1) }
+        if(desktop&&!ref)throw new Error('desktop named-secret typing requires an exact accessibility reference')
         const action: Action = { type: "macos_type", secret: secretName }
+        if (keycodesUS) action.keycodesUS = true
         if (ref) action.ref = ref
         if (typeApp) action.app = typeApp
         if (typePid !== undefined) action.pid = typePid
-        withWindow(action, filtered)
+        withWindow(action, filtered, desktop)
         return action
       }
-      const refOrText = filtered[2]
-      if (!refOrText) { console.error("error: interceptor macos type requires text or ref + text"); process.exit(1) }
-      const action: Action = /^e\d+$/.test(refOrText) && filtered[3]
-        ? { type: "macos_type", ref: refOrText, text: filtered[3] }
+      if (physicalValues && (physicalValues.length > 2 || (physicalValues.length === 2 && !/^e\d+$/.test(physicalValues[0])))) throw new Error("physical type accepts text or ref plus text")
+      const typeValues = physicalValues ?? filtered.slice(2)
+      const refOrText = typeValues[0]
+      if (!refOrText) { if (desktop) throw new Error("type requires text or ref + text"); console.error("error: interceptor macos type requires text or ref + text"); process.exit(1) }
+      const action: Action = /^e\d+$/.test(refOrText) && (desktop ? typeValues[1] !== undefined : !!typeValues[1])
+        ? { type: "macos_type", ref: refOrText, text: typeValues[1] }
         : { type: "macos_type", text: refOrText }
+      if (keycodesUS) action.keycodesUS = true
       if (typeApp) action.app = typeApp
       if (typePid !== undefined) action.pid = typePid
-      withWindow(action, filtered)
+      withWindow(action, filtered, desktop)
       return action
     }
 
     case "keys": {
       const combo = filtered[2]
-      if (!combo) { console.error("error: interceptor macos keys requires a key combo"); process.exit(1) }
+      if (!combo) { if (desktop) throw new Error("keys requires a key combo"); console.error("error: interceptor macos keys requires a key combo"); process.exit(1) }
       const action: Action = { type: "macos_keys", keys: combo }
       const keysApp = flagVal(filtered, "--app")
-      const keysPid = flagInt(filtered, "--pid")
+      const keysPid = flagInt(filtered, "--pid", desktop)
       if (keysApp) action.app = keysApp
       if (keysPid !== undefined) action.pid = keysPid
-      withWindow(action, filtered)
+      withWindow(action, filtered, desktop)
       return action
     }
 
     case "scroll": {
-      const direction = filtered[2] || "down"
-      const amount = parseInt(filtered[3] || "300")
+      // Direction and amount are optional positionals; `scroll --ref e1 --pid 7` uses the defaults.
+      const hasDirection = filtered[2] !== undefined && !filtered[2].startsWith("--")
+      const direction = hasDirection ? filtered[2] : "down"
+      const amountToken = hasDirection && filtered[3] !== undefined && !filtered[3].startsWith("--") ? filtered[3] : "300"
+      const amount = desktop ? flagInt(["--amount", amountToken], "--amount", true)! : parseInt(amountToken)
       const action: Action = {
         type: "macos_scroll",
         direction,
@@ -516,28 +734,35 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       // --pid <pid> or --app <name> routes scroll to a specific process
       // via CGEvent.postToPid — works on occluded / minimized windows
       // without changing focus.
-      const pid = flagInt(filtered, "--pid")
+      const pid = flagInt(filtered, "--pid", desktop)
       const targetApp = flagVal(filtered, "--app")
-      const times = flagInt(filtered, "--times")
-      const intervalMs = flagInt(filtered, "--interval-ms")
+      const times = flagInt(filtered, "--times", desktop)
+      const intervalMs = flagInt(filtered, "--interval-ms", desktop)
       if (pid !== undefined) action.pid = pid
       if (targetApp) action.app = targetApp
       if (times !== undefined) action.times = times
       if (intervalMs !== undefined) action.intervalMs = intervalMs
-      withWindow(action, filtered)
+      withWindow(action, filtered, desktop)
       return action
     }
 
     case "resize": {
       const ref = filtered[2]
       if (!ref) { console.error("error: interceptor macos resize requires a ref"); process.exit(1) }
-      const width = flagInt(filtered, "--width") || parseInt(filtered[3]) || undefined
-      const height = flagInt(filtered, "--height") || parseInt(filtered[4]) || undefined
+      const values = desktop ? collectPositionals(filtered, 3, new Set(["--width", "--height", "--app", "--pid"])) : []
+      const width = desktop
+        ? flagInt(filtered, "--width", true) ?? flagInt(values[0] === undefined ? [] : ["--width", values[0]], "--width", true)
+        : flagInt(filtered, "--width") || parseInt(filtered[3]) || undefined
+      const height = desktop
+        ? flagInt(filtered, "--height", true) ?? flagInt(values[1] === undefined ? [] : ["--height", values[1]], "--height", true)
+        : flagInt(filtered, "--height") || parseInt(filtered[4]) || undefined
+      if (desktop && values.length > 2) throw new Error("resize accepts only width and height positionals")
       // : parser parity with click/type/keys/scroll/drag — forward
       // --app and --pid so the bridge can use them for ref qualification.
       const action: Action = { type: "macos_resize", ref, width, height }
       const resizeApp = flagVal(filtered, "--app")
-      const resizePid = flagInt(filtered, "--pid")
+      const resizePid = flagInt(filtered, "--pid", desktop)
+      if (desktop && filtered.includes("--app") && (!resizeApp || resizeApp.startsWith("--"))) throw new Error("--app requires a target application")
       if (resizeApp) action.app = resizeApp
       if (resizePid !== undefined) action.pid = resizePid
       return action
@@ -546,11 +771,18 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     case "move": {
       const ref = filtered[2]
       if (!ref) { console.error("error: interceptor macos move requires a ref"); process.exit(1) }
-      const x = flagInt(filtered, "--x") || parseInt(filtered[3]) || 0
-      const y = flagInt(filtered, "--y") || parseInt(filtered[4]) || 0
+      const values = desktop ? collectPositionals(filtered, 3, new Set(["--x", "--y", "--app", "--pid"])) : []
+      const x = desktop
+        ? flagInt(filtered, "--x", true) ?? flagInt(values[0] === undefined ? [] : ["--x", values[0]], "--x", true) ?? 0
+        : flagInt(filtered, "--x") || parseInt(filtered[3]) || 0
+      const y = desktop
+        ? flagInt(filtered, "--y", true) ?? flagInt(values[1] === undefined ? [] : ["--y", values[1]], "--y", true) ?? 0
+        : flagInt(filtered, "--y") || parseInt(filtered[4]) || 0
+      if (desktop && values.length > 2) throw new Error("move accepts only x and y positionals")
       const action: Action = { type: "macos_move", ref, x, y }
       const moveApp = flagVal(filtered, "--app")
-      const movePid = flagInt(filtered, "--pid")
+      const movePid = flagInt(filtered, "--pid", desktop)
+      if (desktop && filtered.includes("--app") && (!moveApp || moveApp.startsWith("--"))) throw new Error("--app requires a target application")
       if (moveApp) action.app = moveApp
       if (movePid !== undefined) action.pid = movePid
       return action
@@ -559,17 +791,17 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     case "drag": {
       const from = filtered[2]
       const to = filtered[3]
-      if (!from || !to) { console.error("error: interceptor macos drag requires from and to refs or coords"); process.exit(1) }
+      if (!from || !to) { if (desktop) throw new Error("drag requires from and to refs or coords"); console.error("error: interceptor macos drag requires from and to refs or coords"); process.exit(1) }
       const fromIsCoords = from.includes(",")
       const toIsCoords = to.includes(",")
       const action: Action = fromIsCoords && toIsCoords
         ? { type: "macos_drag", fromCoords: from, toCoords: to }
         : { type: "macos_drag", from, to }
       const dragApp = flagVal(filtered, "--app")
-      const dragPid = flagInt(filtered, "--pid")
+      const dragPid = flagInt(filtered, "--pid", desktop)
       if (dragApp) action.app = dragApp
       if (dragPid !== undefined) action.pid = dragPid
-      withWindow(action, filtered)
+      withWindow(action, filtered, desktop)
       return action
     }
 
@@ -580,13 +812,16 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       const action: Action = {
         type: "macos_screenshot",
         app: flagVal(filtered, "--app"),
-        display: flagInt(filtered, "--display"),
-        window: flagInt(filtered, "--window"),
+        display: flagInt(filtered, "--display", desktop),
+        window: flagInt(filtered, "--window", desktop),
         save: filtered.includes("--save"),
         format: flagVal(filtered, "--format") || "jpeg",
-        quality: flagInt(filtered, "--quality") || 80,
+        quality: desktop ? (flagInt(filtered, "--quality", true) ?? 80) : flagInt(filtered, "--quality") || 80,
         element: flagVal(filtered, "--element"),
         cwd: process.cwd(),
+      }
+      if (desktop) for (const flag of ["--app", "--format", "--element", "--mode"]) {
+        if (filtered.includes(flag) && (!flagVal(filtered, flag) || flagVal(filtered, flag)!.startsWith("--"))) throw new Error(`${flag} requires a value`)
       }
       const mode = flagVal(filtered, "--mode")
       if (mode) action.mode = mode
@@ -594,7 +829,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       if (filtered.includes("--full-screen") || filtered.includes("--display-mode")) {
         action.mode = "display"
       }
-      const targetMaxLongEdge = flagInt(filtered, "--target-max-long-edge")
+      const targetMaxLongEdge = flagInt(filtered, "--target-max-long-edge", desktop)
       if (targetMaxLongEdge !== undefined) {
         action.target_max_long_edge = targetMaxLongEdge
       } else if (flagVal(filtered, "--target-max-long-edge") === "0") {
@@ -611,41 +846,62 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         sub: op,
         app: flagVal(filtered, "--app"),
       }
+      if (desktop && filtered.includes("--app") && (!flagVal(filtered, "--app") || flagVal(filtered, "--app")!.startsWith("--"))) throw new Error("--app requires a target application")
       // `capture frame` blocks briefly waiting for the next sample buffer
-      // when the stream is active but hasn't ticked yet. Default 1000ms;
+      // when the stream is active but hasn't ticked yet. Default 3000ms;
       // override with --timeout-ms.
-      const timeoutMs = flagInt(filtered, "--timeout-ms")
+      const timeoutMs = flagInt(filtered, "--timeout-ms", desktop)
       if (timeoutMs !== undefined) action.timeoutMs = timeoutMs
       return action
     }
 
     // ── Speech ──
     case "listen": {
-      const op = filtered[2] || "status"
-      return {
-        type: "macos_listen",
-        sub: op,
-        device: flagVal(filtered, "--device"),
-      }
+      const values=compoundPositionals(filtered,new Set(['--device']))
+      const op=values[0]??'status'
+      if(!['start','stop','status','transcript','tail','vocab'].includes(op))throw new Error('listen requires start, stop, status, transcript, tail or vocab')
+      const action:Action={type:'macos_listen',sub:op,device:flagVal(filtered,'--device')}
+      if(op==='vocab'){
+        action.op=values[1]??'list';action.word=values[2]
+        if(values.length>3)throw new Error('listen vocab requires one operation and optional word')
+      }else if(values.length>1)throw new Error('listen requires one selector and named flags')
+      const error=desktopSpeechActionError(desktopAction(action));if(error)throw new Error(error)
+      return action
     }
 
     case "vad": {
-      const op = filtered[2] || "status"
-      return { type: "macos_vad", sub: op }
+      const op=filtered[2]??"status"
+      if(!['start','stop','status'].includes(op))throw new Error('vad requires start, stop or status')
+      const action:Action={type:'macos_vad',sub:op}
+      let seen=false
+      for(let i=3;i<filtered.length;i++){
+        if(filtered[i]!=='--threshold'||seen||filtered[i+1]===undefined)throw new Error('vad accepts one --threshold value on start')
+        seen=true;action.threshold=Number(filtered[++i]);if(!filtered[i].trim())throw new Error('vad threshold value is missing')
+      }
+      const error=desktopVadActionError(desktopAction(action));if(error)throw new Error(error)
+      return action
     }
 
     // ── Sound ──
     case "sounds": {
-      const op = filtered[2] || "status"
-      return {
-        type: "macos_sounds",
-        sub: op,
-        filter: flagVal(filtered, "--filter"),
-      }
+      const values=compoundPositionals(filtered,new Set(['--filter']))
+      if(values.length>1)throw new Error('sounds requires one selector and named filter')
+      const action:Action={type:desktop?'desktop_sounds':'macos_sounds',sub:values[0]??'status'}
+      const filter=flagVal(filtered,'--filter');if(filter!==undefined)action.filter=filter
+      const error=desktopSoundActionError({...action,type:'desktop_sounds'});if(error)throw new Error(error)
+      return action
     }
 
     // ── Vision ──
     case "vision": {
+      if(desktop){
+        const values=compoundPositionals(filtered,new Set(['--app','--image','--debug-dump']))
+        if(values.length>1)throw new Error('vision requires one selector and named source flags')
+        const image=flagVal(filtered,'--image'),dump=flagVal(filtered,'--debug-dump')
+        const action:Action={type:'macos_vision',sub:values[0]??'text',app:flagVal(filtered,'--app'),imagePath:image?resolve(image):undefined,debugDumpPath:dump?resolve(dump):undefined}
+        const error=desktopVisionActionError(desktopAction(action));if(error)throw new Error(error)
+        return action
+      }
       const op = filtered[2] || "text"
       const app = flagVal(filtered, "--app")
       const image = flagVal(filtered, "--image")
@@ -673,6 +929,14 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     // ── NLP ──
     case "nlp": {
+      if(desktop){
+        const values=compoundPositionals(filtered,new Set<string>()),sub=values[0]
+        const action:Action={type:'macos_nlp',sub}
+        if(sub==='similar'){if(values.length!==3)throw new Error('similar requires two words');action.word1=values[1];action.word2=values[2]}
+        else{if(values.length!==2)throw new Error('NLP requires one text argument');action.text=values[1]}
+        const error=desktopLanguageActionError(desktopAction(action));if(error)throw new Error(error)
+        return action
+      }
       const op = filtered[2]
       if (!op) { console.error("error: interceptor macos nlp requires a subcommand (entities, language, sentiment, tokens, similar, embed)"); process.exit(1) }
       const text = filtered[3]
@@ -687,6 +951,17 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     // ── Intelligence ──
     case "ai": {
+      if(desktop){
+        const values=compoundPositionals(filtered,new Set<string>()),sub=values[0]??'status',action:Action={type:'macos_ai',sub}
+        if(sub==='prompt'){if(values.length!==2)throw new Error('prompt requires one text argument');action.prompt=values[1]}
+        else if(sub==='session'){
+          action.op=values[1]
+          if(action.op==='send'){if(values.length!==3)throw new Error('session send requires one message');action.message=values[2]}
+          else if(values.length!==2)throw new Error('session requires one operation')
+        }else if(values.length>1)throw new Error('AI status accepts no arguments')
+        const error=desktopLanguageActionError(desktopAction(action));if(error)throw new Error(error)
+        return action
+      }
       const op = filtered[2] || "status"
       // Spec 1 follow-up: `ai session <op>` previously sent
       // filtered[3] as `prompt`, but the bridge's IntelligenceDomain.handleSession
@@ -708,22 +983,40 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     // ── Sensitive ──
     case "sensitive": {
-      const op = filtered[2] || "check"
-      return {
-        type: "macos_sensitive",
-        sub: op,
-        app: flagVal(filtered, "--app"),
-      }
+      const values=compoundPositionals(filtered,new Set(['--app','--image']))
+      const sub=values[0]??'check'
+      if(values.length>(sub==='monitor'?2:1))throw new Error('sensitive accepts check or monitor start/stop/status')
+      const image=flagVal(filtered,'--image')
+      const action:Action={type:desktop?'desktop_sensitive':'macos_sensitive',sub,app:flagVal(filtered,'--app'),imagePath:image?resolve(image):undefined}
+      if(sub==='monitor')action.op=values[1]??'status'
+      const error=desktopSensitiveActionError(desktopAction(action));if(error)throw new Error(error)
+      return action
     }
 
     // ── Health ──
     case "health": {
+      if (desktop) {
+        const values = compoundPositionals(filtered, new Set<string>())
+        if (values.length > 1 || values[0] !== undefined && values[0] !== "status") throw new Error("desktop health accepts only status")
+        return { type: "macos_health", sub: "status" }
+      }
       const op = filtered[2] || "status"
       return { type: "macos_health", sub: op }
     }
 
     // ── Files ──
     case "files": {
+      if(desktop){
+        const values=compoundPositionals(filtered,new Set(['--limit','--pid']))
+        const sub=values[0]??'recent',action:Action={type:'macos_files',sub}
+        if(['watch','unwatch'].includes(sub)){
+          if(values.length!==2)throw new Error('files watch/unwatch require one path')
+          action.path=values[1]
+        }else if(values.length>1)throw new Error('files recent/open accept only named inventory selectors')
+        for(const [flag,key] of [['--limit','limit'],['--pid','pid']])if(filtered.includes(flag))action[key]=flagInt(filtered,flag,true)
+        const error=desktopFilesActionError(desktopAction(action));if(error)throw new Error(error)
+        return action
+      }
       const op = filtered[2] || "recent"
       const path = filtered[3]
       return {
@@ -738,9 +1031,36 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     // ── Notifications ──
     case "notifications": {
+      if (desktop) {
+        const strings = ['namespace','name','app','title','subtitle','body','sound','category','thread','user-info','interruption','attachment','date','components','id','options','identifier','actions','intent-identifiers','summary-format','hidden-placeholder']
+        const numbers = ['limit','seconds','badge','count']
+        if (filtered.filter(s => s === '--repeats').length > 1) throw new Error('invalid or repeated flag: --repeats')
+        const args = filtered.filter(s => s !== '--repeats')
+        const values = compoundPositionals(args, new Set([...strings,...numbers].map(s => '--' + s)))
+        const op = values[0] ?? 'tail'
+        const action: Action = {type:'desktop_notifications',sub:op}
+        for (const key of strings) { const val=flagVal(args,'--'+key); if(val!==undefined) action[key.replaceAll('-','_')]=val }
+        // flagVal reads an empty value as absent, which turned --options "" into the default set.
+        if(args.includes('--options')&&!String(action.options??'').trim()) throw new Error('notifications --options needs at least one option (alert, sound, badge, ...); nothing was requested')
+        for (const key of numbers) if(args.includes('--'+key)) action[key]=flagInt(args,'--'+key,true)
+        if(filtered.includes('--repeats')) action.repeats=true
+        if(op==='categories') action.verb=values[1]??'list'
+        else if(op==='badge'&&values[1]==='clear') action.clear=true
+        else if(op==='badge'&&values[1]!==undefined) {
+          if(action.count!==undefined) throw new Error('badge count has conflicting positional and flag values')
+          action.count=flagInt(['--count',values[1]],'--count',true)
+        } else if(['cancel','dismiss'].includes(op)&&values[1]!==undefined) {
+          if(action.id!==undefined) throw new Error('notification identifier has conflicting positional and flag values')
+          action.id=values[1]
+        } else if(values.length>1) throw new Error('notification operation accepts only named options')
+        if(values.length>2) throw new Error('notification operation has extra positional values')
+        const error=desktopNotificationsActionError(action);if(error)throw new Error(error)
+        return action
+      }
       const op = filtered[2] || "tail"
       const action: Action = { type: "macos_notifications", sub: op }
       // legacy DistributedNotificationCenter flags
+      const name = flagVal(filtered, "--name"); if (name !== undefined) action.name = name
       const app = flagVal(filtered, "--app"); if (app) action.app = app
       const limit = flagInt(filtered, "--limit"); if (limit !== undefined) action.limit = limit
       // UNUserNotificationCenter flags. Numeric flags must be
@@ -751,16 +1071,19 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         const val = flagVal(filtered, flag)
         if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
       }
+      // flagVal reads an empty value as absent, which turned --options "" into the default set.
+      if (filtered.includes("--options") && !String(action.options ?? "").trim()) throw new Error("notifications --options needs at least one option (alert, sound, badge, ...); nothing was requested")
       const nSeconds = flagInt(filtered, "--seconds"); if (nSeconds !== undefined) action.seconds = nSeconds
       const nBadge = flagInt(filtered, "--badge"); if (nBadge !== undefined) action.badge = nBadge
       const nCount = flagInt(filtered, "--count"); if (nCount !== undefined) action.count = nCount
       if (filtered.includes("--repeats")) action.repeats = true
       // sub-sub-verb on `categories` and `badge clear`
-      if (op === "categories") action.verb = filtered[3]
-      if (op === "badge" && filtered[3] === "clear") action.clear = true
-      else if (op === "badge" && filtered[3]) action.count = parseInt(filtered[3])
+      const positional = filtered[3]?.startsWith("--") ? undefined : filtered[3]
+      if (op === "categories") action.verb = positional ?? "list"
+      if (op === "badge" && positional === "clear") action.clear = true
+      else if (op === "badge" && positional) action.count = parseInt(positional)
       // identifier positional for cancel / dismiss
-      if ((op === "cancel" || op === "dismiss") && filtered[3]) action.id = filtered[3]
+      if ((op === "cancel" || op === "dismiss") && positional) action.id = positional
       return action
     }
 
@@ -768,20 +1091,41 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     case "clipboard": {
       const op = filtered[2] || "read"
       const text = op === "write" ? filtered[3] : undefined
+      // Clipboard writes are text-only on every host; never write a flag name as the text.
+      if (op === "write" && (text === undefined || text.startsWith("--"))) throw new Error("clipboard write requires the text to write; image writes are not supported")
+      const limit = flagInt(filtered, "--limit", desktop)
+      if (desktop && limit !== undefined && (limit < 0 || limit > 500)) throw new Error("clipboard --limit must be in 0..500")
       return {
         type: "macos_clipboard",
         sub: op,
         text,
         contentType: flagVal(filtered, "--type"),
         image: flagVal(filtered, "--image"),
-        limit: flagInt(filtered, "--limit"),
+        limit,
       }
     }
 
     // ── Display ──
     case "display": {
       const op = filtered[2] || "list"
+      if (desktop && ["list", "info"].includes(op)) {
+        if (op === "list") {
+          if (filtered.length > 3) throw new Error("display list accepts no target or options")
+          return {type: "macos_display_list"}
+        }
+        const value = flagVal(filtered, "--id") ?? filtered[3]
+        if (!value || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) throw new Error("display info requires a positive native display ID")
+        const expected = filtered.includes("--id") ? 5 : 4
+        if (filtered.length !== expected || (filtered.includes("--id") && filtered[3] !== "--id")) throw new Error("display info accepts one native ID or --id ID")
+        return {type: "macos_display_info", id: Number(value)}
+      }
       const resolution = filtered[3]
+      if (op === "move-window") {
+        // move-window <windowId> <displayId>: the bridge needs both native ids.
+        const windowId = Number(flagVal(filtered, "--window") ?? filtered[3]), displayId = Number(flagVal(filtered, "--display") ?? filtered[4])
+        if (!Number.isSafeInteger(windowId) || windowId <= 0 || !Number.isSafeInteger(displayId) || displayId <= 0) throw new Error("display move-window requires a native window id and a display id")
+        return { type: "macos_display", sub: op, windowId, displayId }
+      }
       return {
         type: "macos_display",
         sub: op,
@@ -800,11 +1144,15 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       // explicitly so the no-arg invocation prints usage instead.
       const channel = filtered[2]
       const op = filtered[3]
-      if (!channel || !op) {
-        console.error("error: interceptor macos audio requires <channel> <op>. Channels: output | input | both. Ops: start | stop | level | devices.")
-        process.exit(1)
+      if (!channel || !op) throw new Error("audio requires <input|output|both> <start|stop|level|devices>")
+      const seen=new Set<string>()
+      for(let i=4;i<filtered.length;i++){
+        const flag=filtered[i]
+        if(!['--app','--device','--save'].includes(flag)||seen.has(flag))throw new Error('audio accepts unique --app, --device and --save options')
+        seen.add(flag)
+        if(flag!=='--save'&&(!filtered[++i]||filtered[i].startsWith('--')))throw new Error(`${flag} requires a value`)
       }
-      return {
+      const action:Action = {
         type: "macos_audio",
         sub: channel,
         op,
@@ -812,20 +1160,30 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         device: flagVal(filtered, "--device"),
         save: filtered.includes("--save"),
       }
+      const error=desktopAudioActionError(desktopAction(action));if(error)throw new Error(error)
+      return action
     }
 
     // ── Stream ──
     case "stream": {
-      const op = filtered[2] || "status"
-      return {
-        type: "macos_stream",
-        op,
-        sid: flagVal(filtered, "--sid") || filtered[3],
-        app: flagVal(filtered, "--app"),
-        display: flagInt(filtered, "--display"),
-        virtual: flagVal(filtered, "--virtual"),
-        format: flagVal(filtered, "--format"),
-      }
+        const flags=new Set(['--sid','--app','--window','--display','--virtual','--format','--input-type','--ref','--x','--y','--text','--combo','--direction','--amount','--record-audio'])
+        const values=compoundPositionals(filtered,flags,new Set(['--media']))
+        const action:Action={type:desktop?'desktop_stream':'macos_stream',op:values[0]??'status'}
+        if(action.op==='record')action.recordOp=values[1]??'status'
+        else if(action.op==='inject')action.inputType=values[1]??flagVal(filtered,'--input-type')??'click'
+        const position=action.op==='record'||action.op==='inject'?values[2]:values[1]
+        if(position!==undefined){if(filtered.includes('--sid'))throw new Error('stream session identity has conflicting positional and named values');action.sid=position}
+        if(values.length>(action.op==='record'||action.op==='inject'?3:2))throw new Error('stream operation has extra positional values')
+        for(const key of ['sid','app','virtual','format','ref','text','combo','direction']){const value=flagVal(filtered,'--'+key);if(value!==undefined)action[key]=value}
+        for(const key of ['window','display','amount'])if(filtered.includes('--'+key))action[key]=flagInt(filtered,'--'+key,true)
+        for(const key of ['x','y'])if(filtered.includes('--'+key)){const value=flagVal(filtered,'--'+key);if(value===undefined||!value.trim()||!Number.isFinite(Number(value)))throw new Error('stream coordinates require finite numbers');action[key]=Number(value)}
+        if(filtered.includes('--input-type')){const kind=flagVal(filtered,'--input-type');if(values[1]!==undefined&&action.op==='inject'&&values[1]!==kind)throw new Error('stream input type has conflicting values');action.inputType=kind}
+        if(filtered.includes('--media'))action.media=true
+        const audio=flagVal(filtered,'--record-audio');if(audio!==undefined)action.recordAudio=audio
+        const canonical:Action={...action,type:'desktop_stream'}
+        if(!desktop&&canonical.display===0)canonical.display=1 // Legacy macOS uses a zero-based display ordinal.
+        const error=desktopStreamActionError(canonical);if(error)throw new Error(error)
+        return action
     }
 
     // ── Monitor ──
@@ -837,6 +1195,27 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     // format keys consumed by the Swift handler.
     case "monitor": {
       const op = filtered[2] || "status"
+      if(desktop){
+        const values=new Set(['--sid','--app','--apps','--include','--exclude','--frames','--frame-format','--frame-quality','--frame-max-long-edge','--watch-path','--watch-paths','--log-predicate','--speech-mode','--video-max-mb','--frame-budget','--frame-disk-cap','--frame-pixel-scale','--scroll-coalesce-ms','--ax-coalesce-ms','--exclude-app','--instruction','--limit','--task','--mode','--retention-policy','--guard-policy','--verifier-policy'])
+        const switches=new Set(['--all-apps','--vision-text','--tap','--include-system-apps','--json','--plan','--raw']),repeatable=new Set(['--apps','--include','--exclude','--watch-paths','--exclude-app']),seen=new Set<string>(),positions:string[]=[]
+        for(let i=3;i<filtered.length;i++){
+          const key=filtered[i]
+          if(!key.startsWith('--')){positions.push(key);continue}
+          if(!values.has(key)&&!switches.has(key)&&key!=='--video'||seen.has(key)&&!repeatable.has(key))throw new Error(`invalid or repeated monitor flag: ${key}`)
+          seen.add(key)
+          if(values.has(key)){if(!filtered[++i]||filtered[i].startsWith('--'))throw new Error(`${key} requires a value`)}
+          else if(key==='--video'&&filtered[i+1]&&!filtered[i+1].startsWith('--')){if(!/^\d+$/.test(filtered[++i]))throw new Error('--video requires an integer fps')}
+        }
+        if(positions.length>(op==='export'&&!seen.has('--sid')?1:0))throw new Error('monitor accepts a positional session identifier only for export')
+        if([...['--json','--plan','--raw']].filter(key=>seen.has(key)).length>1)throw new Error('monitor export requires one output format')
+        if(op==='tail'&&seen.has('--plan'))throw new Error('monitor tail has no --plan; use monitor export <sid> --plan')
+        if(seen.has('--raw')&&!['tail','export'].includes(op))throw new Error('--raw applies to monitor tail and export')
+        if(['--mode','--retention-policy','--guard-policy','--verifier-policy'].some(key=>seen.has(key))&&!seen.has('--task'))throw new Error('monitor task policy/mode options require --task')
+      }
+      const sid = flagVal(filtered, "--sid")
+      if (filtered.includes("--sid") && (!sid || sid.startsWith("--") || filtered.filter(value => value === "--sid").length !== 1)) {
+        throw new Error("monitor requires one nonempty --sid value")
+      }
       // Scope flags.
       const appFlag = flagVal(filtered, "--app")
       const appsRaw = collectMulti(filtered, "--apps")
@@ -854,13 +1233,13 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         ? excludesRaw.flatMap((s) => s.split(",")).map((s) => s.trim()).filter((s) => s.length > 0)
         : undefined
       // Co-recording knobs.
-      const frames = flagInt(filtered, "--frames")
+      const frames = flagInt(filtered, "--frames", desktop)
       const visionText = filtered.includes("--vision-text")
       // Frame-encoding knobs. Default jpeg q=80 mirrors CaptureDomain
       // (interceptor-bridge/Sources/Domains/CaptureDomain.swift:84-86).
       const frameFormat = flagVal(filtered, "--frame-format")
-      const frameQuality = flagInt(filtered, "--frame-quality")
-      const frameMaxLongEdge = flagInt(filtered, "--frame-max-long-edge")
+      const frameQuality = flagInt(filtered, "--frame-quality", desktop)
+      const frameMaxLongEdge = flagInt(filtered, "--frame-max-long-edge", desktop)
       // CGEventTap fallback opt-in.
       const tap = filtered.includes("--tap")
       // File-watch paths.
@@ -881,12 +1260,12 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         const next = filtered[videoIdx + 1]
         video = next && /^\d+$/.test(next) ? parseInt(next) : 4
       }
-      const videoMaxMb = flagInt(filtered, "--video-max-mb")
-      const frameBudget = flagInt(filtered, "--frame-budget")
-      const frameDiskCapMb = flagInt(filtered, "--frame-disk-cap")
-      const framePixelScale = flagInt(filtered, "--frame-pixel-scale")
-      const scrollCoalesceMs = flagInt(filtered, "--scroll-coalesce-ms")
-      const axCoalesceMs = flagInt(filtered, "--ax-coalesce-ms")
+      const videoMaxMb = flagInt(filtered, "--video-max-mb", desktop)
+      const frameBudget = flagInt(filtered, "--frame-budget", desktop)
+      const frameDiskCapMb = flagInt(filtered, "--frame-disk-cap", desktop)
+      const framePixelScale = flagInt(filtered, "--frame-pixel-scale", desktop)
+      const scrollCoalesceMs = flagInt(filtered, "--scroll-coalesce-ms", desktop)
+      const axCoalesceMs = flagInt(filtered, "--ax-coalesce-ms", desktop)
       const includeSystemApps = filtered.includes("--include-system-apps")
       const excludeAppsRaw = collectMulti(filtered, "--exclude-app")
       const excludeApps = excludeAppsRaw.length > 0
@@ -896,23 +1275,17 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       const action: Action = {
         type: "macos_monitor",
         sub: op,
-        sid: flagVal(filtered, "--sid") || (op === "export" ? filtered[3] : undefined),
+        sid: sid ?? (op === "export" ? filtered[3] : undefined),
         instruction: flagVal(filtered, "--instruction"),
-        format: filtered.includes("--json") ? "json" : filtered.includes("--plan") ? "plan" : "timeline",
+        format: filtered.includes("--json") || filtered.includes("--raw") ? "json" : filtered.includes("--plan") ? "plan" : "timeline",
         raw: filtered.includes("--raw"),
-        limit: flagInt(filtered, "--limit"),
+        limit: flagInt(filtered, "--limit", true),
       }
       const taskRef = flagVal(filtered, "--task")
       if (taskRef) {
         action.taskRef = taskRef
-        if (!action.instruction) action.instruction = taskRef
-        const taskMode = flagVal(filtered, "--mode")
-        try {
-          action.taskMode = validateMonitorTaskMode(taskMode)
-        } catch (err) {
-          console.error(`error: ${(err as Error).message}`)
-          process.exit(1)
-        }
+        if (op === "start" && !action.instruction) action.instruction = taskRef
+        if (op === "start") action.taskMode = validateMonitorTaskMode(flagVal(filtered, "--mode"))
         const retentionPolicyId = flagVal(filtered, "--retention-policy")
         const guardPolicyId = flagVal(filtered, "--guard-policy")
         const verifierPolicyId = flagVal(filtered, "--verifier-policy")
@@ -945,11 +1318,21 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       if (typeof axCoalesceMs === "number") action.axCoalesceMs = axCoalesceMs
       if (includeSystemApps) action.includeSystemApps = true
       if (excludeApps) action.excludeApps = excludeApps
+      const canonical = Object.fromEntries(Object.entries(desktopAction(action)).filter(([,value])=>value!==undefined))
+      const error = desktop ? desktopMonitorActionError(canonical) : desktopMonitorArchiveError(canonical)
+      if (error) throw new Error(error)
       return action
     }
 
     // ── Compound Commands ──
     case "open": {
+      if (desktop) {
+        if (filtered.filter(value => value === "--activate").length > 1) throw new Error("repeated --activate flag")
+        const values = compoundPositionals(filtered.filter(value => value !== "--activate"), new Set(["--app", "--pid", "--filter", "--depth"]))
+        const app = flagVal(filtered, "--app")
+        if (values.length > 1 || (values.length && app !== undefined)) throw new Error("open accepts one app name or --app, with optional --pid")
+        return { type: "macos_open", app: app ?? values[0], pid: flagInt(filtered, "--pid", true), activate: filtered.includes("--activate"), filter: flagVal(filtered, "--filter") ?? "interactive", depth: flagInt(filtered, "--depth", true) ?? 10 }
+      }
       const appName = filtered[2] || flagVal(filtered, "--app")
       // Background-first by default; --activate is the
       // explicit opt-in for "bring this app to the foreground."
@@ -966,6 +1349,10 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     }
 
     case "read": {
+      if (desktop) {
+        if (compoundPositionals(filtered, new Set(["--app", "--pid", "--filter", "--depth"])).length) throw new Error("read accepts only target and tree flags")
+        return { type: "macos_read", app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid", true), filter: flagVal(filtered, "--filter") ?? "interactive", depth: flagInt(filtered, "--depth", true) ?? 10 }
+      }
       return {
         type: "macos_compound",
         sub: "read",
@@ -977,6 +1364,11 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     }
 
     case "act": {
+      if (desktop) {
+        const values = compoundPositionals(filtered, new Set(["--app", "--pid"]))
+        if (values.length < 1 || values.length > 2) throw new Error("act requires a ref and optional text")
+        return { type: "macos_act", ref: values[0], text: values[1], app: flagVal(filtered, "--app"), pid: flagInt(filtered, "--pid", true) }
+      }
       const target = filtered[2]
       if (!target) { console.error("error: interceptor macos act requires a ref"); process.exit(1) }
       const text = filtered[3]
@@ -1007,8 +1399,13 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
             encoding: flagVal(filtered, "--encoding") || "utf8",
           }
           const range = flagVal(filtered, "--byte-range")
+          if (desktop && filtered.includes("--byte-range") && range === undefined) throw new Error("--byte-range requires START,LENGTH")
           if (range) {
-            const [s, l] = range.split(",").map((v) => parseInt(v, 10))
+            const values = range.split(",")
+            if (desktop && (values.length !== 2 || !values.every(v => /^-?\d+$/.test(v.trim()) && Number.isSafeInteger(Number(v))))) {
+              throw new Error("--byte-range requires two safe integers")
+            }
+            const [s, l] = values.map((v) => desktop ? Number(v) : parseInt(v, 10))
             if (!isNaN(s) && !isNaN(l)) action.byteRange = { start: s, length: l }
           }
           return action
@@ -1019,6 +1416,8 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
           const action: Action = { type: "macos_fs_write", path }
           const content = flagVal(filtered, "--content")
           const base64 = flagVal(filtered, "--base64")
+          // Both would silently keep only one of them.
+          if (content !== undefined && base64 !== undefined) throw new Error("fs write takes --content or --base64, not both; nothing was written")
           if (content !== undefined) action.content = content
           if (base64 !== undefined) { action.content = base64; action.encoding = "base64" }
           if (filtered.includes("--append")) action.append = true
@@ -1031,11 +1430,11 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
             type: "macos_fs_search",
             query,
             scope: flagVal(filtered, "--scope"),
-            limit: flagInt(filtered, "--limit") || 50,
+            limit: desktop ? flagInt(filtered, "--limit", true) ?? 50 : flagInt(filtered, "--limit") || 50,
             // Spotlight deadline (default 10 s in the bridge). The result carries
             // partial:true when the deadline cut a pass; the CLI transport
             // timeout for this verb is derived from it (cli/transport.ts).
-            timeoutMs: flagInt(filtered, "--timeout-ms"),
+            timeoutMs: flagInt(filtered, "--timeout-ms", desktop),
           }
           // --paths /a,/b,/c — multi-root search (only valid with --scope path).
           // Repeating --paths is also accepted; entries are concatenated.
@@ -1068,11 +1467,13 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     // ── URL fetch (NetDomain) ──
     case "url": {
       const urlSub = filtered[2]
+      if(desktop&&!['get','post'].includes(urlSub))throw new Error('url requires get or post')
       if (!urlSub) {
         console.error("error: interceptor macos url requires a subcommand: get | post")
         process.exit(1)
       }
       const target = filtered[3]
+      if(desktop&&(!target||target.startsWith('--')))throw new Error('url requires an absolute HTTP(S) URL')
       if (!target) { console.error(`error: interceptor macos url ${urlSub} requires a URL`); process.exit(1) }
       const headers: Record<string, string> = {}
       // Collect every --header "K: V" pair
@@ -1080,7 +1481,10 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         if (filtered[i] === "--header" || filtered[i] === "-H") {
           const raw = filtered[i + 1]
           const m = /^([^:]+):\s*(.*)$/.exec(raw)
-          if (m) headers[m[1].trim()] = m[2]
+          if (m) {
+            if(desktop&&Object.keys(headers).some(key=>key.toLowerCase()===m[1].trim().toLowerCase()))throw new Error('HTTP header names must be unique without regard to case')
+            headers[m[1].trim()] = m[2]
+          } else if(desktop)throw new Error('HTTP --header requires a name: value pair')
         }
       }
       const action: Action = {
@@ -1088,12 +1492,13 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         url: target,
         method: urlSub === "post" ? "POST" : (flagVal(filtered, "--method") || "GET").toUpperCase(),
         headers,
-        timeoutMs: flagInt(filtered, "--timeout") || 30000,
+        timeoutMs: desktop?(flagInt(filtered,"--timeout",true)??30000):(flagInt(filtered,"--timeout")||30000),
       }
       const body = flagVal(filtered, "--body")
       if (body !== undefined) action.body = body
       const ct = flagVal(filtered, "--content-type")
       if (ct) (action.headers as Record<string, string>)["Content-Type"] = ct
+      if(desktop){const error=desktopHttpActionError(desktopAction(action));if(error)throw new Error(error)}
       return action
     }
 
@@ -1101,8 +1506,15 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     case "log": {
       const logSub = filtered[2]
       if (logSub !== "query") {
+        if(desktop)throw new Error("log requires the 'query' subcommand")
         console.error("error: interceptor macos log requires the 'query' subcommand")
         process.exit(1)
+      }
+      if(desktop){
+        for(const flag of ['--include-info','--include-debug'])if(filtered.filter(value=>value===flag).length>1)throw new Error(`repeated flag: ${flag}`)
+        const values=compoundPositionals(filtered.filter(value=>!['--include-info','--include-debug'].includes(value)),new Set(['--predicate','--subsystem','--category','--since','--limit']))
+        if(values.length!==1||values[0]!=='query')throw new Error('log query accepts only named options')
+        if(filtered.includes('--predicate')&&(filtered.includes('--subsystem')||filtered.includes('--category')))throw new Error('log predicate cannot be combined with subsystem/category shortcuts')
       }
       let predicate = flagVal(filtered, "--predicate")
       const subsystem = flagVal(filtered, "--subsystem")
@@ -1110,18 +1522,23 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       // Build a predicate from --subsystem / --category if no explicit one
       if (!predicate) {
         const parts: string[] = []
-        if (subsystem) parts.push(`subsystem == "${subsystem}"`)
-        if (category) parts.push(`category == "${category}"`)
+        if (subsystem) parts.push(`subsystem == ${desktop?JSON.stringify(subsystem):`"${subsystem}"`}`)
+        if (category) parts.push(`category == ${desktop?JSON.stringify(category):`"${category}"`}`)
         if (parts.length) predicate = parts.join(" AND ")
       }
-      return {
+      const action:Action={
         type: "macos_log_query",
         predicate,
         since: flagVal(filtered, "--since"),
-        limit: flagInt(filtered, "--limit") || 100,
+        limit: desktop?(flagInt(filtered,"--limit",true)??100):(flagInt(filtered, "--limit") || 100),
         includeInfo: filtered.includes("--include-info"),
         includeDebug: filtered.includes("--include-debug"),
       }
+      if(desktop){
+        for(const key of ['predicate','since'])if(action[key]===undefined)delete action[key]
+        const error=desktopLogActionError(desktopAction(action));if(error)throw new Error(error)
+      }
+      return action
     }
 
     // ── Apple Events / OSA scripts ──
@@ -1133,7 +1550,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       }
       switch (scriptSub) {
         case "run":
-          return parseScriptRunAction(filtered, "macos_script_run")
+          return parseScriptRunAction(filtered, desktop?"desktop_script_run":"macos_script_run",{desktop})
         default:
           console.error(`error: unknown macos script subcommand '${scriptSub}'. Expected: run`)
           process.exit(1)
@@ -1149,7 +1566,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       }
       switch (intentSub) {
         case "dispatch": {
-          return parseScriptRunAction(filtered, "macos_intent_dispatch", { allowStructuredIntent: true })
+          return parseScriptRunAction(filtered, desktop?"desktop_intent_dispatch":"macos_intent_dispatch", { allowStructuredIntent: true,desktop })
         }
         case "warmup": {
           const bundleIds = filtered.slice(3).filter((s) => !s.startsWith("--"))
@@ -1167,6 +1584,36 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     // ── VM management (VmDomain) — ──
     case "vm": {
+      if(desktop){
+        const sub=(filtered[2]==='tcc'&&filtered[3]==='profile'&&filtered[4]==='generate'?'tcc_profile_generate':filtered[2]??'').replaceAll('-','_'),fields=DESKTOP_VM_FIELDS[sub]
+        if(!fields)throw new Error('desktop vm requires a known subcommand')
+        const action:Action={type:'desktop_vm',sub},positionals:string[]=[],seen=new Set<string>()
+        const aliases:Record<string,string>={'state-dir':'stateDir',memory:'memorySize',disk:'diskSize','image-format':'imageFormat','source-path':'sourcePath','install-agent':'installAgent','wait-for-agent':'waitForAgent','wait-for-vsock':'waitForVsock','keep-disk':'keepDisk','from-latest':'fromLatest','disk-only':'diskOnly','paused-state':'pausedStateOnly','max-depth':'max_depth','max-bytes':'maxBytes',op:'snapshotOp','host-address':'hostAddress','host-port':'hostPort','guest-port':'guestPort','no-prompt':'noPrompt','accessibility-prompt':'accessibilityPrompt','screen-prompt':'screenPrompt','reset-denied':'resetDenied','bundle-id':'bundleId','app-path':'appPath','identifier-type':'identifierType','code-requirement':'codeRequirement','full-disk':'fullDisk','include-user-only':'includeUserOnly',service:'services'}
+        const booleans=new Set(['rosetta','installAgent','waitForAgent','waitForVsock','headless','detach','force','keepDisk','fromLatest','diskOnly','pausedStateOnly','tty','noPrompt','prompt','walkthrough','accessibilityPrompt','screenPrompt','resetDenied','fullDisk','includeUserOnly'])
+        const numbers=new Set(['cpu','memorySize','diskSize','timeout','max_depth','maxBytes','limit','hostPort','guestPort','x','y'])
+        for(let i=filtered[2]==='tcc'?5:3;i<filtered.length;i++){
+          const raw=filtered[i];if(raw==='--json')continue
+          if(raw==='--'){if(sub!=='exec'||positionals.length!==1)throw new Error('VM exact argv requires exec <name> -- <argv>');action.command=filtered.slice(i+1);break}
+          if(!raw.startsWith('--')){positionals.push(raw);continue}
+          const key=aliases[raw.slice(2)]??raw.slice(2)
+          if(key!=='stateDir'&&!(sub==='adopt'&&key==='name')&&!fields.includes(key)&&!(sub==='create'&&key==='share')&&!(sub==='share'&&key==='rw'))throw new Error('unknown VM option '+raw)
+          if(seen.has(key)&&!['env','share','services'].includes(key))throw new Error('duplicate VM option '+raw);seen.add(key)
+          if(booleans.has(key)){action[key]=true;continue}
+          if(key==='rw'){action.readOnly=false;continue}
+          const value=filtered[++i];if(value===undefined)throw new Error(raw+' requires a value')
+          if(numbers.has(key)){if(!/^[0-9]+(?:\.[0-9]+)?$/.test(value))throw new Error(raw+' requires a number');action[key]=Number(value)}
+          else if(key==='env'){const at=value.indexOf('=');if(at<1)throw new Error('--env requires KEY=value');const env=(action.env??={}) as Record<string,string>,name=value.slice(0,at);if(Object.hasOwn(env,name))throw new Error('duplicate VM environment key');Object.defineProperty(env,name,{value:value.slice(at+1),enumerable:true,writable:true})}
+          else if(key==='share'){const m=/^(.+?):([^:]+?)(?::(ro|rw))?$/.exec(value);if(!m)throw new Error('--share requires host:tag[:ro|rw]');const shares=(action.shares??=[]) as unknown[];shares.push({hostPath:m[1],tag:m[2],readOnly:m[3]!=='rw'})}
+          else if(key==='services'){const services=(action.services??=[]) as string[];services.push(...value.split(','))}
+          else action[key]=value
+        }
+        const positionalFields=sub==='clone'||sub==='cp'?['src','dst']:sub==='adopt'?['sourcePath']:sub==='pull'?['image']:sub==='list'?[]:sub==='snapshot'&&action.snapshotOp==='list'?['name']:sub==='snapshot'||sub==='restore'?['name','tag']:sub==='mount'?['name','tag','path']:sub==='share'?['name','hostPath','tag']:sub==='type'?['name','text']:sub==='keys'?['name','keys']:sub==='click'&&positionals.length===2?['name','point']:['name']
+        if(sub==='exec'&&action.command===undefined&&positionals.length>1){action.command=positionals.slice(1);positionals.splice(1)}
+        if(sub==='port_forward'&&positionals.length===2){const parts=positionals.pop()!.split(':');if(parts.length<2||parts.length>3)throw new Error('VM forward requires [127.0.0.1:]hostPort:guestPort');action.hostPort=Number(parts.at(-2));action.guestPort=Number(parts.at(-1));if(parts.length===3)action.hostAddress=parts[0]}
+        if(positionals.length!==positionalFields.length)throw new Error('wrong VM positional arguments')
+        for(let i=0;i<positionalFields.length;i++){const key=positionalFields[i];if(key==='point'){const p=positionals[i].split(',');if(p.length!==2||p.some(x=>!x.length))throw new Error('VM click requires x,y');if(action.x!==undefined||action.y!==undefined)throw new Error('duplicate VM coordinates');action.x=Number(p[0]);action.y=Number(p[1])}else{if(action[key]!==undefined)throw new Error('duplicate VM '+key);action[key]=positionals[i]}}
+        const error=desktopVmActionError(action);if(error)throw new Error(error);return action
+      }
       const vmSub = filtered[2]
       if (!vmSub) {
         console.error("error: interceptor macos vm requires a subcommand: create | adopt | clone | install | pull | list | get | inspect | start | stop | pause | resume | delete | reset | snapshot | restore | exec | cp | share | mount | port-forward | screenshot | type | click | keys | read-ax | console | logs | trust | tcc")
@@ -1378,10 +1825,8 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
           if (!src || !dst) { console.error("error: interceptor macos vm cp requires <src> <dst>"); process.exit(1) }
           base.src = src
           base.dst = dst
-          const srcVm = /^([^/:]+):(.+)$/.exec(src)
-          const dstVm = /^([^/:]+):(.+)$/.exec(dst)
-          base.name = (dstVm && dstVm[1]) || (srcVm && srcVm[1])
-          if (!base.name) { console.error("error: interceptor macos vm cp requires one side as <vm>:<path>"); process.exit(1) }
+          base.name = desktopVmCopySelection(src,dst)?.name
+          if (!base.name) { console.error("error: interceptor macos vm cp requires exactly one side as <vm>:<guest-path>"); process.exit(1) }
           if (intArg("--timeout") !== undefined) base.timeout = intArg("--timeout")
           return base
         }
@@ -1497,6 +1942,32 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     // ── container_run (ContainerDomain) ──
     case "container": {
+      if(desktop){
+        if(filtered[2]!=='run'||!filtered[3])throw new Error('container run requires an image')
+        const end=filtered.indexOf('--',4),options=filtered.slice(4,end<0?filtered.length:end)
+        const action:Action={type:'macos_container_run',image:filtered[3],command:end<0?[]:filtered.slice(end+1),env:{},mounts:[]}
+        const seen=new Set<string>()
+        for(let i=0;i<options.length;i++){
+          const key=options[i];if(key==='--json')continue
+          if(!['--cmd','--env','--mount','--volume','-v','--network','--timeout','--max-output-bytes'].includes(key))throw new Error(`unknown container option ${key}`)
+          const value=options[++i];if(value===undefined)throw new Error(`${key} requires a value`)
+          if(!['--env','--mount','--volume','-v'].includes(key)&&seen.has(key))throw new Error(`duplicate container option ${key}`)
+          seen.add(key)
+          if(key==='--cmd'){if(end>=0)throw new Error('--cmd cannot be combined with exact argv');action.command=value.split(' ').filter(Boolean)}
+          else if(key==='--env'){
+            const at=value.indexOf('=');if(at<1)throw new Error('--env requires KEY=value')
+            const env=action.env as Record<string,string>,name=value.slice(0,at);if(Object.hasOwn(env,name))throw new Error('duplicate container env key');Object.defineProperty(env,name,{value:value.slice(at+1),enumerable:true,writable:true})
+          }else if(key==='--mount'){(action.mounts as unknown[]).push(JSON.parse(value))}
+          else if(key==='--volume'||key==='-v'){
+            const match=/^(.+):(\/[^:]*)(?::(ro|rw))?$/.exec(value)
+            if(!match||!match[2].startsWith('/'))throw new Error('--volume requires host:/guest[:ro|rw]; use --mount JSON for ambiguous paths')
+            ;(action.mounts as unknown[]).push({hostPath:match[1],mountPath:match[2],mode:match[3]??'ro'})
+          }else if(key==='--network')action.network=value
+          else{if(!/^\d+$/.test(value))throw new Error(`${key} requires an integer`);action[key==='--timeout'?'timeoutMs':'maxOutputBytes']=Number(value)}
+        }
+        const error=desktopContainerActionError(desktopAction(action));if(error)throw new Error(error)
+        return action
+      }
       const containerSub = filtered[2]
       if (containerSub !== "run") {
         console.error("error: interceptor macos container requires the 'run' subcommand")
@@ -1544,136 +2015,143 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     // ── Overlays (OverlayDomain) ──
     case "overlay": {
       const overlaySub = filtered[2]
-      if (!overlaySub) {
-        console.error("error: interceptor macos overlay requires a subcommand: start | stop | list | status | eval | ctl | verbs")
-        process.exit(1)
+      if (!["start", "stop", "list", "status", "eval", "ctl", "verbs"].includes(overlaySub)) throw new Error("overlay requires start | stop | list | status | eval | ctl | verbs")
+      const startFields: Record<string, string> = {
+        "--id": "id", "--level": "level", "--particles": "particles", "--scene": "scene",
+        "--scene-script": "scene_script", "--scene-script-file": "scene_script_file",
+        "--url": "url", "--html-b64": "html_b64", "--html": "html",
+        "--rect": "rect", "--anchor": "anchor", "--width": "width", "--height": "height",
+        "--display-id": "display_id", "--emojis": "emojis", "--direction": "direction",
+        "--density": "density", "--lifetime": "lifetime", "--velocity": "velocity", "--size-scale": "size_scale",
+        "--timeout-seconds": "timeout_seconds", "--duration-ms": "duration_ms", "--duration": "duration"
       }
+      const controlFields: Record<string, string[]> = {
+        "set-density": ["value"], "set-direction": ["value"], "set-emojis": ["value"],
+        "set-lifetime": ["value"], "set-velocity": ["value"], "set-scale": ["value"],
+        burst: ["count"], pause: [], resume: [], reset: [], say: ["text"],
+        round: ["n", "text"], punch: ["who", "emoji"], "breathe-fire": ["who", "emoji"],
+        throw: ["who", "emoji"], taunt: ["who"], roar: ["who", "text"], bow: ["who"],
+        jump: ["who", "height"], knockout: ["who"], tint: ["who", "color", "amount"],
+        "append-ops": ["ops", "relative"], "append-script": ["json"], "clear-entities": [],
+        spawn: ["entity"], despawn: ["id"], "face-track-start": ["fps"], "face-track-stop": []
+      }
+      const booleans: Record<string, string> = overlaySub === "start" ? {
+        "--interactive": "interactive", "--no-interactive": "noInteractive", "--single-space": "single_space",
+        "--no-fullscreen-aux": "no_fullscreen_aux", "--visible": "visible"
+      } : {}
+      const flags = overlaySub === "start" ? new Set(Object.keys(startFields))
+        : overlaySub === "ctl" ? new Set(["--args", ...Object.values(controlFields).flat().map(key => "--" + key)])
+        : overlaySub === "eval" ? new Set(["--timeout-seconds"]) : new Set<string>()
+      const raw: Record<string, string> = {}
+      const selectedBooleans = new Set<string>()
+      const positionals: string[] = []
+      for (let i = 3; i < filtered.length; i++) {
+        const flag = filtered[i]
+        if (!flag.startsWith("--")) { positionals.push(flag); continue }
+        if (Object.hasOwn(booleans, flag)) {
+          if (selectedBooleans.has(flag)) throw new Error("repeated overlay flag: " + flag)
+          selectedBooleans.add(flag); continue
+        }
+        if (!flags.has(flag) || Object.hasOwn(raw, flag)) throw new Error("invalid or repeated overlay flag: " + flag)
+        const value = filtered[++i]
+        if (value === undefined || value.startsWith("--")) throw new Error(flag + " requires a value")
+        raw[flag] = value
+      }
+      const action: Action = {type: "macos_overlay_" + overlaySub}
       switch (overlaySub) {
         case "start": {
-          const action: Action = { type: "macos_overlay_start" }
-          const id = flagVal(filtered, "--id")
-          const level = flagVal(filtered, "--level")
-          const particles = flagVal(filtered, "--particles")
-          const scene = flagVal(filtered, "--scene")
-          const sceneScript = flagVal(filtered, "--scene-script")
-          const url = flagVal(filtered, "--url")
-          const htmlB64 = flagVal(filtered, "--html-b64")
-          // Spec 7: --html accepted as a friendlier alias to
-          // --html-b64; the parser b64-encodes inline HTML so callers
-          // don't have to wrap shell-escaped HTML themselves.
-          const htmlInline = flagVal(filtered, "--html")
-          const rect = flagVal(filtered, "--rect")
-          const timeout = flagInt(filtered, "--timeout-seconds")
-          // Spec 7: --duration / --duration-ms aliases for the
-          // existing --timeout-seconds. The bridge auto-dismisses after
-          // the timeout regardless of mode.
-          const durationMs = flagInt(filtered, "--duration-ms")
-          const durationLegacy = flagInt(filtered, "--duration")
-          const density = flagInt(filtered, "--density")
-          const lifetime = flagInt(filtered, "--lifetime")
-          const anchor = flagVal(filtered, "--anchor")
-
-          if (id) action.id = id
-          if (level) action.level = level
-          if (filtered.includes("--interactive")) action.interactive = true
-          if (filtered.includes("--no-interactive")) action.interactive = false
-          if (filtered.includes("--single-space")) action.single_space = true
-          if (filtered.includes("--no-fullscreen-aux")) action.no_fullscreen_aux = true
-          if (timeout !== undefined) action.timeout_seconds = timeout
-          if (anchor) action.anchor = anchor
-
-          if (particles) action.particles = particles
-          if (density !== undefined) action.density = density
-          if (lifetime !== undefined) action.lifetime = lifetime
-          if (scene) action.scene = scene
-          if (sceneScript) action.scene_script = sceneScript
-          if (url) action.url = url
-          if (htmlB64) action.html_b64 = htmlB64
-          // Spec 7: forward inline --html as html_b64 (b64-encoded)
-          // so the bridge has a single source HTML field. Buffer.from is
-          // already imported into Bun's globals.
-          let resolvedHtmlB64: string | undefined = htmlB64
-          if (!resolvedHtmlB64 && htmlInline) {
-            resolvedHtmlB64 = Buffer.from(htmlInline, "utf-8").toString("base64")
-            action.html_b64 = resolvedHtmlB64
+          if (positionals.length) throw new Error("overlay start accepts named flags only")
+          if (selectedBooleans.has("--interactive") && selectedBooleans.has("--no-interactive")) throw new Error("overlay interactive flags are exclusive")
+          for (const flag of selectedBooleans) action[flag === "--no-interactive" ? "interactive" : booleans[flag]] = flag !== "--no-interactive"
+          const numbers: Record<string, [number, number]> = {
+            density: [0, 128], lifetime: [0.05, 60], velocity: [0, 4096], size_scale: [0.05, 8],
+            width: [1, 16384], height: [1, 16384], display_id: [1, desktop ? Number.MAX_SAFE_INTEGER : 0xffffffff],
+            timeout_seconds: [0.001, 86400], duration_ms: [1, 86400000], duration: [1, 86400000]
           }
-
-          // Spec 7: unify --duration-ms / --duration / --timeout-seconds
-          // into the bridge's single `timeout_seconds` action field
-          // (OverlayDomain only reads timeout_seconds today, see
-          // OverlayDomain.swift:114). --duration-ms wins, then --duration
-          // (interpreted as ms for ergonomic parity with the particles-mode
-          // flag the live tests already used), then --timeout-seconds as
-          // the legacy form.
-          if (durationMs !== undefined) {
-            action.timeout_seconds = durationMs / 1000
-          } else if (durationLegacy !== undefined) {
-            action.timeout_seconds = durationLegacy / 1000
-          } else if (timeout !== undefined) {
-            action.timeout_seconds = timeout
+          for (const [flag, value] of Object.entries(raw)) {
+            const key = startFields[flag]
+            if (numbers[key]) {
+              const [low, high] = numbers[key], n = Number(value)
+              if (value.trim() !== value || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(n) || n < low || n > high || (key === "display_id" && !Number.isInteger(n))) throw new Error("invalid bounded overlay " + flag)
+              if (key === "duration_ms" || key === "duration") action.timeout_seconds = n / 1000
+              else action[key] = n
+            } else action[key] = value
           }
-
-          if (rect) {
-            const [x, y, w, h] = rect.split(",").map((v) => parseFloat(v))
-            if (!isNaN(x) && !isNaN(y) && !isNaN(w) && !isNaN(h)) {
-              action.rect = { x, y, width: w, height: h }
-            }
+          if (["--timeout-seconds", "--duration-ms", "--duration"].filter(flag => Object.hasOwn(raw, flag)).length > 1) throw new Error("overlay duration flags are exclusive")
+          const sources = ["--particles", "--scene", "--scene-script", "--scene-script-file", "--url", "--html", "--html-b64"].filter(flag => Object.hasOwn(raw, flag))
+          if (sources.length !== 1) throw new Error("overlay start requires exactly one content source")
+          if (action.html !== undefined) { action.html_b64 = Buffer.from(action.html as string, "utf8").toString("base64"); delete action.html }
+          if (action.rect !== undefined) {
+            const values = (action.rect as string).split(",")
+            const nums = values.map(Number)
+            if (values.length !== 4 || values.some(v => !v.trim()) || nums.some(n => !Number.isFinite(n)) || nums[2] < 1 || nums[3] < 1 || nums[2] > 16384 || nums[3] > 16384 || Math.abs(nums[0]) > 131072 || Math.abs(nums[1]) > 131072) throw new Error("--rect requires bounded x,y,width,height")
+            action.rect = {x: nums[0], y: nums[1], width: nums[2], height: nums[3]}
+            if (action.anchor !== undefined || action.width !== undefined || action.height !== undefined) throw new Error("overlay rect and anchor sizing are exclusive")
           }
-
-          if (!particles && !scene && !sceneScript && !url && !resolvedHtmlB64) {
-            console.error("error: overlay start requires one of --particles, --scene, --scene-script, --url, --html, --html-b64")
-            process.exit(1)
-          }
-          return action
+          if (action.level !== undefined && !["statusBar", "mainMenu", "floating", "screenSaver"].includes(action.level as string)) throw new Error("unknown overlay level")
+          if (action.scene !== undefined && action.scene !== "titans") throw new Error("unknown scene preset")
+          if (action.particles !== undefined && !["roses", "hearts", "petals", "stars", "snow", "confetti", "titans", "fire", "beams", "custom"].includes(action.particles as string)) throw new Error("unknown particle preset")
+          if (action.anchor !== undefined && !["tl", "tr", "bl", "br", "top", "bottom", "right", "left", "center"].includes(action.anchor as string)) throw new Error("unknown overlay anchor")
+          if (action.anchor === undefined && action.rect === undefined && (action.width !== undefined || action.height !== undefined)) throw new Error("overlay width and height require an anchor")
+          if (action.direction !== undefined && !["up", "down", "left", "right"].includes(action.direction as string)) throw new Error("unknown particle direction")
+          if (!action.particles && ["emojis", "direction", "density", "lifetime", "velocity", "size_scale"].some(key => action[key] !== undefined)) throw new Error("particle parameters require particles mode")
+          break
         }
-        case "stop": {
-          const id = filtered[3]
-          const action: Action = { type: "macos_overlay_stop" }
-          if (id) action.id = id
-          return action
-        }
+        case "stop":
+        case "status":
+        case "verbs":
+          if (positionals.length > 1) throw new Error("overlay selector takes at most one ID")
+          if (positionals.length) action.id = positionals[0]
+          break
         case "list":
-          return { type: "macos_overlay_list" }
-        case "status": {
-          const id = filtered[3]
-          const action: Action = { type: "macos_overlay_status" }
-          if (id) action.id = id
-          return action
-        }
-        case "eval": {
-          const id = filtered[3]
-          const js = filtered[4]
-          if (!id || !js) { console.error("error: overlay eval requires <id> <javascript>"); process.exit(1) }
-          return { type: "macos_overlay_eval", id, javascript: js }
-        }
-        case "ctl": {
-          const id = filtered[3]
-          const verb = filtered[4]
-          if (!id || !verb) { console.error("error: overlay ctl requires <id> <verb> [args]"); process.exit(1) }
-          const action: Action = { type: "macos_overlay_ctl", id, verb }
-          // Remaining --foo bar pairs become args
-          const args: Record<string, unknown> = {}
-          for (let i = 5; i < filtered.length - 1; i++) {
-            if (filtered[i].startsWith("--")) {
-              const key = filtered[i].slice(2)
-              const val = filtered[i + 1]
-              const numeric = parseFloat(val)
-              args[key] = !isNaN(numeric) && /^-?[\d.]+$/.test(val) ? numeric : val
-            }
+          if (positionals.length) throw new Error("overlay list takes no arguments")
+          break
+        case "eval":
+          if (positionals.length !== 2) throw new Error("overlay eval requires <id> <javascript>")
+          action.id = positionals[0]; action.js = positionals[1]
+          if (!action.js || Buffer.byteLength(action.js as string) > 32768) throw new Error("overlay JavaScript exceeds 32KiB")
+          if (raw["--timeout-seconds"] !== undefined) {
+            const n = Number(raw["--timeout-seconds"])
+            if (!raw["--timeout-seconds"].trim() || !Number.isFinite(n) || n < 0.001 || n > 30) throw new Error("invalid overlay evaluation timeout")
+            action.timeout_seconds = n
           }
-          if (Object.keys(args).length) action.args = args
-          return action
+          break
+        case "ctl": {
+          if (positionals.length !== 2) throw new Error("overlay ctl requires <id> <verb> [named args]")
+          action.id = positionals[0]; action.verb = positionals[1]
+          const fields = controlFields[positionals[1]]
+          if (!fields) throw new Error("unknown overlay controller verb")
+          const args: Record<string, unknown> = {}
+          if (raw["--args"] !== undefined) {
+            if (Object.keys(raw).length !== 1 || Buffer.byteLength(raw["--args"]) > 131072) throw new Error("--args requires one bounded JSON object")
+            const json = JSON.parse(raw["--args"])
+            if (!json || typeof json !== "object" || Array.isArray(json) || Object.keys(json).some(key => !fields.includes(key))) throw new Error("invalid overlay controller argument object")
+            action.args = json
+          } else {
+            for (const [flag, value] of Object.entries(raw)) {
+              const key = flag.slice(2)
+              if (!fields.includes(key)) throw new Error("field does not belong to overlay controller verb")
+              if (["ops", "json", "entity"].includes(key)) {
+                if (Buffer.byteLength(value) > 131072) throw new Error("overlay control JSON exceeds 128KiB")
+                args[key] = JSON.parse(value)
+              } else if (key === "relative") {
+                if (!["true", "false"].includes(value)) throw new Error("--relative requires true or false")
+                args[key] = value === "true"
+              } else if (["n", "height", "amount", "count", "fps"].includes(key) || (key === "value" && !["set-direction", "set-emojis"].includes(positionals[1]))) {
+                const n = Number(value)
+                if (!value.trim() || !Number.isFinite(n)) throw new Error("overlay control requires a finite number")
+                args[key] = n
+              } else args[key] = value
+            }
+            action.args = args
+          }
+          break
         }
-        case "verbs": {
-          const id = filtered[3]
-          const action: Action = { type: "macos_overlay_verbs" }
-          if (id) action.id = id
-          return action
-        }
-        default:
-          console.error(`error: unknown 'overlay' subcommand '${overlaySub}'. Use: start | stop | list | status | eval | ctl | verbs`)
-          process.exit(1)
       }
+      if (action.id !== undefined && ((action.id as string).trim() !== action.id || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(action.id as string))) throw new Error("overlay requires a safe bounded ID")
+      if (Buffer.byteLength(JSON.stringify(action)) > 262144) throw new Error("overlay request exceeds 256KiB")
+      const overlayError=desktopOverlayActionError(desktopAction(action));if(overlayError)throw new Error(overlayError)
+      return action
     }
 
     // ── Personal data + distribution + document surfaces ──
@@ -1682,6 +2160,14 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
 
     case "pdf": {
       const verb = filtered[2]
+      if(desktop){
+        const selector=verb==='forms'&&filtered[3]==='set'?'forms_set':verb
+        if(!Object.hasOwn(DESKTOP_PDF_FIELDS,selector??''))throw new Error('PDF requires a known operation')
+        const names=DESKTOP_PDF_FIELDS[selector]
+        const booleanFields=new Set(['attributed','case_sensitive'])
+        const flag=(field:string)=>field==='annotation_type'?'--type':field==='case_sensitive'?'--case-sensitive':'--'+field
+        compoundPositionals(filtered,new Set(names.filter(field=>!booleanFields.has(field)&&!['query','paths'].includes(field)).map(flag)),new Set(names.filter(field=>booleanFields.has(field)).map(flag)))
+      }
       if (!verb) { console.error("error: pdf requires a verb (info|text|outline|annotations|forms|images|find|attributes|permissions|annotate|strip|merge|split)"); process.exit(1) }
       const action: Action = { type: "macos_pdf", sub: verb }
       if (verb === "merge") {
@@ -1698,7 +2184,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
           if (!path) { console.error("error: pdf forms set <path> --field <name> --value <string> [--out <out>]"); process.exit(1) }
           action.path = path
           action.field = flagVal(filtered, "--field")
-          action.value = flagVal(filtered, "--value")
+          action.value = desktop && filtered.includes('--value') ? filtered[filtered.indexOf('--value')+1] : flagVal(filtered, "--value")
           action.out = flagVal(filtered, "--out")
         } else {
           const path = filtered[3]
@@ -1709,7 +2195,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         const path = filtered[3]
         if (!path) { console.error(`error: pdf ${verb} requires <path>`); process.exit(1) }
         action.path = path
-        const page = flagInt(filtered, "--page"); if (page !== undefined) action.page = page
+        const page = flagInt(filtered, "--page", desktop); if (page !== undefined) action.page = page
         const range = flagVal(filtered, "--range"); if (range) action.range = range
         if (filtered.includes("--attributed")) action.attributed = true
         if (filtered.includes("--case-sensitive")) action.case_sensitive = true
@@ -1726,25 +2212,38 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
           action.out = flagVal(filtered, "--out")
         }
       }
+      if(desktop){
+        const values=compoundPositionals(filtered,new Set(['--out','--field','--value','--page','--range','--type','--rect','--contents','--pages']),new Set(['--attributed','--case-sensitive']))
+        const expected=verb==='merge'?undefined:verb==='forms'&&filtered[3]==='set'?3:verb==='find'?3:2
+        if(expected!==undefined&&values.length!==expected)throw new Error('PDF command has missing or extra positional fields')
+        const canonical=desktopAction(action),error=desktopPdfActionError(canonical);if(error)throw new Error(error)
+        return canonical as Action
+      }
       return action
     }
 
     case "detect": {
+      const values=desktop?compoundPositionals(filtered,new Set(['--types'])):undefined
       const verb = filtered[2]
       if (!verb) { console.error("error: detect requires a verb (types|run|file|stdin)"); process.exit(1) }
       const action: Action = { type: "macos_detect", sub: verb }
-      if (verb === "run") action.input = filtered[3]
-      else if (verb === "file") action.path = filtered[3]
+      const operand = filtered.slice(3).find((value, i, rest) => !value.startsWith("--") && (i === 0 || rest[i - 1] !== "--types"))
+      if (verb === "run") action.input = operand
+      else if (verb === "file") action.path = operand
       else if (verb === "stdin") {
         // Bridge handler reads action["input"]; CLI must wrap stdin into it.
-        const buf = require("node:fs").readFileSync(0, "utf8")
-        action.input = buf
+        action.input = stdinText ?? require("node:fs").readFileSync(0, "utf8")
       }
       const types = flagVal(filtered, "--types"); if (types) action.types = types
+      if(desktop){
+        if(values!.length!==(verb==='run'||verb==='file'?2:1))throw new Error('detect requires exactly the selected operation and input')
+        const error=desktopLanguageActionError(desktopAction(action));if(error)throw new Error(error)
+      }
       return action
     }
 
     case "translate": {
+      if(desktop)compoundPositionals(filtered,new Set(['--from','--to','--sample','--json']))
       const verb = filtered[2]
       if (!verb) { console.error("error: translate requires a verb (status|languages|availability|prepare|text|batch|file|stop)"); process.exit(1) }
       const action: Action = { type: "macos_translate", sub: verb }
@@ -1754,10 +2253,30 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       const json = flagVal(filtered, "--json"); if (json) action.json = json
       if (verb === "text") action.input = filtered[3]
       else if (verb === "file") action.path = filtered[3]
+      if(desktop){
+        const values=compoundPositionals(filtered,new Set(['--from','--to','--sample','--json']))
+        if(values.length!==(['text','file'].includes(verb)?2:1))throw new Error('translation command has missing or extra positional fields')
+        const error=desktopLanguageActionError(desktopAction(action));if(error)throw new Error(error)
+      }
       return action
     }
 
     case "thumbnail": {
+      if (desktop) {
+        if (filtered.filter(value => value === '--save').length > 1) throw new Error('repeated flag: --save')
+        const values = compoundPositionals(filtered.filter(value => value !== '--save'), new Set(['--size','--scale','--types','--format','--out']))
+        const batch = values[0] === 'batch'
+        if (!batch && values.length !== 1) throw new Error('thumbnail requires one path')
+        const action: Action = {type:'macos_thumbnail', sub:batch?'batch':'generate'}
+        if (batch) action.paths = values.slice(1); else action.path = values[0]
+        for (const [flag,key] of [['--size','size'],['--types','types'],['--format','format'],['--out','out']]) {
+          const value=flagVal(filtered,flag); if(value!==undefined) action[key]=value
+        }
+        const scale=flagInt(filtered,'--scale',true); if(scale!==undefined) action.scale=scale
+        if(filtered.includes('--save'))action.save=true
+        const error=desktopThumbnailActionError(desktopAction(action));if(error)throw new Error(error)
+        return action
+      }
       const verb = filtered[2] === "batch" ? "batch" : "generate"
       const action: Action = { type: "macos_thumbnail", sub: verb }
       if (verb === "batch") {
@@ -1780,6 +2299,38 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     // issue #244: the secret vault. Values never appear on argv: `register`
     // opens the bridge's native box, `set` reads stdin or a hidden prompt.
     case "secret": {
+      if (desktop) {
+        const verb = filtered[2]
+        const storing = verb === "set" || verb === "register"
+        const flags = new Set(storing ? ["--gate", "--reuse"] : verb === "unlock" ? ["--for"] : [])
+        const options = filtered.slice(0, 2), targets: string[] = []
+        let stdin = false
+        for (let i = 2; i < filtered.length; i++) {
+          const token = filtered[i]
+          if (token === "--target" || token === "--stdin") {
+            if (flags.has(filtered[i - 1])) throw new Error(`${filtered[i - 1]} requires a value`)
+            if (token === "--target") {
+              if (!storing || filtered[i + 1] === undefined || filtered[i + 1].startsWith("--") || filtered[i + 1].split(",").some(value=>!value.trim())) throw new Error("--target requires a storage target")
+              targets.push(filtered[++i])
+            } else {
+              if (verb !== "set" || stdin) throw new Error("--stdin is accepted once for secret set")
+              stdin = true
+            }
+          } else options.push(token)
+        }
+        const values = compoundPositionals(options, flags)
+        const requiresName = ["register", "set", "rm", "unlock", "reveal"].includes(verb)
+        if (values.length > 2 || (requiresName && values.length !== 2) || (["status", "list"].includes(verb) && values.length !== 1)) throw new Error("secret requires its verb and permitted name; values must not appear on argv")
+        const action: Action = {type:"macos_secret",sub:verb}
+        if (values[1] !== undefined) action.name = values[1]
+        if (stdin) action.stdin = true
+        const gate = flagVal(options,"--gate");if(gate!==undefined)action.gate=gate
+        const reuse = flagInt(options,"--reuse",true);if(reuse!==undefined)action.reuseSeconds=reuse
+        if (targets.length) action.targets = parseTargets(targets)
+        if (verb === "unlock") { const duration=flagVal(options,"--for");if(duration!==undefined)action.forSeconds=parseDuration(duration) }
+        const error=desktopSecretActionError(desktopAction(action),'cli');if(error)throw new Error(error)
+        return action
+      }
       const verb = filtered[2]
       const verbs = ["register", "set", "list", "rm", "status", "unlock", "lock", "reveal"]
       if (!verb || !verbs.includes(verb)) {
@@ -1837,85 +2388,78 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         console.error("error: authdialog requires a verb (fill --secret <name> [--submit] | status)"); process.exit(1)
       }
       const action: Action = { type: "macos_authdialog", sub: verb }
+      const portable=desktop&&process.platform!=='darwin'
+      const flags=new Set(verb==='fill'?['--secret']:[])
+      if(portable)for(const flag of ['--app','--pid','--window','--ref',...(verb==='fill'?['--secret-lease']:[])])flags.add(flag)
+      const submits=filtered.filter(flag=>flag==='--submit').length
+      if(submits>1||submits>0&&verb!=='fill')throw new Error('authentication submit requires one fill flag')
+      const values=compoundPositionals(filtered.filter(flag=>flag!=='--submit'),flags)
+      if(values.length!==1)throw new Error('authentication dialog requires its verb and supported exact flags')
       if (verb === "fill") {
         const secretName = flagVal(filtered, "--secret")
         if (!secretName || secretName.startsWith("--")) { console.error("error: authdialog fill requires --secret <name>"); process.exit(1) }
         action.secret = secretName
         if (filtered.includes("--submit")) action.submit = true
       }
+      if(portable){
+        for(const [flag,key]of [['--app','app'],['--ref','ref'],['--secret-lease','secretLease']] as const){const value=flagVal(filtered,flag);if(value!==undefined)action[key]=value}
+        for(const [flag,key]of [['--pid','pid'],['--window','window']] as const){const value=flagInt(filtered,flag,true);if(value!==undefined)action[key]=value}
+        const error=desktopAuthDialogActionError(desktopAction(action));if(error)throw new Error(error)
+      }
       return action
     }
 
     case "auth": {
       const verb = filtered[2]
+      const values=desktop?compoundPositionals(filtered,new Set(['--policy','--fallback-title','--cancel-title','--reuse'])):undefined
+      if(desktop&&(!verb||values?.length!==(verb==='confirm'?2:1)))throw new Error('auth requires its verb and, for confirm, one reason')
       if (!verb) { console.error("error: auth requires a verb (status|confirm|invalidate|domain-state)"); process.exit(1) }
       const action: Action = { type: "macos_auth", sub: verb }
-      if (verb === "confirm") action.reason = filtered[3]
+      if (verb === "confirm") action.reason = desktop?values?.[1]:filtered[3]
       const policy = flagVal(filtered, "--policy"); if (policy) action.policy = policy
       const fb = flagVal(filtered, "--fallback-title"); if (fb) action.fallback_title = fb
       const cancel = flagVal(filtered, "--cancel-title"); if (cancel) action.cancel_title = cancel
-      const reuse = flagInt(filtered, "--reuse"); if (reuse !== undefined) action.reuse_seconds = reuse
+      const reuse = flagInt(filtered, "--reuse",desktop); if (reuse !== undefined) action.reuse_seconds = reuse
+      if(desktop){const error=desktopAuthActionError(desktopAction(action));if(error)throw new Error(error)}
       return action
     }
 
-    case "calendar": {
-      const verb = filtered[2]
-      if (!verb) { console.error("error: calendar requires a verb (status|request|list|default|sources|create-calendar|delete-calendar|events|event|event-by-external|create|update|delete|move|refresh-sources|reset|tail)"); process.exit(1) }
-      const action: Action = { type: "macos_calendar", sub: verb }
-      // common flags. NB: --type would collide with the action envelope's
-      // `type` field (which dispatches the action), so we remap it to
-      // `cal_type` and read it as such on the bridge side.
-      for (const flag of ["--level","--title","--color","--start","--end","--calendar","--calendars","--all-day","--location","--notes","--url","--span","--to","--recurrence-frequency","--recurrence-interval","--recurrence-end"]) {
-        const val = flagVal(filtered, flag)
-        if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
-      }
-      const calType = flagVal(filtered, "--type")
-      if (calType !== undefined) action.cal_type = calType
-      if (filtered.includes("--all-day")) action.all_day = true
-      // alarms (multiple), attendees (multiple)
-      action.alarms = filtered.reduce<string[]>((acc, v, i) => filtered[i - 1] === "--alarm" ? acc.concat(v) : acc, [])
-      action.attendees = filtered.reduce<string[]>((acc, v, i) => filtered[i - 1] === "--attendee" ? acc.concat(v) : acc, [])
-      // positional id args (after verb)
-      const positional = filtered[3]
-      if (verb === "delete-calendar" || verb === "event" || verb === "event-by-external" || verb === "update" || verb === "delete" || verb === "move") {
-        if (positional) action.id = positional
-      }
-      return action
-    }
-
+    case "calendar":
     case "reminders": {
-      const verb = filtered[2]
-      if (!verb) { console.error("error: reminders requires a verb (status|request|lists|default|all|incomplete|completed|create|update|complete|uncomplete|delete)"); process.exit(1) }
-      const action: Action = { type: "macos_reminders", sub: verb }
-      for (const flag of ["--list","--due-start","--due-end","--since","--until","--title","--due","--start","--priority","--notes","--url"]) {
-        const val = flagVal(filtered, flag)
-        if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
+      const family=filtered[1],verb=filtered[2],fields=(family==='calendar'?DESKTOP_CALENDAR_FIELDS:DESKTOP_REMINDERS_FIELDS)[verb]
+      if(!fields)throw new Error(family+' requires an exact selector')
+      const action:Action={type:'macos_'+family,sub:verb}
+      let index=3
+      if(filtered[index]&&!filtered[index].startsWith('--'))action.id=filtered[index++]
+      for(;index<filtered.length;index++){
+        const flag=filtered[index],key=flag==='--type'?'cal_type':flag==='--alarm'?'alarms':flag==='--attendee'?'attendees':flag.slice(2).replaceAll('-','_')
+        if(!flag.startsWith('--')||!fields.includes(key)||action[key]!==undefined&&!['alarms','attendees'].includes(key))throw new Error('unknown or duplicate '+family+' field '+flag)
+        if(key==='all_day'){action.all_day=true;continue}
+        const value=filtered[++index]
+        if(value===undefined||value.startsWith('--'))throw new Error('missing '+family+' value '+flag)
+        if(['alarms','attendees'].includes(key))action[key]=[...(action[key] as string[]??[]),value]
+        else if(['limit','offset','recurrence_interval'].includes(key)){if(!/^\d+$/.test(value))throw new Error('integer required for '+flag);action[key]=Number(value)}
+        else action[key]=value
       }
-      const positional = filtered[3]
-      if (["update","complete","uncomplete","delete"].includes(verb) && positional) action.id = positional
+      const error=desktopEventKitActionError({...action,type:'desktop_'+family});if(error)throw new Error(error)
       return action
     }
 
     case "contacts": {
-      const verb = filtered[2]
-      if (!verb) { console.error("error: contacts requires a verb (status|request|containers|default-container|groups|group|group-create|group-update|group-delete|group-add-member|group-remove-member|list|contact|me|find|create|update|delete|vcard|import-vcard|current-token|changes)"); process.exit(1) }
-      const action: Action = { type: "macos_contacts", sub: verb }
-      // String flags only. --limit and --offset are integers — see below.
-      // Without the int conversion the Swift handler's `as? Int` cast fails
-      // on strings, silently treating limit=undefined and serializing every
-      // contact (verified — caused 15s timeouts on the list verb).
-      for (const flag of ["--keys","--container","--group","--name","--email","--phone","--given","--family","--organization","--postal","--birthday","--note","--since","--contact"]) {
-        const val = flagVal(filtered, flag)
-        if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
+      const verb=filtered[2],action:Action={type:'macos_contacts',sub:verb}
+      if(!verb)throw new Error('contacts requires an exact selector')
+      const values=['keys','container','group','name','email','phone','given','family','organization','postal','birthday','note','since','contact','limit','offset']
+      let index=3
+      if(filtered[index]&&!filtered[index].startsWith('--')){
+        const key=verb==='find'?'query':verb==='import-vcard'?'path':'id'
+        action[key]=filtered[index++]
       }
-      const cLimit = flagInt(filtered, "--limit"); if (cLimit !== undefined) action.limit = cLimit
-      const cOffset = flagInt(filtered, "--offset"); if (cOffset !== undefined) action.offset = cOffset
-      const positional = filtered[3]
-      if (positional && !positional.startsWith("--")) action.id = positional
-      // Free-text query for find
-      if (verb === "find" && filtered[3] && !filtered[3].startsWith("--")) action.query = filtered[3]
-      if (verb === "import-vcard") action.path = filtered[3]
-      if (verb === "vcard") action.id = filtered[3]
+      for(;index<filtered.length;index++){
+        const flag=filtered[index],key=flag.slice(2),value=filtered[++index]
+        if(!flag.startsWith('--')||!values.includes(key)||action[key]!==undefined||value===undefined||value.startsWith('--'))throw new Error('unknown, duplicate or missing contacts field '+flag)
+        if(['limit','offset'].includes(key)){if(!/^\d+$/.test(value))throw new Error('contacts integer required for '+flag);action[key]=Number(value)}else action[key]=value
+      }
+      const error=desktopContactsActionError({...action,type:'desktop_contacts'});if(error)throw new Error(error)
       return action
     }
 
@@ -1927,124 +2471,95 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     }
 
     case "photos": {
-      const verb = filtered[2]
-      if (!verb) { console.error("error: photos requires a verb (status|request|albums|album|album-create|album-delete|album-rename|assets|asset|export|export-video|export-live|thumbnail|favorite|hide|delete|add-to-album|remove-from-album|import|import-video|current-token|changes)"); process.exit(1) }
-      const action: Action = { type: "macos_photos", sub: verb }
-      // --type collides with the action envelope's `type` dispatch field;
-      // remap to album_type. --limit/--offset must be int-typed because
-      // PhotosDomain casts them with `as? Int` (verified — string casts
-      // silently drop the value, causing accidental full-library fetches).
-      for (const flag of ["--level","--name","--media","--subtype","--since","--until","--where","--out","--asset","--file","--album","--token","--format"]) {
-        const val = flagVal(filtered, flag)
-        if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
+      const sub=filtered[2],action:Action={type:"macos_photos",sub}
+      const fields=DESKTOP_PHOTOS_FIELDS[sub];if(!fields)throw new Error("unknown Photos selector")
+      let index=3
+      if(fields.includes("id")){const id=filtered[index++];if(!id||id.startsWith("--"))throw new Error("Photos "+sub+" requires its identity");action.id=id}
+      const seen=new Set(Object.keys(action)),booleans=new Set(["favorite","hidden","burst","save","on"])
+      for(;index<filtered.length;index++){
+        const flag=filtered[index],key=flag==="--type"?"album_type":flag==="--off"?"on":flag.slice(2).replaceAll("-","_")
+        if(!flag.startsWith("--")||!fields.includes(key)||seen.has(key))throw new Error("invalid or repeated Photos field: "+flag)
+        seen.add(key)
+        if(booleans.has(key)){action[key]=flag!=="--off";continue}
+        const value=filtered[++index];if(value===undefined||value.startsWith("--"))throw new Error("missing Photos field: "+flag)
+        if(["limit","offset","size"].includes(key)){if(!/^\d+$/.test(value))throw new Error("invalid Photos integer: "+key);action[key]=Number(value)}else action[key]=value
       }
-      const pType = flagVal(filtered, "--type")
-      if (pType !== undefined) action.album_type = pType
-      const pLimit = flagInt(filtered, "--limit"); if (pLimit !== undefined) action.limit = pLimit
-      const pOffset = flagInt(filtered, "--offset"); if (pOffset !== undefined) action.offset = pOffset
-      // Same `as? Int` trap the --limit/--offset comment above describes: PhotosDomain
-      // reads --size with `as? Int`, so passing it as a string silently drops it. That
-      // made export's resize+JPEG branch unreachable from the CLI (it always fell
-      // through to the raw-original branch) and pinned thumbnail to its 256px default.
-      const pSize = flagInt(filtered, "--size"); if (pSize !== undefined) action.size = pSize
-      if (filtered.includes("--favorite")) action.favorite = true
-      if (filtered.includes("--hidden")) action.hidden = true
-      if (filtered.includes("--burst")) action.burst = true
-      if (filtered.includes("--save")) action.save = true
-      if (filtered.includes("--on")) action.on = true
-      if (filtered.includes("--off")) action.on = false
-      const positional = filtered[3]
-      if (positional && !positional.startsWith("--")) action.id = positional
+      const error=desktopPhotosActionError({...action,type:"desktop_photos"});if(error)throw new Error(error)
       return action
     }
 
     case "maps": {
-      const verb = filtered[2]
-      if (!verb) { console.error("error: maps requires a verb (search|complete|directions|eta|mapitem-open|reverse)"); process.exit(1) }
-      const action: Action = { type: "macos_maps", sub: verb }
-      if (verb === "search" || verb === "complete") action.query = filtered[3]
-      if (verb === "reverse") action.coords = filtered[3]
-      if (verb === "mapitem-open") action.id = filtered[3]
-      for (const flag of ["--region","--types","--poi-categories","--address-include","--address-exclude","--limit","--from","--to","--transport"]) {
-        const val = flagVal(filtered, flag)
-        if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
+      const sub=filtered[2],action:Action={type:"macos_maps",sub}
+      const positional:Record<string,string>={search:"query",complete:"query",reverse:"coords","mapitem-open":"id"}
+      const common=["--region","--types","--poi-categories","--address-include","--address-exclude","--limit"]
+      const flags:Record<string,string[]>={search:common,complete:common,directions:["--from","--to","--transport","--requests-alternates"],eta:["--from","--to","--transport","--requests-alternates"]}
+      let index=3
+      if(positional[sub]){const value=filtered[index++];if(!value||value.startsWith("--"))throw new Error("maps "+sub+" requires its source");action[positional[sub]]=value}
+      const seen=new Set<string>()
+      for(;index<filtered.length;index++){
+        const flag=filtered[index];if(!flags[sub]?.includes(flag)||seen.has(flag))throw new Error("invalid or repeated maps field: "+flag);seen.add(flag)
+        const key=flag.slice(2).replaceAll("-","_")
+        if(flag==="--requests-alternates"){action[key]=true;continue}
+        const value=filtered[++index];if(value===undefined||value.startsWith("--"))throw new Error("missing maps field: "+flag)
+        if(key==="limit"){if(!/^\d+$/.test(value))throw new Error("invalid integer maps limit");action[key]=Number(value)}else action[key]=value
       }
-      if (filtered.includes("--requests-alternates")) action.requests_alternates = true
+      const error=desktopMapsActionError({...action,type:"desktop_maps"});if(error)throw new Error(error)
       return action
     }
 
     case "location": {
-      const verb = filtered[2]
-      if (!verb) { console.error("error: location requires a verb (status|request|request-temporary-accuracy|current|monitor|significant|visits|heading|geocode|reverse|distance|postal-geocode)"); process.exit(1) }
-      const action: Action = { type: "macos_location", sub: verb }
-      // Sub-sub verbs (start/stop/tail) for monitor / significant / visits / heading
-      if (["monitor","significant","visits","heading"].includes(verb)) {
-        const sub2 = filtered[3]
-        if (!sub2) { console.error(`error: location ${verb} requires start|stop${verb === "monitor" ? "|tail" : ""}`); process.exit(1) }
-        action.sub = `${verb}_${sub2}`
-      }
-      if (verb === "geocode") action.address = filtered[3]
-      if (verb === "reverse") action.coords = filtered[3]
-      if (verb === "postal-geocode") action.postal = filtered[3]
-      for (const flag of ["--level","--purpose","--accuracy","--region","--locale","--from","--to"]) {
-        const val = flagVal(filtered, flag)
-        if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
-      }
+      const verb=filtered[2]
+      const grouped=["monitor","significant","visits","heading"].includes(verb)
+      const sub=grouped?verb+"_"+filtered[3]:verb
+      const flags:Record<string,string[]>={request:["--level"],"request-temporary-accuracy":["--purpose"],monitor_start:["--accuracy"],geocode:["--locale","--region"],reverse:["--locale"],distance:["--from","--to"],"postal-geocode":["--locale"]}
+      const positional:Record<string,string>={geocode:"address",reverse:"coords","postal-geocode":"postal"}
+      const action:Action={type:"macos_location",sub}
+      let index=grouped?4:3
+      if(positional[sub]){if(!filtered[index]||filtered[index].startsWith("--"))throw new Error("location "+verb+" requires its source");action[positional[sub]]=filtered[index++]}
+      const seen=new Set<string>()
+      for(;index<filtered.length;index+=2){const flag=filtered[index],value=filtered[index+1];if(!flags[sub]?.includes(flag)||seen.has(flag)||value===undefined||value.startsWith("--"))throw new Error("invalid, missing or repeated location field: "+flag);seen.add(flag);action[flag.slice(2)]=value}
+      const error=desktopLocationActionError({...action,type:"desktop_location"});if(error)throw new Error(error)
       return action
     }
 
     case "music": {
-      const verb = filtered[2]
-      // Catalog verbs (search/search-suggest/charts/recommendations and the
-      // song/album/artist/playlist by-catalog-id fetchers) require an Apple
-      // Developer MusicKit team key, which interceptor-bridge does not ship
-      // with. Apple's MusicCatalog* APIs return "Failed to request developer
-      // token" without it. Removed from the verb surface; only library,
-      // subscription state, and playback control remain.
-      if (!verb) { console.error("error: music requires a verb (status|request|subscription|library|library-search|play|pause|resume|stop|next|previous|seek|queue|repeat|shuffle|now-playing)"); process.exit(1) }
-      const action: Action = { type: "macos_music", sub: verb }
-      if (["library-search"].includes(verb)) action.term = filtered[3]
-      if (verb === "repeat" || verb === "shuffle") action.mode = filtered[3]
-      for (const flag of ["--types","--limit","--offset","--filter","--sort","--song","--playlist","--time","--kind"]) {
-        const val = flagVal(filtered, flag)
-        if (val !== undefined) action[flag.replace(/^--/, "").replace(/-/g, "_")] = val
+      const sub=filtered[2],action:Action={type:"macos_music",sub}
+      let index=3
+      const positional:Record<string,string>={"library-search":"term",search:"term","search-suggest":"term",repeat:"mode",shuffle:"mode",song:"id",album:"id",artist:"id",playlist:"id"}
+      if(positional[sub]){
+        const value=filtered[index++];if(!value||value.startsWith("--"))throw new Error("music "+sub+" requires its value")
+        action[positional[sub]]=value
       }
-      if (filtered.includes("--top")) action.top = true
-      if (filtered.includes("--ascending")) action.ascending = true
-      if (filtered.includes("--include-tracks")) action.include_tracks = true
-      if (filtered.includes("--include-system")) action.include_system = true
+      const flags:Record<string,string[]>={library:["--kind","--type","--limit","--offset","--filter","--sort","--ascending","--include-tracks"],"library-search":["--types","--limit","--top","--include-tracks"],search:["--types","--limit","--offset","--top"],charts:["--limit"],play:["--song","--album","--playlist"],seek:["--time"],"now-playing":["--include-system"]}
+      const booleanFields=new Set(["--ascending","--include-tracks","--top","--include-system"]),seen=new Set<string>()
+      for(;index<filtered.length;index++){
+        const flag=filtered[index],canonicalFlag=flag==="--type"?"--kind":flag;if(!flags[sub]?.includes(flag)||seen.has(canonicalFlag))throw new Error("invalid or repeated music field: "+flag);seen.add(canonicalFlag)
+        const key=canonicalFlag.slice(2).replaceAll("-","_")
+        if(booleanFields.has(flag)){action[key]=true;continue}
+        const value=filtered[++index];if(value===undefined||value.startsWith("--"))throw new Error("missing music field: "+flag)
+        if(key==="limit"||key==="offset"||key==="time"){
+          if(key!=="time"?!/^\d+$/.test(value):!/^\d+(?:\.\d+)?$/.test(value))throw new Error("invalid numeric music "+key)
+          action[key]=Number(value)
+        }else action[key]=value
+      }
+      const error=desktopMusicActionError({...action,type:"desktop_music"});if(error)throw new Error(error)
       return action
     }
 
     case "share": {
-      const verb = filtered[2]
-      if (!verb) { console.error("error: share requires a verb (services|airdrop|email|message|reading-list|desktop-picture|named|text|url)"); process.exit(1) }
-      const action: Action = { type: "macos_share", sub: verb }
-      if (verb === "named") {
-        // Positional form: `share named <service> [items]`. Skip when the
-        // first positional is actually a flag (`--service ...`); that case
-        // is handled by the flagVal pass below.
-        if (filtered[3] && !filtered[3].startsWith("--")) {
-          action.service = filtered[3]
-          if (filtered[4] && !filtered[4].startsWith("--")) action.items = filtered[4].split(",")
-        }
-      } else if (verb === "text" || verb === "url") {
-        action.value = filtered[3]
-      } else if (verb !== "services") {
-        const items = filtered[3]
-        if (items && !items.startsWith("--")) action.items = items.split(",")
+      const sub=filtered[2],action:Action={type:"macos_share",sub}
+      let index=3
+      if(sub==="named"&&filtered[index]&&!filtered[index].startsWith("--"))action.service=filtered[index++]
+      if(["text","url"].includes(sub)){const value=filtered[index++];if(value===undefined||value.startsWith("--"))throw new Error("share requires its value");action.value=value}
+      else if(sub!=="services"&&filtered[index]&&!filtered[index].startsWith("--"))action.items=filtered[index++].split(",")
+      const fields:Record<string,string>={"--recipient":"recipient","--to":"recipients","--recipients":"recipients","--subject":"subject","--body":"body","--service":"service","--for":"for_item","--text":"text","--url":"url","--items":"items"}
+      const seen=new Set(Object.keys(action))
+      for(;index<filtered.length;index+=2){
+        const flag=filtered[index],key=fields[flag],value=filtered[index+1]
+        if(!key||seen.has(key)||value===undefined||value.startsWith("--"))throw new Error("invalid, missing or repeated share field: "+flag)
+        seen.add(key);action[key]=["items","recipients"].includes(key)?value.split(","):value
       }
-      const recipient = flagVal(filtered, "--recipient"); if (recipient) action.recipient = recipient
-      const recipients = flagVal(filtered, "--to") || flagVal(filtered, "--recipients"); if (recipients) action.recipients = recipients.split(",")
-      const subject = flagVal(filtered, "--subject"); if (subject) action.subject = subject
-      const body = flagVal(filtered, "--body"); if (body) action.body = body
-      const service = flagVal(filtered, "--service"); if (service) action.service = service
-      const forItem = flagVal(filtered, "--for"); if (forItem) action.for_item = forItem
-      // Canned verbs (airdrop / email / message / reading-list / desktop-picture)
-      // can also accept content via --text or --url. Bridge resolveItems()
-      // unifies items / text / url / body into a single payload.
-      const text = flagVal(filtered, "--text"); if (text) action.text = text
-      const url = flagVal(filtered, "--url"); if (url) action.url = url
+      const error=desktopShareActionError({...action,type:"desktop_share"});if(error)throw new Error(error)
       return action
     }
 
@@ -2093,8 +2608,24 @@ function buildExtensionVerbAction(filtered: string[], prefix: string): Action | 
 function parseScriptRunAction(
   filtered: string[],
   type: string,
-  options: { allowStructuredIntent?: boolean } = {}
+  options: { allowStructuredIntent?: boolean; desktop?:boolean } = {}
 ): Action {
+  if(options.desktop){
+    // The portable surface is the same on every host; AppleScript stays on `interceptor macos script`.
+    if(filtered.some(flag=>['--script','--jxa','--javascript','--bundle','--intent','--target','--params'].includes(flag)))throw new Error('AppleScript, JXA and Apple Events are macOS-only: use `interceptor macos script`, or --jsc for portable JavaScript')
+    const args=[...filtered]
+    let unsafe=false
+    for(let i=3;i<args.length;i++){
+      if(args[i]==='--jsc-unsafe-native'){if(unsafe)throw new Error('repeated --jsc-unsafe-native');unsafe=true;args.splice(i--,1)}
+      else if(args[i]==='--jsc-host'&&(args[i+1]===undefined||args[i+1].startsWith('--')))args.splice(i+1,0,'all')
+    }
+    const positionals=compoundPositionals(args,new Set(['--jsc','--jsc-host','--args']))
+    if(positionals.length!==1||positionals[0]!==filtered[2])throw new Error('script accepts one operation and named flags')
+    const action:Action={type,jsc:flagVal(args,'--jsc')}
+    const host=flagVal(args,'--jsc-host');if(host!==undefined||unsafe)action.jscHost=host??'all'
+    const argv=flagVal(args,'--args');if(argv!==undefined){try{action.args=JSON.parse(argv)}catch{throw new Error('--args requires a JSON array of exact strings')}}
+    const error=desktopScriptActionError(action);if(error)throw new Error(error);return action
+  }
   const action: Action = { type }
   const script = flagVal(filtered, "--script")
   const jxa = flagVal(filtered, "--jxa")
@@ -2161,6 +2692,20 @@ function parseScriptRunAction(
 
 // ── Flag helpers ──
 
+function compoundPositionals(args: string[], flags: Set<string>, booleans: Set<string> = new Set()): string[] {
+  const seen = new Set<string>()
+  for (let i = 2; i < args.length; i++) {
+    const flag = args[i]
+    if (!flag.startsWith("--")) continue
+    if (!flags.has(flag) && !booleans.has(flag)) throw new Error(`${args[1] ?? "this command"} does not take ${flag}`)
+    if (seen.has(flag)) throw new Error(`repeated flag: ${flag}`)
+    seen.add(flag)
+    if (booleans.has(flag)) continue
+    if (args[++i] === undefined || args[i].startsWith("--")) throw new Error(`${flag} requires a value`)
+  }
+  return collectPositionals(args.filter(value => !booleans.has(value)), 2, flags)
+}
+
 function flagVal(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag)
   if (idx === -1 || !args[idx + 1]) return undefined
@@ -2175,21 +2720,41 @@ function optionalFlagVal(args: string[], flag: string, defaultValue: string): st
   return next
 }
 
-function flagInt(args: string[], flag: string): number | undefined {
+function flagInt(args: string[], flag: string, strict = false): number | undefined {
   const val = flagVal(args, flag)
+  if (strict && args.includes(flag) && (val === undefined || !/^-?\d+$/.test(val.trim()) || !Number.isSafeInteger(Number(val)))) {
+    throw new Error(`${flag} requires a safe integer`)
+  }
   if (val === undefined) return undefined
-  const n = parseInt(val)
+  const n = strict ? Number(val) : parseInt(val)
   return isNaN(n) ? undefined : n
 }
 
 // `--window <id>`: the window id (from `macos windows`) an input verb should
 // reach, for when another window of the same app covers the point.
-function withWindow(action: Action, args: string[]): void {
+function withWindow(action: Action, args: string[], neutral = false): void {
+  if (neutral) {
+    if (args.includes("--background-only")) action.backgroundOnly = true
+    if (["macos_type", "macos_click"].includes(action.type)) {
+      const title = flagVal(args, "--window-title")
+      if (args.includes("--window-title")) {
+        if (!title || title.startsWith("--")) throw new Error("--window-title requires an exact title")
+        action.windowTitle = title
+      }
+      const bounds = flagVal(args, "--window-bounds")
+      if (args.includes("--window-bounds")) {
+        const values = bounds?.split(",").map(Number)
+        if (!values || values.length !== 4 || values.some(n => !Number.isFinite(n)) || values[2] <= 0 || values[3] <= 0) throw new Error("--window-bounds requires left,top,width,height")
+        action.windowBounds = {left:values[0],top:values[1],width:values[2],height:values[3]}
+      }
+    }
+  }
   if (!args.includes("--window")) return
   const raw = flagVal(args, "--window")
   // Strict digits: a dropped or half-parsed id would send the input to the
   // frontmost window instead.
-  if (raw === undefined || !/^[1-9]\d{0,9}$/.test(raw) || Number(raw) > 0xffffffff) {
+  if (raw === undefined || !/^[1-9]\d{0,15}$/.test(raw) || !Number.isSafeInteger(Number(raw)) || (!neutral && Number(raw) > 0xffffffff)) {
+    if (neutral) throw new Error("--window requires a positive safe-integer native window id")
     console.error(`error: --window takes a numeric window id (the windowId field of 'interceptor macos windows'), got '${raw ?? ""}'`)
     process.exit(1)
   }

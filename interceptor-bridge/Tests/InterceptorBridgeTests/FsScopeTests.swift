@@ -1,7 +1,7 @@
 import XCTest
 @testable import interceptor_bridge
 
-// PRD-65 Spec 10 / PRD-64 Spec 4 regression. FsDomain.handleSearch
+// Regression: FsDomain.handleSearch
 // previously coerced any non-alias scope to the user's home directory,
 // silently dropping `--scope /tmp` and similar absolute paths. The fix
 // honors absolute paths that exist and rejects unresolvable scopes
@@ -21,7 +21,7 @@ final class FsScopeTests: XCTestCase {
         let domain = FsDomain()
         var action: [String: Any] = [
             "type": "macos_fs_search",
-            "query": "PRD-65-fs-scope-test-token-unlikely-to-match"
+            "query": "fs-scope-test-token-unlikely-to-match"
         ]
         if let scope = scope { action["scope"] = scope }
         let holder = FsResultHolder()
@@ -43,9 +43,9 @@ final class FsScopeTests: XCTestCase {
     }
 
     func testUnresolvableScopeReturnsStructuredError() {
-        // /nonexistent/path/PRD65 does not exist; bridge must reject
+        // /nonexistent/path/fs-scope does not exist; bridge must reject
         // explicitly instead of silently overriding to home.
-        let r = dispatch(scope: "/nonexistent/path/PRD65")
+        let r = dispatch(scope: "/nonexistent/path/fs-scope")
         let err = (r["error"] as? String) ?? ""
         XCTAssertTrue(err.contains("not an alias") || err.contains("not an absolute path that exists"),
                       "unresolvable scope must surface a clear error, got: \(err)")

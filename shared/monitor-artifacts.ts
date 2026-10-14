@@ -68,7 +68,10 @@ export type MonitorSessionMeta = {
   artifactVersion: number
   // Surface discriminator. Browser-side sessions write "browser" (or omit,
   // treated as "browser" by the CLI). macOS sessions write "macos".
-  surface?: "browser" | "macos"
+  surface?: "browser" | "macos" | "desktop"
+  host?: "darwin" | "win32" | "linux"
+  partial?: boolean
+  coverage?: Array<{source:string;available:boolean;provider?:string;reason?:string;limits?:string[]}>
   sessionId: string
   taskId?: string
   taskModeAtAttach?: "human-observe" | "human-teach" | "agent-record" | "mixed"

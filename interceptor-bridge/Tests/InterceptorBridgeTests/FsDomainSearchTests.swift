@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import interceptor_bridge
 
 // fs_search rich-contract regression. Pre-fix, FsDomain.handleSearch only
@@ -125,7 +126,7 @@ final class FsDomainSearchTests: XCTestCase {
             "type": "macos_fs_search",
             "query": "anything",
             "scope": "path",
-            "paths": ["/this/path/does/not/exist/PRD66"],
+            "paths": ["/this/path/does/not/exist/fixture"],
         ])
         let err = (result["error"] as? String) ?? ""
         XCTAssertTrue(err.contains("not an absolute path that exists"),
@@ -152,10 +153,39 @@ final class FsDomainSearchTests: XCTestCase {
         XCTAssertEqual(names, Set(["note.txt"]),
                        "kinds:[file] should return note.txt only, got \(names)")
     }
+
+    func testUTIKindFiltersUseExactAndParentTypesAcrossSearchRoutes() throws {
+        let root = try makeScratchTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: root.appendingPathComponent("note.png"))
+        try "{}".write(to: root.appendingPathComponent("note.json"), atomically: true, encoding: .utf8)
+        try "<p>owned</p>".write(to: root.appendingPathComponent("note.html"), atomically: true, encoding: .utf8)
+        let fixtures: [([String], Set<String>)] = [
+            (["public.png"], ["note.png"]), (["public.image"], ["note.png"]),
+            (["public.plain-text"], ["note.txt"]), (["public.text"], ["note.txt", "note.json", "note.html"]),
+            (["public.json"], ["note.json"]), (["public.html"], ["note.html"]),
+            ([" PUBLIC.PNG ", "public.json"], ["note.png", "note.json"]),
+            (["file"], ["note.txt", "note.png", "note.json", "note.html"]),
+            (["com.interceptor.unknown-type"], []),
+        ]
+        for query in ["*", "note"] {
+            for (kinds, expected) in fixtures {
+                let result = dispatch(["type": "macos_fs_search", "query": query,
+                    "scope": root.path, "kinds": kinds, "limit": 50])
+                XCTAssertEqual(result["success"] as? Bool, true)
+                let data = result["data"] as? [String: Any]
+                let matches = data?["matches"] as? [[String: Any]] ?? []
+                XCTAssertEqual(Set(matches.compactMap { $0["name"] as? String }), expected, "\(query): \(kinds)")
+            }
+        }
+    }
     // The Spotlight passes run under a deadline (--timeout-ms). A 1 ms deadline
     // against a rooted scope cannot complete the content pass; the result must
     // still arrive with partial:true instead of running into the transport
-    // timeout (199 harness timeouts on VRAM-wide searches, 2026-09-10 review).
+    // timeout (harness timeouts on volume-wide searches).
     func testDeadlineReturnsPartialInsteadOfHanging() throws {
         let root = try makeScratchTree()
         defer { try? FileManager.default.removeItem(at: root) }

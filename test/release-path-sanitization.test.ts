@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../shared/subprocess-sync"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
@@ -38,6 +38,32 @@ describe("release source-path sanitization", () => {
     )
     expect(source).toContain(
       "tar --uid 0 --gid 0 --uname root --gname wheel --exclude='*.dSYM'",
+    )
+  })
+
+  test("maps cargo, toolchain and checkout paths in the Windows and Linux native builds", () => {
+    const linux = readScript("build-desktop-linux.sh")
+    for (const to of ["/cargo", "/rust/toolchain", "/src/interceptor"]) {
+      expect(linux).toContain(`--remap-path-prefix=%s=${to}`)
+    }
+    expect(linux).toContain('"${CARGO_HOME:-$HOME/.cargo}" "$(rustc --print sysroot)" "$PWD"')
+    // Both the native Linux build and the Mac cross build carry the flags.
+    expect(linux.match(/RUSTFLAGS="\$\{RUSTFLAGS:-\} .*\$\(remap_flags\)"/g)).toHaveLength(2)
+
+    const windows = readScript("build-desktop-windows.ts")
+    expect(windows).toContain('[[env.CARGO_HOME || join(homedir(), ".cargo"), "/cargo"], [sysroot, "/rust/toolchain"], [root, "/src/interceptor"]]')
+    expect(windows).toContain("`--remap-path-prefix=${from}=${to}`")
+    expect(windows).toContain('env[rustflagsKey] = [env[rustflagsKey], "-C target-feature=+crt-static", ...remap]')
+
+    const pointer = readScript("build-hyprland-pointer.ts")
+    expect(pointer).toContain("`-ffile-prefix-map=${source}=/src/interceptor/interceptor-desktop/hyprland`")
+    expect(pointer).toContain("sources:inputs.map(i=>({...i,path:neutral(i.path)}))")
+    expect(pointer).toContain("headers:headers.map(h=>({...h,path:neutral(h.path)}))")
+  })
+
+  test("packs Linux archives with neutral ownership", () => {
+    expect(readScript("release-linux.sh")).toContain(
+      'tar --no-xattrs --owner=root:0 --group=root:0 -czf "$RELEASE_DIR/$name.tar.gz"',
     )
   })
 

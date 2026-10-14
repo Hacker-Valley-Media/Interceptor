@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../shared/subprocess-sync"
 import { resolve } from "node:path"
 
 const REPO_ROOT = resolve(import.meta.dir, "..")
@@ -214,24 +214,18 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
     const { stdout, status } = runReleaseDryRun(["--browser-only"])
     expect(status).toBe(0)
 
-    // Browser daemon staging must include the browser-surface skill.
-    expect(stdout).toContain(
-      `.agents/skills/interceptor-browser ${REPO_ROOT}`,
-    )
+    // Browser daemon staging must include the Mac copy of the browser-surface skill.
+    expect(stdout).toMatch(/gen-skills\.ts darwin .+\/staging\/daemon\/.+\/skills interceptor interceptor-browser interceptor-research/)
     // It must NOT include the macOS skill — that ships only in Full.
-    expect(stdout).not.toContain(".agents/skills/interceptor-macos")
+    expect(stdout).not.toContain("interceptor-macos")
   })
 
   test("Full pkg stages both the browser-surface and macOS skills", () => {
     const { stdout, status } = runReleaseDryRun(["--full"])
     expect(status).toBe(0)
 
-    expect(stdout).toContain(
-      `.agents/skills/interceptor-browser ${REPO_ROOT}`,
-    )
-    expect(stdout).toContain(
-      `.agents/skills/interceptor-macos ${REPO_ROOT}`,
-    )
+    expect(stdout).toMatch(/gen-skills\.ts darwin .+\/skills interceptor interceptor-browser interceptor-research/)
+    expect(stdout).toMatch(/gen-skills\.ts darwin .+\/skills interceptor-macos interceptor-ios/)
 
     // The macOS skill stages into the daemon-full subtree, not the shared
     // daemon subtree — so an "expanded" Browser pkg never accidentally ships

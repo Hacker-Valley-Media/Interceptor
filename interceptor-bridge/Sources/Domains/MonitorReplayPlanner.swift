@@ -139,7 +139,7 @@ enum MonitorReplayPlanner {
                 lines.append("# unhandled event: \(kind)")
             }
         }
-        return lines.joined(separator: "\n")
+        return lines.map { $0.hasPrefix("#") ? $0.components(separatedBy: .newlines).joined(separator: " ") : $0 }.joined(separator: "\n")
     }
 
     // MARK: - helpers
@@ -164,7 +164,10 @@ enum MonitorReplayPlanner {
     }
 
     private static func escapeArg(_ s: String) -> String {
-        return "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        return "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`") + "\""
     }
 
     private static func quote(_ s: String) -> String { escapeArg(s) }

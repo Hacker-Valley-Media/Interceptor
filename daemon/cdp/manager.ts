@@ -5,13 +5,15 @@
  * normal extension), so this manager only bootstraps them and tracks status.
  */
 
-import { spawnSync } from "node:child_process"
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { spawn, spawnSync } from "node:child_process"
+import { cpSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { basename, dirname, join } from "node:path"
 import { CdpConnection } from "./connection"
 import { discover, fetchTargets, pollForEndpoint } from "./discovery"
+import { captureSubprocess } from "../subprocess"
 import { executeCdpAction, mergeHeaderEntries, recordNetworkEvent, type ActionResult, type CdpExecContext, type CdpNetEntry, type HeaderOverrideRule } from "./translate"
-import { bootstrapLoadExtension } from "./inspector"
+import { bootstrapLoadExtension, inspectPortHolder } from "./inspector"
+import { callDesktopProvider } from "../desktop-provider"
 import {
   appContextId,
   appSlug,
@@ -34,15 +36,7 @@ function frontmostApp(): { bundleId?: string; pid?: number } {
   return { bundleId: read("bundleid").match(/"CFBundleIdentifier"="([^"]+)"/)?.[1], pid: Number.isFinite(pid) ? pid : undefined }
 }
 
-/**
- * Lifecycle action types handled by the CdpManager. Explicit set (not a prefix
- * match) so it never collides with the extension's `cdp_tree` meta action.
- */
-export const CDP_ACTION_TYPES = new Set<string>([
-  "cdp_connect", "cdp_targets", "cdp_attach", "cdp_detach", "cdp_status", "cdp_raw",
-  "cdp_discover", "cdp_launch",
-  "app_attach", "app_detach", "app_status", "app_discover", "app_launch",
-])
+export {CDP_ACTION_TYPES} from "../../shared/cdp-app"
 
 type CdpAppContext = {
   descriptor: CdpAppDescriptor
@@ -59,6 +53,8 @@ export type ElectronProcess = {
   command: string
   remoteDebuggingPort?: number
   inspectPort?: number
+  executable?: string
+  identity?: string
 }
 
 export function existingRemoteDebuggingPortFallback(proc: ElectronProcess, appName = proc.appName): ActionResult | undefined {
@@ -80,11 +76,14 @@ export function existingRemoteDebuggingPortFallback(proc: ElectronProcess, appNa
 type ManagerDeps = {
   emit: (event: string, data?: Record<string, unknown>) => void
   hasExtensionContext: (contextId: string) => boolean
+  dropExtensionContext: (contextId: string) => void
   mv2ExtensionDir: () => string
 }
 
 export class CdpManager {
   private contexts = new Map<string, CdpAppContext>()
+  private appBindings = new Map<string, ElectronProcess>()
+  private detachedApps = new Set<string>()
   private deps: ManagerDeps
 
   constructor(deps: ManagerDeps) {
@@ -98,6 +97,10 @@ export class CdpManager {
 
   hasContext(contextId: string): boolean {
     return this.contexts.has(contextId)
+  }
+
+  acceptsAppRegistration(contextId: string): boolean {
+    return !this.detachedApps.has(contextId)
   }
 
   private prepareAppExtensionDir(sourceDir: string, contextId: string): string {
@@ -120,8 +123,8 @@ export class CdpManager {
   /** Run a normal verb (eval/read/screenshot/net/click/...) against a cdp: context. */
   async executeVerb(contextId: string, action: { type: string; [k: string]: unknown }): Promise<ActionResult> {
     const ctx = this.contexts.get(contextId)
-    if (!ctx) return { success: false, error: `cdp context '${contextId}' not found (run 'interceptor macos cdp connect' or 'interceptor macos cdp status')` }
-    if (!ctx.conn.isOpen) return { success: false, error: `cdp context '${contextId}' is disconnected` }
+    if (!ctx) return { success: false, code: "target_gone", error: `cdp context '${contextId}' not found (run 'interceptor macos cdp connect' or 'interceptor macos cdp status')` }
+    if (!ctx.conn.isOpen) return { success: false, code: "target_gone", error: `cdp context '${contextId}' is disconnected` }
     return executeCdpAction(ctx.exec, action)
   }
 
@@ -179,22 +182,24 @@ export class CdpManager {
 
   /** Dispatch a cdp_ or app_ lifecycle action. */
   async handle(action: { type: string; [k: string]: unknown }): Promise<ActionResult> {
+    try {
     switch (action.type) {
-      case "cdp_connect": return this.cdpConnect(action)
-      case "cdp_targets": return this.cdpTargets(action)
-      case "cdp_attach": return this.cdpAttach(action)
-      case "cdp_detach": return this.cdpDetach(action)
-      case "cdp_status": return this.cdpStatus()
-      case "cdp_raw": return this.cdpRaw(action)
+      case "cdp_connect": return await this.cdpConnect(action)
+      case "cdp_targets": return await this.cdpTargets(action)
+      case "cdp_attach": return await this.cdpAttach(action)
+      case "cdp_detach": return await this.cdpDetach(action)
+      case "cdp_status": return await this.cdpStatus()
+      case "cdp_raw": return await this.cdpRaw(action)
       case "cdp_discover":
-      case "app_discover": return this.discoverApps()
+      case "app_discover": return await this.discoverApps()
       case "cdp_launch":
-      case "app_launch": return this.launchWithFlag(action)
-      case "app_attach": return this.appAttach(action)
-      case "app_detach": return this.appDetach(action)
-      case "app_status": return this.appStatus()
+      case "app_launch": return await this.launchWithFlag(action)
+      case "app_attach": return await this.appAttach(action)
+      case "app_detach": return await this.appDetach(action)
+      case "app_status": return await this.appStatus()
       default: return { success: false, error: `unknown cdp/app action: ${action.type}` }
     }
+    } catch (error) { return { success: false, error: `CDP target identity or endpoint inspection failed (${error instanceof Error ? error.message.slice(0, 300) : "unknown"}); no fallback signal or replay was performed` } }
   }
 
   // ── Path A: direct CDP ──────────────────────────────────────────────────────
@@ -202,7 +207,7 @@ export class CdpManager {
   private async cdpConnect(action: { [k: string]: unknown }): Promise<ActionResult> {
     const host = typeof action.host === "string" ? action.host : "127.0.0.1"
     const port = Number(action.port)
-    if (!Number.isFinite(port) || port <= 0) return { success: false, error: "macos cdp connect requires a numeric port" }
+    if (typeof action.port !== "number" || !Number.isSafeInteger(port) || port < 1 || port > 65535) return { success: false, error: "cdp connect requires an integer port 1..65535" }
     let discovered
     try {
       discovered = await discover(host, port)
@@ -331,7 +336,13 @@ export class CdpManager {
   // ── Path 0: inspector-bootstrap + extension control ─────────────────────────
 
   private async appAttach(action: { [k: string]: unknown }): Promise<ActionResult> {
-    const procs = listElectronProcesses()
+    if (action.pid !== undefined && (typeof action.pid !== "number" || !Number.isSafeInteger(action.pid) || action.pid < 1 || action.pid > 0xffffffff)) {
+      return { success: false, error: "app attach requires an integer pid1..4294967295" }
+    }
+    if (action.inspectPort !== undefined && (typeof action.inspectPort !== "number" || !Number.isSafeInteger(action.inspectPort) || action.inspectPort < 1 || action.inspectPort > 65535)) {
+      return { success: false, error: "app attach requires an integer inspector port 1..65535" }
+    }
+    const procs = await listElectronProcesses()
     // NaN passes `typeof === "number"`, so guard with Number.isFinite.
     let pid = Number.isFinite(action.pid as number) ? (action.pid as number) : undefined
     let appName = typeof action.app === "string" ? action.app : undefined
@@ -339,7 +350,9 @@ export class CdpManager {
 
     if (pid === undefined) {
       if (!appName) return { success: false, error: "macos cdp app attach requires an app name or a numeric --pid" }
-      matched = procs.find(p => p.appName.toLowerCase().includes(appName!.toLowerCase()))
+      const matches = electronAppMatches(procs, appName)
+      if (matches.length > 1) return { success: false, error: "Electron app name is ambiguous; select an exact --pid" }
+      matched = matches[0]
       if (!matched) {
         return { success: false, error: `no running Electron app matched '${appName}'. Run 'interceptor macos cdp app discover' to list candidates.` }
       }
@@ -352,16 +365,26 @@ export class CdpManager {
       if (!matched) {
         return { success: false, error: `pid ${pid} is not a confirmed Electron main process; refusing to signal it. Run 'interceptor macos cdp app discover'.` }
       }
-      if (!appName) appName = matched.appName
+      if (appName && appName.toLowerCase() !== matched.appName.toLowerCase()) return { success: false, error: "app name does not match the selected process" }
+      appName = matched.appName
     }
     if (!appName) appName = `pid-${pid}`
 
     const ctxId = appContextId(appName)
 
-    // Already loaded? If the extension is already registered, short-circuit.
-    if (this.deps.hasExtensionContext(ctxId)) {
-      return { success: true, data: { contextId: ctxId, alreadyLoaded: true } }
+    const current = (await listElectronProcesses()).find(p => p.pid === pid)
+    if (!current || current.command !== matched?.command || current.identity !== matched?.identity || current.executable !== matched?.executable) {
+      return { success: false, error: "Electron process identity changed before attach; no signal or extension load was sent" }
     }
+    const binding = this.appBindings.get(ctxId)
+    if (binding && (binding.pid !== pid || binding.command !== current.command || binding.identity !== current.identity || binding.executable !== current.executable)) {
+      return { success: false, error: `context '${ctxId}' belongs to another process identity; detach it before selecting a replacement` }
+    }
+    if (this.deps.hasExtensionContext(ctxId)) {
+      if (!binding) return { success: false, error: `context '${ctxId}' has no verified process binding; detach it before attaching` }
+      return { success: true, data: { contextId: ctxId, pid, alreadyLoaded: true } }
+    }
+    if (!binding && this.appBindings.size + this.detachedApps.size >= 128) return { success: false, error: "app context tracking exceeds 128 entries" }
 
     if (matched && action.allowSigusr1 !== true) {
       const fallback = existingRemoteDebuggingPortFallback(matched, appName)
@@ -397,8 +420,17 @@ export class CdpManager {
     }
 
     this.deps.emit("app_attach_begin", { app: appName, pid, contextId: ctxId, extPath })
+    const beforeLoad = (await listElectronProcesses()).find(p => p.pid === pid)
+    if (!beforeLoad || beforeLoad.command !== current.command || beforeLoad.identity !== current.identity || beforeLoad.executable !== current.executable) {
+      return { success: false, error: "Electron process identity changed before attach; no signal or extension load was sent" }
+    }
+    this.appBindings.set(ctxId, current)
+    this.detachedApps.delete(ctxId)
     const boot = await bootstrapLoadExtension({ pid: pid!, extPath, inspectPort })
     if (!boot.success) {
+      this.appBindings.delete(ctxId)
+      this.detachedApps.add(ctxId)
+      this.deps.dropExtensionContext(ctxId)
       this.deps.emit("app_attach_failed", { app: appName, pid, error: boot.error, fuseLikelyOff: boot.fuseLikelyOff, otrSession: boot.otrSession, portBusy: boot.portBusy })
       return {
         success: false,
@@ -411,7 +443,8 @@ export class CdpManager {
     const registered = await this.waitForExtensionContext(ctxId, 8000)
     this.deps.emit("app_attached", { app: appName, pid, contextId: ctxId, extensionId: boot.extensionId, registered })
     return {
-      success: true,
+      success: registered,
+      error: registered ? undefined : "extension loaded but daemon registration was not observed; inspect before retrying",
       data: {
         contextId: ctxId,
         extensionId: boot.extensionId,
@@ -434,21 +467,27 @@ export class CdpManager {
     const contextId = typeof action.contextId === "string" ? action.contextId
       : typeof action.app === "string" ? appContextId(action.app) : undefined
     if (!contextId) return { success: false, error: "macos cdp app detach requires a context id or app name" }
-    // The extension stays resident until the app restarts; we drop tracking and
-    // emit an event. A future uninstall would re-enter the inspector.
+    if (!contextId.startsWith("app:")) return { success: false, error: "app detach requires an app: context" }
+    if (!this.detachedApps.has(contextId) && this.detachedApps.size + this.appBindings.size >= 128 && !this.appBindings.has(contextId)) return { success: false, error: "app context tracking exceeds 128 entries" }
+    // The extension remains in the app, but routing and reconnects stay disabled
+    // until an explicit attach reestablishes its process binding.
+    this.detachedApps.add(contextId)
+    this.appBindings.delete(contextId)
+    this.deps.dropExtensionContext(contextId)
     this.deps.emit("app_detached", { contextId })
-    return { success: true, data: { contextId, note: "extension remains resident until the app restarts" } }
+    return { success: true, data: { contextId, detached: true, note: "daemon routing is disabled; extension remains resident until the app restarts" } }
   }
 
-  private appStatus(): ActionResult {
-    const procs = listElectronProcesses()
+  private async appStatus(): Promise<ActionResult> {
+    const procs = await listElectronProcesses()
     const data = procs.map(p => {
       const ctxId = appContextId(p.appName)
+      const binding = this.appBindings.get(ctxId)
       return {
         app: p.appName,
         pid: p.pid,
         contextId: ctxId,
-        attached: this.deps.hasExtensionContext(ctxId),
+        attached: this.deps.hasExtensionContext(ctxId) && binding?.pid === p.pid && binding.command === p.command && binding.identity === p.identity && binding.executable === p.executable,
         remoteDebuggingPort: p.remoteDebuggingPort,
         inspectPort: p.inspectPort,
       }
@@ -458,8 +497,8 @@ export class CdpManager {
 
   // ── Discovery / launch ──────────────────────────────────────────────────────
 
-  private discoverApps(): ActionResult {
-    const procs = listElectronProcesses()
+  private async discoverApps(): Promise<ActionResult> {
+    const procs = await listElectronProcesses()
     const data = procs.map(p => ({
       app: p.appName,
       pid: p.pid,
@@ -472,13 +511,99 @@ export class CdpManager {
     return { success: true, data }
   }
 
+  private async launchNativeWithFlag(action: { [k: string]: unknown }): Promise<ActionResult> {
+    const app = typeof action.app === "string" ? action.app : ""
+    const port = action.port === undefined ? 9222 : action.port
+    const inspectPort = action.inspectPort
+    if (!app || typeof port !== "number" || !Number.isSafeInteger(port) || port < 1 || port > 65535 ||
+        inspectPort !== undefined && (typeof inspectPort !== "number" || !Number.isSafeInteger(inspectPort) || inspectPort < 1 || inspectPort > 65535 || inspectPort === port)) {
+      return { success: false, error: "launch requires an exact app name and distinct integer ports1..65535" }
+    }
+    const matches = (await listElectronProcesses()).filter(p => p.appName.toLowerCase() === app.toLowerCase())
+    if (matches.length !== 1 || !matches[0].executable || !matches[0].identity) {
+      return { success: false, error: "launch requires exactly one confirmed Electron app in the current native login" }
+    }
+    const target = matches[0]
+    // Resolve and stat the file to relaunch before anything is quit: an AppImage's
+    // executable lives on a /tmp/.mount_* path that vanishes when the app exits.
+    const launchPath = relaunchPath(target)
+    const executableBefore = statSync(launchPath)
+    for (const value of [port, inspectPort].filter((p): p is number => typeof p === "number")) {
+      const holder = await inspectPortHolder(value)
+      if (holder && holder.pid !== target.pid) return { success: false, error: `debug port ${value} belongs to another or unresolved process; nothing was quit` }
+    }
+    const current = (await listElectronProcesses()).find(p => p.pid === target.pid)
+    if (!current || current.identity !== target.identity || current.executable !== target.executable) {
+      return { success: false, error: "Electron process identity changed before relaunch; nothing was quit" }
+    }
+    const before = await callDesktopProvider({ type: "desktop_frontmost" })
+    const stopped = await callDesktopProvider({ type: "desktop_app", subcommand: "quit", pid: target.pid })
+    if (!stopped.success) return stopped
+    const deadline = Date.now() + 10_000
+    let exited = false
+    while (Date.now() < deadline) {
+      try { process.kill(target.pid, 0) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw new Error("app shutdown could not be verified; no replacement was launched")
+        exited = true; break
+      }
+      await Bun.sleep(100)
+    }
+    if (!exited) return { success: false, error: "selected app has not exited; no replacement was launched or forced termination attempted" }
+    for (const value of [port, inspectPort].filter((p): p is number => typeof p === "number")) {
+      if (await inspectPortHolder(value)) return { success: false, error: "debug port was occupied during shutdown; the app was quit but no replacement was launched" }
+    }
+    const args = [`--remote-debugging-port=${port}`, "--remote-debugging-address=127.0.0.1"]
+    if (inspectPort !== undefined) args.push(`--inspect=127.0.0.1:${inspectPort}`)
+    const executableNow = statSync(launchPath)
+    if (["dev", "ino", "size", "mtimeMs"].some(key => executableBefore[key as keyof typeof executableBefore] !== executableNow[key as keyof typeof executableNow])) {
+      return { success: false, error: "app executable changed during shutdown; no replacement was launched" }
+    }
+    const child = spawn(launchPath, args, { cwd: dirname(launchPath), detached: true, stdio: "ignore", windowsHide: true })
+    const pid = await new Promise<number>((resolve, reject) => { child.once("error", reject); child.once("spawn", () => resolve(child.pid!)) })
+    child.unref()
+    const endpoint = await pollForEndpoint("127.0.0.1", port, { timeoutMs: 15_000, intervalMs: 250 })
+    if (!endpoint || (await inspectPortHolder(port))?.pid !== pid) {
+      return { success: false, error: "replacement launched but its exact CDP port owner could not be verified; observe before retrying", data: { pid, app, port } }
+    }
+    const replacement = (await listElectronProcesses()).find(p => p.pid === pid)
+    if (!replacement?.executable || relaunchPath(replacement) !== launchPath || !replacement.identity) {
+      return { success: false, error: "replacement native-login identity could not be verified; observe before retrying", data: { pid, app, port } }
+    }
+    let restoredFrontmost = false
+    const originalPid = before.success && before.data && typeof before.data === "object" ? (before.data as { pid?: number }).pid : undefined
+    if (originalPid && originalPid !== target.pid) {
+      for (let i = 0; i < 20; i++) {
+        const now = await callDesktopProvider({ type: "desktop_frontmost" })
+        if (now.success && now.data && typeof now.data === "object" && (now.data as { pid?: number }).pid === pid) {
+          restoredFrontmost = (await callDesktopProvider({ type: "desktop_app", subcommand: "activate", pid: originalPid })).success
+          break
+        }
+        await Bun.sleep(250)
+      }
+    }
+    this.deps.emit("app_relaunched", { app, pid, port })
+    return { success: true, data: { app, pid, port, inspectPort, restoredFrontmost, host: process.platform,
+      note: "Native login and executable were verified; the app may raise its own window during launch." } }
+  }
+
   private async launchWithFlag(action: { [k: string]: unknown }): Promise<ActionResult> {
+    if (action.confirm !== true) return { success: false, error: "CDP relaunch requires explicit confirmation" }
     if (process.platform !== "darwin") {
-      return { success: false, error: "relaunch-with-flag is implemented for macOS only; on other platforms relaunch the app manually with --remote-debugging-port" }
+      return this.launchNativeWithFlag(action)
     }
     const app = typeof action.app === "string" ? action.app : undefined
     if (!app) return { success: false, error: "launch requires an app name" }
     const port = typeof action.port === "number" ? action.port : 9222
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return { success: false, error: "debug port must be an integer 1..65535" }
+    const inspectPort = action.inspectPort
+    if (inspectPort !== undefined && (typeof inspectPort !== "number" || !Number.isSafeInteger(inspectPort) || inspectPort < 1 || inspectPort > 65535 || inspectPort === port)) {
+      return { success: false, error: "inspector port requires a distinct integer 1..65535" }
+    }
+    if (inspectPort !== undefined) {
+      const holder = await inspectPortHolder(inspectPort)
+      const target = (await listElectronProcesses()).find(p => p.appName === app && p.pid === holder?.pid)
+      if (holder && !target) return { success: false, error: "inspector port belongs to another or unresolved process; nothing was quit" }
+    }
     // Quit, then WAIT for the app to fully exit before relaunching — otherwise
     // `open --args` reactivates the still-running instance and drops the flag.
     const appForAppleScript = app.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
@@ -498,7 +623,7 @@ export class CdpManager {
     // wired while it never bound the port (seen with two Electron apps from one
     // vendor that share the default port).
     if (await pollForEndpoint("127.0.0.1", port, { timeoutMs: 300, intervalMs: 150 })) {
-      const holders = listElectronProcesses().filter(p => p.remoteDebuggingPort === port)
+      const holders = (await listElectronProcesses()).filter(p => p.remoteDebuggingPort === port)
       const other = holders.find(p => p.appName !== app)
       if (other || holders.length === 0) {
         return {
@@ -524,7 +649,9 @@ export class CdpManager {
     // apps often activate themselves on ready regardless, so the app that was frontmost before is put back
     // once the endpoint is up. lsappinfo needs no TCC grant.
     const frontmostBefore = frontmostApp().bundleId
-    const res = spawnSync("open", ["-g", "-a", app, "--args", `--remote-debugging-port=${port}`], { encoding: "utf-8" })
+    const launchArgs = ["-g", "-a", app, "--args", `--remote-debugging-port=${port}`, "--remote-debugging-address=127.0.0.1"]
+    if (inspectPort !== undefined) launchArgs.push(`--inspect=127.0.0.1:${inspectPort}`)
+    const res = spawnSync("open", launchArgs, { encoding: "utf-8" })
     if (res.status !== 0) {
       return { success: false, error: `failed to relaunch ${app}: ${res.stderr || "open failed"}` }
     }
@@ -557,7 +684,7 @@ export class CdpManager {
     return {
       success: true,
       data: {
-        app, port,
+        app, port, inspectPort,
         frontmostBefore: frontmostBefore ?? null,
         restoredFrontmost,
         note: `relaunched with --remote-debugging-port=${port}; run 'interceptor macos cdp connect ${port}' to attach`
@@ -565,15 +692,15 @@ export class CdpManager {
     }
   }
 
-  private requireCtx(action: { [k: string]: unknown }): CdpAppContext | { error: string; success: false } {
+  private requireCtx(action: { [k: string]: unknown }): CdpAppContext | { error: string; code: string; success: false } {
     const contextId = typeof action.contextId === "string" ? action.contextId : undefined
     if (!contextId) {
       const all = [...this.contexts.keys()]
       if (all.length === 1) return this.contexts.get(all[0])!
-      return { success: false, error: all.length === 0 ? "no cdp contexts connected" : `multiple cdp contexts, use --context (connected: ${all.join(", ")})` }
+      return { success: false, code: all.length === 0 ? "target_gone" : "target_ambiguous", error: all.length === 0 ? "no cdp contexts connected" : `multiple cdp contexts, use --context (connected: ${all.join(", ")})` }
     }
     const ctx = this.contexts.get(contextId)
-    if (!ctx) return { success: false, error: `cdp context '${contextId}' not found` }
+    if (!ctx) return { success: false, code: "target_gone", error: `cdp context '${contextId}' not found` }
     return ctx
   }
 
@@ -612,9 +739,82 @@ export function pidsRunningFromBundle(psOutput: string, app: string): number[] {
   return pids
 }
 
+/** A unique exact (case-insensitive) app name wins ("Notion" beside "Notion Calendar"); otherwise every substring match. */
+export function electronAppMatches(procs: ElectronProcess[], name: string): ElectronProcess[] {
+  const wanted = name.toLowerCase()
+  const exact = procs.filter(p => p.appName.toLowerCase() === wanted)
+  return exact.length === 1 ? exact : procs.filter(p => p.appName.toLowerCase().includes(wanted))
+}
+
+/**
+ * The file that relaunches an Electron process: its executable, or on Linux the AppImage
+ * that mounted it (APPIMAGE/APPDIR in the process environment), since the mount ends with the app.
+ */
+export function relaunchPath(proc: Pick<ElectronProcess, "pid" | "executable">, environ?: string): string {
+  const executable = proc.executable!
+  if (process.platform !== "linux" && environ === undefined) return executable
+  let env: string
+  try { env = environ ?? readFileSync(`/proc/${proc.pid}/environ`, "utf8") } catch { return executable }
+  const value = (key: string) => env.split("\0").find(entry => entry.startsWith(key + "="))?.slice(key.length + 1)
+  const image = value("APPIMAGE"), dir = value("APPDIR")
+  return image && dir && image.startsWith("/") && executable.startsWith(dir.replace(/\/+$/, "") + "/") ? image : executable
+}
+
 /** Enumerate running Electron MAIN processes via `ps`, parsing their command lines. */
-export function listElectronProcesses(): ElectronProcess[] {
-  if (process.platform === "win32") return []
+export async function listElectronProcesses(): Promise<ElectronProcess[]> {
+  if (process.platform === "win32" || process.platform === "linux") {
+    const approved = await callDesktopProvider({ type: "desktop_apps" })
+    if (!approved.success || !Array.isArray(approved.data)) throw new Error("authenticated native app inventory is unavailable")
+    const apps = new Map<number, string>()
+    for (const row of approved.data as { pid?: number; name?: string }[]) {
+      if (Number.isSafeInteger(row.pid) && row.pid! > 0 && typeof row.name === "string") apps.set(row.pid!, row.name)
+    }
+    if (apps.size > 1024) throw new Error("native app inventory exceeds 1024 processes")
+    let windowsRows: { ProcessId?: number; ExecutablePath?: string; CommandLine?: string; Identity?: string }[] = []
+    if (process.platform === "win32" && apps.size) {
+      const r = await captureSubprocess(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        `$ErrorActionPreference='Stop'; @(Get-CimInstance Win32_Process -Filter '${[...apps.keys()].map(pid => `ProcessId=${pid}`).join(" OR ")}' | Where-Object {$_.ExecutablePath -and $_.CommandLine} | Select-Object ProcessId,ExecutablePath,CommandLine,@{n='Identity';e={$_.CreationDate.ToUniversalTime().Ticks.ToString()}}) | ConvertTo-Json -Compress`],
+        { timeoutMs: 20_000 }) // start plus CIM can pass 5 s on a busy host
+      if (r.code !== 0) throw new Error(`Windows process metadata is unavailable (exit ${r.code}: ${r.stderr.trim().slice(0, 200)})`)
+      const value: unknown = r.stdout.trim() ? JSON.parse(r.stdout) : []
+      windowsRows = Array.isArray(value) ? value : [value as typeof windowsRows[number]]
+    }
+    const out: ElectronProcess[] = []
+    for (const [pid, name] of apps) {
+      try {
+        let executable: string, command: string, identity: string
+        if (process.platform === "win32") {
+          const row = windowsRows.find(p => p.ProcessId === pid)
+          if (!row?.ExecutablePath || !row.CommandLine || !row.Identity || /(?:^|\s)--type=/.test(row.CommandLine)) continue
+          executable = row.ExecutablePath; command = row.CommandLine; identity = row.Identity
+        } else {
+          const proc = `/proc/${pid}`
+          if (statSync(proc).uid !== process.getuid!()) continue
+          const before = readFileSync(`${proc}/stat`, "utf8")
+          executable = readlinkSync(`${proc}/exe`)
+          const argv = readFileSync(`${proc}/cmdline`, "utf8").split("\0").filter(Boolean)
+          if (argv.slice(1).some(arg => arg.startsWith("--type="))) continue
+          command = argv.map(arg => JSON.stringify(arg)).join(" ")
+          identity = before.slice(before.lastIndexOf(")") + 2).split(" ")[19]
+          const after = readFileSync(`${proc}/stat`, "utf8")
+          if (!identity || identity !== after.slice(after.lastIndexOf(")") + 2).split(" ")[19]) continue
+        }
+        const folder = dirname(executable)
+        const resources = join(folder, "resources")
+        // Packaged Electron supplies both Chromium data and its app archive or
+        // unpacked package. A Chromium-looking argument alone never earns a signal.
+        if (/^(?:chrome|chromium|msedge|brave|firefox|opera|vivaldi)(?:\.exe)?$/i.test(basename(executable)) ||
+            !existsSync(join(folder, "icudtl.dat")) || !existsSync(join(folder, "chrome_100_percent.pak")) ||
+            !["app.asar", "default_app.asar", "app/package.json"].some(file => existsSync(join(resources, file)))) continue
+        out.push({ pid, appName: name, command, executable, identity,
+          remoteDebuggingPort: parseDebugPortFromArgs(command, "remote-debugging-port"), inspectPort: parseDebugPortFromArgs(command, "inspect") })
+      } catch { /* A disappearing or inaccessible candidate is not an attach target. */ }
+    }
+    const stillApproved = await callDesktopProvider({ type: "desktop_apps" })
+    if (!stillApproved.success || !Array.isArray(stillApproved.data)) throw new Error("native login changed during process discovery")
+    const pids = new Set((stillApproved.data as { pid?: number }[]).map(row => row.pid))
+    return out.filter(row => pids.has(row.pid))
+  }
   const res = spawnSync("ps", ["-axww", "-o", "pid=,command="], { encoding: "utf-8", maxBuffer: 8 * 1024 * 1024 })
   if (res.status !== 0 || !res.stdout) return []
   const out: ElectronProcess[] = []

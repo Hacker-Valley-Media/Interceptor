@@ -12,6 +12,7 @@ import { parseMacosCommand } from "../cli/commands/macos"
 import { parseActionsCommand } from "../cli/commands/actions"
 import { normalizeArgsSplit } from "../cli/normalize"
 import { runSudo } from "../daemon/secrets"
+import { captureShell } from "./helpers/shell-capture"
 
 let exitCode: number | undefined
 let errors: string[] = []
@@ -98,6 +99,14 @@ describe("browser type --secret", () => {
 
 describe("sudo delivery leg", () => {
   test("pipes the value to stdin with -S -k and classifies a rejected password", async () => {
+    // Keep the native pipe test outside Bun's test-runner descriptor setup.
+    // The child calls the real implementation; all effect assertions stay here.
+    const call = async (value: string, cmd: string[], opts: Parameters<typeof runSudo>[2] = {}) => {
+      const script = `const {runSudo}=await import(${JSON.stringify(new URL('../daemon/secrets.ts',import.meta.url).pathname)});console.log(JSON.stringify(await runSudo(${JSON.stringify(value)},${JSON.stringify(cmd)},${JSON.stringify(opts)})));`
+      const child = captureShell(process.execPath,["-e",script],{timeout:15000})
+      expect(child.status,child.stderr).toBe(0)
+      return JSON.parse(child.stdout) as Awaited<ReturnType<typeof runSudo>>
+    }
     const dir = mkdtempSync(join(tmpdir(), "interceptor-sudo-"))
     const fake = join(dir, "sudo")
     // A stand-in for /usr/bin/sudo: records argv, reads the password from
@@ -112,23 +121,23 @@ exit 1
 `)
     chmodSync(fake, 0o755)
     try {
-      const ok = await runSudo("right", ["/bin/echo", "root-ran"], { sudoPath: fake })
-      expect(ok.success).toBe(true)
+      const ok = await call("right", ["/bin/echo", "root-ran"], { sudoPath: fake })
+      expect(ok.success, JSON.stringify(ok)).toBe(true)
       expect(ok.data?.stdout.trim()).toBe("root-ran")
       const argv = (await Bun.file(join(dir, "argv")).text()).trim()
       expect(argv).toBe("-S -k -p  -- /bin/echo root-ran")
       expect(argv).not.toContain("right")
 
-      const keep = await runSudo("right", ["/bin/echo", "x"], { sudoPath: fake, keep: true })
+      const keep = await call("right", ["/bin/echo", "x"], { sudoPath: fake, keep: true })
       expect(keep.success).toBe(true)
       expect((await Bun.file(join(dir, "argv")).text()).trim()).toBe("-S -p  -- /bin/echo x")
 
-      const bad = await runSudo("wrong", ["/bin/echo", "never"], { sudoPath: fake })
+      const bad = await call("wrong", ["/bin/echo", "never"], { sudoPath: fake })
       expect(bad.success).toBe(false)
       expect(bad.error).toContain("rejected the stored password")
       expect(bad.data?.stdout).toBe("")
 
-      const none = await runSudo("right", [], { sudoPath: fake })
+      const none = await call("right", [], { sudoPath: fake })
       expect(none.success).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })

@@ -26,7 +26,7 @@
 
 import net from "node:net"
 import tls, { type ConnectionOptions, type TLSSocket } from "node:tls"
-import { spawnSync } from "node:child_process"
+import { captureSubprocessSync as spawnSync } from "../../shared/subprocess-sync"
 import { encodeUsbmuxMessage, tryReadUsbmuxMessage, plistInteger, htons, resolveDeviceId } from "./usbmux-forward"
 
 export const LOCKDOWN_PORT = 62078

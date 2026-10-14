@@ -1,7 +1,7 @@
 export type OutboundTransport = "relay" | "ws" | "native" | "queue"
 export type ContextRoutingValidation =
   | { ok: true }
-  | { ok: false; error: string }
+  | { ok: false; error: string; code: "target_gone" | "target_ambiguous" }
 
 export function isControlMessage(msg: unknown): boolean {
   const candidate = msg as { type?: unknown }
@@ -70,7 +70,7 @@ export function validateContextRouting(input: {
     const hint = all.length > 0
       ? ` (connected: ${all.join(", ")})`
       : " (no contexts connected)"
-    return { ok: false, error: `context '${contextId}' not found${hint}` }
+    return { ok: false, code: "target_gone", error: `context '${contextId}' not found${hint}` }
   }
 
   if (connectedContexts.length === 1) return { ok: true }
@@ -79,13 +79,14 @@ export function validateContextRouting(input: {
     if (auxContexts.length > 0) {
       const label = cdpContexts.length && iosContexts.length ? "CDP/iOS"
         : iosContexts.length ? "iOS device" : "CDP app"
-      return { ok: false, error: `no extensions connected; a ${label} context exists — use --context ${auxContexts.length === 1 ? auxContexts[0] : "<id>"} (${auxContexts.join(", ")})` }
+      return { ok: false, code: "target_ambiguous", error: `no extensions connected; a ${label} context exists — use --context ${auxContexts.length === 1 ? auxContexts[0] : "<id>"} (${auxContexts.join(", ")})` }
     }
-    return { ok: false, error: "no extensions connected" }
+    return { ok: false, code: "target_gone", error: "no extensions connected" }
   }
 
   return {
     ok: false,
+    code: "target_ambiguous",
     error: `multiple extensions connected, use --context <id> (connected: ${[...connectedContexts, ...auxContexts].join(", ")})`,
   }
 }

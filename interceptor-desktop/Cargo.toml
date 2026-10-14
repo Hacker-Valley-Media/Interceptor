@@ -1,0 +1,70 @@
+[package]
+name = "interceptor-desktop"
+version = "2.1.1"
+edition = "2024"
+license = "Elastic-2.0"
+default-run = "interceptor-desktop"
+
+[[bin]]
+name = "interceptor-notification-badge"
+path = "src/bin/notification_badge.rs"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = ["overlay"]
+# The overlay HUD needs WebView2 (Windows) or WebKitGTK + gtk-layer-shell (Linux). Linux
+# release builds the provider without this feature so it starts on hosts without those
+# libraries; the same source built with it ships beside it as `interceptor-overlay`.
+overlay = ["dep:wry", "dep:tao", "dep:gtk", "dep:gtk-layer-shell"]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["float_roundtrip"] }
+base64 = "=0.22.1"
+time = { version = "=0.3.47", features = ["formatting", "parsing"] }
+unicode-segmentation = "=1.13.3"
+geographiclib-rs = { version = "=0.2.7", default-features = false }
+sha2 = "=0.11.0"
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
+pdfium-render = { version = "=0.9.4", default-features = false, features = ["pdfium_7881", "thread_safe", "image_025"] }
+image = { version = "=0.25.9", default-features = false, features = ["png", "jpeg", "webp"] }
+reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "rustls-tls", "cookies", "gzip", "brotli", "deflate"] }
+url = "=2.5.8"
+# Ed25519 for the signed update feed (update.rs); already in the tree through rustls.
+ring = "=0.17.14"
+regex = "=1.13.1"
+tract-onnx = { version = "=0.23.8", default-features = false }
+icu_normalizer = "=2.3.0"
+
+[target.'cfg(windows)'.dependencies]
+wry = { version = "=0.57.0", default-features = false, features = ["os-webview"], optional = true }
+tao = { version = "=0.37.1", optional = true }
+cpal = { version = "=0.18.2", default-features = false }
+windows = { version = "0.62.2", features = ["Win32_Media_Audio", "Win32_Media_Speech", "Media", "Media_Control", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Foundation", "Win32_System_Com", "ApplicationModel_Contacts", "ApplicationModel_Appointments", "ApplicationModel_UserDataAccounts", "ApplicationModel_UserDataTasks", "UI", "Security_Authorization_AppCapabilityAccess", "Win32_System_Mapi", "Win32_System_SystemInformation", "Win32_System_Ole", "Win32_System_Com_StructuredStorage", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ProcessSnapshotting", "Win32_System_Diagnostics_ToolHelp", "Win32_System_EventLog", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Graphics_Imaging", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_Security", "Win32_Security_WinTrust", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_System_StationsAndDesktops", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_IO", "Win32_Storage_FileSystem", "Win32_System_RemoteDesktop", "Graphics_Capture", "Graphics_DirectX_Direct3D11", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D", "Win32_Graphics_Dxgi_Common", "Win32_System_WinRT_Graphics_Capture", "Win32_System_WinRT_Direct3D11", "Security_Credentials_UI", "Devices_Enumeration", "Devices_Geolocation", "System", "Win32_System_WinRT", "Win32_Security_Credentials", "Win32_System_LibraryLoader", "Win32_UI_Controls", "Win32_Security_Cryptography", "Data_Pdf", "Storage_Streams", "Win32_System_JobObjects", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Variant", "Win32_UI_Notifications", "Win32_System_Time", "Win32_System_Registry", "Win32_Storage_Packaging_Appx", "Media_Ocr", "Media_FaceAnalysis", "Graphics_Imaging", "Globalization", "Foundation_Collections", "Win32_Globalization"] }
+
+windows-future = "=0.3.2"
+windows-core = "=0.62.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wry = { version = "=0.57.0", default-features = false, features = ["os-webview"], optional = true }
+gtk = { version = "=0.18.2", optional = true }
+gtk-layer-shell = { version = "=0.8.2", features = ["v0_6"], optional = true }
+gstreamer = { version = "=0.25.4", default-features = false, features = ["v1_24"] }
+gstreamer-app = { version = "=0.25.2", default-features = false, features = ["v1_24"] }
+gstreamer-video = { version = "=0.25.4", default-features = false, features = ["v1_24"] }
+cpal = { version = "=0.18.2", default-features = false, features = ["pulseaudio"] }
+pulseaudio = "=0.3.1"
+futures = "=0.3.34"
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "unstable"] }
+wayland-scanner = "=0.31.11"
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+
+[profile.release]
+lto = true
+strip = true

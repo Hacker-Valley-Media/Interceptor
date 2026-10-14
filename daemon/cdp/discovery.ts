@@ -28,7 +28,23 @@ async function getJson(url: string, timeoutMs: number): Promise<unknown> {
     // rejects us. Bun's fetch does not add an Origin for same-process requests.
     const res = await fetch(url, { signal: controller.signal, redirect: "error" })
     if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`)
-    return await res.json()
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error("empty CDP discovery response")
+    const chunks: Uint8Array[] = []
+    let size = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        size += value.byteLength
+        if (size > 1024 * 1024) throw new Error("CDP discovery response exceeds 1MiB")
+        chunks.push(value)
+      }
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)))
+    } finally {
+      await reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
   } finally {
     clearTimeout(timer)
   }

@@ -80,10 +80,16 @@ Full contract + verb inventory + worked examples + pitfalls: [`.agents/skills/in
 ## MCP control plane
 
 Interceptor is also an MCP server: `interceptor mcp serve` exposes every surface
-to MCP clients (Claude Code, Codex, Gemini CLI, Cursor, Claude Desktop) as six
-typed tools — `interceptor_browser/macos/ios/read/local/raw` — plus
-`interceptor://…` discovery resources. The server shells back out to this same
+to MCP clients (Claude Code, Codex, Gemini CLI, Cursor, Claude Desktop) as seven
+typed tools: `interceptor_browser/macos/desktop/ios/read/local/raw`, plus
+`interceptor://…` discovery resources. Windows and Linux get five: no `macos` or
+`ios` tool, and the `desktop` menu lists only what that OS has. The server shells back out to this same
 CLI, so it is always at parity with the verbs above.
+
+`interceptor_desktop` uses the host provider. Inspect its capabilities before
+native work on Windows/Linux; their current provider and installation limits
+are recorded in `docs/desktop-bridge.md`. Desktop destructive/exec allowance is
+separate from a `macos` allowance.
 
 - **Setup is one command:** `interceptor mcp install` auto-detects the installed
   AI runtimes and writes each one's config (no manual JSON/TOML). `mcp status`

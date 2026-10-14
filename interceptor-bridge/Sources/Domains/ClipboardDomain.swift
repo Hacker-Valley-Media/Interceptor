@@ -7,32 +7,54 @@ final class ClipboardDomain: DomainHandler, @unchecked Sendable {
     private var lastChangeCount: Int = 0
     private var monitoring = false
     private var monitorTimer: DispatchSourceTimer?
+    private let pasteboard: NSPasteboard
+    private let emitEvent: @Sendable (String, [String: Any]) -> Void
+
+    init(pasteboard: NSPasteboard = .general,
+         emitEvent: @escaping @Sendable (String, [String: Any]) -> Void = { Platform.emitEvent($0, data: $1) }) {
+        self.pasteboard = pasteboard
+        self.emitEvent = emitEvent
+    }
+
+    deinit { monitorTimer?.cancel() }
 
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
+        if let failure = DesktopClipboardValidation.validate(action) { completion(failure); return }
+        let originalType = action["type"] as? String ?? ""
+        let sub = action["sub"] as? String ?? command
+        let finish: @Sendable ([String: Any]) -> Void = {
+            completion(DesktopClipboardValidation.normalize($0, action: ["type": originalType, "sub": sub]))
+        }
         // Router sends command = "clipboard" because the action type is
         // two-segment (`macos_clipboard`). The CLI parser puts the real
         // sub-verb on action["sub"]. Mirror CompoundDomain's contract.
-        let sub = action["sub"] as? String ?? command
+        if action["type"] as? String == "desktop_clipboard", ["read", "types", "tail"].contains(sub),
+           pasteboard.name == NSPasteboard.Name.general, #available(macOS 15.4, *), pasteboard.accessBehavior != .alwaysAllow {
+            // Read only the permission metadata. A neutral automation request
+            // must not raise or bypass the user's pasteboard approval dialog.
+            finish(DesktopClipboardValidation.failure("permission_denied", "Clipboard reading is not approved for this bridge. Set Interceptor's Clipboard access in System Settings before reading."))
+            return
+        }
         switch sub {
         case "read":
-            readClipboard(action, completion: completion)
+            readClipboard(action, completion: finish)
         case "write":
-            writeClipboard(action, completion: completion)
+            writeClipboard(action, completion: finish)
         case "tail":
-            startTail(completion: completion)
+            startTail(completion: finish)
         case "history":
-            getHistory(action, completion: completion)
+            getHistory(action, completion: finish)
         case "clear":
-            clearClipboard(completion: completion)
+            clearClipboard(completion: finish)
         case "types":
-            getTypes(completion: completion)
+            getTypes(completion: finish)
         default:
-            notImplemented(sub, completion: completion)
+            notImplemented(sub, completion: finish)
         }
     }
 
     private func readClipboard(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let pb = NSPasteboard.general
+        let pb = pasteboard
         let typeFilter = action["contentType"] as? String ?? "text"
 
         switch typeFilter {
@@ -76,45 +98,54 @@ final class ClipboardDomain: DomainHandler, @unchecked Sendable {
             completion(WireFormat.error("write requires a text string"))
             return
         }
-        let pb = NSPasteboard.general
+        let pb = pasteboard
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        let written = pb.setString(text, forType: .string)
+        if action["type"] as? String == "desktop_clipboard", !written {
+            completion(DesktopClipboardValidation.failure("partial_result", "clipboard cleared but text was not set; observe before retrying"))
+            return
+        }
         completion(WireFormat.success("ok"))
     }
 
     private func startTail(completion: @escaping @Sendable ([String: Any]) -> Void) {
+        lock.lock()
         if monitoring {
+            lock.unlock()
             completion(WireFormat.success(["tailing": true, "note": "already monitoring"]))
             return
         }
         monitoring = true
-        lastChangeCount = NSPasteboard.general.changeCount
+        lastChangeCount = pasteboard.changeCount
 
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
         timer.schedule(deadline: .now(), repeating: .milliseconds(250))
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
-            let pb = NSPasteboard.general
+            let pb = self.pasteboard
             let current = pb.changeCount
+            self.lock.lock()
             if current != self.lastChangeCount {
                 self.lastChangeCount = current
+                self.lock.unlock()
                 let entry: [String: Any] = [
                     "timestamp": ISO8601DateFormatter().string(from: Date()),
                     "changeCount": current,
                     "types": pb.types?.map { $0.rawValue } ?? [],
-                    "preview": pb.string(forType: .string)?.prefix(200).description ?? ""
+                    "preview": pb.string(forType: .string)?.prefix(DESKTOP_CLIPBOARD_PREVIEW_CHARACTERS).description ?? ""
                 ]
                 self.lock.lock()
                 self.history.append(entry)
-                if self.history.count > 500 {
+                if self.history.count > DESKTOP_CLIPBOARD_HISTORY_LIMIT {
                     self.history.removeFirst(250)
                 }
                 self.lock.unlock()
-                Platform.emitEvent("clipboard_change", data: entry)
-            }
+                self.emitEvent("clipboard_change", entry)
+            } else { self.lock.unlock() }
         }
         timer.resume()
         monitorTimer = timer
+        lock.unlock()
         completion(WireFormat.success(["tailing": true]))
     }
 
@@ -127,12 +158,12 @@ final class ClipboardDomain: DomainHandler, @unchecked Sendable {
     }
 
     private func clearClipboard(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        NSPasteboard.general.clearContents()
+        pasteboard.clearContents()
         completion(WireFormat.success("ok"))
     }
 
     private func getTypes(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let types = NSPasteboard.general.types?.map { $0.rawValue } ?? []
+        let types = pasteboard.types?.map { $0.rawValue } ?? []
         completion(WireFormat.success(types))
     }
 }

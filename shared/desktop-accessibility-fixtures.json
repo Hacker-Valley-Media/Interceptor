@@ -1,0 +1,1921 @@
+{
+  "valid": [
+    {
+      "type": "desktop_keys",
+      "keys": "ctrl+a",
+      "pid": 42,
+      "backgroundOnly": false
+    },
+    {
+      "type": "desktop_scroll",
+      "direction": "down",
+      "amount": 300,
+      "ref": "e1",
+      "times": 2,
+      "intervalMs": 50
+    },
+    {
+      "type": "desktop_drag",
+      "from": "e1",
+      "to": "e2",
+      "pid": 42
+    },
+    {
+      "type": "desktop_menu",
+      "items": [
+        "File",
+        "Save"
+      ],
+      "pid": 42
+    },
+    {
+      "type": "desktop_hello"
+    },
+    {
+      "type": "desktop_capabilities",
+      "sub": "hello"
+    },
+    {
+      "type": "desktop_apps"
+    },
+    {
+      "type": "desktop_windows",
+      "pid": 42
+    },
+    {
+      "type": "desktop_frontmost"
+    },
+    {
+      "type": "desktop_focused",
+      "app": "Fixture"
+    },
+    {
+      "type": "desktop_tree",
+      "pid": 42,
+      "filter": "interactive",
+      "depth": 10,
+      "maxChars": 50000,
+      "maxNodes": 100,
+      "maxMs": 200
+    },
+    {
+      "type": "desktop_find",
+      "query": "Fixture",
+      "role": "AXTextField",
+      "pid": 42
+    },
+    {
+      "type": "desktop_inspect",
+      "ref": "e1"
+    },
+    {
+      "type": "desktop_text",
+      "ref": "e1",
+      "mode": "full"
+    },
+    {
+      "type": "desktop_value",
+      "ref": "e1",
+      "value": ""
+    },
+    {
+      "type": "desktop_type",
+      "ref": "e1",
+      "text": "a🙂",
+      "sensitive": false
+    },
+    {
+      "type": "desktop_click",
+      "ref": "e1",
+      "double": false,
+      "right": false
+    },
+    {
+      "type": "desktop_action",
+      "ref": "e1",
+      "action": "press"
+    },
+    {
+      "type": "desktop_resize",
+      "ref": "e1",
+      "width": 640,
+      "height": 480
+    },
+    {
+      "type": "desktop_move",
+      "ref": "e1",
+      "x": 0,
+      "y": -20
+    },
+    {
+      "type": "desktop_text",
+      "ref": "e1",
+      "mode": "selection"
+    },
+    {
+      "type": "desktop_text",
+      "ref": "e1",
+      "mode": "visible"
+    },
+    {
+      "type": "desktop_app",
+      "pid": 42
+    },
+    {
+      "type": "desktop_app",
+      "subcommand": "activate",
+      "pid": 42
+    },
+    {
+      "type": "desktop_app",
+      "subcommand": "hide",
+      "pid": 42
+    },
+    {
+      "type": "desktop_app",
+      "subcommand": "unhide",
+      "pid": 42
+    },
+    {
+      "type": "desktop_app",
+      "subcommand": "quit",
+      "pid": 42
+    },
+    {
+      "type": "desktop_app",
+      "subcommand": "hide",
+      "app": "Fixture"
+    },
+    {
+      "type": "desktop_app",
+      "subcommand": "launch",
+      "bundleId": "com.example.Fixture"
+    }
+  ],
+  "invalid": [
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "coords": "2,3"
+      },
+      "reason": "ambiguous input target"
+    },
+    {
+      "action": {
+        "type": "desktop_drag",
+        "from": "e1",
+        "toCoords": "2,3"
+      },
+      "reason": "mixed drag targets"
+    },
+    {
+      "action": {
+        "type": "desktop_keys",
+        "keys": ""
+      },
+      "reason": "empty keys"
+    },
+    {
+      "action": {
+        "type": "desktop_scroll",
+        "direction": "diagonal",
+        "amount": 300
+      },
+      "reason": "invalid direction"
+    },
+    {
+      "action": {
+        "type": "desktop_scroll",
+        "direction": "down",
+        "amount": 1.5
+      },
+      "reason": "fractional amount"
+    },
+    {
+      "action": {
+        "type": "desktop_scroll",
+        "direction": "down",
+        "amount": 300,
+        "times": 100,
+        "intervalMs": 100
+      },
+      "reason": "delivery budget"
+    },
+    {
+      "action": {
+        "type": "desktop_menu",
+        "items": [
+          ""
+        ]
+      },
+      "reason": "empty menu label"
+    },
+    {
+      "action": {
+        "type": "desktop_hello",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_hello",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_hello",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_hello",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_hello",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_hello",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_hello",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_capabilities",
+        "sub": "hello",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_capabilities",
+        "sub": "hello",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_capabilities",
+        "sub": "hello",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_capabilities",
+        "sub": "hello",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_capabilities",
+        "sub": "hello",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_capabilities",
+        "sub": "hello",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_capabilities",
+        "sub": "hello",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_apps",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_apps",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_apps",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_apps",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_apps",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_apps",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_apps",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_windows",
+        "pid": 42,
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_windows",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_windows",
+        "pid": 42,
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_windows",
+        "pid": 42,
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_windows",
+        "pid": 42,
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_windows",
+        "pid": 42,
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_windows",
+        "pid": 42,
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_frontmost",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_frontmost",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_frontmost",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_frontmost",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_frontmost",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_frontmost",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_frontmost",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_focused",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_focused",
+        "app": "Fixture",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_focused",
+        "app": "Fixture",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_focused",
+        "app": "Fixture",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_focused",
+        "app": "Fixture",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_focused",
+        "app": "Fixture",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_focused",
+        "app": "Fixture",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 42,
+        "filter": "interactive",
+        "depth": 10,
+        "maxChars": 50000,
+        "maxNodes": 100,
+        "maxMs": 200,
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 0,
+        "filter": "interactive",
+        "depth": 10,
+        "maxChars": 50000,
+        "maxNodes": 100,
+        "maxMs": 200
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 42,
+        "filter": "interactive",
+        "depth": 10,
+        "maxChars": 50000,
+        "maxNodes": 100,
+        "maxMs": 200,
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 42,
+        "filter": "interactive",
+        "depth": 10,
+        "maxChars": 50000,
+        "maxNodes": 100,
+        "maxMs": 200,
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 42,
+        "filter": "interactive",
+        "depth": 10,
+        "maxChars": 50000,
+        "maxNodes": 100,
+        "maxMs": 200,
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 42,
+        "filter": "interactive",
+        "depth": 10,
+        "maxChars": 50000,
+        "maxNodes": 100,
+        "maxMs": 200,
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 42,
+        "filter": "interactive",
+        "depth": 10,
+        "maxChars": 50000,
+        "maxNodes": 100,
+        "maxMs": 200,
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "Fixture",
+        "role": "AXTextField",
+        "pid": 42,
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "Fixture",
+        "role": "AXTextField",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "Fixture",
+        "role": "AXTextField",
+        "pid": 42,
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "Fixture",
+        "role": "AXTextField",
+        "pid": 42,
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "Fixture",
+        "role": "AXTextField",
+        "pid": 42,
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "Fixture",
+        "role": "AXTextField",
+        "pid": 42,
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "Fixture",
+        "role": "AXTextField",
+        "pid": 42,
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect",
+        "ref": "e1",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect",
+        "ref": "e1",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect",
+        "ref": "e1",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect",
+        "ref": "e1",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect",
+        "ref": "e1",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect",
+        "ref": "e1",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect",
+        "ref": "e1",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "full",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "full",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "full",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "full",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "full",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "full",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "full",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1",
+        "value": "",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1",
+        "value": "",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1",
+        "value": "",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1",
+        "value": "",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1",
+        "value": "",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1",
+        "value": "",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1",
+        "value": "",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a🙂",
+        "sensitive": false,
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a🙂",
+        "sensitive": false,
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a🙂",
+        "sensitive": false,
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a🙂",
+        "sensitive": false,
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a🙂",
+        "sensitive": false,
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a🙂",
+        "sensitive": false,
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a🙂",
+        "sensitive": false,
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": false,
+        "right": false,
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": false,
+        "right": false,
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": false,
+        "right": false,
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": false,
+        "right": false,
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": false,
+        "right": false,
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": false,
+        "right": false,
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": false,
+        "right": false,
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_action",
+        "ref": "e1",
+        "action": "press",
+        "app": ""
+      },
+      "reason": "malformed app"
+    },
+    {
+      "action": {
+        "type": "desktop_action",
+        "ref": "e1",
+        "action": "press",
+        "pid": 0
+      },
+      "reason": "malformed pid"
+    },
+    {
+      "action": {
+        "type": "desktop_action",
+        "ref": "e1",
+        "action": "press",
+        "window": -1
+      },
+      "reason": "malformed window"
+    },
+    {
+      "action": {
+        "type": "desktop_action",
+        "ref": "e1",
+        "action": "press",
+        "group": null
+      },
+      "reason": "malformed group"
+    },
+    {
+      "action": {
+        "type": "desktop_action",
+        "ref": "e1",
+        "action": "press",
+        "groupColor": true
+      },
+      "reason": "malformed groupColor"
+    },
+    {
+      "action": {
+        "type": "desktop_action",
+        "ref": "e1",
+        "action": "press",
+        "groupSoft": "false"
+      },
+      "reason": "malformed groupSoft"
+    },
+    {
+      "action": {
+        "type": "desktop_action",
+        "ref": "e1",
+        "action": "press",
+        "extra": true
+      },
+      "reason": "unknown field"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "pid": 1.5
+      },
+      "reason": "invalid traversal pid"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "window": 9007199254740992
+      },
+      "reason": "invalid traversal window"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "depth": true
+      },
+      "reason": "invalid traversal depth"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "maxNodes": 0
+      },
+      "reason": "invalid traversal maxNodes"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "maxMs": 1.5
+      },
+      "reason": "invalid traversal maxMs"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "maxChars": 9007199254740992
+      },
+      "reason": "invalid traversal maxChars"
+    },
+    {
+      "action": {
+        "type": "desktop_tree",
+        "filter": null
+      },
+      "reason": "invalid traversal filter"
+    },
+    {
+      "action": {
+        "type": "desktop_inspect"
+      },
+      "reason": "missing required ref"
+    },
+    {
+      "action": {
+        "type": "desktop_text"
+      },
+      "reason": "missing required ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value"
+      },
+      "reason": "missing required ref"
+    },
+    {
+      "action": {
+        "type": "desktop_action"
+      },
+      "reason": "missing required ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": ""
+      },
+      "reason": "invalid ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e"
+      },
+      "reason": "invalid ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e-1"
+      },
+      "reason": "invalid ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1x"
+      },
+      "reason": "invalid ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": "e1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "reason": "invalid ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": null
+      },
+      "reason": "invalid ref"
+    },
+    {
+      "action": {
+        "type": "desktop_value",
+        "ref": 42
+      },
+      "reason": "invalid ref"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": null
+      },
+      "reason": "invalid text"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": true
+      },
+      "reason": "invalid text"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": 0
+      },
+      "reason": "invalid text"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1",
+        "text": "a\u0000b"
+      },
+      "reason": "invalid text"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "ref": "e1"
+      },
+      "reason": "missing text"
+    },
+    {
+      "action": {
+        "type": "desktop_click"
+      },
+      "reason": "missing target"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "ref": "e1",
+        "double": 1
+      },
+      "reason": "invalid click flag"
+    },
+    {
+      "action": {
+        "type": "desktop_text",
+        "ref": "e1",
+        "mode": "unknown"
+      },
+      "reason": "invalid text mode"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": ""
+      },
+      "reason": "empty query"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "a\u0000b"
+      },
+      "reason": "query NUL"
+    },
+    {
+      "action": {
+        "type": "desktop_find",
+        "query": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "unbounded query"
+    },
+    {
+      "action": {
+        "type": "desktop_click",
+        "coords": "NaN,3"
+      },
+      "reason": "invalid coordinates"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "text": "x",
+        "windowBounds": {
+          "left": 0,
+          "top": 0,
+          "width": 0,
+          "height": 3
+        }
+      },
+      "reason": "invalid window dimensions"
+    },
+    {
+      "action": {
+        "type": "desktop_type",
+        "text": "x",
+        "windowBounds": {
+          "left": 0,
+          "top": 0,
+          "width": 3,
+          "height": 3,
+          "extra": true
+        }
+      },
+      "reason": "unknown nested field"
+    },
+    {
+      "reason": "geometry missing ref",
+      "action": {
+        "type": "desktop_resize",
+        "width": 640,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_resize",
+        "ref": null,
+        "width": 640,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_resize",
+        "ref": true,
+        "width": 640,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "1",
+        "width": 640,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_resize",
+        "ref": 1.5,
+        "width": 640,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_resize",
+        "ref": 2147483648,
+        "width": 640,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry missing width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": null,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": true,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": "1",
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 1.5,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry invalid width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 2147483648,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry missing height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640
+      }
+    },
+    {
+      "reason": "geometry invalid height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": null
+      }
+    },
+    {
+      "reason": "geometry invalid height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": true
+      }
+    },
+    {
+      "reason": "geometry invalid height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": "1"
+      }
+    },
+    {
+      "reason": "geometry invalid height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": 1.5
+      }
+    },
+    {
+      "reason": "geometry invalid height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": 2147483648
+      }
+    },
+    {
+      "reason": "geometry unknown field",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": 480,
+        "activate": true
+      }
+    },
+    {
+      "reason": "geometry missing ref",
+      "action": {
+        "type": "desktop_move",
+        "x": 0,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_move",
+        "ref": null,
+        "x": 0,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_move",
+        "ref": true,
+        "x": 0,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_move",
+        "ref": "1",
+        "x": 0,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_move",
+        "ref": 1.5,
+        "x": 0,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid ref",
+      "action": {
+        "type": "desktop_move",
+        "ref": 2147483648,
+        "x": 0,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry missing x",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid x",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": null,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid x",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": true,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid x",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": "1",
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid x",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 1.5,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry invalid x",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 2147483648,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry missing y",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0
+      }
+    },
+    {
+      "reason": "geometry invalid y",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0,
+        "y": null
+      }
+    },
+    {
+      "reason": "geometry invalid y",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0,
+        "y": true
+      }
+    },
+    {
+      "reason": "geometry invalid y",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0,
+        "y": "1"
+      }
+    },
+    {
+      "reason": "geometry invalid y",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0,
+        "y": 1.5
+      }
+    },
+    {
+      "reason": "geometry invalid y",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0,
+        "y": 2147483648
+      }
+    },
+    {
+      "reason": "geometry unknown field",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0,
+        "y": -20,
+        "activate": true
+      }
+    },
+    {
+      "reason": "geometry nonpositive width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 0,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry nonpositive width",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": -1,
+        "height": 480
+      }
+    },
+    {
+      "reason": "geometry nonpositive height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": 0
+      }
+    },
+    {
+      "reason": "geometry nonpositive height",
+      "action": {
+        "type": "desktop_resize",
+        "ref": "e1",
+        "width": 640,
+        "height": -1
+      }
+    },
+    {
+      "reason": "geometry native overflow x",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": -2147483649,
+        "y": -20
+      }
+    },
+    {
+      "reason": "geometry native overflow y",
+      "action": {
+        "type": "desktop_move",
+        "ref": "e1",
+        "x": 0,
+        "y": -2147483649
+      }
+    },
+    {
+      "action": {
+        "type": "desktop_app"
+      },
+      "reason": "missing lifecycle target"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 42,
+        "app": "Fixture"
+      },
+      "reason": "ambiguous lifecycle target"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 42,
+        "extra": true
+      },
+      "reason": "unknown lifecycle field"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 42,
+        "subcommand": "restart"
+      },
+      "reason": "unknown lifecycle subcommand"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 42,
+        "subcommand": null
+      },
+      "reason": "null lifecycle subcommand"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 42,
+        "subcommand": true
+      },
+      "reason": "non-string lifecycle subcommand"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 0
+      },
+      "reason": "zero lifecycle pid"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": -1
+      },
+      "reason": "negative lifecycle pid"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 1.5
+      },
+      "reason": "fractional lifecycle pid"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 2147483648
+      },
+      "reason": "out of range lifecycle pid"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": true
+      },
+      "reason": "boolean lifecycle pid"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": "42"
+      },
+      "reason": "string lifecycle pid"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": null
+      },
+      "reason": "null lifecycle pid"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "app": ""
+      },
+      "reason": "empty lifecycle app"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "app": "Fixture\u0000"
+      },
+      "reason": "NUL lifecycle app"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "oversize lifecycle app"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "pid": 42,
+        "bundleId": "com.example.Fixture"
+      },
+      "reason": "non-launch bundle target"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch"
+      },
+      "reason": "missing launch bundle target"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch",
+        "bundleId": "com.example.Fixture",
+        "pid": 42
+      },
+      "reason": "launch with pid target"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch",
+        "bundleId": "com.example.Fixture",
+        "app": "Fixture"
+      },
+      "reason": "launch with app target"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch",
+        "bundleId": ""
+      },
+      "reason": "empty launch bundle"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch",
+        "bundleId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "oversize launch bundle"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch",
+        "bundleId": "com.example.Fixture\u0000"
+      },
+      "reason": "NUL launch bundle"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch",
+        "bundleId": true
+      },
+      "reason": "boolean launch bundle"
+    },
+    {
+      "action": {
+        "type": "desktop_app",
+        "subcommand": "launch",
+        "bundleId": null
+      },
+      "reason": "null launch bundle"
+    }
+  ],
+  "supportedVariants": [
+    {
+      "type": "desktop_click",
+      "ref": "e1",
+      "double": true
+    },
+    {
+      "type": "desktop_click",
+      "coords": "2,3",
+      "pid": 42
+    },
+    {
+      "type": "desktop_type",
+      "text": "x",
+      "pid": 42
+    },
+    {
+      "type": "desktop_click",
+      "coords": "2,3",
+      "pid": 42,
+      "window": 3,
+      "windowTitle": "Fixture",
+      "windowBounds": {
+        "left": 0,
+        "top": 0,
+        "width": 100,
+        "height": 100
+      }
+    }
+  ]
+}

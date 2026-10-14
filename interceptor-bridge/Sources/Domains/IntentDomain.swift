@@ -1009,7 +1009,7 @@ final class IntentDomain: DomainHandler, @unchecked Sendable {
         // List → array.
         if d.descriptorType == typeAEList {
             var arr: [Any?] = []
-            for i in 1...d.numberOfItems {
+            for i in stride(from: 1, through: d.numberOfItems, by: 1) {
                 let item = d.atIndex(i)
                 arr.append(descriptorToValue(item))
             }
@@ -1018,7 +1018,7 @@ final class IntentDomain: DomainHandler, @unchecked Sendable {
         // Record → dict.
         if d.descriptorType == typeAERecord {
             var dict: [String: Any?] = [:]
-            for i in 1...d.numberOfItems {
+            for i in stride(from: 1, through: d.numberOfItems, by: 1) {
                 let key = d.keywordForDescriptor(at: i)
                 let val = d.atIndex(i)
                 let keyStr = String(format: "%c%c%c%c",
@@ -1034,7 +1034,7 @@ final class IntentDomain: DomainHandler, @unchecked Sendable {
                     }
                     i += 2
                 }
-                if !record.isEmpty { return record }
+                if !record.isEmpty || userFields.isEmpty { return record }
             }
             return dict
         }

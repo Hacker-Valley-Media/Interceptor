@@ -40,6 +40,25 @@ for arg in "$@"; do
   esac
 done
 
+if [[ "$PLATFORM" == Linux ]]; then
+  LINUX_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  LINUX_REMOVE_MODE=--uninstall-all
+  [[ "$BRIDGE_ONLY" != 1 ]] || LINUX_REMOVE_MODE=--uninstall
+  bash "$LINUX_SCRIPT_DIR/install-desktop-linux.sh" "$LINUX_REMOVE_MODE"
+  [[ "$BRIDGE_ONLY" != 1 ]] || exit 0
+  LINUX_ROOT="$(cd "$LINUX_SCRIPT_DIR/.." && pwd)"
+  # A browser-only install runs the CLI from this folder; remove the skill links adopted from it.
+  if [[ -x "$LINUX_ROOT/dist/interceptor" && -f "$LINUX_ROOT/dist/skills/interceptor-browser/SKILL.md" ]]; then
+    "$LINUX_ROOT/dist/interceptor" skills unadopt --all --owned-root "$LINUX_ROOT/dist/skills" >/dev/null
+  fi
+  LINUX_MANIFEST="$LINUX_ROOT/daemon/.generated/com.interceptor.host.json"
+  for manifest in "$HOME/.config/google-chrome/NativeMessagingHosts/com.interceptor.host.json" "$HOME/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.interceptor.host.json"; do
+    if [[ -L "$manifest" && "$(readlink "$manifest")" == "$LINUX_MANIFEST" ]]; then rm -f "$manifest"; fi
+  done
+  echo "Linux uninstall complete. Foreign processes and registrations were preserved."
+  exit 0
+fi
+
 USER_HOME="${USER_HOME_OVERRIDE:-$HOME}"
 CURRENT_USER="${SUDO_USER:-$(id -un)}"
 # Honor sudo: prefer the GUI user's home so we clean per-user files even when

@@ -27,6 +27,25 @@ final class OverlaySceneScriptView: SKView, OverlayControllable {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { interactive }
 
     private let script = ScriptScene()
+    var captureDisplayID: CGDirectDisplayID?
+    private var retired = false
+
+    var nativeStatus: [String: Any] {
+        var status = script.nativeStatus
+        status["paused"] = isPaused
+        status["retired"] = retired
+        return status
+    }
+
+    var hasPendingNativeWork: Bool { script.hasPendingNativeWork }
+
+    func shutdown() {
+        retired = true
+        script.stopFaceTracking()
+        isPaused = true
+        OverlayNativeCleanup.retire(script)
+        presentScene(nil)
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -59,6 +78,12 @@ final class OverlaySceneScriptView: SKView, OverlayControllable {
 
     @MainActor
     func perform(verb: String, args: [String: Any]) -> [String: Any] {
+        guard !retired else { return ["ok": false, "code": "target_gone", "error": "scene renderer retired"] }
+        let suppliedArgs = args
+        let args: [String: Any]
+        do { args = try DesktopOverlayValidation.controlArgs(suppliedArgs, mode: "scene-script", verb: verb) }
+        catch { return ["ok": false, "code": "invalid_request", "error": error.localizedDescription] }
+        if let error = script.admissionError(verb: verb, args: args) { return ["ok": false, "code": "resource_limit", "error": error] }
         switch verb {
         case "append-ops":
             guard let opsAny = args["ops"] else { return ["ok": false, "error": "ops array required"] }
@@ -72,11 +97,11 @@ final class OverlaySceneScriptView: SKView, OverlayControllable {
             return ["ok": true, "appended": count]
 
         case "append-script":
-            guard let s = args["json"] as? String, let data = s.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return ["ok": false, "error": "json string required"]
+            guard let obj = args["json"] as? [String: Any] else {
+                return ["ok": false, "error": "script object required"]
             }
             script.mergeScript(obj)
+            if let error = script.lastRuntimeError { return ["ok": false, "code": "provider_failed", "error": error] }
             return ["ok": true]
 
         case "say":
@@ -104,10 +129,12 @@ final class OverlaySceneScriptView: SKView, OverlayControllable {
                 })
             else { return ["ok": false, "error": "entity object required"] }
             script.spawnEntity(spec)
+            if let error = script.lastRuntimeError { return ["ok": false, "code": "provider_failed", "error": error] }
             return ["ok": true]
 
         case "despawn":
             let id = (args["id"] as? String) ?? ""
+            guard script.hasEntity(id) else { return ["ok": false, "code": "target_gone", "error": "scene entity not found"] }
             script.despawnEntity(id)
             return ["ok": true, "id": id]
 
@@ -117,12 +144,14 @@ final class OverlaySceneScriptView: SKView, OverlayControllable {
 
         case "face-track-start":
             let fps = (args["fps"] as? Double) ?? (args["fps"] as? Int).map { Double($0) } ?? 15.0
-            script.startFaceTracking(fps: fps)
+            guard let displayID = captureDisplayID else { return ["ok": false, "code": "target_gone", "error": "scene has no owned capture display"] }
+            do { try script.startFaceTracking(fps: fps, displayID: displayID) }
+            catch { return ["ok": false, "code": "resource_busy", "error": error.localizedDescription] }
             return ["ok": true, "fps": fps]
 
         case "face-track-stop":
             script.stopFaceTracking()
-            return ["ok": true]
+            return ["ok": true, "nativeCleanupPending": script.hasPendingNativeWork]
 
         default:
             return ["ok": false, "error": "unknown verb: \(verb)", "verbs": supportedVerbs]
@@ -142,6 +171,7 @@ final class ScriptScene: SKScene {
     struct Op {
         var at: TimeInterval
         var params: [String: Any]
+        var completed = false
     }
 
     private var entities: [String: EntityEntry] = [:]
@@ -153,19 +183,56 @@ final class ScriptScene: SKScene {
     private var shapes: [String: SKNode] = [:]   // persistent rects/labels keyed by id
     private var shapeCounter: Int = 0
     private var faceTrackTask: Task<Void, Never>?
+    private var faceCaptureTask: Task<FaceTrackResult?, any Error>?
+    private var faceTrackGeneration = UUID()
+    private var faceTrackOwner: UUID?
+    private var faceTrackActive = false
+    private var faceTrackDisplay: CGDirectDisplayID?
+    private var faceTrackError: String?
+    private var lastFrameTime: TimeInterval?
+    private(set) var lastRuntimeError: String?
     private let faceTrackContext = CIContext()
+
+    var hasPendingNativeWork: Bool { faceTrackTask != nil || faceCaptureTask != nil }
+    var nativeStatus: [String: Any] {
+        ["entities": entities.count, "shapes": shapes.count, "nodes": children.count,
+         "timelineOperations": timeline.count, "remainingOperations": timeline.filter { !$0.completed }.count,
+         "lastError": lastRuntimeError.map { $0 as Any } ?? NSNull(),
+         "tracking": ["active": faceTrackActive, "nativeWorkOwned": hasPendingNativeWork, "capturing": faceCaptureTask != nil,
+                      "displayID": faceTrackDisplay.map { $0 as Any } ?? NSNull(), "lastError": faceTrackError.map { $0 as Any } ?? NSNull()]]
+    }
+
+    func hasEntity(_ id: String) -> Bool { entities[id] != nil }
+
+    func admissionError(verb: String, args: [String: Any]) -> String? {
+        let json = args["json"] as? [String: Any]
+        let ops = (args["ops"] as? [[String: Any]]) ?? (json?["timeline"] as? [[String: Any]]) ?? []
+        if timeline.count + ops.count > DesktopOverlayValidation.maxOps { return "accumulated timeline exceeds 4096 operations" }
+        let rows = (json?["entities"] as? [[String: Any]]) ?? (args["entity"] as? [String: Any]).map { [$0] } ?? []
+        let newIds = Set(rows.compactMap { $0["id"] as? String }).subtracting(entities.keys)
+        if entities.count + newIds.count > DesktopOverlayValidation.maxEntities { return "scene entity limit reached" }
+        if children.count + newIds.count > DesktopOverlayValidation.maxNodes { return "scene node limit reached" }
+        return nil
+    }
 
     override func didMove(to view: SKView) {
         configured = true
     }
 
     override func update(_ currentTime: TimeInterval) {
+        lastFrameTime = currentTime
+        guard lastRuntimeError == nil else { return }
         if startTime == nil { startTime = currentTime }
         guard let t0 = startTime else { return }
         let elapsed = currentTime - t0
-        while opIndex < timeline.count && timeline[opIndex].at <= elapsed {
+        var dispatched = 0
+        while opIndex < timeline.count && timeline[opIndex].at <= elapsed && dispatched < 64 {
+            if timeline[opIndex].completed { opIndex += 1; continue }
             execute(timeline[opIndex].params)
+            timeline[opIndex].completed = true
             opIndex += 1
+            dispatched += 1
+            if lastRuntimeError != nil { break }
         }
     }
 
@@ -190,12 +257,18 @@ final class ScriptScene: SKScene {
 
     @MainActor
     func loadScript(_ json: [String: Any]) {
+        if let error = DesktopOverlayValidation.scriptError(json) { lastRuntimeError = error; return }
+        stopFaceTracking()
+        OverlayNativeCleanup.retire(self)
+        isPaused = false
         removeAllChildren()
         entities.removeAll()
         shapes.removeAll()
         timeline.removeAll()
         opIndex = 0
         startTime = nil
+        lastFrameTime = nil
+        lastRuntimeError = nil
         banner = nil
 
         // Subtle atmospheric tint (optional)
@@ -221,7 +294,10 @@ final class ScriptScene: SKScene {
 
         // Entities
         if let list = json["entities"] as? [[String: Any]] {
-            for spec in list { spawnEntity(spec) }
+            for spec in list {
+                spawnEntity(spec)
+                if lastRuntimeError != nil { return }
+            }
         }
 
         // Timeline
@@ -236,6 +312,7 @@ final class ScriptScene: SKScene {
 
     @MainActor
     func mergeScript(_ json: [String: Any]) {
+        if let error = DesktopOverlayValidation.scriptError(json) ?? admissionError(verb: "append-script", args: ["json": json]) { lastRuntimeError = error; return }
         if let b = json["banner"] as? [String: Any] {
             setBanner(
                 text: (b["text"] as? String) ?? "",
@@ -245,7 +322,10 @@ final class ScriptScene: SKScene {
             )
         }
         if let list = json["entities"] as? [[String: Any]] {
-            for spec in list { spawnEntity(spec) }
+            for spec in list {
+                spawnEntity(spec)
+                if lastRuntimeError != nil { return }
+            }
         }
         if let t = json["timeline"] as? [[String: Any]] {
             appendOps(t, relativeToNow: true)
@@ -255,13 +335,10 @@ final class ScriptScene: SKScene {
     @MainActor
     @discardableResult
     func appendOps(_ ops: [[String: Any]], relativeToNow: Bool) -> Int {
+        guard DesktopOverlayValidation.opsError(ops) == nil, timeline.count + ops.count <= DesktopOverlayValidation.maxOps else { return 0 }
         let base: TimeInterval
-        if relativeToNow, let t0 = startTime, let last = (self.view as? SKView)?.currentFrameTime {
-            base = last - t0
-        } else if relativeToNow, let t0 = startTime {
-            // Best-effort: assume now is "latest elapsed we know about"
-            base = (timeline.last?.at ?? 0) + 0.0001
-            _ = t0
+        if relativeToNow, let t0 = startTime, let last = lastFrameTime {
+            base = max(0, last - t0)
         } else {
             base = 0
         }
@@ -271,13 +348,7 @@ final class ScriptScene: SKScene {
             timeline.append(Op(at: at, params: raw))
         }
         timeline.sort { $0.at < $1.at }
-        // Rewind opIndex to skip ops strictly before our current position
-        let elapsed: TimeInterval = base
-        opIndex = 0
-        for (i, o) in timeline.enumerated() {
-            if o.at > elapsed { opIndex = i; break }
-            opIndex = i + 1
-        }
+        opIndex = timeline.firstIndex { !$0.completed } ?? timeline.count
         return ops.count
     }
 
@@ -285,6 +356,9 @@ final class ScriptScene: SKScene {
     func resetTimeline() {
         opIndex = 0
         startTime = nil
+        lastFrameTime = nil
+        lastRuntimeError = nil
+        for i in timeline.indices { timeline[i].completed = false }
     }
 
     // MARK: - Banner
@@ -328,16 +402,19 @@ final class ScriptScene: SKScene {
 
     @MainActor
     func spawnEntity(_ spec: [String: Any]) {
+        if let error = DesktopOverlayValidation.entityError(spec) { lastRuntimeError = error; return }
         guard let id = spec["id"] as? String, !id.isEmpty else { return }
+        guard entities[id] != nil || (entities.count < DesktopOverlayValidation.maxEntities && children.count < DesktopOverlayValidation.maxNodes) else { lastRuntimeError = "scene entity or node limit reached"; return }
+        lastRuntimeError = nil
         let emoji = (spec["emoji"] as? String) ?? "❓"
         let size = (spec["size"] as? Double).map { CGFloat($0) } ?? 160
         let nx = (spec["x"] as? Double) ?? 0.5
         let ny = (spec["y"] as? Double) ?? 0.3
         let facing = (spec["facing"] as? String) ?? "right"
 
-        let tex = Self.emojiTexture(emoji, pointSize: max(140, size))
+        guard let tex = Self.emojiTexture(emoji, pointSize: max(140, size)) else { lastRuntimeError = "native emoji texture creation failed"; return }
         let node = SKSpriteNode(texture: tex)
-        node.size = tex?.size() ?? CGSize(width: size, height: size)
+        node.size = tex.size()
         let scale = size / max(node.size.height, 1)
         node.setScale(scale)
         node.zPosition = 10
@@ -353,7 +430,7 @@ final class ScriptScene: SKScene {
         if facing == "left" { node.xScale = -abs(node.xScale) }
 
         // Replace if id already exists
-        if let existing = entities[id] { existing.node.removeFromParent() }
+        if let existing = entities[id] { OverlayNativeCleanup.retire(existing.node); existing.node.removeFromParent() }
         entities[id] = EntityEntry(node: node, baseY: node.position.y)
         addChild(node)
     }
@@ -361,12 +438,13 @@ final class ScriptScene: SKScene {
     @MainActor
     func despawnEntity(_ id: String) {
         guard let e = entities.removeValue(forKey: id) else { return }
+        OverlayNativeCleanup.retire(e.node)
         e.node.removeFromParent()
     }
 
     @MainActor
     func clearEntities() {
-        for (_, e) in entities { e.node.removeFromParent() }
+        for (_, e) in entities { OverlayNativeCleanup.retire(e.node); e.node.removeFromParent() }
         entities.removeAll()
     }
 
@@ -374,6 +452,13 @@ final class ScriptScene: SKScene {
 
     @MainActor
     private func execute(_ p: [String: Any]) {
+        let cost = (p["op"] as? String) == "burst" ? ((p["count"] as? NSNumber)?.intValue ?? 18) : 64
+        guard children.count + cost <= DesktopOverlayValidation.maxNodes, shapes.count < 256 || ["clear-shapes", "despawn", "wait"].contains(p["op"] as? String ?? "") else { lastRuntimeError = "scene live node or shape budget exceeded"; return }
+        if let target = p["target"] {
+            let ids = (target as? [String]) ?? (target as? String).map { [$0] } ?? []
+            if ids.contains(where: { $0 != "all" && entities[$0] == nil }) { lastRuntimeError = "scene operation target is gone"; return }
+        }
+        for key in ["from", "to"] { if let id = p[key] as? String, entities[id] == nil { lastRuntimeError = "scene projectile target is gone"; return } }
         let op = (p["op"] as? String) ?? ""
         switch op {
         case "idle-bob":
@@ -762,6 +847,10 @@ final class ScriptScene: SKScene {
 
     @MainActor
     private func spawnBurst(at point: CGPoint, emojis: [String], count: Int, spread: CGFloat, lifetime: TimeInterval) {
+        guard count >= 1, count <= 128, children.count + count <= DesktopOverlayValidation.maxNodes,
+              spread.isFinite, spread >= 0, lifetime.isFinite, lifetime > 0 else {
+            lastRuntimeError = "native burst exceeded the live scene budget"; return
+        }
         for _ in 0..<count {
             let emoji = emojis.randomElement() ?? "✨"
             let t = Self.emojiTexture(emoji, pointSize: 56)
@@ -833,6 +922,8 @@ final class ScriptScene: SKScene {
         let measured = str.size()
         let pad: CGFloat = 12
         let size = NSSize(width: ceil(measured.width) + pad * 2, height: ceil(measured.height) + pad * 2)
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+              size.width <= 2048, size.height <= 2048, size.width * size.height <= 1048576 else { return nil }
         let img = NSImage(size: size)
         img.lockFocus()
         NSColor.clear.setFill()
@@ -872,26 +963,55 @@ final class ScriptScene: SKScene {
     // MARK: - Face tracking (in-process, real-time)
 
     @MainActor
-    func startFaceTracking(fps: Double) {
-        stopFaceTracking()
-        let interval = max(1, UInt64(1_000_000_000.0 / max(fps, 1)))
-        // Outer Task inherits MainActor; inner Task.detached does the heavy lifting.
+    func startFaceTracking(fps: Double, displayID: CGDirectDisplayID) throws {
+        guard DesktopOverlayValidation.number(fps, 1, 30), displayID != 0 else { throw DesktopOverlayValidation.invalid("tracking requires a bounded rate and exact display") }
+        guard faceTrackTask == nil, faceCaptureTask == nil else { throw DesktopOverlayValidation.invalid("previous native capture still owns this scene; wait for retirement") }
+        guard CGPreflightScreenCaptureAccess() else { throw DesktopOverlayValidation.invalid("screen recording permission is required for display tracking") }
+        let generation = UUID()
+        faceTrackGeneration = generation
+        faceTrackOwner = generation
+        faceTrackDisplay = displayID
+        faceTrackError = nil
+        faceTrackActive = true
         faceTrackTask = Task { [weak self] in
-            while !Task.isCancelled {
-                let started = Date()
-                let result: FaceTrackResult? = await Task.detached(priority: .userInitiated) {
-                    guard let cg = await ScriptScene.captureDisplay() else { return nil }
-                    guard let r = ScriptScene.detectFaceAndExpression(cg: cg) else { return nil }
-                    return FaceTrackResult(bbox: r.0, expression: r.1)
-                }.value
-                if let r = result {
-                    self?.applyFaceUpdate(r.bbox, expression: r.expression)
-                } else {
-                    self?.applyFaceMiss()
+            guard let self else { return }
+            defer {
+                if self.faceTrackOwner == generation {
+                    self.faceCaptureTask = nil
+                    self.faceTrackTask = nil
+                    self.faceTrackOwner = nil
+                    self.faceTrackActive = false
                 }
-                let elapsedNs = UInt64(Date().timeIntervalSince(started) * 1_000_000_000)
-                if elapsedNs < interval {
-                    try? await Task.sleep(nanoseconds: interval - elapsedNs)
+            }
+            while !Task.isCancelled && self.faceTrackGeneration == generation {
+                let deadline = ContinuousClock.now.advanced(by: .seconds(1 / fps))
+                let capture = Task.detached(priority: .userInitiated) { () async throws -> FaceTrackResult? in
+                    try Task.checkCancellation()
+                    let cg = try await ScriptScene.captureDisplay(displayID: displayID)
+                    try Task.checkCancellation()
+                    guard let result = try ScriptScene.detectFaceAndExpression(cg: cg) else { return nil }
+                    try Task.checkCancellation()
+                    return FaceTrackResult(bbox: result.0, expression: result.1)
+                }
+                self.faceCaptureTask = capture
+                do {
+                    let result = try await capture.value
+                    self.faceCaptureTask = nil
+                    guard !Task.isCancelled, self.faceTrackGeneration == generation else { break }
+                    if let result { self.applyFaceUpdate(result.bbox, expression: result.expression) }
+                    else { self.applyFaceMiss() }
+                } catch {
+                    self.faceCaptureTask = nil
+                    if !Task.isCancelled && self.faceTrackGeneration == generation {
+                        self.faceTrackError = String(error.localizedDescription.prefix(2048))
+                        Platform.log("overlay tracking stopped after native capture failure")
+                        Platform.emitEvent("overlay_tracking_failed")
+                    }
+                    break
+                }
+                if ContinuousClock.now < deadline {
+                    do { try await ContinuousClock().sleep(until: deadline) }
+                    catch { break }
                 }
             }
         }
@@ -899,33 +1019,36 @@ final class ScriptScene: SKScene {
 
     @MainActor
     func stopFaceTracking() {
+        faceTrackGeneration = UUID()
+        faceTrackActive = false
+        faceCaptureTask?.cancel()
         faceTrackTask?.cancel()
-        faceTrackTask = nil
+        // Cancellation does not prove that ScreenCaptureKit/Vision returned.
+        // The owning task clears both handles after the native work actually ends.
     }
 
-    nonisolated private static func captureDisplay() async -> CGImage? {
-        do {
-            let content = try await SCShareableContent.current
-            guard let display = content.displays.first else { return nil }
-            let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-            let config = SCStreamConfiguration()
-            // Halve the resolution for speed — face detection still works fine.
-            config.width = display.width / 2
-            config.height = display.height / 2
-            let sb = try await SCScreenshotManager.captureSampleBuffer(contentFilter: filter, configuration: config)
-            guard let pb = CMSampleBufferGetImageBuffer(sb) else { return nil }
-            let ci = CIImage(cvPixelBuffer: pb)
-            return CIContext().createCGImage(ci, from: ci.extent)
-        } catch {
-            Platform.log("face-track capture: \(error.localizedDescription)")
-            return nil
-        }
+    nonisolated private static func captureDisplay(displayID: CGDirectDisplayID) async throws -> CGImage {
+        try Task.checkCancellation()
+        let content = try await SCShareableContent.current
+        try Task.checkCancellation()
+        guard let display = content.displays.first(where: { $0.displayID == displayID }), display.width > 0, display.height > 0 else { throw DesktopOverlayValidation.invalid("owned tracking display is gone") }
+        let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+        let config = SCStreamConfiguration()
+        let scale = min(0.5, 1920 / Double(display.width), 1080 / Double(display.height))
+        config.width = max(1, Int(Double(display.width) * scale))
+        config.height = max(1, Int(Double(display.height) * scale))
+        let sample = try await SCScreenshotManager.captureSampleBuffer(contentFilter: filter, configuration: config)
+        try Task.checkCancellation()
+        guard let pixels = CMSampleBufferGetImageBuffer(sample), CVPixelBufferGetWidth(pixels) <= 1920, CVPixelBufferGetHeight(pixels) <= 1080 else { throw DesktopOverlayValidation.invalid("tracking capture exceeded its native frame bounds") }
+        let ci = CIImage(cvPixelBuffer: pixels)
+        guard let cg = CIContext().createCGImage(ci, from: ci.extent) else { throw DesktopOverlayValidation.invalid("native tracking image conversion failed") }
+        return cg
     }
 
-    nonisolated private static func detectFaceAndExpression(cg: CGImage) -> (CGRect, String)? {
+    nonisolated private static func detectFaceAndExpression(cg: CGImage) throws -> (CGRect, String)? {
         // Step 1: face bbox via Vision (largest face wins)
         let faceReq = VNDetectFaceRectanglesRequest()
-        try? VNImageRequestHandler(cgImage: cg).perform([faceReq])
+        try VNImageRequestHandler(cgImage: cg).perform([faceReq])
         guard let face = (faceReq.results ?? []).max(by: {
             $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height
         }) else { return nil }

@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import ApplicationServices
 import AppKit
+import InputKeycodes
 
 enum InputError: Error {
     case message(String)
@@ -188,19 +189,25 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     /// through `target`. Shared with AuthDialogDomain (issue #244) so the admin
     /// prompt gets exactly the delivery `type` uses. False when no event
     /// source could be created.
-    static func postUnicodeKeystrokes(_ text: String, to target: InputTarget) -> Bool {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+    static func postUnicodeKeystrokes(_ text: String, to target: InputTarget, shouldContinue: () -> Bool = { true }) -> Bool {
+        // Text carries its own Unicode value. A held modifier from the shared
+        // session would turn background text into shortcuts instead.
+        guard let source = CGEventSource(stateID: .privateState) else { return false }
         for char in text {
+            guard shouldContinue() else { return false }
             let utf16 = Array(String(char).utf16)
-            if let downEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
-                downEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-                postEvent(downEvent, on: target)
-            }
+            // Allocate both before posting either. A partial delivery is never
+            // reported as a completed sequence when event creation fails.
+            guard let downEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                  let upEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { return false }
+            downEvent.flags = []
+            downEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+            postEvent(downEvent, on: target)
             usleep(3000)
-            if let upEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
-                upEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-                postEvent(upEvent, on: target)
-            }
+            guard shouldContinue() else { return false }
+            upEvent.flags = []
+            upEvent.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+            postEvent(upEvent, on: target)
             usleep(8000)
         }
         return true
@@ -216,6 +223,11 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         if let problem = explicitTargetProblem(action) {
             completion(WireFormat.error(problem))
             return
+        }
+        // A disabled control does nothing when pressed, but AXPress still answers success;
+        // refuse as action does, for every click kind on a ref.
+        if let ref = action["ref"] as? String, let element = refRegistry.resolve(ref), axElementDisabled(element, transport: transport) {
+            completion(WireFormat.failure("unsupported_target", "element is disabled; nothing was clicked")); return
         }
         let target = selectTarget(action)
 
@@ -258,7 +270,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             }
             switch addressed(action, pid: appPid, point: point, refKeys: ["ref"], mustResolve: true) {
             case .problem(let message):
-                completion(WireFormat.error(message))
+                completion(WireFormat.failure("unsupported_target", message, details: ["delivered": 0]))
                 return
             case .session(let session):
                 DispatchQueue.global().async {
@@ -338,8 +350,23 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         // This bypasses the keyboard entirely and never moves focus.
         // Apple documents this as the supported way to programmatically
         // populate text fields.
+        let keycodesUS = action["keycodesUS"] as? Bool ?? false
+        if action["keycodesUS"] != nil && !(action["keycodesUS"] is Bool) {
+            completion(WireFormat.error("keycodesUS requires a boolean")); return
+        }
+        let physical = keycodesUS ? Self.usPhysicalKeys(text) : nil
+        if keycodesUS && physical == nil {
+            completion(WireFormat.error("physical US-key typing accepts printable ASCII, tab and newline only; nothing was typed")); return
+        }
         if let ref = action["ref"] as? String, let element = refRegistry.resolve(ref) {
-            if isTextRole(element) {
+            // A disabled or read-only target takes no text. Typing into one used to fall back to keys that
+            // landed in whichever field had focus; refuse instead, as value does.
+            if axElementDisabled(element, transport: transport) { completion(WireFormat.failure("unsupported_target", "element is disabled; nothing was typed")); return }
+            if isTextRole(element), !isSecureField(element) {
+                let (probe, settable) = transport.isAttributeSettable(element, kAXValueAttribute as String)
+                if probe == .success && settable == false { completion(WireFormat.failure("unsupported_target", "the field is read-only; nothing was typed")); return }
+            }
+            if !keycodesUS && isTextRole(element) {
                 let err = transport.setAttributeValue(element, kAXValueAttribute as String, text as CFString)
                 if err == .success {
                     completion(WireFormat.success("ax-set value (\(text.count) chars)"))
@@ -352,8 +379,12 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             }
             // Focus the element first so synthesized keys land in it,
             // even though the app stays in the background.
+            _ = transport.setAttributeValue(element, kAXFocusedAttribute as String, kCFBooleanTrue)
             _ = transport.performAction(element, kAXPressAction as String)
             usleep(100_000)
+            // Keys go to the app's focused element. When that is provably somewhere else, typing would edit
+            // another field, so refuse; nothing was typed.
+            if let elsewhere = focusElsewhere(element) { completion(WireFormat.failure("unsupported_target", "the ref could not take keyboard focus (\(elsewhere) has it), so the keys would go to another element; nothing was typed")); return }
         }
 
         // Pick a delivery target for synthesized key events: prefer
@@ -363,7 +394,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         // window the app last had key.
         let (session, refusal) = keyboardSession(action, pid: targetPid(action))
         if let refusal = refusal {
-            completion(WireFormat.error(refusal))
+            completion(WireFormat.failure("unsupported_target", refusal, details: ["delivered": 0]))
             return
         }
         let postTarget: InputTarget
@@ -374,7 +405,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         }
 
         DispatchQueue.global().async {
-            guard let posted = BackgroundInputSession.gesture(session, { Self.postUnicodeKeystrokes(text, to: postTarget) }) else {
+            guard let posted = BackgroundInputSession.gesture(session, {
+                if let physical { return Self.postPhysicalKeys(physical, to: postTarget) }
+                return Self.postUnicodeKeystrokes(text, to: postTarget)
+            }) else {
                 completion(WireFormat.error(Self.deliveryFailed))
                 return
             }
@@ -390,6 +424,29 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             }
             completion(WireFormat.success("typed \(text.count) characters → \(routing)"))
         }
+    }
+
+    private func isSecureField(_ element: AXUIElement) -> Bool {
+        let (result, subrole) = transport.copyAttributeValue(element, kAXSubroleAttribute as String)
+        return result == .success && AXValueCodec.displayString(subrole) == "AXSecureTextField"
+    }
+
+    /// The role and title of the app's focused element when it is neither the target nor inside or around
+    /// it; nil when focus is on the target or cannot be read.
+    private func focusElsewhere(_ element: AXUIElement) -> String? {
+        guard case (.success, let pid?) = transport.pid(element) else { return nil }
+        let (result, value) = transport.copyAttributeValue(transport.createApplication(pid: pid), kAXFocusedUIElementAttribute as String)
+        guard result == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        let focused = value as! AXUIElement
+        func chain(_ start: AXUIElement) -> [AXUIElement] {
+            var out = [start], current = start
+            for _ in 0..<32 { let (r, parent) = transport.copyAttributeValue(current, kAXParentAttribute as String); guard r == .success, let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }; current = parent as! AXUIElement; out.append(current) }
+            return out
+        }
+        if chain(focused).contains(where: { CFEqual($0, element) }) || chain(element).contains(where: { CFEqual($0, focused) }) { return nil }
+        let role = AXValueCodec.displayString(transport.copyAttributeValue(focused, kAXRoleAttribute as String).1) ?? "another element"
+        let title = AXValueCodec.displayString(transport.copyAttributeValue(focused, kAXTitleAttribute as String).1) ?? AXValueCodec.displayString(transport.copyAttributeValue(focused, kAXDescriptionAttribute as String).1) ?? ""
+        return title.isEmpty ? role : "\(role) '\(title)'"
     }
 
     // Roles that we accept programmatic value-set on. These are the
@@ -410,19 +467,48 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
 
     // MARK: - Keys
 
-    private static let keyMap: [String: CGKeyCode] = [
-        "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
-        "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
-        "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25, "7": 26,
-        "-": 27, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32, "[": 33, "i": 34,
-        "p": 35, "l": 37, "j": 38, "'": 39, "k": 40, ";": 41, "\\": 42, ",": 43,
-        "/": 44, "n": 45, "m": 46, ".": 47, "`": 50, " ": 49,
-        "enter": 36, "return": 36, "tab": 48, "space": 49, "backspace": 51, "escape": 53, "delete": 117,
-        "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
-        "up": 126, "down": 125, "left": 123, "right": 124, "arrowup": 126, "arrowdown": 125, "arrowleft": 123, "arrowright": 124,
-        "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
-        "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
-    ]
+    // VM keyboard devices consume keycodes rather than attached Unicode.
+    // Validate the entire text before delivery and reuse the keys map.
+    static func usPhysicalKeys(_ text: String) -> [(CGKeyCode, Bool)]? {
+        let shifted = Array("~!@#$%^&*()_+{}|:\"<>?")
+        let bases = Array("`1234567890-=[]\\;',./")
+        var result: [(CGKeyCode, Bool)] = []
+        for character in text {
+            let scalar = character.unicodeScalars
+            guard scalar.count == 1, let value = scalar.first?.value else { return nil }
+            let base: String, shift: Bool
+            if value >= 65 && value <= 90 { base = String(character).lowercased(); shift = true }
+            else if let index = shifted.firstIndex(of: character) { base = String(bases[index]); shift = true }
+            else if character == "\n" || character == "\r" { base = "return"; shift = false }
+            else if character == "\t" { base = "tab"; shift = false }
+            else { guard value >= 32 && value <= 126 else { return nil }; base = String(character); shift = false }
+            guard let code = keyMap[base] else { return nil }
+            result.append((code, shift))
+        }
+        return result
+    }
+
+    private static func postPhysicalKeys(_ keys: [(CGKeyCode, Bool)], to target: InputTarget) -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        for (code, shifted) in keys {
+            if shifted {
+                guard let down = CGEvent(keyboardEventSource: source, virtualKey: 56, keyDown: true) else { return false }
+                down.flags = .maskShift; postEvent(down, on: target); usleep(3000)
+            }
+            for pressed in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: pressed) else { return false }
+                event.flags = shifted ? .maskShift : []; postEvent(event, on: target); usleep(5000)
+            }
+            if shifted {
+                guard let up = CGEvent(keyboardEventSource: source, virtualKey: 56, keyDown: false) else { return false }
+                up.flags = []; postEvent(up, on: target)
+            }
+            usleep(8000)
+        }
+        return true
+    }
+
+    private static let keyMap = InputKeycodes.mac
 
     private func handleKeys(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         guard let keys = action["keys"] as? String else {
@@ -435,7 +521,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         let modifiers = parts.dropLast().map { $0.lowercased() }
 
         guard let keyCode = Self.keyMap[key] else {
-            completion(WireFormat.error("unknown key: \(key)"))
+            completion(WireFormat.failure("invalid_request", keys.hasSuffix("+") ? "keys \(keys) has no key after the last +; name one, for example \(keys)A" : "unknown key: \(key)", details: ["dispatched": false]))
             return
         }
 
@@ -445,8 +531,11 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             case "shift": flags.insert(.maskShift)
             case "control", "ctrl": flags.insert(.maskControl)
             case "alt", "option": flags.insert(.maskAlternate)
-            case "meta", "command", "cmd": flags.insert(.maskCommand)
-            default: break
+            case "meta", "command", "cmd", "win", "super": flags.insert(.maskCommand)
+            // Same names as Windows and Linux; an unknown modifier is refused, not dropped.
+            default:
+                completion(WireFormat.failure("invalid_request", "unknown modifier: \(mod)", details: ["dispatched": false]))
+                return
             }
         }
 
@@ -463,7 +552,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         // explicit pid/app, else cghidEventTap.
         let (session, refusal) = keyboardSession(action, pid: targetPid(action))
         if let refusal = refusal {
-            completion(WireFormat.error(refusal))
+            completion(WireFormat.failure("unsupported_target", refusal, details: ["delivered": 0]))
             return
         }
         let postTarget: InputTarget
@@ -478,7 +567,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
             // Press modifiers
             let modKeyCodes: [(String, CGKeyCode)] = [
                 ("shift", 56), ("control", 59), ("ctrl", 59), ("alt", 58), ("option", 58),
-                ("meta", 55), ("command", 55), ("cmd", 55)
+                ("meta", 55), ("command", 55), ("cmd", 55), ("win", 55), ("super", 55)
             ]
             for mod in modifiers {
                 if let (_, code) = modKeyCodes.first(where: { $0.0 == mod }) {
@@ -559,10 +648,10 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         // scroll carries the real cursor position and a background app
         // drops it.
         if pidFromAction != nil || windowRequest(action).isExplicit {
-            let refPoint = (action["ref"] as? String).flatMap { refRegistry.resolve($0) }.flatMap { centerPoint(of: $0) }
+            let refPoint = (action["ref"] as? String).flatMap { refRegistry.resolve($0) }.flatMap { visibleCenter(of: $0) }
             switch addressed(action, pid: pidFromAction, point: refPoint, refKeys: ["ref"], mustResolve: false) {
             case .problem(let message):
-                completion(WireFormat.error(message))
+                completion(WireFormat.failure("unsupported_target", message, details: ["delivered": 0]))
                 return
             case .session(let session):
                 let at = refPoint ?? CGPoint(x: session.window.bounds.midX, y: session.window.bounds.midY)
@@ -651,9 +740,14 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         if pid != nil || windowRequest(action).isExplicit {
             switch addressed(action, pid: pid, point: fromPoint, refKeys: ["from"], mustResolve: true) {
             case .problem(let message):
-                completion(WireFormat.error(message))
+                completion(WireFormat.failure("unsupported_target", message, details: ["delivered": 0]))
                 return
             case .session(let session):
+                // The whole gesture stays in the addressed window, as click requires of its point.
+                guard session.window.bounds.contains(toPoint) else {
+                    completion(WireFormat.failure("unsupported_target", "(\(Int(toPoint.x)), \(Int(toPoint.y))) is outside window \(session.window.id); 'interceptor macos windows' lists window frames (nothing was delivered)", details: ["delivered": 0]))
+                    return
+                }
                 DispatchQueue.global().async {
                     guard session.drag(from: fromPoint, to: toPoint) else {
                         completion(WireFormat.error(Self.deliveryFailed))
@@ -742,6 +836,28 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         }
 
         return .failure(.message("click requires ref or coords"))
+    }
+
+    /// A document view inside a scroll area reports its whole frame (a 3000 px text view), so a scroll
+    /// aims at the part the nearest enclosing scroll area shows.
+    private func visibleCenter(of element: AXUIElement) -> CGPoint? {
+        func frame(_ e: AXUIElement) -> CGRect? {
+            let (p, pos) = transport.copyAttributeValue(e, kAXPositionAttribute as String), (s, size) = transport.copyAttributeValue(e, kAXSizeAttribute as String)
+            guard p == .success, s == .success, let origin = AXValueCodec.point(from: pos), let extent = AXValueCodec.size(from: size) else { return nil }
+            return CGRect(origin: origin, size: extent)
+        }
+        guard var rect = frame(element) else { return nil }
+        var current = element
+        for _ in 0..<8 {
+            let (result, parentRef) = transport.copyAttributeValue(current, kAXParentAttribute as String)
+            guard result == .success, let parent = AXValueCodec.asElement(parentRef) else { break }
+            if transport.copyAttributeValue(parent, kAXRoleAttribute as String).1 as? String == kAXScrollAreaRole as String {
+                if let visible = frame(parent), !rect.intersection(visible).isEmpty { rect = rect.intersection(visible) }
+                break
+            }
+            current = parent
+        }
+        return CGPoint(x: rect.midX, y: rect.midY)
     }
 
     private func centerPoint(of element: AXUIElement) -> CGPoint? {

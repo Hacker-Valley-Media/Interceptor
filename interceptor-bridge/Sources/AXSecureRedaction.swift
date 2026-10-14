@@ -1,5 +1,6 @@
 import Foundation
 import ApplicationServices
+import NativeAX
 
 // one central secure-field boundary.
 //
@@ -8,11 +9,11 @@ import ApplicationServices
 // `--include-sensitive` can never override this. The placeholder is a fixed
 // constant that shares no bytes with any real field content.
 enum AXSecureRedaction {
-    static let placeholder = "\u{2022}\u{2022}\u{2022}"   // "•••" — never real content
+    static let placeholder = AXSecureClassification.placeholder
 
     /// A role/subrole pair identifies a secure text field.
     static func isSecure(role: String?, subrole: String?) -> Bool {
-        role == "AXSecureTextField" || subrole == "AXSecureTextField"
+        AXSecureClassification.isSecure(role: role, subrole: subrole)
     }
 
     /// Read role + subrole through the transport and classify. Used by domains

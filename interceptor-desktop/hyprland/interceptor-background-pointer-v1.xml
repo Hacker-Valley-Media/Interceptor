@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="interceptor_background_pointer_v1">
+  <copyright>Interceptor contributors. Elastic License 2.0.</copyright>
+  <interface name="interceptor_background_pointer_v1" version="4">
+    <description summary="authenticated background pointer delivery">
+      Compositor integration for qualified native Wayland targets. Caller and
+      target connection peers must share the compositor's retained user/login
+      identity. A lost or ambiguous login revokes the loaded integration.
+      Commands contain bounded numeric target/point fields and a named input
+      operation. They cannot contain arbitrary code or launch a process.
+      A result describes delivery. Application effects require observation.
+      Version 2 adds menu-guard. Version 1 clients retain pointer delivery.
+      The menu-guard operation borrows a target-scoped popup guard for at most
+      750 milliseconds, until its resource is destroyed or login is revoked.
+      Its zero-delivery acknowledgement does not invoke any menu or input.
+      Version 3 adds typed app lifecycle requests. The process fd pins the
+      selected kernel process. Every target connection must authenticate
+      against that handle and the retained graphical login before mutation.
+      Hide, unhide and quit preserve focus. Activate explicitly changes it.
+      Version 4 adds launch-guard followed by a 64-character lowercase hex
+      token. It creates no process and delivers no input. For ten seconds,
+      matching native windows from the same authenticated login open floating
+      to preserve existing layout, and suppress initial focus and application
+      activation. Floating placement remains after the scope ends. At most 64 windows belong to
+      one connection-owned guard. Expiry, disconnect and unload restore only
+      the saved window flags. Earlier versions refuse before process launch.
+    </description>
+    <enum name="error">
+      <entry name="invalid_request" value="1"/>
+      <entry name="permission_denied" value="2"/>
+      <entry name="resource_limit" value="3"/>
+    </enum>
+    <request name="destroy" type="destructor"/>
+    <request name="execute">
+      <arg name="id" type="uint" summary="nonzero request id, never reused on this object"/>
+      <arg name="command" type="string" summary="bounded named operation and numeric fields"/>
+    </request>
+    <event name="result">
+      <arg name="id" type="uint"/>
+      <arg name="success" type="uint" summary="one when delivery or a zero-delivery menu guard completed"/>
+      <arg name="code" type="string" summary="structured refusal or unknown-outcome code"/>
+      <arg name="delivered" type="uint"/>
+      <arg name="focus_unchanged" type="uint"/>
+      <arg name="cursor_unchanged" type="uint"/>
+    </event>
+    <enum name="app_operation" since="3">
+      <entry name="activate" value="1"/>
+      <entry name="hide" value="2"/>
+      <entry name="unhide" value="3"/>
+      <entry name="quit" value="4"/>
+    </enum>
+    <request name="app" since="3">
+      <arg name="id" type="uint" summary="nonzero increasing request id"/>
+      <arg name="operation" type="uint" enum="app_operation"/>
+      <arg name="pid" type="uint"/>
+      <arg name="address_hi" type="uint"/>
+      <arg name="address_lo" type="uint"/>
+      <arg name="process_fd" type="fd" summary="retained live Linux PIDfd for the selected process"/>
+    </request>
+  </interface>
+</protocol>

@@ -10,6 +10,19 @@ final class OverlaySceneTitansView: SKView, OverlayControllable {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { interactive }
 
     private let titanScene = TitansScene()
+    private var retired = false
+
+    var nativeStatus: [String: Any] {
+        ["paused": isPaused, "retired": retired, "nodes": titanScene.children.count]
+    }
+    var hasPendingNativeWork: Bool { false }
+
+    func shutdown() {
+        retired = true
+        isPaused = true
+        OverlayNativeCleanup.retire(titanScene)
+        presentScene(nil)
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -37,7 +50,13 @@ final class OverlaySceneTitansView: SKView, OverlayControllable {
     }
 
     func perform(verb: String, args: [String: Any]) -> [String: Any] {
-        return titanScene.perform(verb: verb, args: args)
+        guard !retired else { return ["ok": false, "code": "target_gone", "error": "scene renderer retired"] }
+        let result = titanScene.perform(verb: verb, args: args)
+        if result["ok"] as? Bool == true {
+            if verb == "pause" { isPaused = true }
+            if verb == "resume" { isPaused = false }
+        }
+        return result
     }
 }
 
@@ -145,7 +164,7 @@ final class TitansScene: SKScene {
     private func startChoreography() {
         let loop = SKAction.run { [weak self] in self?.runRound() }
         let wait = SKAction.wait(forDuration: 4.2)
-        run(.repeatForever(.sequence([loop, wait])))
+        run(.repeatForever(.sequence([loop, wait])), withKey: "choreography")
     }
 
     private func runRound() {
@@ -327,6 +346,11 @@ final class TitansScene: SKScene {
     }
 
     private func spawnBurst(at point: CGPoint, emojis: [String], count: Int, spread: CGFloat, lifetime: TimeInterval) {
+        guard count >= 1, count <= 128, children.count + count <= DesktopOverlayValidation.maxNodes else {
+            isPaused = true
+            Platform.emitEvent("overlay_scene_resource_limit")
+            return
+        }
         for _ in 0..<count {
             let emoji = emojis.randomElement()!
             let t = Self.emojiTexture(emoji, pointSize: 56)
@@ -361,6 +385,9 @@ final class TitansScene: SKScene {
 
     func perform(verb: String, args: [String: Any]) -> [String: Any] {
         guard configured else { return ["ok": false, "error": "scene not configured yet"] }
+        do { _ = try DesktopOverlayValidation.controlArgs(args, mode: "scene", verb: verb) }
+        catch { return ["ok": false, "code": "invalid_request", "error": error.localizedDescription] }
+        guard children.count + 128 <= DesktopOverlayValidation.maxNodes else { return ["ok": false, "code": "resource_limit", "error": "scene node limit reached"] }
         switch verb {
         case "say":
             let text = (args["text"] as? String) ?? "—"
@@ -465,6 +492,7 @@ final class TitansScene: SKScene {
     }
 
     private func parseColor(_ name: String?) -> NSColor {
+        if let name, let color = ScriptScene.parseColor(name) { return color }
         switch (name ?? "").lowercased() {
         case "red":    return NSColor(calibratedRed: 1, green: 0.2, blue: 0.1, alpha: 1)
         case "blue":   return NSColor(calibratedRed: 0.2, green: 0.4, blue: 1.0, alpha: 1)

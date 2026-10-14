@@ -342,6 +342,13 @@ build_windows_arch() {
   fi
   rm -rf "$stage/extension"
   cp -R extension/dist "$stage/extension"
+  # Agent skills with only the Windows lines; the installer copies them from the stage.
+  bun scripts/gen-skills.ts win32 "$stage/skills" interceptor interceptor-browser interceptor-research interceptor-desktop
+  local engine_root="${INTERCEPTOR_DESKTOP_WINDOWS_ENGINE_ROOT:-$PWD/interceptor-desktop/target/windows-packages}"
+  if [[ -e "$engine_root/$arch/engines" || -L "$engine_root/$arch/engines" ]]; then
+    mkdir -p "$stage/desktop"
+    bun scripts/stage-desktop-engines.ts "$engine_root/$arch/engines" win32 "$arch" "$PWD/$stage/desktop/engines"
+  fi
 }
 
 build_linux_arch() {
@@ -362,6 +369,8 @@ build_linux_arch() {
   bun build daemon/index.ts --compile --target="$bun_target" --outfile="$stage/daemon/interceptor-daemon"
   cp daemon/com.interceptor.host.json "$stage/daemon/com.interceptor.host.json"
   chmod 755 "$stage/interceptor" "$stage/daemon/interceptor-daemon"
+  # Agent skills with only the Linux lines; release-linux.sh packs them beside the CLI.
+  bun scripts/gen-skills.ts linux "$stage/skills" interceptor interceptor-browser interceptor-research interceptor-desktop
 }
 
 build_bridge() {

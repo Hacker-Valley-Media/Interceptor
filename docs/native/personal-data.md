@@ -44,7 +44,11 @@ interceptor macos calendar move <id> --to <target-calendar-id>
 interceptor macos calendar refresh-sources | reset | tail
 ```
 
-`request --level write` creates events without revealing other calendars (per Apple's docs). On macOS < 14, `request` falls back to legacy `requestAccess(to:)`.
+A recurring event's rows from `events` name each occurrence: the id ends in `@<unix seconds of that occurrence's original start>` on macOS and Windows (Linux has its own occurrence id). Pass that id to `delete --span this` to remove only that occurrence, or `--span future` to end the series before it. The plain series id (from `create` or `event`) still names the whole series. Windows and Linux refuse `update` and `move` of one occurrence instead of applying them to the series.
+
+Apple's write-only grant permits event creation without reading the calendar store. Mutations require full access for its exact calendar identity and independent save readback, so a write-only grant alone does not satisfy the mutation preflight. On macOS before 14, explicit `request` uses legacy `requestAccess(to:)`. Consent is requested only by `request` and requires the installed app's purpose string.
+
+Calendar validates all 17 selectors, exact fields, explicit calendar scope, real ISO8601 instants and ranges within 1461 days. Pages require integer limits 1..1000 and offsets 0..10000. Invalid calendar IDs never broaden queries. Updates apply supplied alarms and recurrence fields. Saves and deletes require native readback. One request per domain remains admitted until native completion or reminder fetch cancellation resolves, including after a 55-second deadline. A hung SDK call can still occupy that admission.
 
 ## Reminders (EventKit reminders)
 
@@ -63,6 +67,10 @@ interceptor macos reminders complete <id> | uncomplete <id>
 interceptor macos reminders delete <id>
 ```
 
+Reminders validates all 12 selectors and exact list/item identities. Only explicit `request` invokes consent. Native due/start components use Gregorian UTC with a timezone, and native fetch cancellation retains its real token. A null native fetch result fails. Creation, updates, completion and deletion use independent native store readback.
+
+`interceptor desktop calendar` and `reminders` use the Windows appointment and task stores and Linux Evolution Data Server. Windows writes go to calendars and lists Interceptor owns; Linux item IDs bind the native source UID and component UID. Windows tasks have no URL field. What differs per host is listed in [the desktop bridge guide](../desktop-bridge.md).
+
 ## Contacts
 
 ```bash
@@ -76,7 +84,7 @@ interceptor macos contacts group-update <id> --name "..."
 interceptor macos contacts group-delete <id>
 interceptor macos contacts group-add-member <id> --contact <contact-id>
 interceptor macos contacts group-remove-member <id> --contact <contact-id>
-interceptor macos contacts list [--container <id>] [--group <id>] [--limit N --offset N]
+interceptor macos contacts list [--container <id> | --group <id>] [--limit N --offset N] [--keys id,givenName,...]
 interceptor macos contacts contact <id>
 interceptor macos contacts me
 interceptor macos contacts find "<query>" | --email <addr> | --phone <num>
@@ -94,6 +102,10 @@ interceptor macos contacts changes --since <token>
 ```
 
 The `note` field requires Apple's `com.apple.developer.contacts.notes` entitlement. The bridge sets `note: null` and a structured `requires_entitlement: "..."` field on responses when the entitlement isn't present.
+
+Contacts source now validates every selector before native calls. Paging requires integer limits 1..1000 and offsets 0..10000. Import requires an absolute regular-file path, at most 256 KiB and 1..100 complete cards. History returns actual native events and a canonical base64 token; unknown events or a requested limit that would discard events fail without advancing the token. Full dates use `YYYY-MM-DD`; a native birthday without a year uses `--MM-DD`. Input birthdays still require a complete actual date within years 1..9999. Images are bounded and identify the encoded MIME type. Mutations do not request consent implicitly or replay after an unknown native outcome.
+
+`interceptor desktop contacts` uses the Windows ContactStore and Linux EDS. Windows writes are limited to lists Interceptor owns, and Windows Contacts has no groups; Linux groups are native distribution lists. Projection keys without a native mapping refuse. See [the desktop bridge guide](../desktop-bridge.md).
 
 ## Photos (PhotoKit)
 
@@ -124,7 +136,9 @@ interceptor macos photos current-token
 interceptor macos photos changes --token <opaque-base64>
 ```
 
-The Photos predicate vocabulary follows Apple's documented allowed keys (`PHFetchOptions.md`); the bridge rejects unsupported keys with a structured error.
+Photos now validates every selector before native work. `assets` defaults to limit 100, accepts limits 1..1000 and offsets 0..10000, and applies an exact album scope. `--where` accepts up to eight documented scalar comparisons joined by ` AND `, for example `--where 'pixelWidth >= 1024 AND isFavorite == true'`. Boolean comparisons require `==` or `!=`; dates require quoted ISO8601 instants. Unsupported predicate keys and programs fail with a structured error.
+
+The current source uses public `addedDate` only on macOS26, verifies actual mutation readback, imports image and video through the correct native resource request, exports actual paired Live Photo resources and enumerates native persistent history. Outputs are private and exclusive, and never replace an existing file. Raw resource exports preserve their actual UTI, including video, while explicit JPEG/PNG conversion reports encoded dimensions. Full read/write authorization is required for independent readback; explicit `request --level addonly` can request that narrower native grant but does not qualify later reads or mutations needing readback. Builds, native behavior and current installed qualification remain pending. Portable library behavior and dependency requirements are recorded in `docs/desktop-bridge.md`.
 
 ## Location (CoreLocation)
 
@@ -152,20 +166,25 @@ interceptor macos location postal-geocode '<json-postal>'
 interceptor macos music status
 interceptor macos music request                                    # MusicAuthorization.request
 interceptor macos music subscription                                # MusicSubscription.current
-interceptor macos music search "<term>" [--types song,album,artist,playlist,curator,genre]
-   [--top] [--limit N --offset N]
-interceptor macos music search-suggest "<partial>"
-interceptor macos music charts | recommendations
-interceptor macos music library --type song|album|artist|playlist|track [--limit N]
-interceptor macos music library-search "<term>" [--types ...]
-interceptor macos music song <id> | album <id> | artist <id> | playlist <id>
+interceptor macos music library --kind song|album|artist|playlist|track [--limit N --offset N]
+   [--filter "<text>" --sort title|artistName|name --ascending --include-tracks]
+interceptor macos music library-search "<term>" [--types song,album,artist,playlist]
+   [--limit N --top --include-tracks]
 interceptor macos music play --song <id> | --album <id> | --playlist <id>
 interceptor macos music pause | resume | stop | next | previous
 interceptor macos music seek --time <seconds>
 interceptor macos music queue
 interceptor macos music repeat off|one|all
 interceptor macos music shuffle off|songs
-interceptor macos music now-playing
+interceptor macos music now-playing [--include-system]
 ```
 
-`ApplicationMusicPlayer` plays *inside the bridge process* and does not move Music.app's state. To control Music.app's system-wide playback, route through the existing `interceptor macos intent dispatch --bundle com.apple.Music --script '...'` Apple Events path. `now-playing` includes a structured note explaining the split.
+`--type` remains an alias for the library kind; it no longer overwrites the operation type. Supplying both aliases refuses. Limits are 1..100, offsets 0..10000 and seek positions 0..604800 seconds. Album and playlist track expansion uses actual library relationships. Catalog commands remain outside the public surface because the bridge has no MusicKit catalog team key.
+
+`ApplicationMusicPlayer` plays inside the bridge process. `now-playing --include-system` adds a read-only Music.app snapshot through PID-addressed Apple Events. It requires existing Automation consent and never prompts, launches or activates Music. Separate Music.app controls remain on the existing intent surface. On Windows and Linux, play, pause, next, previous, seek, repeat and shuffle go through the system player; no music library ships there (see `docs/desktop-bridge.md`).
+
+## Share (AppKit)
+
+`share services [--for <absolute-path>]` enumerates actual services without sending. The `airdrop`, `email`, `message`, `reading-list`, `desktop-picture`, `named`, `text` and `url` selectors require content. Named/string/URL requests require an exact `--service`; recipient aliases cannot be combined. Unknown or misplaced fields refuse before native calls.
+
+On the Mac, share observes actual native sharing completion, retains delegates and catches native perform exceptions in Objective-C. A native composer or share sheet may display UI. Timeout reports unknown outcome, retains unresolved native admission and never replays content. Windows and Linux use the native backends described in `docs/desktop-bridge.md`.

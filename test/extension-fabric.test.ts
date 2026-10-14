@@ -11,6 +11,7 @@ import {
   BUILTIN_BRIDGE_PREFIXES,
 } from "../shared/extensions"
 import { parseMacosCommand } from "../cli/commands/macos"
+import { classify, gate, parseAllow } from "../cli/mcp/tiers"
 
 // Extension Fabric — discovery + CLI routing + capability-blind invariants.
 
@@ -39,6 +40,32 @@ afterEach(() => {
 })
 
 describe("extension discovery", () => {
+  test("private prefixes require an execution allowance and confirmation", () => {
+    writeExtension("owned-policy-fixture", {
+      name: "owned-policy-fixture", version: "1.0.0",
+      bridgeDomains: [{ prefix: "fixturex", dylib: "owned.dylib", entry: "owned_entry" }],
+      cliVerbs: [{ verb: "run", actionPrefix: "fixturey" }],
+    })
+    for (const surface of ["macos", "desktop"] as const) {
+      for (const prefix of ["fixturex", "fixturey"]) {
+        for (const args of [[], ["run"], ["unknown"]]) {
+          const c = classify(surface, prefix, args)
+          expect(c.surface).toBe(surface)
+          expect(c.tier).toBe("exec")
+          expect(gate(c, parseAllow("raw"), true).allowed).toBe(false)
+          expect(gate(c, parseAllow(undefined), true).allowed).toBe(false)
+          expect(gate(c, parseAllow(`${surface}:${prefix}`), false).needsConfirm).toBe(true)
+          expect(gate(c, parseAllow(`${surface}:${prefix}`), true).allowed).toBe(true)
+        }
+      }
+      expect(classify(surface, "click", ["e1"]).tier).toBe("mutate")
+      expect(classify(surface, "tree", []).tier).toBe("read")
+      expect(classify(surface, "open", []).tier).toBe("mutate")
+      expect(classify(surface, "act", ["e1"]).tier).toBe("mutate")
+      expect(classify(surface, "notyetinstalled", ["run"]).tier).toBe("exec")
+    }
+  })
+
   test("root honors INTERCEPTOR_EXTENSIONS_DIR", () => {
     expect(extensionsRoot()).toBe(root)
   })

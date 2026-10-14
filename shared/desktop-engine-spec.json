@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "maxFiles": 128,
+  "maxBundleBytes": 8589934592,
+  "assets": [
+    {"variable":"INTERCEPTOR_TESSERACT_LIBRARY","kind":"library","maxBytes":67108864,"version":"5.5.2"},
+    {"variable":"INTERCEPTOR_TESSERACT_MODEL","kind":"model","maxBytes":67108864},
+    {"variable":"INTERCEPTOR_VISION_PALM_MODEL","kind":"model","maxBytes":33554432},
+    {"variable":"INTERCEPTOR_VISION_HAND_MODEL","kind":"model","maxBytes":33554432},
+    {"variable":"INTERCEPTOR_VISION_PERSON_MODEL","kind":"model","maxBytes":33554432},
+    {"variable":"INTERCEPTOR_VISION_POSE_MODEL","kind":"model","maxBytes":33554432},
+    {"variable":"INTERCEPTOR_VISION_CLASSIFY_MODEL","kind":"model","maxBytes":33554432},
+    {"variable":"INTERCEPTOR_VISION_CLASSIFY_LABELS","kind":"data","maxBytes":1048576},
+    {"variable":"INTERCEPTOR_VISION_SALIENCY_MODEL","kind":"model","maxBytes":33554432},
+    {"variable":"INTERCEPTOR_SOUND_MODEL","kind":"model","maxBytes":33554432},
+    {"variable":"INTERCEPTOR_SOUND_LABELS","kind":"data","maxBytes":1048576},
+    {"variable":"INTERCEPTOR_EMBED_MODEL","kind":"model","maxBytes":134217728},
+    {"variable":"INTERCEPTOR_EMBED_VOCAB","kind":"data","maxBytes":4194304},
+    {"variable":"INTERCEPTOR_WHISPER_CLI","kind":"executable","maxBytes":134217728,"version":"1.9.5"},
+    {"variable":"INTERCEPTOR_WHISPER_MODEL","kind":"model","maxBytes":1073741824},
+    {"variable":"INTERCEPTOR_LLAMA_SERVER","kind":"executable","maxBytes":134217728,"version":"b11557"},
+    {"variable":"INTERCEPTOR_PDFIUM_LIBRARY","kind":"library","maxBytes":67108864,"version":"7881"},
+    {"variable":"INTERCEPTOR_PHOTOS_EXIFTOOL","kind":"executable","maxBytes":67108864,"version":"13.00"},
+    {"variable":"INTERCEPTOR_PHOTOS_FFMPEG","kind":"executable","maxBytes":67108864,"version":"8.0"},
+    {"variable":"INTERCEPTOR_QEMU_SYSTEM","kind":"executable","maxBytes":67108864,"version":"9.2.4"},
+    {"variable":"INTERCEPTOR_QEMU_IMG","kind":"executable","maxBytes":67108864,"version":"9.2.4"},
+    {"variable":"INTERCEPTOR_QEMU_BIOS","kind":"data","maxBytes":4194304},
+    {"variable":"INTERCEPTOR_QEMU_VGA_BIOS","kind":"data","maxBytes":4194304},
+    {"variable":"INTERCEPTOR_MPD_EXECUTABLE","kind":"executable","maxBytes":67108864,"version":"0.24.5"}
+  ]
+}

@@ -1,615 +1,358 @@
-// PRD-66 Domain 10 — PhotoKit. macOS 10.13+ (PHAccessLevel macOS 11+).
-// References: apple-developer-docs/Photos/{PHPhotoLibrary,PHAsset,PHAssetCollection,
-// PHFetchOptions,PHImageManager,PHAuthorizationStatus,PHAccessLevel}.md.
-
 import Foundation
 import AppKit
 import Photos
 import ImageIO
+import UniformTypeIdentifiers
+import CryptoKit
+import Darwin
+import ShareNative
 
 final class PhotosDomain: DomainHandler, @unchecked Sendable {
-    private let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-    private let isoFormatterPlain: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
-    /// Parse ISO-8601 with or without fractional seconds. The strict
-    /// `withFractionalSeconds` formatter rejects inputs like
-    /// `2025-01-01T00:00:00Z`, which silently dropped the predicate from
-    /// the assets fetch and returned the latest assets instead. Calendar's
-    /// parser already does this dual-parse; align Photos with it.
-    private func parseIso(_ s: String) -> Date? {
-        return isoFormatter.date(from: s) ?? isoFormatterPlain.date(from: s)
+    private let queue = DispatchQueue(label: "interceptor.photos.native")
+    private let admission = NSLock()
+    private var active: Request?
+    // A request that times out is given up once (its download is cancelled and its
+    // file removed) so later Photos calls are not blocked while the cancellation finishes.
+    private var abandoned: UUID?
+    private final class Request: @unchecked Sendable {
+        let id = UUID()
+        private let lock = NSLock()
+        private var expired = false
+        private var downloadCancelled = false
+        private var cancellations: [@Sendable () -> Void] = []
+        var live: Bool { lock.lock(); defer { lock.unlock() }; return !expired }
+        func cancelWith(_ callback: @escaping @Sendable () -> Void) { lock.lock(); let now = expired || downloadCancelled; if !now { cancellations.append(callback) }; lock.unlock(); if now { callback() } }
+        func cancelDownloads() { lock.lock(); downloadCancelled = true; let callbacks = cancellations; cancellations.removeAll(); lock.unlock(); callbacks.forEach { $0() } }
+        func expire() { lock.lock(); expired = true; let callbacks = cancellations; cancellations.removeAll(); lock.unlock(); callbacks.forEach { $0() } }
+        func retire() { lock.lock(); expired = true; cancellations.removeAll(); lock.unlock() }
     }
-
+    private struct NativeFailure: Error, @unchecked Sendable { let response: [String: Any] }
+    private func fail(_ code: String, _ message: String, details: [String: Any]? = nil) -> NativeFailure { NativeFailure(response: WireFormat.failure(code, message, details: details)) }
+    private func native(_ error: any Error, committed: Bool = false) -> [String: Any] {
+        if let error = error as? NativeFailure {
+            var response = error.response
+            if committed { var details = (response["details"] as? [String: Any]) ?? [:]; details["mutationCommitted"] = true; details["outcomeUnknown"] = true; response["details"] = details; if response["code"] as? String == "invalid_target" { response["code"] = "partial_result" } }
+            return response
+        }
+        let n = error as NSError
+        return WireFormat.failure(committed ? "timeout_unknown_outcome" : "provider_failed", String(n.localizedDescription.prefix(4096)), details: ["nativeDomain": n.domain, "nativeCode": n.code, "mutationCommitted": committed])
+    }
     func handle(_ command: String, action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let sub = action["sub"] as? String ?? command
+        var canonical = action; canonical["type"] = "desktop_photos"; canonical["sub"] = action["sub"] ?? command
+        if let error = DesktopPhotosValidation.actionError(canonical) { completion(WireFormat.failure("invalid_request", error)); return }
+        let request = Request(), once = AtomicFlag(), box = UncheckedSendableBox(canonical)
+        admission.lock(); let accepted = active == nil; if accepted { active = request }; admission.unlock()
+        guard accepted else { completion(WireFormat.failure("resource_limit", "another Photos operation is still running, or an earlier timed-out one has not finished cancelling; nothing queued")); return }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global()), timerBox: UncheckedSendableBox<any DispatchSourceTimer>
+        timerBox = UncheckedSendableBox(timer)
+        let finish: @Sendable ([String: Any]) -> Void = { response in
+            timerBox.value.cancel(); request.retire()
+            self.admission.lock(); if self.active?.id == request.id { self.active = nil }; if self.abandoned == request.id { self.abandoned = nil }; self.admission.unlock()
+            if once.set() { if let error = DesktopPhotosValidation.resultError(response, action: box.value) { completion(WireFormat.failure("partial_result", error, details: ["outcomeUnknown": true])) } else { completion(response) } }
+        }
+        timer.schedule(deadline: .now() + 55)
+        timer.setEventHandler {
+            guard request.live else { return }; request.expire()
+            self.admission.lock(); let gaveUp = self.active?.id == request.id && self.abandoned == nil; if gaveUp { self.abandoned = request.id; self.active = nil }; self.admission.unlock()
+            if once.set() { completion(WireFormat.failure("timeout_unknown_outcome", "Photos did not finish within 55 seconds (an iCloud original or video may still have been downloading); the request was cancelled, any unfinished --out file was removed, and no mutation was replayed" + (gaveUp ? "" : "; Photos calls are refused until an earlier cancelled request finishes"))) }
+        }
+        timer.resume()
+        queue.async {
+            guard request.live else { finish(WireFormat.failure("cancelled", "Photos request expired before dispatch")); return }
+            if let exception = InterceptorNativeOperation("Photos", {
+                do { try self.perform(box.value, request: request, finish: finish) } catch { finish(self.native(error)) }
+            }) { finish(self.native(exception)) }
+        }
+    }
+    private func statusName(_ status: PHAuthorizationStatus) -> String {
+        switch status { case .notDetermined: return "notDetermined"; case .restricted: return "restricted"; case .denied: return "denied"; case .authorized: return "authorized"; case .limited: return "limited"; @unknown default: return "unknown" }
+    }
+    private func mediaName(_ media: PHAssetMediaType) -> String {
+        switch media { case .image: return "image"; case .video: return "video"; case .audio: return "audio"; case .unknown: return "unknown"; @unknown default: return "unknown" }
+    }
+    private let subtypes: [String: PHAssetMediaSubtype] = ["panorama": .photoPanorama, "hdr": .photoHDR, "screenshot": .photoScreenshot, "livePhoto": .photoLive, "depthEffect": .photoDepthEffect, "streamedVideo": .videoStreamed, "highFrameRate": .videoHighFrameRate, "timelapse": .videoTimelapse]
+    private func assetRow(_ a: PHAsset) -> [String: Any] {
+        var row: [String: Any] = ["id": a.localIdentifier, "mediaType": mediaName(a.mediaType), "mediaSubtypes": subtypes.keys.sorted().filter { a.mediaSubtypes.contains(subtypes[$0]!) }, "pixelWidth": a.pixelWidth, "pixelHeight": a.pixelHeight, "duration": a.duration, "isFavorite": a.isFavorite, "isHidden": a.isHidden, "hasAdjustments": a.hasAdjustments, "burstIdentifier": a.burstIdentifier as Any? ?? NSNull(), "playbackStyle": NativeNames.name(a.playbackStyle.rawValue, NativeNames.playbackStyle), "sourceType": NativeNames.name(Int(a.sourceType.rawValue), NativeNames.assetSource)]
+        for (key, date) in [("creationDate", a.creationDate), ("modificationDate", a.modificationDate)] { if let date { row[key] = DesktopEventKitValidation.iso(date) } }
+        if #available(macOS 26, *) { row["addedDate"] = DesktopEventKitValidation.iso(a.addedDate) }
+        if let loc = a.location { row["location"] = ["latitude": loc.coordinate.latitude, "longitude": loc.coordinate.longitude, "altitude": loc.altitude, "horizontalAccuracy": loc.horizontalAccuracy] }
+        return row
+    }
+    private func albumRow(_ c: PHAssetCollection) -> [String: Any] {
+        ["id": c.localIdentifier, "title": c.localizedTitle as Any? ?? NSNull(), "type": NativeNames.name(c.assetCollectionType.rawValue, NativeNames.collectionType), "subtype": NativeNames.name(c.assetCollectionSubtype.rawValue, NativeNames.collectionSubtype), "estimatedAssetCount": c.estimatedAssetCount == NSNotFound ? NSNull() : c.estimatedAssetCount as Any]
+    }
+    private func album(_ id: String, edit: PHCollectionEditOperation? = nil) throws -> PHAssetCollection {
+        let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil)
+        guard result.count == 1, let row = result.firstObject, row.localIdentifier == id else { throw fail("invalid_target", "exact Photos album does not exist or is inaccessible") }
+        if let edit, !row.canPerform(edit) { throw fail("unsupported_target", "Photos album does not allow the requested edit") }
+        return row
+    }
+    private func fetchAssets(_ ids: [String], edit: PHAssetEditOperation? = nil) throws -> PHFetchResult<PHAsset> {
+        let options = PHFetchOptions(); options.includeHiddenAssets = true; options.includeAllBurstAssets = true
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: options)
+        guard result.count == ids.count else { throw fail("invalid_target", "one or more exact Photos assets are absent or inaccessible; no partial mutation") }
+        var found = Set<String>(); result.enumerateObjects { asset, _, _ in found.insert(asset.localIdentifier) }
+        guard found == Set(ids) else { throw fail("invalid_target", "Photos asset identity differs from exact request") }
+        if let edit { for index in 0..<result.count { if !result.object(at: index).canPerform(edit) { throw fail("unsupported_target", "Photos asset does not allow the requested edit") } } }
+        return result
+    }
+    private func asset(_ id: String, edit: PHAssetEditOperation? = nil) throws -> PHAsset { try fetchAssets([id], edit: edit).object(at: 0) }
+    private func options(_ a: [String: Any]) -> PHFetchOptions {
+        let options = PHFetchOptions(); var predicates: [NSPredicate] = []
+        if let raw = a["media"] as? String { let media: [String: Int] = ["unknown": 0, "image": 1, "video": 2, "audio": 3]; predicates.append(NSPredicate(format: "mediaType == %d", media[raw]!)) }
+        if let raw = a["subtype"] as? String { let key = raw == "live" ? "livePhoto" : raw == "streamed" ? "streamedVideo" : raw; predicates.append(NSPredicate(format: "(mediaSubtypes & %d) != 0", subtypes[key]!.rawValue)) }
+        if a["favorite"] as? Bool == true { predicates.append(NSPredicate(format: "isFavorite == YES")) }
+        for (key, op) in [("since", ">="), ("until", "<=")] { if let date = DesktopEventKitValidation.date(a[key]) { predicates.append(NSPredicate(format: "creationDate \(op) %@", date as NSDate)) } }
+        if let raw = a["where"] as? String { for (key, op, value) in DesktopPhotosValidation.comparisons(raw)! { predicates.append(NSPredicate(format: "%K \(op) %@", key, value)) } }
+        if !predicates.isEmpty { options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates) }
+        options.includeHiddenAssets = a["hidden"] as? Bool == true; options.includeAllBurstAssets = a["burst"] as? Bool == true
+        // PhotoKit rejects localIdentifier as a sort key ("Unsupported sort descriptor"), so creationDate alone orders pages.
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        return options
+    }
+    private func changes(request: Request, block: @escaping @Sendable () throws -> Void, readback: @escaping @Sendable () throws -> [String: Any], finish: @escaping @Sendable ([String: Any]) -> Void) {
+        let errorBox = MutationError()
+        PHPhotoLibrary.shared().performChanges({
+            guard request.live else { return }
+            if let error = InterceptorNativeOperation("Photos", { do { try block() } catch { errorBox.set(error) } }) { errorBox.set(error) }
+        }) { ok, error in
+            self.queue.async {
+                guard request.live else { finish(WireFormat.failure("cancelled", "Photos completion retired after deadline; outcome unknown")); return }
+                if let error = errorBox.value ?? error { finish(self.native(error, committed: ok)); return }
+                guard ok else { finish(WireFormat.failure("provider_failed", "native Photos change failed without an error")); return }
+                if let exception = InterceptorNativeOperation("Photos", { do { finish(WireFormat.success(try readback())) } catch { finish(self.native(error, committed: true)) } }) { finish(self.native(exception, committed: true)) }
+            }
+        }
+    }
+    private final class MutationError: @unchecked Sendable {
+        private let lock = NSLock(); private var error: (any Error)?
+        func set(_ value: any Error) { lock.lock(); error = value; lock.unlock() }
+        var value: (any Error)? { lock.lock(); defer { lock.unlock() }; return error }
+    }
+    private final class CreatedIdentity: @unchecked Sendable {
+        private let lock = NSLock(); private var identity: String?
+        func set(_ value: String?) { lock.lock(); identity = value; lock.unlock() }
+        var value: String? { lock.lock(); defer { lock.unlock() }; return identity }
+    }
+    private func perform(_ a: [String: Any], request: Request, finish: @escaping @Sendable ([String: Any]) -> Void) throws {
+        let sub = a["sub"] as! String
+        if sub == "status" { finish(WireFormat.success(["status": statusName(PHPhotoLibrary.authorizationStatus(for: .readWrite)), "macOS": ProcessInfo.processInfo.operatingSystemVersionString])); return }
+        if sub == "request" {
+            let level: PHAccessLevel = a["level"] as? String == "addonly" ? .addOnly : .readWrite
+            let key = level == .addOnly ? "NSPhotoLibraryAddUsageDescription" : "NSPhotoLibraryUsageDescription"
+            guard let reason = Bundle.main.object(forInfoDictionaryKey: key) as? String, !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw fail("not_installed", "Photos consent purpose key is missing") }
+            DispatchQueue.main.async { guard request.live else { finish(WireFormat.failure("cancelled", "Photos consent retired before dispatch")); return }; PHPhotoLibrary.requestAuthorization(for: level) { status in finish(WireFormat.success(["status": self.statusName(status)])) } }; return
+        }
+        let auth = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard auth == .authorized || auth == .limited else { throw fail("permission_denied", "Photos requires existing read/write access for native reads and independent mutation readback; explicit photos request asks for consent") }
         switch sub {
-        case "status":              status(completion: completion)
-        case "request":             requestAccess(action, completion: completion)
-        case "albums":              albums(action, completion: completion)
-        case "album":               album(action, completion: completion)
-        case "album-create":        albumCreate(action, completion: completion)
-        case "album-delete":        albumDelete(action, completion: completion)
-        case "album-rename":        albumRename(action, completion: completion)
-        case "assets":              assets(action, completion: completion)
-        case "asset":               asset(action, completion: completion)
-        case "export":              export(action, completion: completion)
-        case "export-video":        exportVideo(action, completion: completion)
-        case "export-live":         exportLive(action, completion: completion)
-        case "thumbnail":           thumbnail(action, completion: completion)
-        case "favorite":            favorite(action, completion: completion)
-        case "hide":                hide(action, completion: completion)
-        case "delete":              deleteAssets(action, completion: completion)
-        case "add-to-album":        addToAlbum(action, completion: completion)
-        case "remove-from-album":   removeFromAlbum(action, completion: completion)
-        case "import":              importAsset(action, completion: completion, isVideo: false)
-        case "import-video":        importAsset(action, completion: completion, isVideo: true)
-        case "current-token":       currentToken(completion: completion)
-        case "changes":             changes(action, completion: completion)
-        default:                    completion(WireFormat.error("photos.\(sub) — unknown verb"))
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func authStatusString(_ s: PHAuthorizationStatus) -> String {
-        switch s {
-        case .notDetermined: return "notDetermined"
-        case .restricted:    return "restricted"
-        case .denied:        return "denied"
-        case .authorized:    return "authorized"
-        case .limited:       return "limited"
-        @unknown default:    return "unknown"
-        }
-    }
-
-    private func mediaTypeString(_ t: PHAssetMediaType) -> String {
-        switch t {
-        case .image: return "image"
-        case .video: return "video"
-        case .audio: return "audio"
-        case .unknown: return "unknown"
-        @unknown default: return "unknown"
-        }
-    }
-
-    private func subtypeStrings(_ s: PHAssetMediaSubtype) -> [String] {
-        var out: [String] = []
-        if s.contains(.photoPanorama) { out.append("panorama") }
-        if s.contains(.photoHDR) { out.append("hdr") }
-        if s.contains(.photoScreenshot) { out.append("screenshot") }
-        if s.contains(.photoLive) { out.append("livePhoto") }
-        if s.contains(.photoDepthEffect) { out.append("depthEffect") }
-        if s.contains(.videoStreamed) { out.append("streamedVideo") }
-        if s.contains(.videoHighFrameRate) { out.append("highFrameRate") }
-        if s.contains(.videoTimelapse) { out.append("timelapse") }
-        return out
-    }
-
-    private func parseSubtypeRequested(_ raw: String) -> PHAssetMediaSubtype? {
-        switch raw {
-        case "panorama": return .photoPanorama
-        case "screenshot": return .photoScreenshot
-        case "hdr": return .photoHDR
-        case "livePhoto", "live": return .photoLive
-        case "depthEffect": return .photoDepthEffect
-        case "streamed": return .videoStreamed
-        case "highFrameRate": return .videoHighFrameRate
-        case "timelapse": return .videoTimelapse
-        default: return nil
-        }
-    }
-
-    private func assetDict(_ a: PHAsset) -> [String: Any] {
-        var out: [String: Any] = [
-            "id": a.localIdentifier,
-            "mediaType": mediaTypeString(a.mediaType),
-            "mediaSubtypes": subtypeStrings(a.mediaSubtypes),
-            "pixelWidth": a.pixelWidth,
-            "pixelHeight": a.pixelHeight,
-            "duration": a.duration,
-            "isFavorite": a.isFavorite,
-            "isHidden": a.isHidden,
-            "hasAdjustments": a.hasAdjustments,
-            "burstIdentifier": a.burstIdentifier as Any? ?? NSNull(),
-            "playbackStyle": String(describing: a.playbackStyle),
-            "sourceType": String(describing: a.sourceType),
-        ]
-        if let c = a.creationDate { out["creationDate"] = isoFormatter.string(from: c) }
-        if let m = a.modificationDate { out["modificationDate"] = isoFormatter.string(from: m) }
-        if #available(macOS 13, *), let added = a.value(forKey: "addedDate") as? Date {
-            out["addedDate"] = isoFormatter.string(from: added)
-        }
-        if let loc = a.location {
-            out["location"] = [
-                "latitude": loc.coordinate.latitude,
-                "longitude": loc.coordinate.longitude,
-                "altitude": loc.altitude,
-                "horizontalAccuracy": loc.horizontalAccuracy,
-            ]
-        }
-        return out
-    }
-
-    private func collectionDict(_ c: PHAssetCollection) -> [String: Any] {
-        return [
-            "id": c.localIdentifier,
-            "title": c.localizedTitle as Any? ?? NSNull(),
-            "type": String(describing: c.assetCollectionType),
-            "subtype": String(describing: c.assetCollectionSubtype),
-            "estimatedAssetCount": c.estimatedAssetCount,
-        ]
-    }
-
-    // MARK: - Verbs
-
-    private func status(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let s: PHAuthorizationStatus
-        if #available(macOS 11, *) {
-            s = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        } else {
-            s = PHPhotoLibrary.authorizationStatus()
-        }
-        completion(WireFormat.success([
-            "status": authStatusString(s),
-            "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
-        ]))
-    }
-
-    private func requestAccess(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let level = (action["level"] as? String) ?? "readwrite"
-        if #available(macOS 11, *) {
-            let pa: PHAccessLevel = (level == "addonly") ? .addOnly : .readWrite
-            PHPhotoLibrary.requestAuthorization(for: pa) { s in
-                completion(WireFormat.success(["status": self.authStatusString(s)]))
+        case "albums":
+            if a["album_type"] as? String == "moment" { throw fail("unsupported_operation", "PhotoKit moments are unavailable on macOS") }
+            var rows: [[String: Any]] = []
+            for type: PHAssetCollectionType in [.smartAlbum, .album] { if let selected = a["album_type"] as? String, selected != (type == .album ? "album" : "smart") { continue }
+                let result = PHAssetCollection.fetchAssetCollections(with: type, subtype: .any, options: nil)
+                guard rows.count + result.count <= 1000 else { throw fail("resource_limit", "Photos collection result exceeds 1000; no truncated success") }
+                for index in 0..<result.count { guard request.live else { throw fail("cancelled", "Photos album enumeration retired") }; rows.append(albumRow(result.object(at: index))) }
             }
-        } else {
-            PHPhotoLibrary.requestAuthorization { s in
-                completion(WireFormat.success(["status": self.authStatusString(s)]))
-            }
+            finish(WireFormat.success(["albums": rows]))
+        case "album": finish(WireFormat.success(albumRow(try album(a["id"] as! String))))
+        case "assets":
+            let options = options(a), result: PHFetchResult<PHAsset>
+            if let id = a["album"] as? String { result = PHAsset.fetchAssets(in: try album(id), options: options) } else { result = PHAsset.fetchAssets(with: options) }
+            let limit = (a["limit"] as? Int) ?? 100, offset = (a["offset"] as? Int) ?? 0
+            var rows: [[String: Any]] = []
+            if offset < result.count { for index in offset..<min(result.count, offset + limit) { guard request.live else { throw fail("cancelled", "Photos asset enumeration retired") }; rows.append(assetRow(result.object(at: index))) } }
+            finish(WireFormat.success(["count": result.count, "limit": limit, "offset": offset, "hasMore": offset + rows.count < result.count, "assets": rows]))
+        case "asset": finish(WireFormat.success(assetRow(try asset(a["id"] as! String))))
+        case "album-create":
+            let name = a["name"] as! String, created = CreatedIdentity()
+            changes(request: request, block: { created.set(PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name).placeholderForCreatedAssetCollection.localIdentifier) }, readback: {
+                guard let id = created.value else { throw self.fail("partial_result", "Photos created album identifier is missing") }; let row = try self.album(id); guard row.localizedTitle == name else { throw self.fail("partial_result", "Photos created album name readback differs", details: ["id": id]) }; return ["id": id, "name": name]
+            }, finish: finish)
+        case "album-rename", "album-delete":
+            let id = a["id"] as! String, collection = try album(id, edit: sub == "album-delete" ? .delete : .rename), box = UncheckedSendableBox(collection), name = a["name"] as? String
+            changes(request: request, block: {
+                if sub == "album-delete" { PHAssetCollectionChangeRequest.deleteAssetCollections([box.value] as NSArray) }
+                else { guard let change = PHAssetCollectionChangeRequest(for: box.value) else { throw self.fail("unsupported_target", "Photos album change request is unavailable") }; change.title = name! }
+            }, readback: {
+                if sub == "album-delete" { guard PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).count == 0 else { throw self.fail("partial_result", "Photos album remains after delete") }; return ["ok": true, "id": id] }
+                guard try self.album(id).localizedTitle == name else { throw self.fail("partial_result", "Photos album rename readback differs") }; return ["id": id, "name": name!]
+            }, finish: finish)
+        case "favorite", "hide":
+            let id = a["id"] as! String, on = (a["on"] as? Bool) ?? true, box = UncheckedSendableBox(try asset(id, edit: .properties))
+            changes(request: request, block: { let change = PHAssetChangeRequest(for: box.value); if sub == "favorite" { change.isFavorite = on } else { change.isHidden = on } }, readback: {
+                let row = try self.asset(id), observed = sub == "favorite" ? row.isFavorite : row.isHidden
+                guard observed == on else { throw self.fail("partial_result", "Photos flag readback differs") }; return ["ok": true, "id": id, sub == "favorite" ? "isFavorite" : "isHidden": observed]
+            }, finish: finish)
+        case "delete":
+            let ids = DesktopPhotosValidation.ids(a["id"])!, box = UncheckedSendableBox(try fetchAssets(ids, edit: .delete))
+            changes(request: request, block: { PHAssetChangeRequest.deleteAssets(box.value) }, readback: {
+                let options = PHFetchOptions(); options.includeHiddenAssets = true; options.includeAllBurstAssets = true
+                guard PHAsset.fetchAssets(withLocalIdentifiers: ids, options: options).count == 0 else { throw self.fail("partial_result", "one or more Photos assets remain after delete") }; return ["ok": true, "deleted": ids]
+            }, finish: finish)
+        case "add-to-album", "remove-from-album":
+            let id = a["album"] as! String, ids = DesktopPhotosValidation.ids(a["asset"])!, collection = UncheckedSendableBox(try album(id, edit: sub == "add-to-album" ? .addContent : .removeContent)), assets = UncheckedSendableBox(try fetchAssets(ids))
+            changes(request: request, block: {
+                guard let change = PHAssetCollectionChangeRequest(for: collection.value) else { throw self.fail("unsupported_target", "Photos album membership change request is unavailable") }
+                if sub == "add-to-album" { change.addAssets(assets.value) } else { change.removeAssets(assets.value) }
+            }, readback: { try self.verifyMembership(id, ids: ids, present: sub == "add-to-album"); return ["ok": true, "album": id, "assets": ids] }, finish: finish)
+        case "import", "import-video":
+            let path = a["file"] as! String, data = try readFile(path), created = CreatedIdentity(), collection = try (a["album"] as? String).map { try album($0, edit: .addContent) }, coll = UncheckedSendableBox(collection)
+            let type: PHAssetResourceType = sub == "import-video" ? .video : .photo
+            let resourceOptions = PHAssetResourceCreationOptions(); resourceOptions.originalFilename = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).lastPathComponent
+            let resourceBox = UncheckedSendableBox(resourceOptions)
+            changes(request: request, block: {
+                let change = PHAssetCreationRequest.forAsset(); change.addResource(with: type, data: data, options: resourceBox.value)
+                guard let placeholder = change.placeholderForCreatedAsset else { throw self.fail("partial_result", "Photos import placeholder is missing") }; created.set(placeholder.localIdentifier)
+                if let collection = coll.value { guard let albumChange = PHAssetCollectionChangeRequest(for: collection) else { throw self.fail("unsupported_target", "Photos import album change request is unavailable") }; albumChange.addAssets([placeholder] as NSArray) }
+            }, readback: {
+                guard let id = created.value else { throw self.fail("partial_result", "Photos import identifier is missing") }; let asset = try self.asset(id)
+                guard asset.mediaType == (sub == "import-video" ? .video : .image) else { throw self.fail("partial_result", "Photos imported media type differs", details: ["id": id]) }
+                if let collection = coll.value { try self.verifyMembership(collection.localIdentifier, ids: [id], present: true) }; return ["ok": true, "id": id]
+            }, finish: finish)
+        case "current-token":
+            let bytes = try NSKeyedArchiver.archivedData(withRootObject: PHPhotoLibrary.shared().currentChangeToken, requiringSecureCoding: true)
+            guard !bytes.isEmpty, bytes.count <= 49152 else { throw fail("resource_limit", "Photos token exceeds 48KiB") }; finish(WireFormat.success(["token": bytes.base64EncodedString()]))
+        case "changes":
+            let data = Data(base64Encoded: a["token"] as! String)!
+            guard let token = try NSKeyedUnarchiver.unarchivedObject(ofClass: PHPersistentChangeToken.self, from: data) else { throw fail("invalid_request", "Photos history token is not a native persistent token") }
+            let result = InterceptorPhotoHistory(PHPhotoLibrary.shared(), token, 12000)
+            if let error = result["nativeError"] as? NSError { finish(native(error)) } else { finish(WireFormat.success(result)) }
+        case "export", "export-video", "export-live", "thumbnail": try export(a, request: request, finish: finish)
+        default: throw fail("invalid_request", "unknown Photos selector")
         }
     }
-
-    private func albums(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        var collections: [PHAssetCollection] = []
-        // CLI sends `album_type` — `type` collides with the action envelope's
-        // dispatch field (always "macos_photos"), so do not fall back to it.
-        let typeFilter = action["album_type"] as? String
-        if typeFilter == nil || typeFilter == "smart" {
-            let smart = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .any, options: nil)
-            smart.enumerateObjects { c, _, _ in collections.append(c) }
-        }
-        if typeFilter == nil || typeFilter == "album" {
-            let user = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
-            user.enumerateObjects { c, _, _ in collections.append(c) }
-        }
-        if typeFilter == "moment" {
-            // moments deprecated; surface empty list
-        }
-        completion(WireFormat.success(["albums": collections.map { collectionDict($0) }]))
+    private func verifyMembership(_ albumId: String, ids: [String], present: Bool) throws {
+        let options = PHFetchOptions(); options.includeHiddenAssets = true; options.includeAllBurstAssets = true; options.predicate = NSPredicate(format: "localIdentifier IN %@", ids)
+        let count = PHAsset.fetchAssets(in: try album(albumId), options: options).count
+        guard count == (present ? ids.count : 0) else { throw fail("partial_result", "Photos album membership readback differs") }
     }
-
-    private func album(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String else { completion(WireFormat.error("photos.album: <id> required")); return }
-        let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil)
-        guard let c = result.firstObject else { completion(WireFormat.error("photos.album: not found")); return }
-        completion(WireFormat.success(collectionDict(c)))
+    // VM file copy composes this retained reader with a smaller explicit cap.
+    func readFile(_ path: String, maxBytes: Int = 134217728, allowEmpty: Bool = false) throws -> Data {
+        let expanded = (path as NSString).expandingTildeInPath, fd = Darwin.open(expanded, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { throw fail("invalid_target", "Photos input cannot be opened as a retained regular file") }; defer { Darwin.close(fd) }
+        var before = stat(); guard maxBytes > 0, maxBytes <= 134217728, fstat(fd, &before) == 0, before.st_mode & S_IFMT == S_IFREG, before.st_size >= 0, allowEmpty || before.st_size > 0, before.st_size <= maxBytes else { throw fail("resource_limit", "Native input must be a retained regular file within its explicit byte cap") }
+        var data = Data(), chunk = [UInt8](repeating: 0, count: 65536)
+        while true { let n = Darwin.read(fd, &chunk, chunk.count); if n < 0 { if errno == EINTR { continue }; throw fail("provider_failed", "Photos input read failed") }; if n == 0 { break }; guard data.count + n <= maxBytes else { throw fail("resource_limit", "Native input grew beyond its explicit byte cap") }; data.append(contentsOf: chunk.prefix(n)) }
+        var after = stat(); guard fstat(fd, &after) == 0, before.st_size == after.st_size, before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec, before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec, data.count == Int(after.st_size) else { throw fail("invalid_target", "Photos input changed during retained read") }
+        return data
     }
-
-    private func albumCreate(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let name = action["name"] as? String else { completion(WireFormat.error("photos.album-create: --name required")); return }
-        var placeholderId: String?
-        PHPhotoLibrary.shared().performChanges({
-            let req = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name)
-            placeholderId = req.placeholderForCreatedAssetCollection.localIdentifier
-        }, completionHandler: { ok, error in
-            if ok, let id = placeholderId {
-                completion(WireFormat.success(["id": id, "name": name]))
-            } else {
-                completion(WireFormat.error("photos.album-create: \(error?.localizedDescription ?? "failed")"))
+    // Also used by native stream finalization, with the same exclusive file,
+    // retained identity, digest readback and sync checks.
+    final class Output: @unchecked Sendable {
+        let path: String
+        private let lock = NSLock()
+        private let directory: Int32, descriptor: Int32
+        private let name: String
+        private var count = 0, digest = SHA256(), error: String?, finished = false
+        init(_ path: String) throws {
+            let expanded = (path as NSString).expandingTildeInPath, url = URL(fileURLWithPath: expanded).standardizedFileURL
+            self.path = url.path; name = url.lastPathComponent
+            // Open into locals: a throw after every stored property is set runs deinit, which would close them again.
+            let parent = Darwin.open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard parent >= 0, name != ".", name != "..", !name.isEmpty else { if parent >= 0 { Darwin.close(parent) }; throw NSError(domain: "InterceptorPhotosOutput", code: 1, userInfo: [NSLocalizedDescriptionKey: "Photos output parent must exist and be a retained directory"]) }
+            let file = openat(parent, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            guard file >= 0 else { Darwin.close(parent); throw NSError(domain: "InterceptorPhotosOutput", code: 2, userInfo: [NSLocalizedDescriptionKey: "Photos output exists or cannot be created exclusively; no existing file was replaced"]) }
+            directory = parent; descriptor = file
+        }
+        deinit { Darwin.close(descriptor); Darwin.close(directory) }
+        func append(_ data: Data) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard error == nil, count + data.count <= 134217728 else { error = error ?? "Photos resource exceeds 128MiB"; return false }
+            let ok = data.withUnsafeBytes { bytes -> Bool in var offset = 0; while offset < bytes.count { let n = Darwin.write(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset); if n < 0 && errno == EINTR { continue }; if n <= 0 { return false }; offset += n }; return true }
+            guard ok else { error = "Photos resource write failed; partial file preserved"; return false }; count += data.count; digest.update(data: data); return true
+        }
+        // Removes an unfinished output (same file still at the name), so a failed or cancelled export
+        // leaves nothing behind at --out.
+        func discard() {
+            lock.lock(); defer { lock.unlock() }
+            guard !finished else { return }; finished = true
+            var info = stat(), named = stat()
+            if fstat(descriptor, &info) == 0, fstatat(directory, name, &named, AT_SYMLINK_NOFOLLOW) == 0, info.st_dev == named.st_dev, info.st_ino == named.st_ino { unlinkat(directory, name, 0) }
+        }
+        func finish(allowEmpty: Bool = false) throws -> Int {
+            lock.lock(); defer { lock.unlock() }
+            if let error { throw NSError(domain: "InterceptorPhotosOutput", code: 3, userInfo: [NSLocalizedDescriptionKey: error, "filePath": path]) }
+            var info = stat(), named = stat()
+            guard allowEmpty || count > 0, fsync(descriptor) == 0, fstat(descriptor, &info) == 0, fstatat(directory, name, &named, AT_SYMLINK_NOFOLLOW) == 0, info.st_size == count, info.st_dev == named.st_dev, info.st_ino == named.st_ino, info.st_nlink == 1, info.st_mode & 0o777 == 0o600 else { throw NSError(domain: "InterceptorPhotosOutput", code: 4, userInfo: [NSLocalizedDescriptionKey: "Photos output identity, size or sync differs", "filePath": path]) }
+            var observed = SHA256(), offset = 0, bytes = [UInt8](repeating: 0, count: 65536)
+            while offset < count { let n = pread(descriptor, &bytes, min(bytes.count, count - offset), off_t(offset)); if n < 0 && errno == EINTR { continue }; guard n > 0 else { throw NSError(domain: "InterceptorPhotosOutput", code: 5, userInfo: [NSLocalizedDescriptionKey: "Photos output readback failed"]) }; observed.update(data: Data(bytes.prefix(n))); offset += n }
+            guard observed.finalize() == digest.finalize(), fsync(directory) == 0 else { throw NSError(domain: "InterceptorPhotosOutput", code: 6, userInfo: [NSLocalizedDescriptionKey: "Photos output digest or directory sync differs"]) }
+            finished = true
+            return count
+        }
+    }
+    private func writeResource(_ resource: PHAssetResource, path: String, kind: String, request: Request, completion: @escaping @Sendable (Result<[String: Any], any Error>) -> Void) throws {
+        let output = try Output(path), resourceBox = UncheckedSendableBox(resource), manager = PHAssetResourceManager.default(), options = PHAssetResourceRequestOptions(); options.isNetworkAccessAllowed = true
+        let id = manager.requestData(for: resourceBox.value, options: options, dataReceivedHandler: { bytes in if request.live && !output.append(bytes) { request.cancelDownloads() } }, completionHandler: { error in
+            self.queue.async {
+                guard request.live else { output.discard(); completion(.failure(self.fail("cancelled", "Photos resource request was cancelled; the unfinished output was removed", details: ["filePath": output.path]))); return }
+                if let error { output.discard(); completion(.failure(error)); return }
+                do { completion(.success(["filePath": output.path, "uti": resourceBox.value.uniformTypeIdentifier, "bytes": try output.finish(), "type": kind])) } catch { output.discard(); completion(.failure(error)) }
             }
         })
+        request.cancelWith { manager.cancelDataRequest(id); output.discard() }
     }
-
-    private func albumDelete(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String else { completion(WireFormat.error("photos.album-delete: <id> required")); return }
-        let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil)
-        PHPhotoLibrary.shared().performChanges({
-            PHAssetCollectionChangeRequest.deleteAssetCollections(result)
-        }, completionHandler: { ok, error in
-            if ok { completion(WireFormat.success(["ok": true, "id": id])) }
-            else { completion(WireFormat.error("photos.album-delete: \(error?.localizedDescription ?? "failed")")) }
-        })
+    private func resource(_ asset: PHAsset, type: PHAssetResourceType) throws -> PHAssetResource {
+        let rows = PHAssetResource.assetResources(for: asset).filter { $0.type == type }
+        guard rows.count == 1, rows[0].assetLocalIdentifier == asset.localIdentifier else { throw fail("unsupported_target", "Photos requires one exact native resource of the requested type") }; return rows[0]
     }
-
-    private func albumRename(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String, let name = action["name"] as? String else {
-            completion(WireFormat.error("photos.album-rename: --id and --name required")); return
+    private func export(_ a: [String: Any], request: Request, finish: @escaping @Sendable ([String: Any]) -> Void) throws {
+        let sub = a["sub"] as! String, id = a["id"] as! String, asset = try asset(id)
+        if sub == "export-live" {
+            guard asset.mediaSubtypes.contains(.photoLive) else { throw fail("unsupported_target", "Photos asset is not a Live Photo") }
+            let image = try resource(asset, type: asset.hasAdjustments ? .fullSizePhoto : .photo), video = try resource(asset, type: asset.hasAdjustments ? .fullSizePairedVideo : .pairedVideo)
+            guard let imageExt = UTType(image.uniformTypeIdentifier)?.preferredFilenameExtension, let videoExt = UTType(video.uniformTypeIdentifier)?.preferredFilenameExtension, imageExt != videoExt, [imageExt, videoExt].allSatisfy({ $0.range(of: "^[A-Za-z0-9]{1,12}$", options: .regularExpression) != nil }) else { throw fail("unsupported_target", "Live Photo native resource extensions are unavailable or ambiguous") }
+            let base = (a["out"] as! NSString).expandingTildeInPath, videoBox = UncheckedSendableBox(video)
+            try writeResource(image, path: base + "." + imageExt, kind: "image", request: request) { first in
+                switch first {
+                case .failure(let error): finish(self.native(error))
+                case .success(let imageRow):
+                    let imageBox = UncheckedSendableBox(imageRow)
+                    do { try self.writeResource(videoBox.value, path: base + "." + videoExt, kind: "video", request: request) { second in
+                        switch second { case .success(let videoRow): finish(WireFormat.success(["ok": true, "assetId": id, "filePathBase": base, "resources": [imageBox.value, videoRow]])); case .failure(let error): finish(WireFormat.failure("partial_result", (error as NSError).localizedDescription, details: ["writtenResources": [imageBox.value], "outcomeUnknown": true])) }
+                    } } catch { finish(WireFormat.failure("partial_result", (error as NSError).localizedDescription, details: ["writtenResources": [imageRow], "outcomeUnknown": true])) }
+                }
+            }; return
         }
-        let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil)
-        guard let c = result.firstObject else { completion(WireFormat.error("photos.album-rename: not found")); return }
-        PHPhotoLibrary.shared().performChanges({
-            let req = PHAssetCollectionChangeRequest(for: c)
-            req?.title = name
-        }, completionHandler: { ok, error in
-            if ok { completion(WireFormat.success(["id": id, "name": name])) }
-            else { completion(WireFormat.error("photos.album-rename: \(error?.localizedDescription ?? "failed")")) }
-        })
-    }
-
-    private func buildFetchOptions(_ action: [String: Any]) -> PHFetchOptions {
-        let opts = PHFetchOptions()
-        var preds: [NSPredicate] = []
-
-        if let media = action["media"] as? String {
-            switch media {
-            case "image": preds.append(NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue))
-            case "video": preds.append(NSPredicate(format: "mediaType == %d", PHAssetMediaType.video.rawValue))
-            case "audio": preds.append(NSPredicate(format: "mediaType == %d", PHAssetMediaType.audio.rawValue))
-            default: break
-            }
+        if sub == "export-video" || sub == "export" && a["format"] == nil && a["size"] == nil {
+            guard asset.mediaType == (sub == "export-video" ? .video : .image) else { throw fail("unsupported_target", "Photos resource export media type differs") }
+            let type: PHAssetResourceType = sub == "export-video" ? (asset.hasAdjustments ? .fullSizeVideo : .video) : (asset.hasAdjustments ? .fullSizePhoto : .photo)
+            try writeResource(try resource(asset, type: type), path: a["out"] as! String, kind: sub == "export-video" ? "video" : "image", request: request) { result in
+                switch result { case .failure(let error): finish(self.native(error)); case .success(var row): row.removeValue(forKey: "type"); row["ok"] = true; row["assetId"] = id; row["originalWidth"] = asset.pixelWidth; row["originalHeight"] = asset.pixelHeight; finish(WireFormat.success(row)) }
+            }; return
         }
-        if let subtype = action["subtype"] as? String, let st = parseSubtypeRequested(subtype) {
-            preds.append(NSPredicate(format: "(mediaSubtype & %d) != 0", st.rawValue))
-        }
-        if (action["favorite"] as? Bool) == true {
-            preds.append(NSPredicate(format: "isFavorite == YES"))
-        }
-        if let since = action["since"] as? String, let s = parseIso(since) {
-            preds.append(NSPredicate(format: "creationDate >= %@", s as NSDate))
-        }
-        if let until = action["until"] as? String, let u = parseIso(until) {
-            preds.append(NSPredicate(format: "creationDate <= %@", u as NSDate))
-        }
-        if !preds.isEmpty { opts.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: preds) }
-        if (action["hidden"] as? Bool) == true { opts.includeHiddenAssets = true }
-        if (action["burst"] as? Bool) == true { opts.includeAllBurstAssets = true }
-        if let limit = action["limit"] as? Int { opts.fetchLimit = limit }
-        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        return opts
-    }
-
-    private func assets(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let options = buildFetchOptions(action)
-        let result: PHFetchResult<PHAsset>
-        if let albumId = action["album"] as? String,
-           let coll = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil).firstObject {
-            result = PHAsset.fetchAssets(in: coll, options: options)
-        } else {
-            result = PHAsset.fetchAssets(with: options)
-        }
-        var arr: [[String: Any]] = []
-        let offset = (action["offset"] as? Int) ?? 0
-        result.enumerateObjects { asset, idx, stop in
-            if idx < offset { return }
-            arr.append(self.assetDict(asset))
-        }
-        completion(WireFormat.success([
-            "count": result.count,
-            "limit": (options.fetchLimit > 0 ? options.fetchLimit : NSNull()) as Any,
-            "offset": offset,
-            "assets": arr,
-        ]))
-    }
-
-    private func asset(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String else { completion(WireFormat.error("photos.asset: <id> required")); return }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let a = result.firstObject else { completion(WireFormat.error("photos.asset: not found")); return }
-        completion(WireFormat.success(assetDict(a)))
-    }
-
-    private func export(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String, let outPath = action["out"] as? String else {
-            completion(WireFormat.error("photos.export: <id> and --out required")); return
-        }
-        // Validated up front, before the asset fetch, so an unsupported value reports itself
-        // rather than hiding behind a "not found" from an unrelated bad id.
-        let wantFormat = (action["format"] as? String)?.lowercased()
-        if let want = wantFormat, want != "jpeg", want != "png" {
-            completion(WireFormat.error("photos.export: --format must be jpeg or png (got \(want))")); return
-        }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let a = result.firstObject else { completion(WireFormat.error("photos.export: not found")); return }
-        let outURL = URL(fileURLWithPath: (outPath as NSString).expandingTildeInPath)
-        let manager = PHImageManager.default()
-        let opts = PHImageRequestOptions()
-        opts.isSynchronous = false
-        opts.deliveryMode = .highQualityFormat
-        opts.isNetworkAccessAllowed = true
-
-        if let sizePx = action["size"] as? Int, sizePx > 0 {
-            // --format composes with --size: encode the resized image as PNG when asked,
-            // else JPEG (the long-standing default). Otherwise --size + --format png
-            // writes JPEG bytes under a .png name — the same trusts-the-extension
-            // breakage the no-size branch below exists to prevent.
-            let usePNG = wantFormat == "png"
-            let target = CGSize(width: sizePx, height: sizePx)
-            manager.requestImage(for: a, targetSize: target, contentMode: .aspectFit, options: opts) { image, _ in
-                guard let image = image,
-                      let tiff = image.tiffRepresentation,
-                      let rep = NSBitmapImageRep(data: tiff),
-                      let data = rep.representation(
-                        using: usePNG ? .png : .jpeg,
-                        properties: usePNG ? [:] : [.compressionFactor: 0.85])
-                else { completion(WireFormat.error("photos.export: encode failed")); return }
+        guard asset.mediaType == .image || sub == "thumbnail" && asset.mediaType == .video else { throw fail("unsupported_target", "Photos raster export requires an image or video thumbnail") }
+        let target = (a["size"] as? Int) ?? (sub == "thumbnail" ? 256 : max(asset.pixelWidth, asset.pixelHeight))
+        guard target > 0, target <= 16384, sub == "thumbnail" || a["size"] != nil || asset.pixelWidth > 0 && asset.pixelHeight > 0 && asset.pixelWidth <= 33554432 / asset.pixelHeight else { throw fail("resource_limit", "Photos raster export exceeds 32M pixels; request an explicit bounded size") }
+        let options = PHImageRequestOptions(); options.isNetworkAccessAllowed = true; options.deliveryMode = .highQualityFormat; options.resizeMode = .exact
+        let manager = PHImageManager.default(), action = UncheckedSendableBox(a)
+        let nativeId = manager.requestImage(for: asset, targetSize: CGSize(width: target, height: target), contentMode: .aspectFit, options: options) { image, info in
+            let imageBox = UncheckedSendableBox(image), infoBox = UncheckedSendableBox(info)
+            self.queue.async {
+                guard request.live else { finish(WireFormat.failure("cancelled", "Photos raster completion retired")); return }
+                if infoBox.value?[PHImageResultIsDegradedKey] as? Bool == true { return }
+                if let error = infoBox.value?[PHImageErrorKey] as? NSError { finish(self.native(error)); return }
+                if infoBox.value?[PHImageCancelledKey] as? Bool == true { finish(WireFormat.failure("cancelled", "native Photos image request cancelled")); return }
+                guard let image = imageBox.value, let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil), cg.width > 0, cg.height > 0, cg.width <= 33554432 / cg.height else { finish(WireFormat.failure("resource_limit", "native Photos raster is missing or exceeds 32M pixels")); return }
+                let edge = min(target, max(cg.width, cg.height)), ratio = min(1.0, Double(edge) / Double(max(cg.width, cg.height))), width = max(1, Int(Double(cg.width) * ratio)), height = max(1, Int(Double(cg.height) * ratio))
+                guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { finish(WireFormat.failure("provider_failed", "Photos raster allocation failed")); return }
+                context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height)); guard let raster = context.makeImage() else { finish(WireFormat.failure("provider_failed", "Photos raster resizing failed")); return }
+                let format = (action.value["format"] as? String) ?? "jpeg", uti = format == "png" ? "public.png" : "public.jpeg", encoded = NSMutableData()
+                guard let destination = CGImageDestinationCreateWithData(encoded, uti as CFString, 1, nil) else { finish(WireFormat.failure("provider_failed", "Photos raster encoder missing")); return }
+                CGImageDestinationAddImage(destination, raster, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+                guard CGImageDestinationFinalize(destination), encoded.length > 0, encoded.length <= 134217728 else { finish(WireFormat.failure("resource_limit", "Photos encoded raster is missing or exceeds 128MiB")); return }
                 do {
-                    try data.write(to: outURL)
-                    completion(WireFormat.success([
-                        "ok": true, "assetId": id, "filePath": outURL.path,
-                        "uti": usePNG ? "public.png" : "public.jpeg",
-                        "bytes": data.count,
-                        "originalWidth": a.pixelWidth, "originalHeight": a.pixelHeight,
-                        "exportWidth": Int(image.size.width), "exportHeight": Int(image.size.height),
-                    ]))
-                } catch {
-                    completion(WireFormat.error("photos.export: write failed \(error.localizedDescription)"))
-                }
-            }
-        } else {
-            manager.requestImageDataAndOrientation(for: a, options: opts) { data, uti, _, _ in
-                guard let data = data else { completion(WireFormat.error("photos.export: no data")); return }
-                // Without --size this hands back the asset's original bytes, which for most
-                // iPhone captures is HEIC. --format lets a caller ask for something portable
-                // without also having to resize; previously it was accepted and discarded,
-                // so `--format jpeg --out shot.jpg` wrote a HEIC under a .jpg name and every
-                // downstream consumer that trusts the extension broke confusingly.
-                var outData = data
-                var outUTI: String? = uti
-                if let want = wantFormat, want == "jpeg" || want == "png" {
-                    let targetUTI = want == "jpeg" ? "public.jpeg" : "public.png"
-                    if uti != targetUTI {
-                        guard let rep = NSBitmapImageRep(data: data),
-                              let converted = rep.representation(
-                                using: want == "jpeg" ? .jpeg : .png,
-                                properties: want == "jpeg" ? [.compressionFactor: 0.85] : [:])
-                        else {
-                            completion(WireFormat.error("photos.export: transcode to \(want) failed")); return
-                        }
-                        outData = converted
-                        outUTI = targetUTI
-                    }
-                }
-                do {
-                    try outData.write(to: outURL)
-                    completion(WireFormat.success([
-                        "ok": true, "assetId": id, "filePath": outURL.path,
-                        "uti": outUTI as Any? ?? NSNull(), "bytes": outData.count,
-                        "originalWidth": a.pixelWidth, "originalHeight": a.pixelHeight,
-                    ]))
-                } catch {
-                    completion(WireFormat.error("photos.export: write failed \(error.localizedDescription)"))
-                }
+                    let bytes = encoded as Data, write = sub != "thumbnail" || action.value["out"] != nil || action.value["save"] as? Bool == true
+                    if write {
+                        let path = (action.value["out"] as? String) ?? NSTemporaryDirectory() + "interceptor-photos-" + UUID().uuidString + ".jpg", output = try Output(path)
+                        guard output.append(bytes) else { throw self.fail("provider_failed", "Photos raster write failed; partial output preserved") }; let count = try output.finish()
+                        if sub == "thumbnail" { finish(WireFormat.success(["ok": true, "filePath": output.path, "format": "jpeg", "bytes": count, "width": width, "height": height])) }
+                        else { finish(WireFormat.success(["ok": true, "assetId": id, "filePath": output.path, "uti": uti, "bytes": count, "originalWidth": asset.pixelWidth, "originalHeight": asset.pixelHeight, "exportWidth": width, "exportHeight": height])) }
+                    } else { guard bytes.count <= 700000 else { throw self.fail("resource_limit", "inline Photos thumbnail exceeds 700000 bytes; use --out") }; finish(WireFormat.success(["ok": true, "format": "jpeg", "bytes": bytes.count, "width": width, "height": height, "dataUrl": "data:image/jpeg;base64," + bytes.base64EncodedString()])) }
+                } catch { finish(self.native(error)) }
             }
         }
+        request.cancelWith { manager.cancelImageRequest(nativeId) }
     }
-
-    private func exportVideo(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String, let outPath = action["out"] as? String else {
-            completion(WireFormat.error("photos.export-video: --id and --out required")); return
-        }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let a = result.firstObject else { completion(WireFormat.error("photos.export-video: not found")); return }
-        let opts = PHVideoRequestOptions()
-        opts.isNetworkAccessAllowed = true
-        PHImageManager.default().requestExportSession(forVideo: a, options: opts, exportPreset: AVAssetExportPresetHighestQuality) { session, _ in
-            guard let session = session else { completion(WireFormat.error("photos.export-video: no session")); return }
-            let outURL = URL(fileURLWithPath: (outPath as NSString).expandingTildeInPath)
-            session.outputURL = outURL
-            session.outputFileType = .mov
-            session.exportAsynchronously {
-                if session.status == .completed {
-                    completion(WireFormat.success(["ok": true, "assetId": id, "filePath": outURL.path]))
-                } else {
-                    completion(WireFormat.error("photos.export-video: \(session.error?.localizedDescription ?? "export failed")"))
-                }
-            }
-        }
-    }
-
-    private func exportLive(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String, let outPrefix = action["out"] as? String else {
-            completion(WireFormat.error("photos.export-live: --id and --out required")); return
-        }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let a = result.firstObject else { completion(WireFormat.error("photos.export-live: not found")); return }
-        let opts = PHLivePhotoRequestOptions()
-        opts.isNetworkAccessAllowed = true
-        PHImageManager.default().requestLivePhoto(for: a, targetSize: .zero, contentMode: .default, options: opts) { live, _ in
-            guard live != nil else { completion(WireFormat.error("photos.export-live: no live photo")); return }
-            // PHLivePhoto exports require AVAsset extraction — surface metadata
-            // and a stub path; deeper export is left to clients via export + export-video.
-            let outBase = (outPrefix as NSString).expandingTildeInPath
-            completion(WireFormat.success([
-                "ok": true, "assetId": id,
-                "filePathBase": outBase,
-                "note": "Live Photo export emits paired image+video; use photos.export and photos.export-video to extract each component.",
-            ]))
-        }
-    }
-
-    private func thumbnail(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String else { completion(WireFormat.error("photos.thumbnail: <id> required")); return }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let a = result.firstObject else { completion(WireFormat.error("photos.thumbnail: not found")); return }
-        let sizeRaw = (action["size"] as? Int) ?? 256
-        let target = CGSize(width: sizeRaw, height: sizeRaw)
-        let opts = PHImageRequestOptions()
-        opts.isSynchronous = false
-        opts.deliveryMode = .highQualityFormat
-        opts.isNetworkAccessAllowed = true
-        let outRequested = action["out"] as? String
-        // Passing --out is itself a request to write a file. Requiring --save alongside it
-        // meant `thumbnail <id> --out shot.jpg` wrote nothing and instead returned the image
-        // inline as a base64 dataUrl, which for an agent caller is a large payload delivered
-        // at exactly the moment it asked for a path instead. Backward compatible: --out
-        // without --save previously had no effect, so nothing can depend on the old behavior.
-        let save = (action["save"] as? Bool) ?? (outRequested != nil)
-        PHImageManager.default().requestImage(for: a, targetSize: target, contentMode: .aspectFit, options: opts) { image, _ in
-            guard let image = image else { completion(WireFormat.error("photos.thumbnail: no image")); return }
-            guard let tiff = image.tiffRepresentation,
-                  let rep = NSBitmapImageRep(data: tiff),
-                  let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
-            else { completion(WireFormat.error("photos.thumbnail: encode failed")); return }
-            if save {
-                let outURL = URL(fileURLWithPath: (outRequested ?? "/tmp/photos-thumb-\(UUID().uuidString.prefix(8)).jpg" as String).expanding)
-                do {
-                    try data.write(to: outURL)
-                    completion(WireFormat.success(["ok": true, "filePath": outURL.path, "bytes": data.count, "format": "jpeg"]))
-                } catch {
-                    completion(WireFormat.error("photos.thumbnail: write failed \(error.localizedDescription)"))
-                }
-            } else {
-                completion(WireFormat.success([
-                    "ok": true,
-                    "format": "jpeg",
-                    "bytes": data.count,
-                    "dataUrl": "data:image/jpeg;base64,\(data.base64EncodedString())",
-                ]))
-            }
-        }
-    }
-
-    private func favorite(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String else { completion(WireFormat.error("photos.favorite: <id> required")); return }
-        let on = (action["on"] as? Bool) ?? true
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let a = result.firstObject else { completion(WireFormat.error("photos.favorite: not found")); return }
-        PHPhotoLibrary.shared().performChanges({
-            let req = PHAssetChangeRequest(for: a)
-            req.isFavorite = on
-        }, completionHandler: { ok, error in
-            if ok { completion(WireFormat.success(["ok": true, "id": id, "isFavorite": on])) }
-            else { completion(WireFormat.error("photos.favorite: \(error?.localizedDescription ?? "failed")")) }
-        })
-    }
-
-    private func hide(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String else { completion(WireFormat.error("photos.hide: <id> required")); return }
-        let on = (action["on"] as? Bool) ?? true
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let a = result.firstObject else { completion(WireFormat.error("photos.hide: not found")); return }
-        PHPhotoLibrary.shared().performChanges({
-            let req = PHAssetChangeRequest(for: a)
-            req.isHidden = on
-        }, completionHandler: { ok, error in
-            if ok { completion(WireFormat.success(["ok": true, "id": id, "isHidden": on])) }
-            else { completion(WireFormat.error("photos.hide: \(error?.localizedDescription ?? "failed")")) }
-        })
-    }
-
-    private func deleteAssets(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let id = action["id"] as? String else { completion(WireFormat.error("photos.delete: <id> required")); return }
-        let ids = id.split(separator: ",").map(String.init)
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
-        PHPhotoLibrary.shared().performChanges({
-            PHAssetChangeRequest.deleteAssets(result)
-        }, completionHandler: { ok, error in
-            if ok { completion(WireFormat.success(["ok": true, "deleted": ids])) }
-            else { completion(WireFormat.error("photos.delete: \(error?.localizedDescription ?? "failed")")) }
-        })
-    }
-
-    private func addToAlbum(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let albumId = action["album"] as? String, let assetId = action["asset"] as? String else {
-            completion(WireFormat.error("photos.add-to-album: --album and --asset required")); return
-        }
-        let coll = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil).firstObject
-        guard let coll = coll else { completion(WireFormat.error("photos.add-to-album: album not found")); return }
-        let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetId.split(separator: ",").map(String.init), options: nil)
-        PHPhotoLibrary.shared().performChanges({
-            if let req = PHAssetCollectionChangeRequest(for: coll) {
-                req.addAssets(assets)
-            }
-        }, completionHandler: { ok, error in
-            if ok { completion(WireFormat.success(["ok": true, "album": albumId])) }
-            else { completion(WireFormat.error("photos.add-to-album: \(error?.localizedDescription ?? "failed")")) }
-        })
-    }
-
-    private func removeFromAlbum(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        guard let albumId = action["album"] as? String, let assetId = action["asset"] as? String else {
-            completion(WireFormat.error("photos.remove-from-album: --album and --asset required")); return
-        }
-        let coll = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil).firstObject
-        guard let coll = coll else { completion(WireFormat.error("photos.remove-from-album: album not found")); return }
-        let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetId.split(separator: ",").map(String.init), options: nil)
-        PHPhotoLibrary.shared().performChanges({
-            if let req = PHAssetCollectionChangeRequest(for: coll) {
-                req.removeAssets(assets)
-            }
-        }, completionHandler: { ok, error in
-            if ok { completion(WireFormat.success(["ok": true, "album": albumId])) }
-            else { completion(WireFormat.error("photos.remove-from-album: \(error?.localizedDescription ?? "failed")")) }
-        })
-    }
-
-    private func importAsset(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void, isVideo: Bool) {
-        guard let path = action["file"] as? String else { completion(WireFormat.error("photos.import: --file required")); return }
-        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        var placeholderId: String?
-        PHPhotoLibrary.shared().performChanges({
-            let req: PHAssetCreationRequest? = PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: url) // works for images
-            if isVideo {
-                let v = PHAssetCreationRequest.forAsset()
-                v.addResource(with: .video, fileURL: url, options: nil)
-                placeholderId = v.placeholderForCreatedAsset?.localIdentifier
-            } else {
-                placeholderId = req?.placeholderForCreatedAsset?.localIdentifier
-            }
-            if let albumId = action["album"] as? String,
-               let coll = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil).firstObject,
-               let placeholder = (req ?? PHAssetCreationRequest.forAsset()).placeholderForCreatedAsset,
-               let albumReq = PHAssetCollectionChangeRequest(for: coll) {
-                albumReq.addAssets([placeholder] as NSArray)
-            }
-        }, completionHandler: { ok, error in
-            if ok {
-                completion(WireFormat.success(["ok": true, "id": placeholderId as Any? ?? NSNull()]))
-            } else {
-                completion(WireFormat.error("photos.import: \(error?.localizedDescription ?? "failed")"))
-            }
-        })
-    }
-
-    private func currentToken(completion: @escaping @Sendable ([String: Any]) -> Void) {
-        if #available(macOS 14, *) {
-            let token = PHPhotoLibrary.shared().currentChangeToken
-            let tokenData = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: false)
-            completion(WireFormat.success(["token": tokenData?.base64EncodedString() as Any? ?? NSNull()]))
-        } else {
-            completion(WireFormat.error("photos.current-token: requires macOS 14+"))
-        }
-    }
-
-    private func changes(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        if #available(macOS 14, *) {
-            guard let raw = action["token"] as? String, let data = Data(base64Encoded: raw),
-                  let token = try? NSKeyedUnarchiver.unarchivedObject(ofClass: PHPersistentChangeToken.self, from: data)
-            else { completion(WireFormat.error("photos.changes: --token <opaque-base64> required")); return }
-            do {
-                let result = try PHPhotoLibrary.shared().fetchPersistentChanges(since: token)
-                completion(WireFormat.success([
-                    "events": [Any](),
-                    "fetchResultClass": String(describing: type(of: result)),
-                    "note": "Persistent-change enumeration is platform-version dependent; per-token deltas should be consumed via PHPhotoLibraryChangeObserver in the daemon.",
-                ]))
-            } catch {
-                completion(WireFormat.error("photos.changes: \(error.localizedDescription)"))
-            }
-        } else {
-            completion(WireFormat.error("photos.changes: requires macOS 14+"))
-        }
-    }
-}
-
-// Tiny helper used in `thumbnail` — keep at end of file scope.
-private extension String {
-    var expanding: String { (self as NSString).expandingTildeInPath }
 }

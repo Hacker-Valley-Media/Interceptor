@@ -6,7 +6,7 @@ import ApplicationServices
 //
 // It fabricates only real, constructible CF values (CFString, CFNumber,
 // AXValue via AXValueCreate, kCFNull, AXUIElementCreateSystemWide) so tests need
-// no live application. It models the branches the PRD requires: per-slot bulk
+// no live application. It models the branches the AX transport contract requires: per-slot bulk
 // values/nulls/errors, a recorded call count (delay stand-in), and an
 // "action happened but returned cannotComplete" fixture.
 final class FakeAXTransport: AXTransport, @unchecked Sendable {
@@ -111,9 +111,10 @@ final class FakeAXTransport: AXTransport, @unchecked Sendable {
         return (.success, AXUIElementCreateSystemWide())
     }
 
+    var processID: pid_t = 4242
     func pid(_ element: AXUIElement) -> (AXError, pid_t?) {
         tick()
-        return (.success, 4242)
+        return (.success, processID)
     }
 
     func setMessagingTimeout(_ element: AXUIElement, seconds: Float) -> AXError {

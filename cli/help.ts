@@ -4,20 +4,28 @@
 // loaded — so this block carries everything needed to form a correct invocation
 // in one shot (flags, accepted inputs, response shape, an example).
 import { COMMAND_SPECS } from "./manifest"
+import { filterDesktopHelp, hostDesktopOs } from "../shared/desktop-support"
 
 const COMMAND_HELP: Record<string, string> = {
   update: [
-    "interceptor update — update Interceptor itself",
+    "interceptor update: check Interceptor releases",
     "",
-    "  interceptor update             macOS: check now — reports Sparkle's selected version or no-update reason",
-    "  interceptor update status      macOS: consistent lifecycle state, live-session age, recovery hint, feed, and schedule",
+    "  interceptor update             Check now; reports selected release, eligibility or observed error",
+    "  interceptor update status      Read the retained check lifecycle, feed and schedule",
     "",
     "Notes:",
-    "  - macOS: requires the full install (the updater lives in the bridge app); browser-only",
-    "    installs get 'interceptor upgrade --full' guidance instead. A found update keeps",
-    "    Sparkle's visible prompt; a slow check returns 'checking' and status records its result.",
-    "  - Windows: updates ship as a signed installer — this command prints the Releases link",
-    "    (run the newer architecture-matched Setup; downgrades are refused).",
+    "  - Full installs check once a day. A newer release opens the update window: Skip This",
+    "    Version, Remind Me Later, Install Update. Nothing downloads or installs until you click;",
+    "    after the download, Install and Relaunch installs it. A slow check returns 'checking'",
+    "    and status records its result.",
+    "  - macOS: the window is Sparkle's, in the bridge app; browser-only installs get",
+    "    'interceptor upgrade --full' guidance instead.",
+    "  - Windows/Linux Full: the provider reads the signed feed on updates.hackervalley.media and",
+    "    verifies the installer (signed SHA-256 and length; Authenticode on Windows). An agent finds",
+    "    a button with 'interceptor desktop find \"Install Update\" --app interceptor-desktop' (Linux:",
+    "    --app interceptor-overlay) and presses it with 'interceptor desktop click <ref>'.",
+    "  - INTERCEPTOR_AUTO_UPDATE=off in the provider's login environment stops the daily checks.",
+    "  - Browser-only Windows/Linux installs update by running a newer installer.",
   ].join("\n"),
   daemon: [
     "interceptor daemon — local daemon lifecycle control",
@@ -58,6 +66,30 @@ const COMMAND_HELP: Record<string, string> = {
 // "  interceptor <cmd> ". User types `interceptor <cmd> --help` (or `-h`) and
 // gets exactly the slice for that command.
 export function helpForCommand(cmd: string, sub?: string): string | null {
+  if ((cmd === "desktop" || cmd === "macos") && sub === "stream") return [
+    `interceptor ${cmd} stream start [--app <name> | --window <native-id> | --display <native-id>]`,
+    `interceptor ${cmd} stream record start [--sid <sid>] --media [--record-audio none|system]`,
+    `interceptor ${cmd} stream record status|stop [--sid <sid>]`,
+    "Media source candidate: Mac15+ native H264/MP4; Windows/Linux MJPEG/Matroska with measured frame-arrival times. Finalized replies include an exclusive private file, source identity and SHA256.",
+    "Counter-only record syntax remains available without --media. Mac system audio requires an explicit display; portable audio synchronization is unavailable. Current grouped tests and installed qualification remain open.",
+  ].join("\n")
+  if (cmd === "desktop") {
+    if (["status", "capabilities", "providers"].includes(sub ?? "")) return "interceptor desktop status|capabilities|providers: negotiated native provider, version, session, permissions and operation capabilities."
+    if (sub === "files") return [
+      "interceptor desktop files watch <absolute-path>",
+      "interceptor desktop files unwatch <absolute-path>",
+      "interceptor desktop files recent [--limit 0..1000]",
+      "interceptor desktop files open [--pid <positive-pid>] [--limit 0..100]",
+      "Watch keeps the original file/directory object, observes direct changes, and returns watching/eventPath. Events may coalesce. Unwatch returns path/removed.",
+      "Recent returns ordered path/timestamp/event records (default 20). History ends when the provider exits; 64 watches, 1000 entries/1MiB history, private 4MiB rolling event log.",
+      "Open returns files/count/partial/scope and coverage counts (default 100), with a five-second deadline. Accessible current-user paths only; Windows/Linux also require the current graphical login. Coverage is partial.",
+      "Unsupported filters, extra selectors, unknown flags and malformed integers refuse before native calls. Read-only recent/open and mutating watch/unwatch retain the same MCP policy.",
+    ].join("\n")
+    const page = ["interceptor desktop status|capabilities|providers", "Available operations depend on the installed native provider and target. Inspect capabilities before acting.", helpForCommand("macos", sub)?.replaceAll("interceptor macos", "interceptor desktop") ?? ""].join("\n")
+    // Windows and Linux leave out the commands their provider does not have (shared/desktop-support.json).
+    const os = hostDesktopOs()
+    return os ? filterDesktopHelp(page, os) : page
+  }
   const footer = `Run 'interceptor help --all' for the full command list, or 'interceptor ${cmd} -h' is an alias for --help.`
   // per-verb returns semantics from the manifest spec, so an
   // agent forming an invocation also learns exactly what comes back.
@@ -181,7 +213,7 @@ const MAP_UPGRADE = `macOS + iPhone control are NOT enabled on this browser-only
 
 const MAP_FOOTER = `LOCAL (no browser needed):
   status · init · daemon stop · skills (adopt packs into Claude Code / Codex / ~/.agents) · manifest · research · upgrade · help
-  update — update Interceptor itself (fires the Sparkle update check; 'update status' shows the schedule)
+  update: check Interceptor releases; a newer release opens the update window; 'update status' shows retained state and schedule
 
 GLOBAL FLAGS (any command, any position — flag order never changes meaning):
   --json  --context <id>  --tab <id>  --group <label>  --frame <id>  --all-surfaces
@@ -657,11 +689,13 @@ macOS Bridge (full install only):
 
   System & Filesystem:
   interceptor macos clipboard read|write|tail
-  interceptor macos notifications tail [--app <name>] [--limit N]
+  interceptor macos notifications tail --name <exact-distributed-name>
+  interceptor macos notifications untail --name <exact-distributed-name>
   interceptor macos notifications log [--app <pat>] [--limit N]   Buffered distributed notifications
-  interceptor macos files recent [--filter <pat>] [--limit N]
-  interceptor macos files watch <path> [--filter <pat>]            Emit file_change events for path
-  interceptor macos files open                                     lsof-derived list of open files under $HOME
+  interceptor macos files recent [--limit 0..1000]                 Ordered file_change history (default20)
+  interceptor macos files watch <path>                            Watch the original file/directory; events may coalesce
+  interceptor macos files unwatch <path>                          Cancel the owned watch
+  interceptor macos files open [--pid N] [--limit 0..100]         Bounded lsof-derived path array; partial inventory
   interceptor macos fs read|write|search <path|query>
   interceptor macos url get|post <url> [--header "K: V"] [--body <data>]
   interceptor macos log query --predicate '...' [--since <ts>] [--limit N]
@@ -704,6 +738,8 @@ macOS Bridge (full install only):
   Display / Stream / Container / Overlays:
   interceptor macos display list|set <resolution> [--id N] [--hidpi] [--hz N]
   interceptor macos stream start|status|stop [--sid N] [--app <name>] [--virtual <res>]
+  interceptor macos stream record start [--sid <sid>] --media [--record-audio none|system]
+  interceptor macos stream record status|stop [--sid <sid>]
   interceptor macos container run <image> [--cmd "..."] [--env K=V] [--volume host:container[:mode]]
   interceptor macos overlay start|stop|list|status|eval|ctl|verbs
 
@@ -752,7 +788,8 @@ macOS Bridge (full install only):
   interceptor macos secret lock [<name>]
   interceptor macos secret reveal <name>     Human read-back: always OS-gated, TTY only, refused under --json / MCP
   interceptor macos sudo --secret <name> [--keep] -- <command...>   Run as root; the password goes to sudo -S stdin
-  interceptor macos authdialog status|fill --secret <name> [--submit]   Fill the macOS administrator prompt (SecurityAgent),
+  interceptor macos authdialog status        Whether an administrator prompt (SecurityAgent) is showing
+  interceptor macos authdialog fill --secret <name> [--submit]   Fill the macOS administrator prompt (SecurityAgent),
                                              pressing "Use Password" first on a Touch ID sheet
   interceptor macos calendar status|request|list|default|sources|create-calendar|delete-calendar|events|event|create|update|delete|move|refresh-sources|reset|tail   (EventKit events)
   interceptor macos calendar create --title "..." --start <ISO8601> --end <ISO8601> [--calendar <id>] [--all-day] [--alarm <offset|absolute>]
@@ -765,8 +802,10 @@ macOS Bridge (full install only):
   interceptor macos location status|request|request-temporary-accuracy|current|monitor|significant|visits|heading|geocode|reverse|distance|postal-geocode
   interceptor macos location current                                              (one-shot CLLocationManager.requestLocation)
   interceptor macos location reverse <lat,lng>
-  interceptor macos music status|request|subscription|search|search-suggest|charts|recommendations|library|library-search|song|album|artist|playlist|play|pause|resume|stop|next|previous|seek|queue|repeat|shuffle|now-playing
-  interceptor macos music search "<term>" [--types song,album,artist,playlist,curator,genre]
+  interceptor macos music status|request|subscription|library|library-search|search|search-suggest|charts|recommendations|song|album|artist|playlist|play|pause|resume|stop|next|previous|seek|queue|repeat|shuffle|now-playing
+  interceptor macos music library-search "<term>" [--types song,album,artist,playlist]   (your library)
+  interceptor macos music search "<term>" [--types ...] [--limit N] [--offset N] [--top]   (Apple Music catalog, Mac only; needs the MusicKit App Service on the bridge's App ID, the refusal says so)
+  interceptor macos music search-suggest "<term>" | charts [--limit N] | recommendations | song|album|artist|playlist <catalog id>
   interceptor macos music library --type song|album|artist|playlist|track [--filter ...] [--sort ...]
 
   Distribution:

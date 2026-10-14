@@ -1,7 +1,36 @@
 import XCTest
+import ApplicationServices
 @testable import interceptor_bridge
 
 final class AppsDomainTests: XCTestCase {
+    func testHiddenReadConfirmsOnlyTheRequestedLiveBooleanState() {
+        let transport = FakeAXTransport()
+        transport.attributeResponses[kAXHiddenAttribute as String] = kCFBooleanTrue
+        XCTAssertTrue(AppsDomain.waitForHiddenState(pid: 123, hidden: true, transport: transport, timeoutMs: 0))
+        XCTAssertFalse(AppsDomain.waitForHiddenState(pid: 123, hidden: false, transport: transport, timeoutMs: 0))
+        transport.attributeResponses[kAXHiddenAttribute as String] = kCFBooleanFalse
+        XCTAssertTrue(AppsDomain.waitForHiddenState(pid: 123, hidden: false, transport: transport, timeoutMs: 0))
+    }
+
+    func testHiddenReadDoesNotTreatMissingOrUnusableValuesAsSuccess() {
+        let transport = FakeAXTransport()
+        XCTAssertFalse(AppsDomain.waitForHiddenState(pid: 123, hidden: false, transport: transport, timeoutMs: 0))
+        for value in [FakeAX.string("false"), FakeAX.number(0), FakeAX.null] {
+            transport.attributeResponses[kAXHiddenAttribute as String] = value
+            XCTAssertFalse(AppsDomain.waitForHiddenState(pid: 123, hidden: false, transport: transport, timeoutMs: 0))
+        }
+    }
+
+    func testHiddenReadStopsAtItsDeadlineWithoutSendingAnotherMutation() {
+        let transport = FakeAXTransport()
+        transport.attributeResponses[kAXHiddenAttribute as String] = kCFBooleanFalse
+        let start = Date()
+        XCTAssertFalse(AppsDomain.waitForHiddenState(pid: 123, hidden: true, transport: transport, timeoutMs: 20))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.2)
+        XCTAssertTrue(transport.performedActions.isEmpty)
+        XCTAssertTrue(transport.setAttributes.isEmpty)
+    }
+
     // Issue #168: live frontmost pid equality is the whole signal — the old
     // `appIsActive` conjunct read the frozen NSRunningApplication cache and
     // could veto real activations.

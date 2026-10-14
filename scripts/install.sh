@@ -242,7 +242,8 @@ fi
 
 # ── Mode resolution ────────────────────────────────────────────────────────────
 # If neither --browser-only nor --full was passed, prompt interactively.
-# Default: macOS → "full", anything else → "browser-only" (full mode is mac-only).
+# Default: macOS -> "full", anything else -> "browser-only". Linux full mode
+# installs its native provider when explicitly selected.
 if [[ -z "$MODE" ]]; then
   if [[ "$(uname -s)" == "Darwin" ]]; then
     DEFAULT_MODE="full"
@@ -275,9 +276,24 @@ if [[ -z "$MODE" ]]; then
   fi
 fi
 
-if [[ "$MODE" == "full" && "$(uname -s)" != "Darwin" ]]; then
-  echo "ERROR: --full mode is macOS only (the Swift bridge is mac-only)." >&2
-  echo "       Use --browser-only on this platform." >&2
+if [[ "$PLATFORM" == Linux ]]; then
+  if [[ "$MODE" == browser-only && "$DRY_RUN" != 1 && -e "$HOME/.local/share/interceptor/interceptor-desktop" ]]; then
+    echo "ERROR: A full native installation is present. Run scripts/uninstall.sh --bridge-only before installing browser-only mode." >&2
+    exit 1
+  fi
+  if [[ "$MODE" == full || -f "$HOME/.local/share/interceptor/browser-install.sha256" ]]; then
+    DAEMON_PATH="$HOME/.local/share/interceptor/interceptor-daemon"
+    if [[ "$MODE" == browser-only && "$DRY_RUN" != 1 ]]; then bash "$ROOT/scripts/install-desktop-linux.sh" --refresh-browser; fi
+  fi
+fi
+if [[ "$MODE" == "full" && "$PLATFORM" == Linux ]]; then
+  if [[ "$DRY_RUN" == 1 ]]; then
+    bash "$ROOT/scripts/install-desktop-linux.sh" --dry-run
+  else
+    bash "$ROOT/scripts/install-desktop-linux.sh" --check
+  fi
+elif [[ "$MODE" == "full" && "$PLATFORM" != Darwin ]]; then
+  echo "ERROR: --full requires a supported macOS or Linux native provider." >&2
   exit 1
 fi
 
@@ -305,6 +321,16 @@ if [[ -z "$BROWSER" ]]; then
                     + BRAVE_INSTALLED + EDGE_INSTALLED + VIVALDI_INSTALLED ))
 
   if (( TOTAL_INSTALLED == 0 )); then
+    if [[ "$PLATFORM" == Linux && "$MODE" == full ]]; then
+      echo "==> No supported browser found; installing the Linux native provider, CLI and daemon."
+      if [[ "$DRY_RUN" == 1 ]]; then
+        bash "$ROOT/scripts/install-desktop-linux.sh" --dry-run
+      else
+        bash "$ROOT/scripts/install-desktop-linux.sh"
+      fi
+      echo "==> Done. Linux full mode installed. Browser integration requires a supported browser."
+      exit 0
+    fi
     echo "ERROR: No supported browser found." >&2
     echo "       Install Chrome (stable/Beta/Canary/Dev/for-Testing), Brave, Edge, or Vivaldi, then re-run." >&2
     exit 1
@@ -505,6 +531,11 @@ load_extension() {
       echo "ERROR: load_extension called with unknown browser '$target'." >&2
       return 1 ;;
   esac
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "==> [browser] DRY: would launch $BROWSER_NAME --load-extension=$EXTENSION_DIR"
+    return 0
+  fi
+
   if [[ "$PLATFORM" == "Darwin" ]]; then
     case "$target" in
       brave)
@@ -547,11 +578,6 @@ load_extension() {
       echo "ERROR: $BROWSER_NAME binary not found in PATH on this platform." >&2
       return 1
     fi
-  fi
-
-  if [[ "$DRY_RUN" == "1" ]]; then
-    echo "==> [browser] DRY: would launch $BROWSER_NAME --load-extension=$EXTENSION_DIR"
-    return 0
   fi
 
   # ── Developer-mode preflight ─────────────────────────────────────────────────
@@ -762,6 +788,15 @@ if [[ "$MODE" == "browser-only" ]]; then
 fi
 
 # MODE == "full" past this point.
+if [[ "$PLATFORM" == Linux ]]; then
+  if [[ "$DRY_RUN" == 1 ]]; then
+    echo "==> DRY-RUN complete (Linux full mode)."
+  else
+    bash "$ROOT/scripts/install-desktop-linux.sh"
+    echo "==> Done. Installed Linux full mode; use interceptor desktop capabilities to inspect qualified operations."
+  fi
+  exit 0
+fi
 echo ""
 echo "==> [bridge] Chaining into install-bridge.sh..."
 if [[ "$DRY_RUN" == "1" ]]; then

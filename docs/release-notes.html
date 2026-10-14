@@ -26,6 +26,45 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.1">
+    <h2>Interceptor 2.1.1</h2>
+    <time datetime="2026-10-13">October 13, 2026</time>
+    <ul>
+      <li>Windows and Linux now update the way the Mac does with Sparkle. Once a day Interceptor checks for a new release, and when there is one it opens its update window with the release notes and <strong>Skip This Version</strong>, <strong>Remind Me Later</strong>, and <strong>Install Update</strong>. Nothing downloads or installs until you click. After the download, <strong>Install and Relaunch</strong> installs it and Interceptor restarts.</li>
+      <li>2.1.0 installed updates on its own once Interceptor had been idle for 10 minutes. That is gone, and so is <code>interceptor update install</code>: on every OS you install from the update window, and <code>interceptor update</code> checks now and opens the window when there is an update.</li>
+      <li>The installer is still checked before it runs: its SHA-256 and length must match the signed feed, and on Windows it must carry the Hacker Valley Media signature. The release notes in the window are pinned by the same signed feed.</li>
+      <li>Remind Me Later asks again the next day. Skip This Version stops asking about that release; a newer one is still offered. If an install fails, Interceptor keeps the version you had and tells you the next time it starts.</li>
+      <li>On Linux the update window needs WebKitGTK 4.1, the same library overlays use. Without it, Interceptor posts a notification that links the new release.</li>
+      <li>Computers already on 2.1.0 take this one update on their own, because 2.1.0's updater does that. From 2.1.1 on, every update waits for your click.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="2.1.0">
+    <h2>Interceptor 2.1.0</h2>
+    <time datetime="2026-10-12">October 12, 2026</time>
+    <ul>
+      <li>Windows and Linux Full installs now update themselves, the way Sparkle updates a Mac. The native provider checks the update server every 15 minutes, downloads a newer installer, proves it is the one Hacker Valley Media published (a signed digest, plus the Authenticode signature on Windows), and installs it silently once Interceptor has gone 10 minutes without a request, so it never cuts off an agent in the middle of a command.</li>
+      <li>New <code>interceptor update install</code> on Windows and Linux Full installs a newer release right away. <code>interceptor update status</code> shows the last check and the last install.</li>
+      <li>If the installer fails, it rolls back to the version you had, the provider comes back, and the failed version is not tried again on its own.</li>
+      <li>Set <code>INTERCEPTOR_AUTO_UPDATE=off</code> in the provider's login environment to turn automatic updates off.</li>
+      <li>Windows and Linux computers on 2.0.0 have no updater yet. Install 2.1.0 once by hand; later releases arrive on their own.</li>
+    </ul>
+  </section>
+  <section data-sparkle-version="2.0.0">
+    <h2>Interceptor 2.0.0</h2>
+    <time datetime="2026-10-12">October 12, 2026</time>
+    <ul>
+      <li>New <code>interceptor desktop</code> drives native apps on Windows and Linux with the same verbs, flags, and JSON replies as <code>interceptor macos</code>: element trees, background click, type, keys, scroll, and drag, window screenshots and streams, clipboard, files, PDF, OCR and local vision, speech, calendar, reminders, contacts, notifications, monitor and replay, overlays, and vault secrets. On a Mac, <code>interceptor desktop</code> is the same as <code>interceptor macos</code>.</li>
+      <li>New Windows Full installers and Linux Full archives carry the native provider and its bundled engines (OCR, hand, body, and scene vision, sound classification, text embeddings, and speech recognition on Linux). The local AI model behind <code>ai</code>, <code>translate</code>, and <code>detect</code> downloads once, on first use.</li>
+      <li><code>interceptor desktop capabilities</code> lists every operation and says whether it works on this computer and, when it does not, why.</li>
+      <li>Each operating system now ships only its own agent skills, help, and MCP menu. Windows and Linux get a new <code>interceptor-desktop</code> skill, and the Linux archives now install the skills too.</li>
+      <li>MCP tool calls are classified on the arguments the CLI will actually run. A global flag's value can no longer make a destructive or exec verb look like a read.</li>
+      <li>Element refs from <code>interceptor macos</code> reads stay valid after a later <code>find</code> or <code>tree</code>. <code>type</code> into a read-only field refuses instead of typing into another field.</li>
+      <li>Calendar: <code>--span future</code> on a recurring event no longer deletes past occurrences, and one occurrence can be updated or deleted on its own.</li>
+      <li>New on the Mac: <code>stream record --media</code> writes an H.264 MP4, <code>type --keycodes-us</code> types into virtual machines that ignore text events, <code>music now-playing --include-system</code> reads Music.app, and <code>contacts list --keys</code> picks the fields returned. OCR runs in a helper process, so a stuck Vision call no longer hangs the bridge.</li>
+      <li>A notification attachment is copied before it is posted, so your original file stays where it was.</li>
+      <li>The Browser and Full packages find the signed-in user even when the console belongs to the login window, so their post-install steps (native messaging links, and the bridge restart on Full) run for that user.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="1.0.24">
     <h2>Interceptor 1.0.24</h2>
     <time datetime="2026-10-02">October 2, 2026</time>

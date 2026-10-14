@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { resolve } from "node:path"
 import { IosManager, RUNNER_RECONNECT_GRACE_MS } from "../daemon/ios/manager"
 import { RunnerChannel } from "../daemon/ios/channel"
+import { captureShell } from "./helpers/shell-capture"
 
 /**
  * Launch lifecycle: identity is validated BEFORE xcodebuild is spawned, an
@@ -48,8 +49,13 @@ async function launchIn(mode: LaunchMode): Promise<{ code: number; out: string; 
     const ms = Date.now() - started;
     console.log(JSON.stringify({ r, spawned, ms, procs: procs.length }));
   `
+  const env = { ...process.env, INTERCEPTOR_NO_XCODE: "", INTERCEPTOR_IOS_USE_XCODE: "1" }
+  if (process.platform === "darwin") {
+    const result = captureShell(process.execPath, ["-e", script], { env, timeout: 5000 })
+    return { code: result.status ?? -1, out: result.stdout, err: result.stderr }
+  }
   const child = Bun.spawn([process.execPath, "-e", script], {
-    env: { ...process.env, INTERCEPTOR_NO_XCODE: "", INTERCEPTOR_IOS_USE_XCODE: "1" },
+    env,
     stdout: "pipe", stderr: "pipe",
   })
   const code = await child.exited

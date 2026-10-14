@@ -1,4 +1,4 @@
-// PRD-66 — PhotosDomain unit tests. Live tests gated behind LIVE_PHOTOS=1.
+// PhotosDomain unit tests. Live tests gated behind LIVE_PHOTOS=1.
 
 import XCTest
 @testable import interceptor_bridge
@@ -126,5 +126,18 @@ final class PhotosDomainTests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["LIVE_PHOTOS"] == "1")
         let r = runVerb("albums")
         XCTAssertEqual(r["success"] as? Bool, true)
+    }
+}
+
+// A failed or cancelled export leaves nothing at --out; a finished one is kept.
+final class PhotosOutputDiscardTests: XCTestCase {
+    func testDiscardRemovesOnlyUnfinishedOutput() throws {
+        let dir = NSTemporaryDirectory() + "interceptor-qa-discard-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let partial = try PhotosDomain.Output(dir + "/partial.jpg"); XCTAssertTrue(partial.append(Data([1, 2, 3]))); partial.discard()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir + "/partial.jpg"))
+        let done = try PhotosDomain.Output(dir + "/done.jpg"); XCTAssertTrue(done.append(Data([1, 2, 3]))); XCTAssertEqual(try done.finish(), 3); done.discard()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir + "/done.jpg"))
     }
 }
