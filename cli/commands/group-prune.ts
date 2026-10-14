@@ -69,8 +69,10 @@ const MENU_RE = new RegExp(String.raw`^\s*${REF} menu\s*$`)
 const OPEN_ITEM_RE = new RegExp(String.raw`^\s*${REF} menuitem "Open group"\s*$`)
 // Chrome can ask before it deletes a saved group: a window titled "Delete tab
 // group?" holding "Delete group" and "Cancel" buttons (seen on Windows, Chrome 155).
-const CONFIRM_RE = new RegExp(String.raw`^\s*${REF} (?:window|dialog|group) "Delete tab group\?"\s*$`)
-const CONFIRM_DELETE_RE = new RegExp(String.raw`^\s*${REF} button "Delete group"\s*$`)
+// On a Mac the same dialog is a sheet in title case, "Delete Tab Group?" with
+// "Delete Group" (Brave 155), hence the case-insensitive match.
+const CONFIRM_RE = new RegExp(String.raw`^\s*${REF} (?:window|dialog|sheet|group) "Delete tab group\?"\s*$`, "i")
+const CONFIRM_DELETE_RE = new RegExp(String.raw`^\s*${REF} button "Delete group"\s*$`, "i")
 const CONFIRM_CANCEL_RE = new RegExp(String.raw`^\s*${REF} button "Cancel"\s*$`)
 // The bar ends in a "Tab groups" button, which every host reports as a button.
 const BAR_RE = new RegExp(String.raw`^\s*${REF} button "Tab groups"\s*$`)

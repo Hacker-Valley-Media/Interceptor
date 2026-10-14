@@ -142,9 +142,42 @@ const CONFIRM = [
   '            [e43] button "Cancel"',
 ].join("\n")
 
+// Copied from a live macOS tree, Brave 155, right after "Delete group" was pressed.
+const CONFIRM_MAC = [
+  '  [e814] window "New Tab - Brave - BunAndBear"',
+  '      [e2134] group "Delete Tab Group?"',
+  '        [e2135] group',
+  '          [e2136] group',
+  '            [e2137] group',
+  '              [e2138] heading "Delete Tab Group?"',
+  '            [e2139] group',
+  '              [e2140] scrollarea',
+  '                [e2141] group',
+  '                  [e2142] group',
+  '                    [e2143] group',
+  '                      [e2144] checkbox "Don\'t Ask Again" value="0"',
+  '                [e2145] group',
+  '              [e2146] group',
+  '                [e2147] group',
+  '                [e2148] button "Cancel"',
+  '                [e2149] button "Delete Group"',
+  '    [e885] button',
+  '    [e2152] sheet "Delete Tab Group?"',
+  '      [e2134] group "Delete Tab Group?"',
+].join("\n")
+
 describe("Chrome's delete confirmation", () => {
   test("is found with both of its buttons", () => {
     expect(findDeleteConfirmation(CONFIRM)).toEqual({ deleteRef: "e42", cancelRef: "e43" })
+  })
+
+  test("the macOS sheet, in title case, is found with both of its buttons", () => {
+    expect(findDeleteConfirmation(CONFIRM_MAC)).toEqual({ deleteRef: "e2149", cancelRef: "e2148" })
+  })
+
+  test("a sheet that holds the buttons itself is the dialog", () => {
+    const sheet = '[e1] sheet "Delete Tab Group?"\n  [e2] button "Cancel"\n  [e3] button "Delete Group"'
+    expect(findDeleteConfirmation(sheet)).toEqual({ deleteRef: "e3", cancelRef: "e2" })
   })
 
   test("a button outside the dialog is not taken for one of its own", () => {
@@ -269,6 +302,14 @@ describe("the prune run", () => {
     const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
     expect(r.success).toBe(true)
     expect(calls).toEqual(["tree:interactive", "tree:all", "showMenu:e10", "tree:all", "press:e23166", "tree:all", "press:e42", "tree:all", "tree:interactive"])
+    expect((r.data as { deleted: number }).deleted).toBe(1)
+  })
+
+  test("the macOS sheet is answered with Delete Group, and Don't Ask Again is left alone", async () => {
+    const { send, calls } = fakeBridge({ trees: [ONE_CHIP, ONE_CHIP, `${ONE_CHIP}\n${MENU}`, `${ONE_CHIP}\n${CONFIRM_MAC}`, CHIP_GONE, CHIP_GONE] })
+    const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
+    expect(r.success).toBe(true)
+    expect(calls).toEqual(["tree:interactive", "tree:all", "showMenu:e10", "tree:all", "press:e23166", "tree:all", "press:e2149", "tree:all", "tree:interactive"])
     expect((r.data as { deleted: number }).deleted).toBe(1)
   })
 
