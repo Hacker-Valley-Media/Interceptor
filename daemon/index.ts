@@ -20,7 +20,7 @@ import {
 } from "../shared/monitor-artifacts"
 import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
 import { claimContextId, describeContexts, recordExtensionIdentity, type ContextSocket } from "./context-registration"
-import { extensionIdFromOrigin, installTypeLabel } from "../shared/extension-identity"
+import { extensionIdFromOrigin, installTypeLabel, isAllowedWsOrigin } from "../shared/extension-identity"
 import { bridgePidPath, bridgeSocketPath } from "../shared/bridge-paths"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 import { consoleUser, currentUserName, probeGuiSession, type BridgeLaunchOpts } from "../shared/gui-session"
@@ -2297,6 +2297,14 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
     hostname: "127.0.0.1",
     port: WS_PORT,
     fetch(req, server) {
+      // A web page can reach a loopback port, and a WebSocket handshake is not
+      // held to the same-origin policy. Only the extension and local programs
+      // are served (issue #274).
+      const origin = req.headers.get("origin")
+      if (!isAllowedWsOrigin(origin)) {
+        log(`ws request refused: origin ${String(origin).slice(0, 120)}`)
+        return new Response("forbidden: origin not allowed", { status: 403 })
+      }
       if (server.upgrade(req, {})) return
       if (new URL(req.url).pathname === "/health") {
         return Response.json({ service: DAEMON_HEALTH_SERVICE, pid: process.pid, version: VERSION, wsPort: WS_PORT, healed: healRuntimeFiles("health probe") })
