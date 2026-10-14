@@ -11,8 +11,12 @@ import { classify } from "../cli/mcp/tiers"
 import { normalizeArgs } from "../cli/normalize"
 import type { DaemonResponse } from "../cli/transport"
 
-// A Mac with the bridge installed, and no waiting between steps.
-const MAC: PruneHost = { platform: "darwin", providerFailure: async () => null, sleep: async () => {} }
+// A Mac with the bridge installed, and no waiting between steps. Native calls
+// reach the scripted provider below through the same `send`.
+const MAC: PruneHost = {
+  platform: "darwin", providerFailure: async () => null, sleep: async () => {},
+  native: async (send, action) => (await send(action)).result,
+}
 const WINDOWS: PruneHost = { ...MAC, platform: "win32" }
 const LINUX: PruneHost = { ...MAC, platform: "linux" }
 
@@ -121,20 +125,29 @@ describe("reading the chip's context menu", () => {
 })
 
 describe("finding the browsers to prune", () => {
-  test("Chromium browsers only, with the active and hidden markers read", () => {
+  // The rows a Mac answers `apps` with, copied from a live bridge.
+  test("macOS rows are matched by bundle id, and hidden is read", () => {
     expect(parseRunningBrowsers(undefined)).toEqual([])
-    const apps = [
-      "[750] Safari — com.apple.Safari",
-      "[1579] Google Chrome * — com.google.Chrome",
-      "[1600] Brave Browser (hidden) — com.brave.Browser",
-      "[1601] Microsoft Edge * (hidden) — com.microsoft.edgemac",
-      "[82539] Discord — com.hnc.Discord",
-    ].join("\n")
-    expect(parseRunningBrowsers(apps)).toEqual([
+    const rows = [
+      { bundleId: "com.apple.Safari", active: false, pid: 750, hidden: false, name: "Safari" },
+      { bundleId: "com.google.Chrome", active: true, pid: 1579, hidden: false, name: "Google Chrome" },
+      { bundleId: "com.brave.Browser", active: false, pid: 1600, hidden: true, name: "Brave Browser" },
+      { bundleId: "com.microsoft.edgemac", active: true, pid: 1601, hidden: true, name: "Microsoft Edge" },
+      { bundleId: "com.hnc.Discord", active: false, pid: 82539, hidden: false, name: "Discord" },
+    ]
+    expect(parseRunningBrowsers(rows)).toEqual([
       { name: "Google Chrome", pid: 1579, hidden: false },
       { name: "Brave Browser", pid: 1600, hidden: true },
       { name: "Microsoft Edge", pid: 1601, hidden: true },
     ])
+  })
+
+  test("an app that is only named like a browser is not one", () => {
+    expect(parseRunningBrowsers([{ bundleId: "com.example.helper", pid: 5, hidden: false, name: "Chrome" }])).toEqual([])
+  })
+
+  test("the text the CLI prints for `apps` is not what the provider answers, and matches nothing", () => {
+    expect(parseRunningBrowsers("[1579] Google Chrome * — com.google.Chrome")).toEqual([])
   })
 
   test("Windows and Linux rows are matched by process or application name", () => {
@@ -147,18 +160,22 @@ describe("finding the browsers to prune", () => {
   })
 
   test("two instances of one browser stay separate", () => {
-    const apps = "[1579] Google Chrome (hidden) — com.google.Chrome\n[30747] Google Chrome — com.google.Chrome"
+    const apps = [macApp(1579, "Google Chrome", "com.google.Chrome", true), macApp(30747, "Google Chrome", "com.google.Chrome")]
     expect(parseRunningBrowsers(apps).map((b) => [b.pid, b.hidden])).toEqual([[1579, true], [30747, false]])
   })
 })
 
-// `trees` are returned in order, one per tree call.
-// A scripted provider. It answers the macOS bridge's `macos_*` actions and the
-// Windows / Linux provider's `desktop_*` actions; `namespaces` records which came in.
-function fakeBridge(opts: { trees: string[]; apps?: unknown; frontmostPid?: number; frontmost?: unknown; groups?: unknown[]; windows?: number }) {
+const macApp = (pid: number, name: string, bundleId: string, hidden = false) => ({ bundleId, active: false, pid, hidden, name })
+
+// `trees` are returned in order, one per tree call; so are `frontmostPids`,
+// one per frontmost call, and the last one repeats.
+// A scripted provider. `namespaces` records whether an action came in under
+// the neutral `desktop_` name or the macOS bridge's older `macos_` one.
+function fakeBridge(opts: { trees: string[]; apps?: unknown; frontmostPid?: number; frontmostPids?: number[]; frontmost?: unknown; groups?: unknown[]; windows?: number }) {
   const calls: string[] = []
   const namespaces = new Set<string>()
   let treeIndex = 0
+  let frontmostIndex = 0
   const send = async (a: { type: string; [k: string]: unknown }, _t?: number, ctx?: string): Promise<DaemonResponse> => {
     const reply = (data: unknown) => ({ id: "x", result: { success: true, data } } as DaemonResponse)
     const nativeCall = /^(macos|desktop)_(.+)$/.exec(a.type)
@@ -166,8 +183,11 @@ function fakeBridge(opts: { trees: string[]; apps?: unknown; frontmostPid?: numb
     switch (nativeCall ? `macos_${nativeCall[2]}` : a.type) {
       case "contexts": return reply(opts.groups ? ["ctx1"] : [])
       case "group_list": calls.push(`group_list@${ctx}`); return reply(opts.groups ?? [])
-      case "macos_apps": return reply(opts.apps ?? "[1] Google Chrome — com.google.Chrome")
-      case "macos_frontmost": return reply(opts.frontmost !== undefined ? opts.frontmost : { name: "x", pid: opts.frontmostPid ?? 999 })
+      case "macos_apps": return reply(opts.apps ?? [macApp(1, "Google Chrome", "com.google.Chrome")])
+      case "macos_frontmost": {
+        if (opts.frontmostPids) return reply({ name: "x", pid: opts.frontmostPids[Math.min(frontmostIndex++, opts.frontmostPids.length - 1)] })
+        return reply(opts.frontmost !== undefined ? opts.frontmost : { name: "x", pid: opts.frontmostPid ?? 999 })
+      }
       case "macos_click": calls.push(`click:${a.ref}:${a.right === true ? "right" : "left"}`); return reply(undefined)
       case "macos_windows": return reply(Array.from({ length: opts.windows ?? 0 }, (_, i) => ({ windowId: i })))
       case "macos_tree": {
@@ -249,8 +269,24 @@ describe("the prune run", () => {
     expect((await runGroupPrune({ dryRun: false, allowFrontmost: true }, allowed.send, MAC)).success).toBe(true)
   })
 
+  test("a browser that comes to the front during the run stops it before the next menu", async () => {
+    const two = `${ONE_CHIP}\n  [e12] button " interceptor-lane2 group - Closed"`
+    const lane2Left = '  [e12] button " interceptor-lane2 group - Closed"'
+    const { send, calls } = fakeBridge({
+      trees: [two, two, `${two}\n${MENU}`, lane2Left, lane2Left],
+      frontmostPids: [999, 1],
+    })
+    const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
+    expect(r.success).toBe(false)
+    expect(r.error).toContain("(1 deleted)")
+    expect(r.error).toContain("Google Chrome is the frontmost app")
+    expect(r.error).toContain("nothing more was deleted")
+    expect(calls.filter((c) => c.startsWith("showMenu:"))).toEqual(["showMenu:e10"])
+    expect((r.data as { browsers: Array<{ deleted: string[] }> }).browsers[0].deleted).toEqual(["interceptor-lane1"])
+  })
+
   test("a hidden browser is left alone", async () => {
-    const { send, calls } = fakeBridge({ trees: [ONE_CHIP], apps: "[1] Google Chrome (hidden) — com.google.Chrome" })
+    const { send, calls } = fakeBridge({ trees: [ONE_CHIP], apps: [macApp(1, "Google Chrome", "com.google.Chrome", true)] })
     const r = await runGroupPrune({ dryRun: false, allowFrontmost: true }, send, MAC)
     expect(r.success).toBe(false)
     expect(r.error).toContain("Google Chrome is hidden")
@@ -277,7 +313,7 @@ describe("the prune run", () => {
   })
 
   test("--app picks the browser by name, and a name that is not running is an error", async () => {
-    const apps = "[1] Google Chrome — com.google.Chrome\n[2] Brave Browser — com.brave.Browser"
+    const apps = [macApp(1, "Google Chrome", "com.google.Chrome"), macApp(2, "Brave Browser", "com.brave.Browser")]
     const one = await runGroupPrune({ dryRun: true, allowFrontmost: false, app: "brave browser" }, fakeBridge({ trees: [ONE_CHIP], apps }).send, MAC)
     expect((one.data as { browsers: Array<{ app: string }> }).browsers.map((b) => b.app)).toEqual(["Brave Browser"])
     const none = await runGroupPrune({ dryRun: true, allowFrontmost: false, app: "Arc" }, fakeBridge({ trees: [ONE_CHIP], apps }).send, MAC)
@@ -286,7 +322,7 @@ describe("the prune run", () => {
   })
 
   test("no Chromium browser running is a clean no-op", async () => {
-    const { send } = fakeBridge({ trees: [], apps: "[750] Safari — com.apple.Safari" })
+    const { send } = fakeBridge({ trees: [], apps: [macApp(750, "Safari", "com.apple.Safari")] })
     const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
     expect(r).toEqual({ success: true, data: { dryRun: false, deleted: 0, browsers: [] } })
   })
@@ -307,10 +343,12 @@ describe("on Windows and Linux", () => {
     })
   }
 
-  test("macOS keeps its own action names and the accessibility menu action", async () => {
+  // The bridge's older `macos_action` answers a failed accessibility action
+  // with a real click at the element; the neutral name never does.
+  test("macOS uses the neutral names too, and keeps the accessibility menu action", async () => {
     const { send, calls, namespaces } = fakeBridge({ trees: deleted() })
     await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
-    expect([...namespaces]).toEqual(["macos"])
+    expect([...namespaces]).toEqual(["desktop"])
     expect(calls).toContain("showMenu:e10")
     expect(calls.some((c) => c.startsWith("click:"))).toBe(false)
   })

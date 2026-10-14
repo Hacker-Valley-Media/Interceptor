@@ -12,13 +12,17 @@
  * native desktop provider (Full install): open the chip's context menu, press
  * "Delete group", confirm the chip is gone. The calls are the same on macOS,
  * Windows and Linux; only the way the menu is opened differs, because the
- * Windows provider's `action` has no context-menu action. Saved groups sync, so
- * a prune on one computer clears every profile and device on that account.
+ * Windows provider's `action` has no context-menu action. Every call goes to
+ * the provider directly under its neutral `desktop_` name: on that path a
+ * failed accessibility action is an error, where the macOS bridge's older
+ * `macos_action` answers one with a real click at the element. Saved groups
+ * sync, so a prune on one computer clears every profile and device on that account.
  *
  * There is no age filter: the browser UI exposes no timestamp for a saved
  * group. Prune takes every closed managed group and nothing else.
  */
 
+import { callDesktopProvider } from "../../daemon/desktop-provider"
 import { desktopAction } from "../../shared/desktop-contract"
 import { GROUP_LABEL_RE } from "../parse"
 import type { DaemonResponse, DaemonResult } from "../transport"
@@ -40,8 +44,8 @@ export type GroupPruneOptions = {
 
 export const DEFAULT_BRAND = "interceptor"
 
-// Chromium browsers that draw the saved tab groups bar: by bundle id on macOS,
-// by process or application name on Windows and Linux (no bundle id there).
+// Chromium browsers that draw the saved tab groups bar: by bundle id where the
+// host reports one (macOS), else by process or application name.
 const BROWSER_BUNDLES = new Set([
   "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
   "org.chromium.Chromium", "com.brave.Browser", "com.microsoft.edgemac",
@@ -141,22 +145,17 @@ export type BrowserApp = { name: string; pid: number; hidden: boolean }
 /**
  * The running Chromium browsers, one entry per process: two instances of one
  * browser (a second user-data-dir) share a name, so each is addressed by pid.
- * macOS answers `apps` with `[pid] Name * (hidden) — bundle.id` lines (`*`
- * marks the active app); Windows and Linux answer with `{ name, pid }` rows.
+ * Every host answers `apps` with rows. macOS rows carry `bundleId` and
+ * `hidden`; Windows and Linux rows are `{ name, pid }`. A row with a bundle id
+ * is judged by it alone, so an app that is merely named "Chrome" is not taken.
  */
 export function parseRunningBrowsers(apps: unknown): BrowserApp[] {
   const browsers: BrowserApp[] = []
-  if (typeof apps === "string") {
-    for (const line of apps.split("\n")) {
-      const m = /^\[(\d+)\] (.+?)( \*)?( \(hidden\))? — (\S+)\s*$/.exec(line)
-      if (m && BROWSER_BUNDLES.has(m[5])) browsers.push({ name: m[2], pid: Number(m[1]), hidden: m[4] !== undefined })
-    }
-  } else if (Array.isArray(apps)) {
-    for (const app of apps as Array<{ name?: unknown; pid?: unknown }>) {
-      if (typeof app?.name === "string" && typeof app.pid === "number" && BROWSER_NAME_RE.test(app.name.trim())) {
-        browsers.push({ name: app.name, pid: app.pid, hidden: false })
-      }
-    }
+  if (!Array.isArray(apps)) return browsers
+  for (const app of apps as Array<{ name?: unknown; pid?: unknown; bundleId?: unknown; hidden?: unknown }>) {
+    if (typeof app?.name !== "string" || typeof app.pid !== "number") continue
+    const isBrowser = typeof app.bundleId === "string" ? BROWSER_BUNDLES.has(app.bundleId) : BROWSER_NAME_RE.test(app.name.trim())
+    if (isBrowser) browsers.push({ name: app.name, pid: app.pid, hidden: app.hidden === true })
   }
   return browsers
 }
@@ -180,6 +179,8 @@ export type PruneHost = {
   platform: string
   /** Why the native provider cannot be used on this install, or null. */
   providerFailure: (send: SendFn) => Promise<string | null>
+  /** One call to the native provider, already under its `desktop_` name. */
+  native: (send: SendFn, action: Action) => Promise<DaemonResult>
   sleep: (ms: number) => Promise<unknown>
 }
 
@@ -192,11 +193,15 @@ async function call(send: SendFn, action: Action, contextId?: string): Promise<D
 }
 
 /**
- * One native call. Actions are written with their macOS names; on Windows and
- * Linux the same action goes to the desktop provider under its `desktop_` name.
+ * One native call. Actions are written with their macOS names and go to the
+ * provider under the matching `desktop_` name on every host.
  */
-function native(send: SendFn, platform: string, action: Action): Promise<DaemonResult> {
-  return call(send, platform === "darwin" ? action : desktopAction(action))
+async function native(send: SendFn, host: PruneHost, action: Action): Promise<DaemonResult> {
+  try {
+    return await host.native(send, desktopAction(action))
+  } catch (err) {
+    return { success: false, error: (err as Error).message }
+  }
 }
 
 async function realProviderFailure(send: SendFn): Promise<string | null> {
@@ -211,6 +216,9 @@ async function realProviderFailure(send: SendFn): Promise<string | null> {
 const REAL_HOST: PruneHost = {
   platform: process.platform,
   providerFailure: realProviderFailure,
+  // Straight to the provider, as `interceptor desktop` does: the daemon turns a
+  // `desktop_` action back into the macOS bridge's `macos_` one.
+  native: (_send, action) => callDesktopProvider(action),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 }
 
@@ -256,7 +264,7 @@ type AppReport = {
 
 async function pruneApp(
   run: Native, browser: BrowserApp, brands: Set<string>, openTitles: Set<string>, opts: GroupPruneOptions,
-  frontmost: boolean, host: PruneHost
+  isFrontmost: () => Promise<boolean>, host: PruneHost
 ): Promise<AppReport> {
   const { name: app, pid } = browser
   const { sleep } = host
@@ -274,10 +282,11 @@ async function pruneApp(
     report.skipped = `${app} is hidden; run again when its windows are on screen`
     return report
   }
-  if (frontmost && !opts.allowFrontmost) {
-    // An open context menu takes the keyboard of the frontmost app, so a person
-    // typing in the browser would be typing into the menu.
-    report.skipped = `${app} is the frontmost app; run again when it is in the background, or pass --allow-frontmost`
+  // An open context menu takes the keyboard of the frontmost app, so a person
+  // typing in the browser would be typing into the menu.
+  const frontmostSkip = `${app} is the frontmost app; run again when it is in the background, or pass --allow-frontmost`
+  if (!opts.allowFrontmost && await isFrontmost()) {
+    report.skipped = frontmostSkip
     return report
   }
 
@@ -296,6 +305,11 @@ async function pruneApp(
     const next = selectPrunable(parseSavedGroupChips(before.tree), brands, openTitles)
       .find((c) => (attempts.get(c.title) ?? 0) < MAX_ATTEMPTS)
     if (!next) break
+    // The person can switch to the browser while a run is under way.
+    if (!opts.allowFrontmost && round > 0 && await isFrontmost()) {
+      report.skipped = `${frontmostSkip}; nothing more was deleted`
+      break
+    }
     attempts.set(next.title, (attempts.get(next.title) ?? 0) + 1)
 
     // macOS has an accessibility action for the context menu. The Windows
@@ -340,7 +354,7 @@ export async function runGroupPrune(
   if (!PRUNE_PLATFORMS.includes(host.platform)) return { success: false, error: unsupportedPlatformError(host.platform) }
   const noProvider = await host.providerFailure(send)
   if (noProvider !== null) return { success: false, error: noProviderError(noProvider) }
-  const run: Native = (action) => native(send, host.platform, action)
+  const run: Native = (action) => native(send, host, action)
 
   const { brands, openTitles } = await readExtensionGroups(send)
   brands.add(opts.brand ?? DEFAULT_BRAND)
@@ -355,12 +369,14 @@ export async function runGroupPrune(
   }
   if (apps.length === 0) return { success: true, data: { dryRun: opts.dryRun, deleted: 0, browsers: [] } }
 
-  // One window on macOS and Windows; Linux can answer with a list.
-  const front = (await run({ type: "macos_frontmost" })).data
-  const frontPid = ((Array.isArray(front) ? front[0] : front) as { pid?: unknown } | null | undefined)?.pid
+  const isFrontmost = async (pid: number): Promise<boolean> => {
+    // One window on macOS and Windows; Linux can answer with a list.
+    const front = (await run({ type: "macos_frontmost" })).data
+    return ((Array.isArray(front) ? front[0] : front) as { pid?: unknown } | null | undefined)?.pid === pid
+  }
 
   const browsers: AppReport[] = []
-  for (const app of apps) browsers.push(await pruneApp(run, app, brands, openTitles, opts, frontPid === app.pid, host))
+  for (const app of apps) browsers.push(await pruneApp(run, app, brands, openTitles, opts, () => isFrontmost(app.pid), host))
 
   const deleted = browsers.reduce((n, b) => n + b.deleted.length, 0)
   const failures = browsers.flatMap((b) => b.failed.map((f) => `${f.title} not deleted: ${f.reason}`))
