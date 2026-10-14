@@ -67,6 +67,11 @@ const CHIP_RE = new RegExp(String.raw`^\s*${REF} button " ?(.+) group - (Closed|
 const DELETE_ITEM_RE = new RegExp(String.raw`^\s*${REF} menuitem "Delete group"\s*$`)
 const MENU_RE = new RegExp(String.raw`^\s*${REF} menu\s*$`)
 const OPEN_ITEM_RE = new RegExp(String.raw`^\s*${REF} menuitem "Open group"\s*$`)
+// Chrome can ask before it deletes a saved group: a window titled "Delete tab
+// group?" holding "Delete group" and "Cancel" buttons (seen on Windows, Chrome 155).
+const CONFIRM_RE = new RegExp(String.raw`^\s*${REF} (?:window|dialog|group) "Delete tab group\?"\s*$`)
+const CONFIRM_DELETE_RE = new RegExp(String.raw`^\s*${REF} button "Delete group"\s*$`)
+const CONFIRM_CANCEL_RE = new RegExp(String.raw`^\s*${REF} button "Cancel"\s*$`)
 // The bar ends in a "Tab groups" button, which every host reports as a button.
 const BAR_RE = new RegExp(String.raw`^\s*${REF} button "Tab groups"\s*$`)
 
@@ -142,6 +147,21 @@ export function findSavedGroupMenu(tree: string): { menuRef?: string; deleteRef?
       if (del) return { menuRef: menu[1], deleteRef: del[1] }
     }
     return { menuRef: menu[1] }
+  }
+  return {}
+}
+
+/** Chrome's "Delete tab group?" confirmation, if the tree shows one: its two buttons. */
+export function findDeleteConfirmation(tree: string): { deleteRef?: string; cancelRef?: string } {
+  const lines = tree.split("\n")
+  for (let i = 0; i < lines.length; i++) {
+    if (!CONFIRM_RE.test(lines[i])) continue
+    const found: { deleteRef?: string; cancelRef?: string } = {}
+    for (let j = i + 1; j < lines.length && j <= i + 30 && !(found.deleteRef && found.cancelRef); j++) {
+      found.deleteRef ??= CONFIRM_DELETE_RE.exec(lines[j])?.[1]
+      found.cancelRef ??= CONFIRM_CANCEL_RE.exec(lines[j])?.[1]
+    }
+    if (found.deleteRef || found.cancelRef) return found
   }
   return {}
 }
@@ -305,9 +325,24 @@ async function pruneApp(
   const attempts = new Map<string, number>()
   const lastProblem = new Map<string, string>()
   // Each delete re-reads the tree: refs are short-lived and the bar reflows.
-  for (let round = 0; round < report.found.length * MAX_ATTEMPTS + 1; round++) {
+  let lastPressed: string | undefined
+  // A confirmation takes a round of its own, hence the factor of two.
+  for (let round = 0; round < report.found.length * MAX_ATTEMPTS * 2 + 1; round++) {
     const before = await readTree(run, pid, "all")
     if (before.tree === undefined) break
+    // The run was asked to delete the group it just pressed, so it answers
+    // Chrome's confirmation. One it cannot press is cancelled, so no dialog
+    // is left over the person's window.
+    const confirm = findDeleteConfirmation(before.tree)
+    if (confirm.deleteRef || confirm.cancelRef) {
+      const confirmed = confirm.deleteRef ? await run({ type: "macos_action", ref: confirm.deleteRef, action: "press" }) : undefined
+      if (!confirmed?.success) {
+        if (lastPressed) lastProblem.set(lastPressed, confirmed?.error ?? "the browser asked to confirm the delete and the confirmation could not be pressed")
+        if (confirm.cancelRef) await run({ type: "macos_action", ref: confirm.cancelRef, action: "press" })
+      }
+      await sleep(DELETE_SETTLE_MS)
+      continue
+    }
     if (findSavedGroupMenu(before.tree).menuRef) {
       report.skipped = `a saved tab group menu is already open in ${app}; nothing more was deleted`
       break
@@ -344,6 +379,7 @@ async function pruneApp(
     const pressed = await run({ type: "macos_action", ref: menu.deleteRef, action: "press" })
     if (pressed.success) lastProblem.delete(next.title)
     else lastProblem.set(next.title, pressed.error ?? "could not press 'Delete group'")
+    lastPressed = next.title
     await sleep(DELETE_SETTLE_MS)
   }
 
@@ -353,7 +389,7 @@ async function pruneApp(
   for (const title of attempts.keys()) {
     if (after.tree === undefined) report.failed.push({ title, reason: "could not re-read the browser to confirm the delete" })
     else if (!remaining.has(title)) report.deleted.push(title)
-    else report.failed.push({ title, reason: lastProblem.get(title) ?? "still on the bar after 'Delete group' (the browser may be asking for confirmation)" })
+    else report.failed.push({ title, reason: lastProblem.get(title) ?? "still on the bar after 'Delete group'" })
   }
   return report
 }
