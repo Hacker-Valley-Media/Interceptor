@@ -57,6 +57,21 @@ export function isPreStoreVersion(version: string | undefined): boolean {
   return false
 }
 
+const WS_ORIGIN_SCHEMES = new Set(["chrome-extension:", "moz-extension:", "safari-web-extension:"])
+
+/**
+ * Whether the daemon's loopback WebSocket port serves a request with this
+ * Origin header. A browser sends Origin on every WebSocket handshake, and the
+ * same-origin policy does not apply to one, so without this rule any page open
+ * on the computer could connect and drive the browser (issue #274). The
+ * extension sends its own scheme. The CLI, the Safari handler, the runtime
+ * agent and the iOS runner are not browsers and send no Origin.
+ */
+export function isAllowedWsOrigin(origin: string | null | undefined): boolean {
+  if (!origin) return true
+  try { return WS_ORIGIN_SCHEMES.has(new URL(origin).protocol) } catch { return false }
+}
+
 /** `chrome-extension://<id>/` (the native host's first argument) → `<id>`. */
 export function extensionIdFromOrigin(origin: string | undefined): string | undefined {
   const match = origin?.match(/^chrome-extension:\/\/([a-p]{32})\/?$/)

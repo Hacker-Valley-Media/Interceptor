@@ -26,6 +26,18 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.2">
+    <h2>Interceptor 2.1.2</h2>
+    <time datetime="2026-10-14">October 14, 2026</time>
+    <ul>
+      <li>A background click no longer crashes the page it lands on. On a Mac, a click or drag sent to a named app or window carried a time from just after the computer started. Chrome, Brave, and Electron apps crashed the tab when such a click changed the page's route. Clicks and drags now carry the current time.</li>
+      <li>Closing a tab group no longer leaves a closed saved group behind in Chrome or Brave. <code>group close</code>, <code>tab close</code> on a group's last tab, <code>window close</code>, and the idle cleanup now delete the group. A group that keeps a tab stays, and groups you made yourself are not touched.</li>
+      <li>New <code>interceptor group prune</code> deletes the closed saved groups that earlier versions left on the bookmarks bar. <code>--dry-run</code> lists them first, and <code>interceptor group prune &lt;label&gt;</code> deletes only the groups you name. It needs the Full install and a bookmarks bar that is showing. A delete syncs to every profile on the account and cannot be undone.</li>
+      <li>A web page can no longer connect to Interceptor. The local port the browser extension uses now refuses a connection that comes from a web page.</li>
+      <li>The Mac packages now refuse to install on an Intel Mac, where their programs cannot run. An Intel Mac can still build Interceptor from source.</li>
+      <li>The Mac bridge builds from source against the macOS 27 SDK.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="2.1.1">
     <h2>Interceptor 2.1.1</h2>
     <time datetime="2026-10-13">October 13, 2026</time>
