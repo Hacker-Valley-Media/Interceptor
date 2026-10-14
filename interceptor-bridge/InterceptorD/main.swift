@@ -113,8 +113,13 @@ func eventTargetPID(_ action: [String: Any]) -> pid_t? {
 }
 
 func postEvent(_ event: CGEvent, targetPID: pid_t?) {
-    if let targetPID { event.postToPid(targetPID) }
-    else { event.post(tap: .cghidEventTap) }
+    if let targetPID {
+        // Per-pid delivery skips the WindowServer, which stamps a tap-posted
+        // event. Unstamped, the app reads a time from just after boot, and
+        // Chromium traps on such a click when it starts a same-document navigation.
+        event.timestamp = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        event.postToPid(targetPID)
+    } else { event.post(tap: .cghidEventTap) }
 }
 
 func handleType(_ action: [String: Any]) -> [String: Any] {
