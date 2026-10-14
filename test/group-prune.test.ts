@@ -175,6 +175,11 @@ describe("Chrome's delete confirmation", () => {
     expect(findDeleteConfirmation(CONFIRM_MAC)).toEqual({ deleteRef: "e2149", cancelRef: "e2148" })
   })
 
+  test("a sheet that holds the buttons itself is the dialog", () => {
+    const sheet = '[e1] sheet "Delete Tab Group?"\n  [e2] button "Cancel"\n  [e3] button "Delete Group"'
+    expect(findDeleteConfirmation(sheet)).toEqual({ deleteRef: "e3", cancelRef: "e2" })
+  })
+
   test("a button outside the dialog is not taken for one of its own", () => {
     const sibling = '[e40] window "Delete tab group?"\n  [e41] text "Delete this group?"\n[e50] window "Other"\n  [e51] button "Delete group"'
     expect(findDeleteConfirmation(sibling)).toEqual({})
