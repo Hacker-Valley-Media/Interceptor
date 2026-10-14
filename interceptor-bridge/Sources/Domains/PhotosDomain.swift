@@ -74,7 +74,8 @@ final class PhotosDomain: DomainHandler, @unchecked Sendable {
     private func assetRow(_ a: PHAsset) -> [String: Any] {
         var row: [String: Any] = ["id": a.localIdentifier, "mediaType": mediaName(a.mediaType), "mediaSubtypes": subtypes.keys.sorted().filter { a.mediaSubtypes.contains(subtypes[$0]!) }, "pixelWidth": a.pixelWidth, "pixelHeight": a.pixelHeight, "duration": a.duration, "isFavorite": a.isFavorite, "isHidden": a.isHidden, "hasAdjustments": a.hasAdjustments, "burstIdentifier": a.burstIdentifier as Any? ?? NSNull(), "playbackStyle": NativeNames.name(a.playbackStyle.rawValue, NativeNames.playbackStyle), "sourceType": NativeNames.name(Int(a.sourceType.rawValue), NativeNames.assetSource)]
         for (key, date) in [("creationDate", a.creationDate), ("modificationDate", a.modificationDate)] { if let date { row[key] = DesktopEventKitValidation.iso(date) } }
-        if #available(macOS 26, *) { row["addedDate"] = DesktopEventKitValidation.iso(a.addedDate) }
+        // `addedDate` is `Date` in the macOS 26 SDK and `Date?` in the macOS 27 SDK; the cast compiles against both.
+        if #available(macOS 26, *), let added = a.addedDate as Date? { row["addedDate"] = DesktopEventKitValidation.iso(added) }
         if let loc = a.location { row["location"] = ["latitude": loc.coordinate.latitude, "longitude": loc.coordinate.longitude, "altitude": loc.altitude, "horizontalAccuracy": loc.horizontalAccuracy] }
         return row
     }
