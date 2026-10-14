@@ -250,4 +250,53 @@ describe.skipIf(!IS_DARWIN)("release modes — dry-run", () => {
     expect(stdout).toContain("InterceptorAgent-arm64.dylib")
     expect(stdout).toContain("InterceptorAgent-arm64e.dylib")
   })
+
+  test("default release builds for the host and checks every binary for arm64", () => {
+    const { stdout, status } = runReleaseDryRun([])
+    expect(status).toBe(0)
+    expect(stdout).toContain("Architectures:     arm64")
+    expect(stdout).toContain("scripts/build.sh --target=host")
+
+    const lipoLines = stdout.split("\n").filter((l) => l.includes("DRY: lipo"))
+    expect(lipoLines.map((l) => l.split(" -verify_arch ")[0]?.split("/").pop())).toEqual([
+      "interceptor",
+      "interceptor-daemon",
+      "interceptor-bridge",
+      "Sparkle",
+    ])
+    expect(lipoLines[3]).toContain("/interceptor-bridge.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle ")
+    for (const line of lipoLines) expect(line).toEndWith("-verify_arch arm64")
+
+    // The checked-in distribution files go to productbuild unchanged.
+    const productbuildLines = stdout.split("\n").filter((l) => l.includes("DRY: productbuild"))
+    for (const line of productbuildLines) expect(line).toContain("/scripts/release/distribution")
+  })
+
+  test("--universal builds arm64 + x86_64 and declares both to Installer", () => {
+    const { stdout, status } = runReleaseDryRun(["--universal"])
+    expect(status).toBe(0)
+    expect(stdout).toContain("Architectures:     arm64 x86_64 (universal)")
+    expect(stdout).toContain("scripts/build.sh --target=macos-universal")
+
+    const lipoLines = stdout.split("\n").filter((l) => l.includes("DRY: lipo"))
+    expect(lipoLines).toHaveLength(4)
+    for (const line of lipoLines) expect(line).toEndWith("-verify_arch arm64 x86_64")
+
+    // Both packages are built from copies that add x86_64 to hostArchitectures.
+    const writes = stdout.split("\n").filter((l) => l.includes('hostArchitectures="arm64,x86_64"'))
+    expect(writes.some((l) => l.includes("_distribution-universal/distribution-browser.xml"))).toBe(true)
+    expect(writes.some((l) => l.includes("_distribution-universal/distribution.xml"))).toBe(true)
+    const productbuildLines = stdout.split("\n").filter((l) => l.includes("DRY: productbuild"))
+    expect(productbuildLines).toHaveLength(2)
+    for (const line of productbuildLines) expect(line).toContain("/_distribution-universal/distribution")
+  })
+
+  test("--universal refuses the research agent dylibs, which are arm64-only", () => {
+    const { status, stderr } = runReleaseDryRun(["--universal", "--full"], {
+      INTERCEPTOR_INCLUDE_AGENT_DYLIBS: "1",
+    })
+    expect(status).not.toBe(0)
+    expect(stderr).toContain("--universal")
+    expect(stderr).toContain("INTERCEPTOR_INCLUDE_AGENT_DYLIBS")
+  })
 })

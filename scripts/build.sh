@@ -255,6 +255,30 @@ build_macos() {
   bun build daemon/index.ts --compile --target=bun-darwin-arm64 --outfile=daemon/interceptor-daemon
 }
 
+# Compile one entry point for both Mac architectures and merge the slices into
+# one Mach-O, so the same pkg runs on Apple silicon and Intel. x64 uses the
+# baseline build like Windows and Linux: Intel Macs that macOS 11 still
+# supports include CPUs without AVX2. The slices go under dist/ (ignored), so a
+# failed compile does not leave a stray binary beside the daemon.
+compile_macos_universal() {
+  local entry="$1" out="$2"
+  local slice="dist/macos-slices/$(basename "$out")"
+  mkdir -p dist/macos-slices
+  bun build "$entry" --compile --target=bun-darwin-arm64 --outfile="$slice-arm64"
+  bun build "$entry" --compile --target=bun-darwin-x64-baseline --outfile="$slice-x64"
+  lipo -create "$slice-arm64" "$slice-x64" -output "$out"
+  rm -f "$slice-arm64" "$slice-x64"
+}
+
+# --target=macos-universal: the CLI and daemon that release.sh --universal
+# packages. The bridge follows through build_bridge universal.
+build_macos_universal() {
+  echo "Building CLI (macOS arm64 + x64)..."
+  compile_macos_universal cli/index.ts dist/interceptor
+  echo "Building daemon (macOS arm64 + x64)..."
+  compile_macos_universal daemon/index.ts daemon/interceptor-daemon
+}
+
 # Windows keeps a mandatory write lock on a running .exe, so `bun build
 # --compile` over a live binary fails with a bare EPERM. This MUST run before the
 # first compile: build_host writes the CLI first (bun appends .exe on a Windows
@@ -383,8 +407,13 @@ build_bridge() {
     echo "Skipping interceptor-bridge (not on macOS)"
     return 0
   fi
-  echo "Building interceptor-bridge (macOS native)..."
-  bash scripts/build-bridge.sh
+  if [[ "${1:-}" == "universal" ]]; then
+    echo "Building interceptor-bridge (macOS arm64 + x86_64)..."
+    INTERCEPTOR_BRIDGE_UNIVERSAL=1 bash scripts/build-bridge.sh
+  else
+    echo "Building interceptor-bridge (macOS native)..."
+    bash scripts/build-bridge.sh
+  fi
 }
 
 # Preflight before any bundling: a locked .exe is a user-fixable condition, and
@@ -420,6 +449,12 @@ elif [[ "$TARGET" == "macos" ]]; then
   build_extension_safari
   build_macos
   build_bridge
+elif [[ "$TARGET" == "macos-universal" ]]; then
+  build_extension
+  build_extension_mv2
+  build_extension_safari
+  build_macos_universal
+  build_bridge universal
 elif [[ "$TARGET" == "windows-x64" ]]; then
   build_extension
   build_windows_arch x64
@@ -451,7 +486,7 @@ fi
 # No --entitlements here: entitlement enforcement only applies under the
 # hardened runtime, which ad-hoc signing doesn't enable. Release builds are
 # re-signed (--force) with the real identity + entitlements by release.sh.
-if [[ "$(uname -s)" == "Darwin" && ( "$BUILD_ALL" == "1" || "$TARGET" == "host" || "$TARGET" == "macos" ) ]] && command -v codesign >/dev/null 2>&1; then
+if [[ "$(uname -s)" == "Darwin" && ( "$BUILD_ALL" == "1" || "$TARGET" == "host" || "$TARGET" == "macos" || "$TARGET" == "macos-universal" ) ]] && command -v codesign >/dev/null 2>&1; then
   for b in dist/interceptor daemon/interceptor-daemon dist/interceptor-bridge; do
     if [[ -f "$b" ]]; then
       codesign --remove-signature "$b" 2>/dev/null || true
