@@ -151,13 +151,18 @@ export function findSavedGroupMenu(tree: string): { menuRef?: string; deleteRef?
   return {}
 }
 
-/** Chrome's "Delete tab group?" confirmation, if the tree shows one: its two buttons. */
+/**
+ * Chrome's "Delete tab group?" confirmation, if the tree shows one: its two
+ * buttons. Only lines nested under the dialog count; the tree text indents a
+ * child deeper than its parent, so the scan stops where the dialog ends.
+ */
 export function findDeleteConfirmation(tree: string): { deleteRef?: string; cancelRef?: string } {
   const lines = tree.split("\n")
+  const depth = (line: string) => line.length - line.trimStart().length
   for (let i = 0; i < lines.length; i++) {
     if (!CONFIRM_RE.test(lines[i])) continue
     const found: { deleteRef?: string; cancelRef?: string } = {}
-    for (let j = i + 1; j < lines.length && j <= i + 30 && !(found.deleteRef && found.cancelRef); j++) {
+    for (let j = i + 1; j < lines.length && depth(lines[j]) > depth(lines[i]); j++) {
       found.deleteRef ??= CONFIRM_DELETE_RE.exec(lines[j])?.[1]
       found.cancelRef ??= CONFIRM_CANCEL_RE.exec(lines[j])?.[1]
     }
@@ -334,12 +339,18 @@ async function pruneApp(
     // Chrome's confirmation. One it cannot press is cancelled, so no dialog
     // is left over the person's window.
     const confirm = findDeleteConfirmation(before.tree)
+    if ((confirm.deleteRef || confirm.cancelRef) && !lastPressed) {
+      // Not this run's dialog: leave it to the person, as with an open menu.
+      report.skipped = `a "Delete tab group?" dialog is already open in ${app}; nothing more was deleted`
+      break
+    }
     if (confirm.deleteRef || confirm.cancelRef) {
       const confirmed = confirm.deleteRef ? await run({ type: "macos_action", ref: confirm.deleteRef, action: "press" }) : undefined
       if (!confirmed?.success) {
         if (lastPressed) lastProblem.set(lastPressed, confirmed?.error ?? "the browser asked to confirm the delete and the confirmation could not be pressed")
         if (confirm.cancelRef) await run({ type: "macos_action", ref: confirm.cancelRef, action: "press" })
       }
+      lastPressed = undefined
       await sleep(DELETE_SETTLE_MS)
       continue
     }

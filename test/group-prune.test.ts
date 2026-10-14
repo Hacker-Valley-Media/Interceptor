@@ -147,6 +147,11 @@ describe("Chrome's delete confirmation", () => {
     expect(findDeleteConfirmation(CONFIRM)).toEqual({ deleteRef: "e42", cancelRef: "e43" })
   })
 
+  test("a button outside the dialog is not taken for one of its own", () => {
+    const sibling = '[e40] window "Delete tab group?"\n  [e41] text "Delete this group?"\n[e50] window "Other"\n  [e51] button "Delete group"'
+    expect(findDeleteConfirmation(sibling)).toEqual({})
+  })
+
   test("another dialog with the same button names is not it", () => {
     const other = '[e1] window "Save password?"\n  [e2] button "Delete group"\n  [e3] button "Cancel"'
     expect(findDeleteConfirmation(other)).toEqual({})
@@ -265,6 +270,14 @@ describe("the prune run", () => {
     expect(r.success).toBe(true)
     expect(calls).toEqual(["tree:interactive", "tree:all", "showMenu:e10", "tree:all", "press:e23166", "tree:all", "press:e42", "tree:all", "tree:interactive"])
     expect((r.data as { deleted: number }).deleted).toBe(1)
+  })
+
+  test("a confirmation the run did not cause is left alone, and the run stops", async () => {
+    const { send, calls } = fakeBridge({ trees: [ONE_CHIP, `${ONE_CHIP}\n${CONFIRM}`, ONE_CHIP] })
+    const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('"Delete tab group?" dialog is already open')
+    expect(calls.some((c) => c.startsWith("press:") || c.startsWith("showMenu:"))).toBe(false)
   })
 
   test("a confirmation that cannot be pressed is cancelled and reported", async () => {
