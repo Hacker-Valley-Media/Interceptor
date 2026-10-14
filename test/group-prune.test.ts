@@ -3,7 +3,7 @@
 // makes. The tree fixtures are lines copied from a live `macos tree` of Chrome.
 import { describe, expect, test } from "bun:test"
 import {
-  findSavedGroupMenu, isManagedTitle, NO_VISIBLE_BROWSER, parseGroupPruneOptions, parseRunningBrowsers,
+  findDeleteConfirmation, findSavedGroupMenu, isManagedTitle, NO_VISIBLE_BROWSER, parseGroupPruneOptions, parseRunningBrowsers,
   countWindowsWithoutBar, parseSavedGroupChips, runGroupPrune, selectPrunable, unsupportedPlatformError,
   type PruneHost,
 } from "../cli/commands/group-prune"
@@ -134,6 +134,31 @@ describe("reading the chip's context menu", () => {
   })
 })
 
+// Copied from a live Windows tree, Chrome 155, right after "Delete group" was pressed.
+const CONFIRM = [
+  '[e40] group "Delete tab group?"',
+  '  [e41] window "Delete tab group?"',
+  '            [e42] button "Delete group"',
+  '            [e43] button "Cancel"',
+].join("\n")
+
+describe("Chrome's delete confirmation", () => {
+  test("is found with both of its buttons", () => {
+    expect(findDeleteConfirmation(CONFIRM)).toEqual({ deleteRef: "e42", cancelRef: "e43" })
+  })
+
+  test("a button outside the dialog is not taken for one of its own", () => {
+    const sibling = '[e40] window "Delete tab group?"\n  [e41] text "Delete this group?"\n[e50] window "Other"\n  [e51] button "Delete group"'
+    expect(findDeleteConfirmation(sibling)).toEqual({})
+  })
+
+  test("another dialog with the same button names is not it", () => {
+    const other = '[e1] window "Save password?"\n  [e2] button "Delete group"\n  [e3] button "Cancel"'
+    expect(findDeleteConfirmation(other)).toEqual({})
+    expect(findDeleteConfirmation(MENU)).toEqual({})
+  })
+})
+
 describe("finding the browsers to prune", () => {
   // The rows a Mac answers `apps` with, copied from a live bridge.
   test("macOS rows are matched by bundle id, and hidden is read", () => {
@@ -237,6 +262,34 @@ describe("the prune run", () => {
     expect(calls.filter((c) => c.startsWith("showMenu:"))).toEqual(["showMenu:e12"])
     expect((r.data as { browsers: Array<{ found: string[]; deleted: string[] }> }).browsers[0])
       .toMatchObject({ found: ["interceptor-lane2"], deleted: ["interceptor-lane2"] })
+  })
+
+  test("Chrome's confirmation is answered with Delete group", async () => {
+    const { send, calls } = fakeBridge({ trees: [ONE_CHIP, ONE_CHIP, `${ONE_CHIP}\n${MENU}`, `${ONE_CHIP}\n${CONFIRM}`, CHIP_GONE, CHIP_GONE] })
+    const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
+    expect(r.success).toBe(true)
+    expect(calls).toEqual(["tree:interactive", "tree:all", "showMenu:e10", "tree:all", "press:e23166", "tree:all", "press:e42", "tree:all", "tree:interactive"])
+    expect((r.data as { deleted: number }).deleted).toBe(1)
+  })
+
+  test("a confirmation the run did not cause is left alone, and the run stops", async () => {
+    const { send, calls } = fakeBridge({ trees: [ONE_CHIP, `${ONE_CHIP}\n${CONFIRM}`, ONE_CHIP] })
+    const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('"Delete tab group?" dialog is already open')
+    expect(calls.some((c) => c.startsWith("press:") || c.startsWith("showMenu:"))).toBe(false)
+  })
+
+  test("a confirmation that cannot be pressed is cancelled and reported", async () => {
+    // Both attempts reach the confirmation, and both presses are refused.
+    const ask = [ONE_CHIP, `${ONE_CHIP}\n${MENU}`, `${ONE_CHIP}\n${CONFIRM}`]
+    const trees = [ONE_CHIP, ...ask, ...ask, ONE_CHIP, ONE_CHIP]
+    const { send: base, calls } = fakeBridge({ trees })
+    const send: typeof base = async (a, t, c) => a.ref === "e42" ? ({ id: "x", result: { success: false, error: "press refused" } } as DaemonResponse) : base(a, t, c)
+    const r = await runGroupPrune({ dryRun: false, allowFrontmost: false }, send, MAC)
+    expect(r.success).toBe(false)
+    expect(calls.filter((c) => c === "press:e43")).toHaveLength(2)
+    expect(r.error).toContain("interceptor-lane1 not deleted: press refused")
   })
 
   test("--dry-run lists the groups and touches nothing", async () => {
