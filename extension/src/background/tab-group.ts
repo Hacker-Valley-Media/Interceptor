@@ -393,7 +393,9 @@ export async function ungroupBeforeClose(tabIds: number[]): Promise<void> {
   if (tabIds.length === 0 || !hasTabGroupApi() || typeof chrome.tabs.ungroup !== "function") return
   try {
     await ensureInterceptorGroup()
-    await hydrateNamedGroups()
+    // A group moved to another window or restored by the browser comes back
+    // under a new id; without this its registry entry is gone and it is missed.
+    await readoptNamedGroups()
     const managed = new Set(namedGroups.values())
     if (interceptorGroupId !== null) managed.add(interceptorGroupId)
     const closing = new Set(tabIds)

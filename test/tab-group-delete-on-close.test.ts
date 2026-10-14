@@ -130,6 +130,15 @@ describe("closing a managed group's last tabs deletes the group", () => {
     expect(calls).toEqual([["remove", [1, 2]]])
   })
 
+  test("a group the registry lost is found again by its title", async () => {
+    // Moved to another window or restored by the browser, the group has a new
+    // id and tabGroups.onRemoved already dropped the old entry.
+    namedGroups.delete("lane1")
+    const calls = installChrome(LANE_TABS)
+    await removeTabsAndEmptiedGroups([1, 2])
+    expect(calls).toEqual([["ungroup", [1, 2]], ["remove", [1, 2]]])
+  })
+
   test("ungroupBeforeClose alone removes nothing (the window_close path)", async () => {
     const calls = installChrome(LANE_TABS)
     await ungroupBeforeClose([1, 2])
