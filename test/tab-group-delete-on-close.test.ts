@@ -179,6 +179,20 @@ describe("every close path deletes the group it empties", () => {
     expect(order).toEqual(["ungroup", "windows.remove 1"])
   })
 
+  test("window_close still closes the window when its tabs cannot be read", async () => {
+    for (const query of [async () => { throw new Error("No window with id: 1.") }, () => new Promise<never>(() => {})]) {
+      const calls = installChrome(LANE_TABS)
+      const chromeMock = g.chrome as { windows: Record<string, unknown>; tabs: Record<string, unknown> }
+      chromeMock.tabs.query = query
+      const removed: number[] = []
+      chromeMock.windows.remove = async (id: number) => { removed.push(id) }
+      const result = await handleWindowActions({ type: "window_close", windowId: 1 }, 0)
+      expect(result.success).toBe(true)
+      expect(removed).toEqual([1])
+      expect(calls).toEqual([])
+    }
+  }, 10_000)
+
   test("the idle purge", async () => {
     const now = 1_700_000_000_000
     const calls = installChrome(

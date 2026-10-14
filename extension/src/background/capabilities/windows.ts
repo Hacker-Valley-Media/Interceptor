@@ -11,6 +11,9 @@ type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: 
 //   2. Wrap the whole handler so it ALWAYS returns a structured ActionResult —
 //      a timeout or a throw becomes an honest { success:false, error } the CLI can see.
 const WINDOW_OP_TIMEOUT_MS = 8000
+// window_close ungroups before it closes. Short, so that step plus the close
+// itself still answer inside the CLI's 15 s.
+export const WINDOW_CLOSE_PREP_TIMEOUT_MS = 3000
 
 export class WindowOperationTimeoutError extends Error {
   constructor(public readonly operation: string, public readonly timeoutMs: number) {
@@ -118,9 +121,13 @@ export async function handleWindowActions(
         const windowId = windowIdFromAction(action)
         if (windowId === undefined) return { success: false, error: "window_close requires a window id" }
         // A window that closes with a managed group inside leaves that group
-        // behind as a closed saved group (issue #301).
-        const windowTabs = await chrome.tabs.query({ windowId }).catch(() => [])
-        await ungroupBeforeClose(windowTabs.map(t => t.id).filter((id): id is number => typeof id === "number"))
+        // behind as a closed saved group (issue #301). The ungroup is bounded
+        // and best effort: a hung or failed tab query must not keep the
+        // window open.
+        await withWindowTimeout("window_close", (async () => {
+          const windowTabs = await chrome.tabs.query({ windowId })
+          await ungroupBeforeClose(windowTabs.map(t => t.id).filter((id): id is number => typeof id === "number"))
+        })(), WINDOW_CLOSE_PREP_TIMEOUT_MS).catch(() => {})
         await withWindowTimeout("window_close", chrome.windows.remove(windowId))
         return { success: true }
       }
