@@ -231,6 +231,7 @@ interceptor group prune [--dry-run]      # Delete every CLOSED saved group Inter
                                          # and presses "Delete group" through the native desktop provider, in the background. No age filter
                                          # (the UI has no timestamp). Skips a frontmost or hidden browser; --allow-frontmost, --app <name>, --brand <title>.
                                          # Reads the bookmarks bar only: a `warning` counts the windows that hide it (their groups were not checked).
+interceptor group prune <label>...       # Delete only `<brand>-<label>` for those labels. A delete syncs to every profile and cannot be undone.
 interceptor window list
 interceptor window new [url]                              # Background window (ordered below the user's); your tab group moves into it,
                                                           # so its tab paints and takes trusted clicks without touching the user's view

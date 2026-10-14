@@ -99,6 +99,16 @@ describe("which groups prune may delete", () => {
     expect(picked.map((c) => c.title)).toEqual(["interceptor-s-4074e11fb71b108a", "interceptor"])
   })
 
+  test("with labels, only those groups are taken", () => {
+    const chips = parseSavedGroupChips(BAR)
+    expect(selectPrunable(chips, brands, new Set(), ["cf-deskhand"]).map((c) => c.title)).toEqual(["interceptor-cf-deskhand"])
+    // A label never matches the shared default group or another group's prefix.
+    expect(selectPrunable(chips, brands, new Set(), ["cf"])).toEqual([])
+    expect(selectPrunable(chips, brands, new Set(["interceptor-cf-deskhand"]), ["cf-deskhand"])).toEqual([])
+    expect(selectPrunable(parseSavedGroupChips('  [e1] button " acme-lane1 group - Closed"'), ["interceptor", "acme"], new Set(), ["lane1"]).map((c) => c.title))
+      .toEqual(["acme-lane1"])
+  })
+
   test("a title that reads 'Opened' in any window is kept", () => {
     const tree = [
       '  [e1] button " interceptor-lane1 group - Closed"',
@@ -215,6 +225,18 @@ describe("the prune run", () => {
       dryRun: false, deleted: 1,
       browsers: [{ app: "Google Chrome", pid: 1, found: ["interceptor-lane1"], deleted: ["interceptor-lane1"], failed: [] }],
     })
+  })
+
+  test("with a label, the run deletes that group and leaves the other closed groups", async () => {
+    const two = `${ONE_CHIP}\n  [e12] button " interceptor-lane2 group - Closed"`
+    const lane2Gone = ONE_CHIP
+    const lane2Menu = `${two}\n${MENU}`
+    const { send, calls } = fakeBridge({ trees: [two, two, lane2Menu, lane2Gone, lane2Gone] })
+    const r = await runGroupPrune({ dryRun: false, allowFrontmost: false, labels: ["lane2"] }, send, MAC)
+    expect(r.success).toBe(true)
+    expect(calls.filter((c) => c.startsWith("showMenu:"))).toEqual(["showMenu:e12"])
+    expect((r.data as { browsers: Array<{ found: string[]; deleted: string[] }> }).browsers[0])
+      .toMatchObject({ found: ["interceptor-lane2"], deleted: ["interceptor-lane2"] })
   })
 
   test("--dry-run lists the groups and touches nothing", async () => {
@@ -413,8 +435,14 @@ describe("the command line", () => {
       .toEqual({ dryRun: true, allowFrontmost: true, app: "Brave Browser", brand: "acme" })
   })
 
-  test("a stray argument or a flag without its value is a usage error", () => {
-    expect(parseGroupPruneOptions(["group", "prune", "lane1"])).toHaveProperty("error")
+  test("labels", () => {
+    expect(parseGroupPruneOptions(["group", "prune", "lane1", "s-4074e11fb71b108a", "--dry-run"]))
+      .toEqual({ dryRun: true, allowFrontmost: false, labels: ["lane1", "s-4074e11fb71b108a"] })
+  })
+
+  test("a bad label or a flag without its value is a usage error", () => {
+    expect(parseGroupPruneOptions(["group", "prune", "has space"])).toHaveProperty("error")
+    expect(parseGroupPruneOptions(["group", "prune", "bad!"])).toHaveProperty("error")
     expect(parseGroupPruneOptions(["group", "prune", "--app"])).toHaveProperty("error")
     expect(parseGroupPruneOptions(["group", "prune", "--older-than", "7"])).toHaveProperty("error")
   })

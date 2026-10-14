@@ -1,10 +1,12 @@
 /**
  * cli/commands/group-prune.ts — `interceptor group prune`.
  *
- *   interceptor group prune [--dry-run] [--app <name>] [--brand <title>] [--allow-frontmost]
+ *   interceptor group prune [label...] [--dry-run] [--app <name>] [--brand <title>] [--allow-frontmost]
  *
  * Deletes every CLOSED saved tab group that Interceptor left behind
  * (`<brand>` and `<brand>-<label>` chips on the bookmarks bar; issue #301).
+ * With labels it deletes only `<brand>-<label>` for those labels: a delete
+ * syncs to every profile on the account and cannot be undone.
  *
  * Chrome gives extensions no handle on a closed saved group: chrome.tabGroups
  * has get / query / update / move over OPEN groups and nothing else. The only
@@ -40,6 +42,8 @@ export type GroupPruneOptions = {
   allowFrontmost: boolean
   app?: string
   brand?: string
+  /** Delete only `<brand>-<label>` for these labels. Absent: every closed managed group. */
+  labels?: string[]
 }
 
 export const DEFAULT_BRAND = "interceptor"
@@ -99,7 +103,8 @@ export function isManagedTitle(title: string, brands: Iterable<string>): boolean
 export function selectPrunable(
   chips: SavedGroupChip[],
   brands: Iterable<string>,
-  openTitles: ReadonlySet<string>
+  openTitles: ReadonlySet<string>,
+  labels?: readonly string[]
 ): SavedGroupChip[] {
   const brandList = [...brands]
   const openSomewhere = new Set(chips.filter((c) => c.state === "open").map((c) => c.title))
@@ -108,6 +113,7 @@ export function selectPrunable(
   for (const chip of chips) {
     if (chip.state !== "closed" || seen.has(chip.title)) continue
     if (!isManagedTitle(chip.title, brandList)) continue
+    if (labels && !brandList.some((brand) => labels.some((label) => chip.title === `${brand}-${label}`))) continue
     if (openSomewhere.has(chip.title) || openTitles.has(chip.title)) continue
     seen.add(chip.title)
     out.push(chip)
@@ -275,7 +281,7 @@ async function pruneApp(
   const windows = await run({ type: "macos_windows", pid })
   const noBar = Array.isArray(windows.data) ? countWindowsWithoutBar(first.tree, windows.data.length) : 0
   if (noBar > 0) report.windowsWithoutBar = noBar
-  report.found = selectPrunable(parseSavedGroupChips(first.tree), brands, openTitles).map((c) => c.title)
+  report.found = selectPrunable(parseSavedGroupChips(first.tree), brands, openTitles, opts.labels).map((c) => c.title)
   if (opts.dryRun || report.found.length === 0) return report
   if (browser.hidden) {
     // A menu opened in a hidden app is not on screen and can bring the app back.
@@ -302,7 +308,7 @@ async function pruneApp(
       report.skipped = `a saved tab group menu is already open in ${app}; nothing more was deleted`
       break
     }
-    const next = selectPrunable(parseSavedGroupChips(before.tree), brands, openTitles)
+    const next = selectPrunable(parseSavedGroupChips(before.tree), brands, openTitles, opts.labels)
       .find((c) => (attempts.get(c.title) ?? 0) < MAX_ATTEMPTS)
     if (!next) break
     // The person can switch to the browser while a run is under way.
@@ -406,8 +412,10 @@ export function parseGroupPruneOptions(filtered: string[]): GroupPruneOptions | 
     else if ((arg === "--app" || arg === "--brand") && filtered[i + 1] && !filtered[i + 1].startsWith("--")) {
       if (arg === "--app") opts.app = filtered[++i]
       else opts.brand = filtered[++i]
+    } else if (!arg.startsWith("--") && GROUP_LABEL_RE.test(arg)) {
+      (opts.labels ??= []).push(arg)
     } else {
-      return { error: "usage: interceptor group prune [--dry-run] [--app <name>] [--brand <title>] [--allow-frontmost]" }
+      return { error: "usage: interceptor group prune [label...] [--dry-run] [--app <name>] [--brand <title>] [--allow-frontmost]" }
     }
   }
   return opts

@@ -586,6 +586,7 @@ Tab groups (per-agent isolation):
   interceptor group list                     All live tab groups: label, title, color, tab count
   interceptor group close <label>            Atomically close every tab in a named group and delete the group (other groups untouched)
   interceptor group prune [--dry-run]        Delete every closed saved group Interceptor left on the bookmarks bar (Full install)
+  interceptor group prune <label>...         Delete only those groups' closed saved copies (a delete syncs and cannot be undone)
   interceptor group prune --app <name>       One browser only (default: every running Chromium browser)
   interceptor group prune --brand <title>    Also match this brand title (default: interceptor, plus what connected profiles report)
   interceptor group prune --allow-frontmost  Run even when the browser is the frontmost app (its open menu takes the keyboard)`
