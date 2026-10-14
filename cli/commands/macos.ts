@@ -91,7 +91,7 @@ async function send(
 // Bridge preflight: detect browser-only installs and short-circuit before the
 // daemon roundtrip times out at 15s with a misleading "Ensure Chrome/Brave"
 // message. Returns a reason string if the bridge is unreachable, else null.
-function bridgePreflightFailure(): string | null {
+export function bridgePreflightFailure(): string | null {
   if (process.platform !== "darwin") {
     return "'interceptor macos *' commands require macOS (the Swift bridge is mac-only)."
   }

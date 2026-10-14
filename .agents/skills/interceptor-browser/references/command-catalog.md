@@ -225,7 +225,13 @@ interceptor read --group <label>         # Any command scopes to that group's ta
                                          # No explicit scope: supported agent shells get a soft session group (s-<hash16>).
 interceptor open <url> --shared-group     # Suppress session scope; use the shared default Interceptor group.
 interceptor group list                   # All live tab groups: label, title, color, tab count
-interceptor group close <label>          # Atomically close every tab in a named group (other groups untouched)
+interceptor group close <label>          # Atomically close every tab in a named group and delete the group (other groups untouched)
+interceptor group prune [--dry-run]      # Delete every CLOSED saved group Interceptor left on the bookmarks bar (`<brand>` and `<brand>-<label>`).
+                                         # Full install only: a closed saved group has no extension API, so prune opens each chip's menu
+                                         # and presses "Delete group" through the native desktop provider, in the background. No age filter
+                                         # (the UI has no timestamp). Skips a frontmost or hidden browser; --allow-frontmost, --app <name>, --brand <title>.
+                                         # Reads the bookmarks bar only: a `warning` counts the windows that hide it (their groups were not checked).
+interceptor group prune <label>...       # Delete only `<brand>-<label>` for those labels. A delete syncs to every profile and cannot be undone.
 interceptor window list
 interceptor window new [url]                              # Background window (ordered below the user's); your tab group moves into it,
                                                           # so its tab paints and takes trusted clicks without touching the user's view

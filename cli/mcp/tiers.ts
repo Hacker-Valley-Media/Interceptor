@@ -73,6 +73,8 @@ const EXEC: TierMap = {
 const DESTRUCTIVE_SUB: TierMap = {
   "local:upgrade": "destructive",
   "local:update:install": "destructive",
+  // Deletes saved tab groups through the browser's own UI; there is no undo.
+  "browser:group:prune": "destructive",
   // macOS app lifecycle
   "macos:app:quit": "destructive", "macos:app:terminate": "destructive",
   // macOS fs / display / tcc

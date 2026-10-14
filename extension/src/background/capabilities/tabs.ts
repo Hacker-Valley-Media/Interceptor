@@ -1,7 +1,8 @@
 import {
   addTabToInterceptorGroup, ensureInterceptorGroup, interceptorGroupId,
   GROUP_LABEL_RE, ensureNamedGroup, addTabToNamedGroup, labelForGroupId,
-  namedGroups, hydrateNamedGroups, hasTabGroupApi, managedGroupWindows, readoptNamedGroups
+  namedGroups, hydrateNamedGroups, hasTabGroupApi, managedGroupWindows, readoptNamedGroups,
+  removeTabsAndEmptiedGroups
 } from "../tab-group"
 import { resolveTabLifecycle, policyMayDecideReuse } from "../tab-lifecycle"
 import { waitForTabLoad } from "../content-bridge"
@@ -206,7 +207,8 @@ export async function handleTabActions(
 
     case "tab_close": {
       const closedId = (action.tabId as number) || tabId
-      await chrome.tabs.remove(closedId)
+      // A managed group's last tab takes the group with it (issue #301).
+      await removeTabsAndEmptiedGroups([closedId])
       // If the closed tab was the auto-target, clear it so the next call
       // re-resolves via chrome.tabs.query rather than targeting a dead tab.
       // Checks the caller's per-group key too.
@@ -288,11 +290,12 @@ export async function handleTabActions(
       }
       const groupTabs = await chrome.tabs.query({ groupId })
       const ids = groupTabs.map(t => t.id).filter((id): id is number => typeof id === "number")
-      // Atomic: ONE tabs.remove over exactly this group's tab ids — the group
-      // object auto-deletes at zero tabs, and the tabGroups.onRemoved listener
+      // Atomic: ONE tabs.remove over exactly this group's tab ids. The tabs are
+      // ungrouped first so Chrome deletes the group instead of keeping it as a
+      // closed saved group (issue #301), and the tabGroups.onRemoved listener
       // purges the registry entry + per-group auto-target. Nothing outside this
       // id list is touched (issue #124's "3a" isolation guarantee).
-      if (ids.length > 0) await chrome.tabs.remove(ids)
+      if (ids.length > 0) await removeTabsAndEmptiedGroups(ids)
       return { success: true, data: { label, groupId, closedTabs: ids.length } }
     }
 

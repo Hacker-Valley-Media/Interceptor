@@ -377,6 +377,47 @@ async function addTabToInterceptorGroupSerialized(tabId: number): Promise<number
   return groupId
 }
 
+/**
+ * Ungroup the tabs of every managed group that closing `tabIds` would empty.
+ * Chrome saves every tab group, and a group whose last tabs are closed with
+ * chrome.tabs.remove (or with their window) is kept as a CLOSED saved group: a
+ * chip on the bookmarks bar and a row in the Tab groups menu, synced to every
+ * profile on the account, and out of reach of chrome.tabGroups for good. One
+ * piled up per agent session (issue #301). A group emptied by ungrouping is
+ * deleted instead, so every close path calls this right before it closes.
+ *
+ * A group that keeps a tab is left alone, and so is a group Interceptor does not
+ * manage. Best effort: a failure here must not stop the close.
+ */
+export async function ungroupBeforeClose(tabIds: number[]): Promise<void> {
+  if (tabIds.length === 0 || !hasTabGroupApi() || typeof chrome.tabs.ungroup !== "function") return
+  try {
+    await ensureInterceptorGroup()
+    // A group moved to another window or restored by the browser comes back
+    // under a new id; without this its registry entry is gone and it is missed.
+    await readoptNamedGroups()
+    const managed = new Set(namedGroups.values())
+    if (interceptorGroupId !== null) managed.add(interceptorGroupId)
+    const closing = new Set(tabIds)
+    const emptied: number[] = []
+    for (const groupId of managed) {
+      const members = (await chrome.tabs.query({ groupId }))
+        .map((t) => t.id)
+        .filter((id): id is number => typeof id === "number")
+      if (members.length > 0 && members.every((id) => closing.has(id))) emptied.push(...members)
+    }
+    if (emptied.length > 0) await chrome.tabs.ungroup(emptied as [number, ...number[]])
+  } catch (err) {
+    console.warn("ungroupBeforeClose: the closed group may stay behind as a saved group:", err)
+  }
+}
+
+/** chrome.tabs.remove that deletes, rather than saves, a managed group it empties. */
+export async function removeTabsAndEmptiedGroups(tabIds: number[]): Promise<void> {
+  await ungroupBeforeClose(tabIds)
+  await chrome.tabs.remove(tabIds)
+}
+
 export async function isTabInInterceptorGroup(tabId: number): Promise<boolean> {
   if (!hasTabGroupApi()) return true
   const tab = await chrome.tabs.get(tabId)

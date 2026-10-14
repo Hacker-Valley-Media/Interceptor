@@ -28,6 +28,7 @@ import { parseEvalCommand } from "./commands/eval"
 import { parseSaveCommand } from "./commands/save"
 import { parseBrandCommand } from "./commands/brand"
 import { parseGroupCommand, listExtensionContextIds, runGroupAcrossContexts } from "./commands/group"
+import { parseGroupPruneOptions, runGroupPrune } from "./commands/group-prune"
 import { parseBatchCommand } from "./commands/batch"
 import { parseMonitorCommand } from "./commands/monitor"
 import { parseSceneCommand } from "./commands/scene"
@@ -475,6 +476,15 @@ async function main() {
   else if (EVAL_CMDS.has(cmd))   action = parseEvalCommand(filtered, normalized.positionalCount)
   else if (SAVE_CMDS.has(cmd))   action = parseSaveCommand(filtered)
   else if (BRAND_CMDS.has(cmd))  action = parseBrandCommand(filtered)
+  else if (GROUP_CMDS.has(cmd) && filtered[1] === "prune") {
+    // Closed saved groups are out of the extension's reach; prune drives the
+    // browser's own UI through the native desktop provider (cli/commands/group-prune.ts).
+    const pruneOpts = parseGroupPruneOptions(filtered)
+    if ("error" in pruneOpts) { console.error(`error: ${pruneOpts.error}`); process.exit(1) }
+    const result = await runGroupPrune(pruneOpts, (a, tabId, ctx) => useWs ? sendCommandWs(a, tabId, ctx) : sendCommand(a, tabId, ctx))
+    console.log(formatResult(result, jsonMode))
+    process.exit(result.success ? 0 : 1)
+  }
   else if (GROUP_CMDS.has(cmd))  action = parseGroupCommand(filtered)
   else if (BATCH_CMDS.has(cmd))  action = parseBatchCommand(filtered)
   else if (POWER_CMDS.has(cmd))   action = parsePowerCommand(filtered)

@@ -3,6 +3,7 @@
  *
  *   interceptor group list             All live tab groups (label, title, color, tab count)
  *   interceptor group close <label>    Atomically close every tab in a named group
+ *   interceptor group prune [label...] Delete closed saved groups (cli/commands/group-prune.ts)
  *
  * Scoping day-to-day work into a group is the global `--group <label>` flag
  * (or $INTERCEPTOR_GROUP), not a subcommand here.
@@ -99,6 +100,6 @@ export function parseGroupCommand(filtered: string[]): Action {
     return { type: "group_close", label }
   }
 
-  console.error("error: usage: interceptor group list | interceptor group close <label>")
+  console.error("error: usage: interceptor group list | interceptor group close <label> | interceptor group prune [label...] [--dry-run]")
   process.exit(1)
 }
