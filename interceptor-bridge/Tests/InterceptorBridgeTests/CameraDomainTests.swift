@@ -15,6 +15,13 @@ private final class ResultHolder: @unchecked Sendable {
     func set(_ v: [String: Any]) { lock.withLock { stored = v } }
 }
 
+private final class PendingGrant: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done: (@Sendable (Bool) -> Void)?
+    func store(_ d: @escaping @Sendable (Bool) -> Void) { lock.withLock { done = d } }
+    func answer(_ granted: Bool) { lock.withLock { done }?(granted) }
+}
+
 final class CameraDomainTests: XCTestCase {
     private func run(_ domain: CameraDomain, _ action: [String: Any], timeout: TimeInterval = 5) -> [String: Any] {
         let holder = ResultHolder()
@@ -139,6 +146,49 @@ final class CameraDomainTests: XCTestCase {
         let d = data(run(domain, ["sub": "status"]))
         XCTAssertEqual(d["hasFrame"] as? Bool, false)
         XCTAssertEqual(d["frames"] as? Int, 0)
+    }
+
+    func testStopDuringThePromptCancelsThatStart() {
+        let domain = CameraDomain()
+        domain.authorizationStatus = { .notDetermined }
+        let pending = PendingGrant()
+        domain.requestAccess = { done in pending.store(done) }
+        let holder = ResultHolder()
+        let started = expectation(description: "start replies")
+        domain.handle("camera", action: ["type": "macos_camera", "sub": "start"]) { r in holder.set(r); started.fulfill() }
+        // The person is still looking at the prompt when a stop arrives.
+        XCTAssertEqual(run(domain, ["sub": "stop"])["success"] as? Bool, true)
+        // A new start is not blocked by the abandoned one...
+        domain.authorizationStatus = { .denied }
+        XCTAssertEqual(run(domain, ["sub": "start"])["code"] as? String, "permission_required")
+        // ...and the abandoned one, once allowed, does not turn the camera on.
+        pending.answer(true)
+        wait(for: [started], timeout: 5)
+        XCTAssertEqual(holder.value["code"] as? String, "invalid_request")
+        XCTAssertTrue((holder.value["error"] as? String)?.contains("stop arrived before start finished") == true)
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["active"] as? Bool, false)
+    }
+
+    func testInterruptedCameraRefusesItsLastFrame() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        domain._testInjectFrame(image(width: 8, height: 8))
+        domain._testInterrupt("interrupted")
+        let r = run(domain, ["sub": "frame"])
+        XCTAssertEqual(r["code"] as? String, "provider_failed")
+        XCTAssertTrue((r["error"] as? String)?.contains("not live") == true)
+        domain._testInterrupt(nil)
+        XCTAssertEqual(run(domain, ["sub": "frame"])["success"] as? Bool, true)
+    }
+
+    func testInterruptionWhileWaitingForTheFirstFrameIsReported() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) {
+            domain._testInterrupt("interrupted")
+            domain._testInjectFrame(self.image(width: 8, height: 8))
+        }
+        XCTAssertEqual(run(domain, ["sub": "frame", "timeoutMs": 2000])["code"] as? String, "provider_failed")
     }
 
     func testUnknownSubcommandIsRefused() {

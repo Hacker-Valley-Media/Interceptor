@@ -40,7 +40,7 @@ const READ_VERBS: Record<Surface, Set<string>> = {
   macos: new Set([
     "tree", "find", "inspect", "focused", "windows", "text", "menu", "apps",
     "frontmost", "screenshot", "vision", "nlp", "sensitive", "health", "files",
-    "log", "sounds", "detect", "translate", "thumbnail", "read", "capture", "camera", "notifications", "audio", "vad", "listen", "trust", "stream",
+    "log", "sounds", "detect", "translate", "thumbnail", "read", "capture", "notifications", "audio", "vad", "listen", "trust", "stream",
   ]),
   ios: new Set([
     "tree", "find", "inspect", "screenshot", "apps", "status", "devices",
@@ -126,6 +126,8 @@ const FAMILY_FLOOR: Record<string, Tier> = {
   "macos:pdf": "destructive",
   "macos:tcc": "destructive",
   "macos:fs": "destructive",
+  // Turning the camera on is a state change; reading its frames is not.
+  "macos:camera": "mutate",
   "macos:clipboard": "mutate",
   "macos:calendar": "destructive",
   "macos:reminders": "destructive",
@@ -273,6 +275,7 @@ const FAMILY_READ_SUBS: Record<string, Set<string>> = {
   "macos:authdialog": new Set(["status"]),
   "macos:auth": new Set(["status", "domain-state"]),
   "macos:files": new Set(["recent", "open"]),
+  "macos:camera": new Set(["list", "status", "frame"]),
   "ios:app": new Set([]),
   "ios:web": new Set(["targets", "status", "explain", "read", "text", "find", "inspect", "console", "network", "screenshot"]),
   "ios:fs": new Set(["ls"]),
@@ -283,6 +286,7 @@ const FAMILY_MUTATE_SUBS: Record<string, Set<string>> = {
   "macos:secret": new Set(["register", "set", "unlock", "lock"]),
   "macos:auth": new Set(["confirm", "invalidate"]),
   "macos:files": new Set(["watch", "unwatch"]),
+  "macos:camera": new Set(["start", "stop"]),
   "ios:app": new Set(["launch", "activate"]),
   "ios:web": new Set(["attach", "detach", "click", "type", "keys", "scroll", "calibrate"]),
   "ios:fs": new Set(["pull"]),

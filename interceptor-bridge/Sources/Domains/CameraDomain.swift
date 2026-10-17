@@ -36,6 +36,9 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
     private var frameCount = 0
     private var interruption: String?
     private var starting = false
+    // Bumped by every stop. A start captures it and installs its session only
+    // if no stop arrived meanwhile (e.g. while the camera prompt was up).
+    private var generation = 0
     private var observers: [NSObjectProtocol] = []
     // Signaled on every converted frame so `frame` can wait out the gap
     // between startRunning() and the first sample buffer.
@@ -63,6 +66,10 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
             frameCount += 1
         }
         frameReady.signal()
+    }
+
+    func _testInterrupt(_ reason: String?) {
+        lock.withLock { interruption = reason }
     }
 
     func _testReset() {
@@ -142,23 +149,24 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
     // MARK: - Session
 
     private func start(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
-        let busy = lock.withLock { () -> Bool in
-            if session != nil || starting { return true }
+        let claimed = lock.withLock { () -> Int? in
+            if session != nil || starting { return nil }
             starting = true
-            return false
+            return generation
         }
-        if busy {
+        guard let gen = claimed else {
             completion(WireFormat.failure("invalid_request", "camera is already running or starting; stop it before choosing another device"))
             return
         }
         let finish: @Sendable ([String: Any]) -> Void = { [self] result in
-            lock.withLock { starting = false }
+            // A stop already cleared `starting`; a newer start may own it now.
+            lock.withLock { if generation == gen { starting = false } }
             completion(result)
         }
         let boxed = UncheckedSendableBox(action)
         switch authorizationStatus() {
         case .authorized:
-            sessionQueue.async { [self] in finish(self.startSession(boxed.value)) }
+            sessionQueue.async { [self] in finish(self.startSession(boxed.value, generation: gen)) }
         case .notDetermined:
             // First use: macOS shows the camera prompt for interceptor-bridge.
             // Same activation-policy upgrade as TrustDomain.checkMicrophone, so
@@ -174,7 +182,7 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
             requestAccess { [self] granted in
                 if isLiveBridge { DispatchQueue.main.async { NSApplication.shared.setActivationPolicy(.accessory) } }
                 guard granted else { finish(Self.permissionFailure()); return }
-                sessionQueue.async { [self] in finish(self.startSession(boxed.value)) }
+                sessionQueue.async { [self] in finish(self.startSession(boxed.value, generation: gen)) }
             }
         default:
             finish(Self.permissionFailure())
@@ -185,7 +193,12 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
         WireFormat.failure("permission_required", "Camera permission required; allow interceptor-bridge in System Settings > Privacy & Security > Camera")
     }
 
-    private func startSession(_ action: [String: Any]) -> [String: Any] {
+    static func stoppedWhileStarting() -> [String: Any] {
+        WireFormat.failure("invalid_request", "camera stop arrived before start finished; the camera was not started")
+    }
+
+    private func startSession(_ action: [String: Any], generation gen: Int) -> [String: Any] {
+        if lock.withLock({ generation != gen }) { return Self.stoppedWhileStarting() }
         let all = Self.devices()
         let selector = action["device"] as? String
         guard let device = Self.resolve(selector, in: all) else {
@@ -235,7 +248,8 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
 
         while frameReady.wait(timeout: .now()) == .success {}
         let info = Self.describe(device)
-        lock.withLock {
+        let current = lock.withLock { () -> Bool in
+            guard generation == gen else { return false }
             self.session = session
             self.output = output
             self.device = info
@@ -243,7 +257,9 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
             self.latestTimestamp = nil
             self.frameCount = 0
             self.interruption = nil
+            return true
         }
+        guard current else { return Self.stoppedWhileStarting() }
         observe(session)
         session.startRunning()
         guard session.isRunning else {
@@ -277,6 +293,8 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
     private func stop() {
         let (old, oldObservers) = lock.withLock { () -> (AVCaptureSession?, [NSObjectProtocol]) in
             let old = (session, observers)
+            generation += 1
+            starting = false
             session = nil
             output = nil
             device = nil
@@ -319,7 +337,11 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
 
     private func frame(_ action: [String: Any], completion: @escaping @Sendable ([String: Any]) -> Void) {
         let timeoutMs = action["timeoutMs"] as? Int ?? 3000
-        let (active, buffered) = lock.withLock { (session != nil || testForcedActive, latestImage) }
+        let (active, buffered, interrupted) = lock.withLock { (session != nil || testForcedActive, latestImage, interruption) }
+        if let interrupted {
+            completion(Self.interruptedFailure(interrupted))
+            return
+        }
         if let buffered {
             completion(deliver(buffered, action))
             return
@@ -333,7 +355,10 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
             let waited = self.frameReady.wait(timeout: .now() + .milliseconds(timeoutMs))
-            if let image = self.lock.withLock({ self.latestImage }) {
+            let (image, interrupted) = self.lock.withLock { (self.latestImage, self.interruption) }
+            if let interrupted {
+                completion(Self.interruptedFailure(interrupted))
+            } else if let image {
                 completion(self.deliver(image, boxed.value))
             } else {
                 completion(WireFormat.failure("timeout", waited == .timedOut
@@ -341,6 +366,11 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
                     : "camera running but no frame buffered"))
             }
         }
+    }
+
+    /// An interrupted camera's last frame is not live; say so instead of serving it.
+    static func interruptedFailure(_ interruption: String) -> [String: Any] {
+        WireFormat.failure("provider_failed", "camera \(interruption); its last frame is not live. Check camera status, then stop and start")
     }
 
     /// Writes the frame to `out` when given (an absolute path from the CLI),
