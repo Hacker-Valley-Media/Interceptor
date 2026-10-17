@@ -23,6 +23,11 @@
          /AVFoundation/requesting-authorization-to-capture-and-save-media.md -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Camera capture (macos camera). Same rule as the microphone: under
+         hardened runtime NSCameraUsageDescription alone is not enough; without
+         com.apple.security.device.camera the camera prompt never appears. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
     <!-- personal-data domains. tccd silently denies privacy prompts
          under hardened runtime when the matching entitlement is absent —
          confirmed in unified log: "Prompting policy for hardened runtime;

@@ -125,7 +125,7 @@ const PREFIX_RE = /^[a-z][a-z0-9]*$/ // bridge-domain prefix: single lowercase t
 export const BUILTIN_BRIDGE_PREFIXES: ReadonlySet<string> = new Set([
   "tree", "find", "inspect", "value", "action", "focused", "windows", "resize",
   "move", "apps", "app", "frontmost", "click", "type", "keys", "scroll", "drag",
-  "screenshot", "capture", "listen", "vad", "sounds", "vision", "nlp", "ai",
+  "screenshot", "capture", "camera", "listen", "vad", "sounds", "vision", "nlp", "ai",
   "sensitive", "health", "files", "notifications", "clipboard", "display",
   "audio", "stream", "monitor", "trust", "tcc", "menu", "text", "compound",
   "overlay", "fs", "url", "log", "script", "intent", "container", "native",

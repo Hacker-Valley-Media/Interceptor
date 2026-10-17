@@ -855,6 +855,35 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       return action
     }
 
+    // ── Camera ──
+    // The bridge holds the camera session, so the grant is interceptor-bridge's
+    // and no window has to stay on screen. Frames go to a file with --out
+    // (resolved here: the bridge's working directory is /) or come back inline.
+    case "camera": {
+      const op = filtered[2] ?? "status"
+      if (!["list", "start", "frame", "status", "stop"].includes(op)) throw new Error("camera requires list, start, frame, status or stop")
+      const allowed: Record<string, string[]> = { start: ["--device", "--fps"], frame: ["--out", "--timeout-ms", "--max-long-edge", "--quality"] }
+      const flags = allowed[op] ?? []
+      for (let i = 3; i < filtered.length; i += 2) {
+        if (!flags.includes(filtered[i])) throw new Error(`camera ${op} does not take ${filtered[i]}`)
+        if (filtered[i + 1] === undefined || filtered[i + 1].startsWith("--")) throw new Error(`${filtered[i]} requires a value`)
+        if (filtered.indexOf(filtered[i]) !== i) throw new Error(`repeated flag: ${filtered[i]}`)
+      }
+      const action: Action = { type: "macos_camera", sub: op }
+      const device = flagVal(filtered, "--device")
+      if (device !== undefined) action.device = device
+      const out = flagVal(filtered, "--out")
+      if (out !== undefined) action.out = resolve(out)
+      const ints: [string, string, number, number][] = [["--fps", "fps", 1, 30], ["--timeout-ms", "timeoutMs", 0, 60_000], ["--max-long-edge", "maxLongEdge", 16, 8192], ["--quality", "quality", 1, 100]]
+      for (const [flag, key, min, max] of ints) {
+        const value = flagVal(filtered, flag)
+        if (value === undefined) continue
+        if (!/^\d+$/.test(value) || Number(value) < min || Number(value) > max) throw new Error(`${flag} must be an integer from ${min} to ${max}`)
+        action[key] = Number(value)
+      }
+      return action
+    }
+
     // ── Speech ──
     case "listen": {
       const values=compoundPositionals(filtered,new Set(['--device']))
