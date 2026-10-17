@@ -74,6 +74,7 @@ This matters for verification: if you expect a 5-second recording to exist on di
 | Accessibility | AX tree, AX input verbs, window management, `monitor`, refs that route to AX, the entire macOS surface really | — |
 | Screen Recording | `screenshot`, `capture *`, `stream *`, `vision *`, `--frames` on `monitor` | reads that don't capture pixels |
 | Microphone | `listen`, `vad`, `sounds`, `audio input`, `--include speech` on `monitor` | text-only paths |
+| Camera | `camera start` (the first one raises the prompt; `camera status` reports `authorization`). `trust` does not list it yet | `camera list` |
 | Input Monitoring | Global key / click capture in `monitor` | one-shot synthesized input via `click` / `type` / `keys` |
 | Apple Events | `intent dispatch` against a specific bundle id | granted per-app on first dispatch |
 

@@ -40,7 +40,7 @@ const READ_VERBS: Record<Surface, Set<string>> = {
   macos: new Set([
     "tree", "find", "inspect", "focused", "windows", "text", "menu", "apps",
     "frontmost", "screenshot", "vision", "nlp", "sensitive", "health", "files",
-    "log", "sounds", "detect", "translate", "thumbnail", "read", "capture", "notifications", "audio", "vad", "listen", "trust", "stream",
+    "log", "sounds", "detect", "translate", "thumbnail", "read", "capture", "camera", "notifications", "audio", "vad", "listen", "trust", "stream",
   ]),
   ios: new Set([
     "tree", "find", "inspect", "screenshot", "apps", "status", "devices",
