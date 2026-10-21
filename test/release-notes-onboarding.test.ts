@@ -33,12 +33,12 @@ function visibleVersions(document: Document): string[] {
 
 describe("cumulative Sparkle release notes", () => {
   test("one-version-behind shows only the target release", () => {
-    expect(visibleVersions(releaseDocument("2.1.2"))).toEqual(["2.1.3"])
+    expect(visibleVersions(releaseDocument("2.1.3"))).toEqual(["2.1.5"])
   })
 
   test("older install shows every newer release", () => {
     expect(visibleVersions(releaseDocument("1.0.3"))).toEqual([
-      "2.1.3", "2.1.2", "2.1.1", "2.1.0", "2.0.0", "1.0.24", "1.0.21", "1.0.19", "1.0.17", "1.0.15", "1.0.13", "1.0.11", "1.0.9",
+      "2.1.5", "2.1.3", "2.1.2", "2.1.1", "2.1.0", "2.0.0", "1.0.24", "1.0.21", "1.0.19", "1.0.17", "1.0.15", "1.0.13", "1.0.11", "1.0.9",
     ])
   })
 
@@ -279,6 +279,7 @@ describe("macOS package conclusion extension routes", () => {
       expect(script).toContain(".open-extension-store-$TARGET_UID")
       expect(script).toContain(identities.chrome.listingUrl)
       expect(script).toContain('if [[ -n "$TARGET_UID" && -f "$STORE_MARKER" ]]')
+      expect(script).toContain("diagnose extension --welcome")
     }
   })
 })
