@@ -1051,7 +1051,8 @@ export class IosManager {
       return u ? iosContextId(u) : undefined
     }
     // A runner opened on the device away from home is live here even when devicectl cannot see the phone.
-    if (this.contexts.size === 1) return [...this.contexts.keys()][0]
+    const only = this.contexts.size === 1 ? [...this.contexts.values()][0] : undefined
+    if (only?.launchedBy === "device") return only.descriptor.contextId
     const u = await this.pickDeviceUdid(undefined)
     return u ? iosContextId(u) : undefined
   }

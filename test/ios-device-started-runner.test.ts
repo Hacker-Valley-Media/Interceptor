@@ -126,6 +126,10 @@ describe("registering a runner the device started", () => {
     m.pickDeviceUdid = async () => { throw new Error("devicectl was asked") }
     expect(await m.canonicalContextId(undefined)).toBe(ack.contextId)
     expect(await m.canonicalContextId("")).toBe(ack.contextId)
+    // Any other lone context (a Mac launch, a simulator) still goes through device discovery.
+    m.contexts.get(ack.contextId).launchedBy = undefined
+    m.pickDeviceUdid = async () => "00008150-00000000000000AA"
+    expect(await m.canonicalContextId(undefined)).toBe("ios:00008150-00000000000000aa")
   })
 
   test("it replaces an existing context for the device (only one runner process can run there)", () => {
