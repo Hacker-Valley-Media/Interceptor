@@ -12,6 +12,7 @@ import {
 } from "../daemon/ios/state"
 import { probeDialBack, remoteDialBack, savedDialBack } from "../daemon/ios/ws-host"
 import { createRunnerListener } from "../daemon/ios/runner-listener"
+import { WebSocket as WsClient } from "ws"
 import { isAllowedWsOrigin } from "../shared/extension-identity"
 import { captureShell } from "./helpers/shell-capture"
 
@@ -377,16 +378,22 @@ describe("review fixes", () => {
 })
 
 describe("runner-only listener", () => {
-  type Ws = WebSocket
-  const opened = (ws: Ws) => new Promise((r) => ws.addEventListener("open", r, { once: true }))
-  const closeCode = (ws: Ws) => new Promise<number>((r) => ws.addEventListener("close", (e) => r(e.code), { once: true }))
+  // The full suite registers happy-dom globals, which replace WebSocket, fetch and Response:
+  // its WebSocket cannot take an "error" listener, and Bun.serve only accepts a native
+  // Response. So dial with the ws client, request with Bun.fetch, and restore Response.
+  type Ws = WsClient
+  const opened = (ws: Ws) => new Promise((r) => ws.once("open", r))
+  const closeCode = (ws: Ws) => new Promise<number>((r) => ws.once("close", (code: number) => r(code)))
+  const dial = (url: string) => { const ws = new WsClient(url); ws.on("error", () => {}); return ws }
 
   test("serves only a runner registration and that runner's frames", async () => {
+    const pageResponse = globalThis.Response
+    globalThis.Response = (await Bun.fetch("data:,")).constructor as typeof Response
     const registered = new Set<unknown>()
     const frames: unknown[] = []
     const closes: number[] = []
     const ensure = createRunnerListener({
-      port: 0, maxPayloadLength: 1 << 20, allowOrigin: isAllowedWsOrigin, registerWindowMs: 300,
+      port: 0, maxPayloadLength: 1 << 20, allowOrigin: isAllowedWsOrigin, registerWindowMs: 1_000,
       runnerFrame: (ws, f) => { if (!registered.has(ws)) return false; frames.push(f); return true },
       register: (ws, msg) => { const ok = msg.token === "good"; if (ok) registered.add(ws); ws.send(JSON.stringify({ type: "ios", ok })); return ok },
       close: (_ws, code) => { closes.push(code) },
@@ -398,33 +405,33 @@ describe("runner-only listener", () => {
       const url = `ws://127.0.0.1:${server.port}`
       // A CLI action, an extension registration, a binary frame, or a rejected registration first: closed.
       for (const first of [JSON.stringify({ id: "1", action: { type: "macos_apps" } }), JSON.stringify({ type: "extension" }), new Uint8Array([1, 2, 3]), JSON.stringify({ type: "ios", token: "bad" })]) {
-        const ws = new WebSocket(url)
+        const ws = dial(url)
         await opened(ws)
         const code = closeCode(ws)
         ws.send(first)
         expect(await code).toBe(1008)
       }
       // No registration within the window: closed.
-      const idle = new WebSocket(url)
+      const idle = dial(url)
       await opened(idle)
       expect(await closeCode(idle)).toBe(1008)
       // A registered runner's text and binary frames reach the shared handlers, and it stays open.
-      const runner = new WebSocket(url)
+      const runner = dial(url)
       await opened(runner)
-      const ack = new Promise<string>((r) => runner.addEventListener("message", (e) => r(String(e.data)), { once: true }))
+      const ack = new Promise<string>((r) => runner.once("message", (d: unknown) => r(String(d))))
       runner.send(JSON.stringify({ type: "ios", token: "good" }))
       expect(JSON.parse(await ack).ok).toBe(true)
       runner.send(JSON.stringify({ id: "r1", result: { success: true } }))
       runner.send(new Uint8Array([0xff, 0xd8]))
-      await Bun.sleep(450)
-      expect(runner.readyState).toBe(WebSocket.OPEN)
+      await Bun.sleep(1_200)
+      expect(runner.readyState).toBe(WsClient.OPEN)
       expect(frames).toHaveLength(2)
       runner.close()
       // No HTTP routes, and no browser pages.
-      expect((await fetch(`http://127.0.0.1:${server.port}/health`)).status).toBe(404)
-      expect((await fetch(`http://127.0.0.1:${server.port}/`, { headers: { origin: "https://example.com" } })).status).toBe(403)
+      expect((await Bun.fetch(`http://127.0.0.1:${server.port}/health`)).status).toBe(404)
+      expect((await Bun.fetch(`http://127.0.0.1:${server.port}/`, { headers: { origin: "https://example.com" } })).status).toBe(403)
       expect(closes.length).toBeGreaterThanOrEqual(5)
-    } finally { server.stop(true) }
+    } finally { server.stop(true); globalThis.Response = pageResponse }
   })
 
   test("a failed bind is logged once and retried on the next call", () => {

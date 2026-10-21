@@ -353,8 +353,11 @@ describe("the single-dialog lock", () => {
     try {
       expect(takeLock()).toBe(true) // no ~/.interceptor and no lock file yet
       expect(readFileSync(join(home, ".interceptor", "extension-repair.lock"), "utf8")).toBe(String(process.pid))
-      writeFileSync(join(home, ".interceptor", "extension-repair.lock"), String(process.ppid))
-      expect(takeLock()).toBe(false) // another live process holds it
+      const holder = Bun.spawn(["sleep", "30"]) // a live process this user owns
+      try {
+        writeFileSync(join(home, ".interceptor", "extension-repair.lock"), String(holder.pid))
+        expect(takeLock()).toBe(false) // another live process holds it
+      } finally { holder.kill() }
       writeFileSync(join(home, ".interceptor", "extension-repair.lock"), "999999")
       expect(takeLock()).toBe(true) // its holder is gone
     } finally {
