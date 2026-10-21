@@ -64,8 +64,8 @@ The macOS release binaries target Apple silicon. On Windows and Linux, the Full 
 
 ### macOS installation
 
-1. Install the Browser or Full `.pkg` from Releases.
-2. In Chrome or Brave, install the [Interceptor extension](https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed). The local runtime and browser extension are both required.
+1. Install the Browser or Full `.pkg` from Releases. On a first install, the Interceptor window opens: it checks whether the extension is already in your browser, and if not, walks you through adding it from the Chrome Web Store, as an unpacked extension (with a step-by-step guide in the browser), or for Safari. Open it again any time with `interceptor diagnose extension --welcome`.
+2. In Chrome or Brave, install the [Interceptor extension](https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed) if the window did not already do it. The local runtime and browser extension are both required.
 3. For Safari, also install the Safari `.pkg`, open `/Applications/InterceptorSafari.app` once, then enable Interceptor and website access in **Safari → Settings → Extensions**. Safari requires your approval.
 4. With Full, grant the permissions needed by your task to `interceptor-bridge`. Run `interceptor macos trust --walkthrough` for guidance. Accessibility enables native UI control; screen, microphone, and app-automation access are needed for their respective features.
 
@@ -175,7 +175,7 @@ These commands inspect Finder without activating it. Use returned element refere
 
 **Drive apps on a physical iPhone and inspect more than its screen.** Interceptor's own on-device XCUITest runner handles UI work; additional interfaces expose developer and device services.
 
-Setup requires an owned, unlocked iPhone in Developer Mode, pairing with your Mac, a Full installation, and Xcode signed into an Apple Developer team. Connect by USB for initial pairing. Wi-Fi operation is available once paired, with network reachability between the phone and Mac.
+Setup requires an owned, unlocked iPhone in Developer Mode, pairing with your Mac, a Full installation, and Xcode signed into an Apple ID (a free personal team works; its signing lasts 7 days and Interceptor renews it). Connect by USB for initial pairing. Wi-Fi operation is available once paired, with network reachability between the phone and Mac. Away from your Mac, including on cellular, open InterceptorRunner on the phone and it connects back over Tailscale.
 
 ```bash
 interceptor ios discover
@@ -254,7 +254,7 @@ interceptor diagnose              # Runtime and extension diagnostics
 
 On a Full Mac installation, `interceptor update` checks for an update and `interceptor update status` reports progress. Windows and Linux Full installs update the way Sparkle updates a Mac: once a day the native provider checks the signed feed on `updates.hackervalley.media`, and a newer release opens Interceptor's update window with its release notes and **Skip This Version**, **Remind Me Later**, and **Install Update**. Nothing downloads or installs until you click. The installer is checked against the signed feed (plus its Authenticode signature on Windows), then **Install and Relaunch** installs it. `interceptor update` checks now and opens the window when there is an update; `interceptor update status` shows what happened. Set `INTERCEPTOR_AUTO_UPDATE=off` in the provider's login environment to stop the daily checks. Browser-only users can run a newer installer; `interceptor upgrade --full` adds Mac native capabilities.
 
-If no browser context connects, check that both the runtime and extension are installed and enabled. `interceptor diagnose` distinguishes store and unpacked versions. `interceptor reload --context <id>` reloads an unpacked extension; a store copy remains subject to store publication. For missing native permissions, use `interceptor macos trust --walkthrough`.
+If no browser context connects, check that both the runtime and extension are installed and enabled. `interceptor diagnose` distinguishes store and unpacked versions. If Interceptor disappears every time the browser restarts, run `interceptor diagnose extension`. It finds a profile that loaded the unpacked copy before 1.0.1 (an entry for the old extension ID blocks the folder), a load from `scripts/install.sh` that lasts one session, and two copies running at once. `--fix` repairs the first by restarting Brave, Vivaldi or Chromium on macOS; everything else gets exact steps. Installs and updates run the same check and ask before touching a browser. On macOS 27, an app needs your permission to read Chrome, Brave and Edge settings, so the check runs inside the bridge: in System Settings > Privacy & Security > Files & Folders, turn on each browser under `interceptor-bridge`, or give `interceptor-bridge` Full Disk Access. On a Mac that had Interceptor before 1.0.1, the installer asks and checks as soon as access is on. `interceptor reload --context <id>` reloads an unpacked extension; a store copy remains subject to store publication. For missing native permissions, use `interceptor macos trust --walkthrough`.
 
 macOS package removal: `sudo bash "/Library/Application Support/Interceptor/uninstall.sh"`. Add `--bridge-only` to remove native Mac support while retaining Browser.
 
