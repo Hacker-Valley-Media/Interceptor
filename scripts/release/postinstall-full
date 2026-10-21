@@ -177,9 +177,14 @@ if [[ -n "$TARGET_HOME" && -d "$TARGET_HOME" ]]; then
     "$TARGET_HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts" \
     "$TARGET_HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"
   do
-    mkdir -p "$browser_dir"
-    ln -sfn "$RENDERED_MANIFEST" "$browser_dir/com.interceptor.host.json"
-    chown -R "$TARGET_USER" "$browser_dir" 2>/dev/null || true
+    # macOS 27 denies writes into a browser's Application Support folder when
+    # that browser is not installed. A link we cannot place must not fail the
+    # whole install (it did on a Brave-only Mac, leaving no pkg receipts).
+    if mkdir -p "$browser_dir" && ln -sfn "$RENDERED_MANIFEST" "$browser_dir/com.interceptor.host.json"; then
+      chown -R "$TARGET_USER" "$browser_dir" 2>/dev/null || true
+    else
+      log_install "WARN: skipped native host link in $browser_dir"
+    fi
   done
 fi
 
@@ -204,13 +209,33 @@ if [[ -n "$TARGET_UID" && -f "$LAUNCH_AGENT_PATH" ]]; then
 fi
 
 # A preinstall marker exists only when no Interceptor daemon package receipt
-# preceded this install. Open the approved listing once for that new user;
-# routine pkg and Sparkle upgrades leave the browser alone.
+# preceded this install. That new user gets the welcome window: it looks for a
+# copy already in a browser, else walks them through adding one (Chrome Web
+# Store, Load unpacked or Safari). The store tab is the fallback when the CLI
+# cannot run. Routine pkg and Sparkle upgrades leave the browser alone.
 STORE_MARKER="$INSTALL_ROOT/.open-extension-store-$TARGET_UID"
+FIRST_INSTALL=0
 if [[ -n "$TARGET_UID" && -f "$STORE_MARKER" ]]; then
   rm -f "$STORE_MARKER"
+  FIRST_INSTALL=1
+  if [[ -z "$TARGET_HOME" ]] || ! /bin/launchctl asuser "$TARGET_UID" /usr/bin/sudo -u "$TARGET_USER" \
+      /usr/bin/env HOME="$TARGET_HOME" /usr/local/bin/interceptor diagnose extension --welcome \
+      >>"$INSTALL_LOG_PATH" 2>&1; then
+    /bin/launchctl asuser "$TARGET_UID" /usr/bin/sudo -u "$TARGET_USER" \
+      /usr/bin/open "https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed" \
+      >/dev/null 2>&1 || true
+  fi
+fi
+
+# A browser profile that loaded the unpacked extension before 1.0.1 keeps an
+# entry for the old extension ID on the extension folder, and the browser then
+# drops Interceptor at every start. Check on every install and Sparkle update.
+# When one is found the CLI detaches and asks the user whether to restart the
+# browser; nothing happens to the browser without that click.
+# A first install already ran this check inside the welcome window.
+if [[ -n "$TARGET_UID" && -n "$TARGET_HOME" && "$FIRST_INSTALL" == 0 ]]; then
   /bin/launchctl asuser "$TARGET_UID" /usr/bin/sudo -u "$TARGET_USER" \
-    /usr/bin/open "https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed" \
+    /usr/bin/env HOME="$TARGET_HOME" /usr/local/bin/interceptor diagnose extension --prompt \
     >>"$INSTALL_LOG_PATH" 2>&1 || true
 fi
 

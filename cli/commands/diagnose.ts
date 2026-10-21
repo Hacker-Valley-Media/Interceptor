@@ -34,8 +34,8 @@ import {
   isPreStoreVersion,
   isStoreManaged,
   LEGACY_DEVELOPMENT_EXTENSION_ID,
-  STORE_LISTING_URL,
 } from "../../shared/extension-identity"
+import { findProblems, type RepairBrowser } from "../lib/extension-repair"
 
 /** Where the installers leave the unpacked copy (the developer path). */
 export const UNPACKED_EXTENSION_DIR = process.platform === "win32"
@@ -92,16 +92,23 @@ export function extensionVersionMismatchLine(
   // extension ID to Chrome, so its storage (context name, tab-group label,
   // lifecycle) starts empty. Say so before the user loses the name.
   if (!installType && isPreStoreVersion(extensionVersion)) {
-    return `${base} This copy predates the store identity: an unpacked copy comes back from the reload under the store extension ID with empty settings, so restore its name afterwards with 'interceptor contexts rename ${contextId} --context <new id>'; a Chrome Web Store copy updates when the store publishes ${cliVersion}.`
+    return `${base} Run 'interceptor diagnose extension' before the reload: if this copy's folder now holds the store copy, the reload moves it to the store extension ID and the browser drops it at its next start, and diagnose extension gives the fix that keeps it. This copy predates the store identity:`
+      + ` an unpacked copy comes back from the reload under the store extension ID with empty settings, so restore its name afterwards with 'interceptor contexts rename ${contextId} --context <new id>'; a Chrome Web Store copy updates when the store publishes ${cliVersion}.`
   }
   return base
 }
 
-/** The pre-store development ID still connects (its origin stays allowed through
- *  0.25.x) but it is a second copy next to the store-ID one; name it. */
+/** A copy that registered with no version is running extension code from before 0.24. */
+export function cachedOldCodeLine(contextId: string): string {
+  return `⚠ context ${contextId} runs extension code from before 0.24 that the browser cached. Run 'interceptor diagnose extension' first; if it reports nothing for that browser, click the reload arrow on the Interceptor card in that profile (or run 'interceptor reload --context ${contextId}').`
+}
+
+/** The pre-store development ID still connects. As a profile's only copy it is the
+ *  repaired one (extension-legacy keeps that ID) and stays; next to a store-ID copy
+ *  it runs Interceptor twice. Only the profile files tell which, so point there. */
 export function legacyDevelopmentCopyLine(contextId: string, extensionId: string | undefined): string | null {
   if (extensionId !== LEGACY_DEVELOPMENT_EXTENSION_ID) return null
-  return `⚠ context ${contextId} is the pre-store development copy (id ${extensionId}); it keeps working through 0.25.x. Remove it on chrome://extensions, then load ${UNPACKED_EXTENSION_DIR} again or install ${STORE_LISTING_URL}, and restore its name with 'interceptor contexts rename ${contextId} --context <new id>'.`
+  return `context ${contextId} is the pre-store development copy (id ${extensionId}). If it is the only Interceptor in that browser profile, keep it. Run 'interceptor diagnose extension' to check for two copies; if it reports Interceptor running twice, remove this copy as it says and restore its name on the other one with 'interceptor contexts rename ${contextId} --context <new id>'.`
 }
 
 /** Text for the CLI's "unknown action type" failure: the connected extension
@@ -153,6 +160,10 @@ function contextKind(contextId: string | undefined): ContextProbe["kind"] {
 type DiagnoseSnapshot = {
   daemon: { running: boolean; pid: number | null; execPath?: string; version?: string; startedAt?: string }
   binaryMismatches: BinaryMismatch[]
+  /** Browser profiles where Interceptor cannot load properly (see cli/lib/extension-repair.ts). */
+  extensionProblems: Array<{ kind: string; browser: string; profile: string; profileName: string; extensionId: string; path: string; autoFix: boolean }>
+  /** Browsers whose profiles were not checked because macOS protects their data. */
+  extensionBlocked: string[]
   contexts: ContextProbe[]
   monitor: { active: number; total: number }
 }
@@ -257,6 +268,10 @@ export async function probeContext(contextId: string | undefined, identity?: Con
 export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string): Promise<void> {
   const status = readStatusSnapshot()
   const lock = readLockFile(LOCK_PATH)
+  // Skips folders macOS protects: reading one posts "Data Access Blocked" for
+  // whatever app runs diagnose. Those browsers are named, never called clean.
+  const extensionBlocked: RepairBrowser[] = []
+  const extensionProblems = findProblems(undefined, extensionBlocked, true)
 
   const snap: DiagnoseSnapshot = {
     daemon: {
@@ -265,6 +280,8 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
       ...(lock ? { execPath: lock.execPath, version: lock.version, startedAt: lock.startedAt } : {}),
     },
     binaryMismatches: detectBinaryMismatches(lock),
+    extensionProblems: extensionProblems.map(e => ({ kind: e.kind, browser: e.browser.key, profile: e.profileDir, profileName: e.profileName, extensionId: e.extensionId, path: e.path, autoFix: e.autoFix })),
+    extensionBlocked: extensionBlocked.map(b => b.key),
     contexts: [],
     monitor: { active: 0, total: 0 },
   }
@@ -324,6 +341,16 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
     lines.push(`    Fix: run 'interceptor init' or update the NMH manifest to match.`)
   }
 
+  // A leftover old-ID entry makes the browser skip Interceptor at start, which
+  // looks like "no contexts" with nothing else wrong.
+  if (snap.extensionProblems.length > 0) {
+    const where = snap.extensionProblems.map(e => `${e.browser} "${e.profileName}"`).join(", ")
+    lines.push(`⚠ Interceptor cannot load properly in: ${where}. Details and fix: 'interceptor diagnose extension'.`)
+  }
+  if (extensionBlocked.length > 0) {
+    lines.push(`extension: could not check ${extensionBlocked.map(b => b.label).join(", ")} (${process.platform === "darwin" ? "macOS needs permission" : "permission denied"}); run 'interceptor diagnose extension'`)
+  }
+
   if (status.daemon) {
     const multiCtx = snap.contexts.length > 1 || snap.contexts[0]?.contextId !== "default"
 
@@ -352,6 +379,7 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
       const mismatch = extensionVersionMismatchLine(ctx.contextId, ext.version, VERSION, ext.installType)
       if (mismatch) lines.push(`${indent}${mismatch}`)
       if (ext.reachable) lines.push(`${indent}${formatEvalMainLine(ext.evalMain)}`)
+      if (ext.reachable && !ext.version && !ext.extensionId && !ext.installType) lines.push(`${indent}${cachedOldCodeLine(ctx.contextId)}`)
       const legacy = legacyDevelopmentCopyLine(ctx.contextId, ext.extensionId)
       if (legacy) lines.push(`${indent}${legacy}`)
 

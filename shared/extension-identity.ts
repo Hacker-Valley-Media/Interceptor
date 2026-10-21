@@ -16,6 +16,10 @@ import identities from "../extension/store-identities.json"
 export const STORE_EXTENSION_ID: string = identities.chrome.storeId
 export const STORE_LISTING_URL: string = identities.chrome.listingUrl
 export const LEGACY_DEVELOPMENT_EXTENSION_ID = "hkjbaciefhhgekldhncknbjkofbpenng"
+/** The manifest key the unpacked copy carried through 0.24.13 (it derives the ID
+ *  above). The installers stamp it into extension-legacy/, the copy
+ *  `interceptor diagnose extension --fix` moves a leftover old-ID entry to. */
+export const LEGACY_DEVELOPMENT_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr8I3MwCNVrLcP0OCP8fRpiGWHIpbu2iMsyweU4YcX/CWdmO2fnZAJ6UP+IKkM5Zw9mt9kY4CFW4tZt096ChuMKiVBg4HM47ffWHTlo6rXOzdLuXMQ6MtFDuqbQuq6x0tLgYlOr7UxSiPVFgPRuczOz+kPkTO/h8nJNDaouNY1WnG4/ESruv10gwLwxgNKEvisnjxDU6lw9zDm/+pF8aAB8RMJbJQpRRBKDVL8rTRb4yCp6qi8E9VkJRK3sTD9sX0fgZoYd4pkvbK+7kPh9oxiuzPKNCKm9v8XTCVBh+sWBJBdke7PAoERkdXOs2MEijjO2A0X4/tzqygr3oARSghkQIDAQAB"
 
 export type ExtensionInstallType = "development" | "normal" | "sideload" | "admin" | "other"
 

@@ -111,6 +111,10 @@ Source: "windows-notification-identity.ps1"; DestName: "notification-identity-ma
 ; point "Load unpacked" (Developer mode). Setup still never touches a browser
 ; profile or loads it automatically — it only stages the files.
 Source: "{#StageDir}\extension\*"; DestDir: "{app}\extension"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The same extension under the key it carried through 0.24.13. A profile that
+; loaded the old copy from {app}\extension cannot load either copy from there
+; any more; "interceptor diagnose extension" points the user at this folder.
+Source: "{#StageDir}\extension-legacy\*"; DestDir: "{app}\extension-legacy"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\skills\interceptor\*"; DestDir: "{app}\skills\interceptor"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\skills\interceptor-browser\*"; DestDir: "{app}\skills\interceptor-browser"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\skills\interceptor-research\*"; DestDir: "{app}\skills\interceptor-research"; Excludes: "._*"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -146,6 +150,7 @@ Type: dirifempty; Name: "{localappdata}\Interceptor"
 ; remove the whole staged extension folder explicitly. filesandordirs also clears
 ; anything a user dropped in — the browser only reads from here, never writes.
 Type: filesandordirs; Name: "{app}\extension"
+Type: filesandordirs; Name: "{app}\extension-legacy"
 ; The same empty-tree residue for the other recursesubdirs payloads (an uninstall otherwise
 ; left engines\*, skills\*, daemon and Assets behind as empty folders). By this point uninstall
 ; has verified the engine bundle is the one this installer wrote and has unadopted the skill links.
@@ -162,6 +167,10 @@ Type: filesandordirs; Name: "{app}\interceptor-desktop.exe.WebView2"
 ; Last, once everything above is gone.
 Type: dirifempty; Name: "{app}"
 [Run]
+; Check every browser profile for an Interceptor copy that cannot load (an old-ID
+; entry left from before 1.0.1, a one-session load). Runs on installs and on the
+; updater's silent installs; it detaches and only shows a dialog when it finds one.
+Filename: "{app}\interceptor.exe"; Parameters: "diagnose extension --prompt"; Flags: nowait runhidden
 #ifdef FullInstall
 Filename: "{app}\interceptor-desktop.exe"; Flags: nowait runhidden
 #endif

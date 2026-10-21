@@ -199,6 +199,7 @@ DEST_BRIDGE_DIR="Applications"
 DEST_SUPPORT_DIR="Library/Application Support/Interceptor"
 DEST_EXTENSION_DIR="${DEST_SUPPORT_DIR}/extension"
 DEST_EXTENSION_MV2_DIR="${DEST_SUPPORT_DIR}/extension-mv2"
+DEST_EXTENSION_LEGACY_DIR="${DEST_SUPPORT_DIR}/extension-legacy"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 # `run`: in dry-run, print and skip; otherwise execute. Use for any external
@@ -434,6 +435,7 @@ run mkdir -p "$STAGING_DIR/cli/$DEST_CLI_DIR"
 run mkdir -p "$STAGING_DIR/daemon/$DEST_SUPPORT_DIR"
 run mkdir -p "$STAGING_DIR/extension/$DEST_EXTENSION_DIR"
 run mkdir -p "$STAGING_DIR/extension/$DEST_EXTENSION_MV2_DIR"
+run mkdir -p "$STAGING_DIR/extension/$DEST_EXTENSION_LEGACY_DIR"
 run mkdir -p "$COMPONENTS_DIR"
 run mkdir -p "$SCRIPTS_BROWSER_DIR"
 run mkdir -p "$SCRIPTS_FULL_DIR"
@@ -529,6 +531,13 @@ fi
 
 # Browser extension: extension/dist → staging/extension/<support>/extension
 run ditto "$REPO_ROOT/extension/dist" "$STAGING_DIR/extension/$DEST_EXTENSION_DIR"
+
+# The same extension under the development key it carried through 0.24.13.
+# A profile that loaded that copy keeps an entry for the old ID on the folder
+# above, which makes the browser drop Interceptor at every start;
+# `interceptor diagnose extension --fix` moves the entry onto this folder.
+run ditto "$REPO_ROOT/extension/dist" "$STAGING_DIR/extension/$DEST_EXTENSION_LEGACY_DIR"
+run bun "$REPO_ROOT/scripts/stamp-legacy-extension.ts" "$STAGING_DIR/extension/$DEST_EXTENSION_LEGACY_DIR/manifest.json"
 
 # Electron app extension: extension/dist-mv2 → staging/extension/<support>/extension-mv2
 run ditto "$REPO_ROOT/extension/dist-mv2" "$STAGING_DIR/extension/$DEST_EXTENSION_MV2_DIR"
