@@ -70,6 +70,7 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
     // Replace only external Xcode/install processes; exercise real build staging
     // and installer selection without touching a device or signing identity.
     let buildArgs = [];
+    const resigned = [];
     let expiration = new Date(Date.now() + 86_400_000).toISOString();
     Bun.spawnSync = ((args, opts) => {
       if (args.includes("build-for-testing")) {
@@ -103,6 +104,9 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
       }
       if (command.endsWith("codesign") && args.includes("--entitlements")) return ok('<?xml version="1.0"?><plist/>');
       if (command.endsWith("codesign") && args.includes("-dvvv")) return ok('', 'TeamIdentifier=FIXTURE\\n');
+      // Device builds drop Xcode's XCTest and are re-signed with the same identity.
+      if (command.endsWith("codesign") && args.includes("-dvv")) return ok('', 'Authority=Apple Development: Fixture (FIXTURE)\\nTeamIdentifier=FIXTURE\\n');
+      if (command.endsWith("codesign") && args.includes("--force")) { resigned.push(args.slice(1)); return ok(); }
       if (args.includes("install") && readFileSync(join(args.at(-1), "Fixture"), "utf8") !== "xcode-signed") throw new Error("installed unsigned bundle");
       return ok();
     });
@@ -115,6 +119,8 @@ test("stageRunner refreshes a cached runner when the source artifact changes", a
     const built = await buildRunnerWithXcode("fixture", { teamId: "FIXTURE", projectPath: source, derivedDataPath: derived });
     if (!buildArgs.includes("PRODUCT_BUNDLE_IDENTIFIER=com.interceptor.runner.fixture")) throw new Error("derived bundle id was not passed to Xcode");
     if (built.bundleId !== "com.interceptor.runner.fixture.xctrunner") throw new Error("actual bundle id was not returned");
+    const resign = resigned.find((a) => String(a.at(-1)).endsWith("Fixture-Runner.app"));
+    if (!resign || resign[resign.indexOf("--sign") + 1] !== "Apple Development: Fixture (FIXTURE)") throw new Error("device runner was not re-signed with its own identity after removing Xcode's XCTest");
     if (!(await installRunnerApp("fixture", built.bundleId, true)).ok) throw new Error("install failed");
     expiration = "2000-01-01T00:00:00Z";
     const expired = await installRunnerApp("fixture", built.bundleId, true);

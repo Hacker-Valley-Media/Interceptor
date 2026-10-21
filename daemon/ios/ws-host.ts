@@ -16,6 +16,7 @@
  * loopback.
  */
 import { networkInterfaces } from "node:os"
+import net from "node:net"
 import { execFileSync } from "node:child_process"
 import type { IosDeviceKind, IosDialBackVia } from "../../shared/ios-device"
 import { usbmuxListDevices } from "./usbmux-forward"
@@ -164,4 +165,36 @@ export async function resolveRunnerDialBack(
   const pick = pickRunnerWsHost({ ifaces, phoneAddress: phone?.address, phoneInterfaceIndex: phone?.interfaceIndex, defaultRouteIface })
   if (!pick) return loopback
   return { url: `ws://${pick.host}:${wsPort}`, host: pick.host, via: pick.via }
+}
+
+/**
+ * The Mac's Tailscale (VPN) URL. A runner the device starts away from
+ * home dials this; it is saved on the device at every Mac launch.
+ */
+export function remoteDialBack(wsPort: number, ifaces: Iface[] = ifaceTable()): DialBack | undefined {
+  const vpn = ifaces.find(isVpnIface)
+  return vpn ? { url: `ws://${vpn.address}:${wsPort}`, host: vpn.address, via: "vpn" } : undefined
+}
+
+/**
+ * True when this Mac answers a TCP connect on the dial-back's host and port.
+ * The daemon answers there through its runner-only listener
+ * (./runner-listener.ts); an unserved port is refused at once.
+ */
+export function probeDialBack(d: DialBack, timeoutMs = 1500): Promise<boolean> {
+  let port: number
+  try { port = Number(new URL(d.url).port) } catch { return Promise.resolve(false) }
+  if (!port) return Promise.resolve(false)
+  return new Promise<boolean>((resolve) => {
+    const s = net.connect({ host: d.host, port })
+    const done = (ok: boolean) => { clearTimeout(timer); s.destroy(); resolve(ok) }
+    const timer = setTimeout(() => done(false), timeoutMs)
+    s.once("connect", () => done(true))
+    s.once("error", () => done(false))
+  })
+}
+
+/** The URL a device-started runner dialed from its saved connection. */
+export function savedDialBack(url: string): DialBack {
+  return { url, host: hostOf(url), via: "saved" }
 }

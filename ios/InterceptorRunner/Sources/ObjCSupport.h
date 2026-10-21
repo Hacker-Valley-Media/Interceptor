@@ -28,6 +28,10 @@ NSString * _Nullable ICActiveApplicationDebug(void);
 /// Darwin notification state (non-zero while locked).
 BOOL ICIsScreenLocked(void);
 
+/// SetUp has started, so a runner opened on the device no longer needs
+/// to background itself (see ICEarlyBackground in ObjCSupport.m).
+void ICMarkSetUpStarted(void);
+
 /// issue #244: press a hardware button through XCTest's private XCDeviceEvent
 /// (HID usage page + usage, hold duration in seconds). Used for the lock
 /// button on iOS 27, where -[XCUIDevice pressLockButton] no longer locks

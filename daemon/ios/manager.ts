@@ -18,7 +18,8 @@
 
 import {
   classifyIosWayIn, describeIosDevice, describeIosWayIn, iosContextId, iosUdidSlug, udidFromContextId,
-  type IosDeviceDescriptor, type IosDeviceState, type IosTunnelState, type IosDeviceKind,
+  type IosDeviceDescriptor, type IosDeviceState, type IosTunnelState, type IosDeviceKind, type IosLaunchedBy,
+  IOS_RUNNER_OPS,
 } from "../../shared/ios-device"
 import { WdaClient } from "./wda-client"
 import { RunnerChannel, type IosDeviceChannel, type RunnerSocket, type RunnerResult, type GestureFinger } from "./channel"
@@ -35,12 +36,13 @@ import {
 import {
   setAlias, aliasForUdid, resolveUdid, markInstalled, knownInstalledUdids,
   getInstalled, getAppleAccount, setAppleAccount, clearAppleAccount, installsExpiringBy,
+  getOrCreateRunnerSecret, hasRunnerSecret, verifyRunnerProof, serverProof, markDeviceStartReady, deviceStartReady,
 } from "./state"
 import * as keychain from "./keychain"
 import * as testmanagerd from "./testmanagerd"
 import { helperAvailable, runRemotectl } from "./tunnel"
 import type { RunnerEnv } from "./tunnel"
-import { resolveRunnerDialBack, runnerDialHint, type DialBack } from "./ws-host"
+import { resolveRunnerDialBack, runnerDialHint, remoteDialBack, probeDialBack, savedDialBack, classifyDialBackHost, type DialBack } from "./ws-host"
 import net from "node:net"
 import { renameSync, writeFileSync } from "node:fs"
 import { isAbsolute } from "node:path"
@@ -133,6 +135,8 @@ type ManagerDeps = {
   emit: (event: string, data?: Record<string, unknown>) => void
   /** Daemon WS port the on-device runner dials back into. */
   wsPort: number
+  /** Open the daemon's runner-only listener on a non-loopback host a runner dials (the main server binds loopback). */
+  listenRunner?: (host: string) => void
 }
 
 type IosDeviceContext = {
@@ -152,6 +156,31 @@ type IosDeviceContext = {
   grace?: RunnerGrace
   /** Frame stream state; kept after stop so the last frame stays readable. */
   stream?: StreamState
+  /** `device` when the runner was opened on the device (no launch process here). */
+  launchedBy?: IosLaunchedBy
+}
+
+/** The daemon's reply to a registration. `serverProof` lets a device-started runner check it reached this Mac. */
+export type RunnerAck = { ok: boolean; error?: string; contextId?: string; serverProof?: string }
+
+/** What a runner sends when it registers (`{type:"ios", …}`). */
+export type RunnerRegistration = {
+  udid?: string
+  token?: string
+  contextId?: string
+  /**
+   * A device-started runner proves it holds the device secret without
+   * sending it: proof = HMAC-SHA256(secret, "runner|UDID|ts|nonce").
+   */
+  ts?: number
+  nonce?: string
+  proof?: string
+  /** `device` when the runner was opened on the device rather than launched by this Mac. */
+  launchedBy?: string
+  /** The URL the runner dialed. */
+  url?: string
+  /** `simulator` or `device`, reported by the runner build. */
+  kind?: string
 }
 
 /** A closed runner socket being held open for the runner's own re-dial. */
@@ -171,9 +200,20 @@ type RunnerGrace = {
  */
 export const RUNNER_RECONNECT_GRACE_MS = 10_000
 
+/**
+ * Grace for a runner the device started. Its re-dial backs off to one
+ * try every 30 s, so the window covers a full step before the context is dropped
+ * (the runner's next re-dial then registers a fresh one).
+ */
+export const RUNNER_DEVICE_GRACE_MS = 30_000
+
+const PROOF_REJECTED = "ios runner proof rejected (wrong device secret, a clock more than 2 minutes off, or a replay)"
+
 /** A pending `enable` waiting for its InterceptorRunner to dial back in. */
 type PendingRunner = {
   token: string
+  /** The launch env carried the device secret, so a runner that reports `launchedBy: "mac"` saved it. */
+  savesConnection: boolean
   resolve: (ch: RunnerChannel) => void
   reject: (e: Error) => void
   timer: ReturnType<typeof setTimeout>
@@ -195,6 +235,13 @@ export class IosManager {
   private registerTimeoutMs = 120_000
   /** How long a closed runner socket is held for its re-dial. Tests shorten it. */
   private reconnectGraceMs = RUNNER_RECONNECT_GRACE_MS
+  /** Grace for device-started runners. Tests shorten it. */
+  private deviceGraceMs = RUNNER_DEVICE_GRACE_MS
+  /** The Mac's Tailscale URL and its reachability probe. Tests stub both. */
+  private remoteDialBackFor = (): DialBack | undefined => remoteDialBack(this.deps.wsPort)
+  private probeRemote = probeDialBack
+  /** UDID slugs whose device-started runner `ios disable` could not reach; its next registration is told to quit. */
+  private quitRequested = new Set<string>()
 
   private refreshTimer?: ReturnType<typeof setInterval>
 
@@ -239,7 +286,7 @@ export class IosManager {
    * it to a pending `enable`, validates the per-session token, and binds the
    * socket to a RunnerChannel. Returns an ack the daemon sends back.
    */
-  registerRunner(ws: RunnerSocket, msg: { udid?: string; token?: string; contextId?: string }): { ok: boolean; error?: string; contextId?: string } {
+  registerRunner(ws: RunnerSocket, msg: RunnerRegistration): RunnerAck {
     const udid = msg.udid || (msg.contextId ? udidFromContextId(msg.contextId) : undefined)
     if (!udid) return { ok: false, error: "ios runner registration missing udid" }
     // Key by slug (case-insensitive): the runner may report the raw devicectl udid
@@ -253,12 +300,22 @@ export class IosManager {
       // rejecting it as "no pending enable" and letting the session die.
       const ctx = this.contexts.get(iosContextId(udid))
       if (ctx?.grace && ctx.channel instanceof RunnerChannel) {
-        if (msg.token !== ctx.grace.token) return { ok: false, error: "ios runner token mismatch" }
-        ctx.channel.rebind(ws)
-        this.runnerByWs.set(ws, { udid, channel: ctx.channel })
-        this.settleGrace(ctx, true)
-        return { ok: true, contextId: ctx.descriptor.contextId }
+        // The same runner re-dialing: its launch token, or the device secret when the
+        // device started this session. A device-started runner never takes over a Mac
+        // launch's session; it registers fresh below, replacing it.
+        const byToken = typeof msg.token === "string" && msg.token !== "" && msg.token === ctx.grace.token
+        if (byToken || (ctx.launchedBy === "device" && verifyRunnerProof(udid, msg))) {
+          ctx.channel.rebind(ws)
+          this.runnerByWs.set(ws, { udid, channel: ctx.channel })
+          this.settleGrace(ctx, true)
+          const proof = byToken ? undefined : serverProof(udid, String(msg.nonce))
+          return proof ? { ok: true, contextId: ctx.descriptor.contextId, serverProof: proof } : { ok: true, contextId: ctx.descriptor.contextId }
+        }
+        if (ctx.launchedBy === "device" || msg.launchedBy !== "device") {
+          return { ok: false, error: msg.launchedBy === "device" ? PROOF_REJECTED : "ios runner token mismatch" }
+        }
       }
+      if (msg.launchedBy === "device") return this.registerDeviceStarted(ws, udid, msg)
       return { ok: false, error: `no pending 'ios enable' for udid ${udid}` }
     }
     // A pending runner always carries a per-session token; reject any mismatch
@@ -268,8 +325,59 @@ export class IosManager {
     this.runnerByWs.set(ws, { udid, channel })
     clearTimeout(pending.timer)
     this.pendingRunners.delete(key)
+    // Only runners that save the connection report launchedBy; older ones ignore the secret.
+    if (pending.savesConnection && msg.launchedBy === "mac") markDeviceStartReady(udid)
     pending.resolve(channel)
     return { ok: true, contextId: iosContextId(udid) }
+  }
+
+  /**
+   * A runner opened on the device, with no launch from this Mac. It must
+   * present the secret this Mac gave it at an earlier launch. It replaces any
+   * context for the device, because only one runner process can run there.
+   */
+  private registerDeviceStarted(ws: RunnerSocket, udid: string, msg: RunnerRegistration): RunnerAck {
+    if (!hasRunnerSecret(udid)) {
+      return { ok: false, error: `no device secret for ${udid} on this Mac: run any interceptor ios command once while the device is on this Mac's network or USB` }
+    }
+    if (!verifyRunnerProof(udid, msg)) return { ok: false, error: PROOF_REJECTED }
+    const contextId = iosContextId(udid)
+    const ack: RunnerAck = { ok: true, contextId, serverProof: serverProof(udid, String(msg.nonce)) }
+    if (this.quitRequested.delete(iosUdidSlug(udid))) {
+      // `ios disable` ran while this runner was between sockets: accept it only to tell it to stop.
+      const channel = new RunnerChannel(ws)
+      this.runnerByWs.set(ws, { udid, channel })
+      // A microtask, so the quit follows the ack the daemon sends on return.
+      queueMicrotask(() => {
+        void channel.rawOp(IOS_RUNNER_OPS.quit).catch(() => {})
+          .finally(() => { this.runnerByWs.delete(ws); channel.teardown() })
+      })
+      return ack
+    }
+    const prior = this.contexts.get(contextId)
+    if (prior) {
+      // Ending a re-dial window here: callers waiting on it get the new session under the same id.
+      const grace = prior.grace
+      if (grace) { clearTimeout(grace.timer); prior.grace = undefined }
+      this.dropContext(prior, "replaced by a runner opened on the device")
+      grace?.resolve(true)
+    }
+    const kind: IosDeviceKind = msg.kind === "simulator" ? "simulator" : "device"
+    const descriptor = describeIosDevice({ udid, name: aliasForUdid(udid) ?? udid, kind, paired: true, developerMode: true })
+    const channel = new RunnerChannel(ws)
+    const ctx: IosDeviceContext = {
+      descriptor, channel, registry: new IosRefRegistry(), wdaPort: 0, tunnel: "none", procs: [],
+      registeredAt: Date.now(), token: crypto.randomUUID(), launchedBy: "device",
+      dialBack: typeof msg.url === "string" && msg.url ? savedDialBack(msg.url) : undefined,
+    }
+    this.contexts.set(contextId, ctx)
+    this.runnerByWs.set(ws, { udid, channel })
+    // The real name and iOS version, when this Mac can see the device.
+    void this.resolveDescriptor(udid)
+      .then((d) => { if (d && this.contexts.get(contextId) === ctx) ctx.descriptor = d })
+      .catch(() => {})
+    this.deps.emit("ios_enabled", { contextId, udid, kind, transport: "runner", launchedBy: "device" })
+    return ack
   }
 
   /** Fail a launch that is still waiting for its runner (the launch process died). */
@@ -341,9 +449,10 @@ export class IosManager {
     ctx.channel.failInflight("ios runner disconnected (waiting for it to re-dial)")
     let resolve!: (rebound: boolean) => void
     const settled = new Promise<boolean>((r) => { resolve = r })
-    const timer = setTimeout(() => this.settleGrace(ctx, false), this.reconnectGraceMs)
+    const graceMs = ctx.launchedBy === "device" ? this.deviceGraceMs : this.reconnectGraceMs
+    const timer = setTimeout(() => this.settleGrace(ctx, false), graceMs)
     ctx.grace = { token: ctx.token, timer, settled, resolve }
-    this.deps.emit("ios_reconnecting", { contextId: ctx.descriptor.contextId, udid: rec.udid, graceMs: this.reconnectGraceMs })
+    this.deps.emit("ios_reconnecting", { contextId: ctx.descriptor.contextId, udid: rec.udid, graceMs })
   }
 
   /** End a grace window: keep the session (rebound) or run the old immediate teardown. */
@@ -365,9 +474,11 @@ export class IosManager {
     this.deps.emit("ios_disabled", { contextId: ctx.descriptor.contextId, udid: ctx.descriptor.udid, reason })
   }
 
-  private awaitRunner(udid: string, token: string, timeoutMs: number): Promise<RunnerChannel> {
+  private awaitRunner(udid: string, token: string, timeoutMs: number, savesConnection = false): Promise<RunnerChannel> {
     // Key by slug so registerRunner matches regardless of udid case (see registerRunner).
     const key = iosUdidSlug(udid)
+    // A launch from this Mac replaces whatever runner `ios disable` was waiting to stop.
+    this.quitRequested.delete(key)
     const prior = this.pendingRunners.get(key)
     if (prior) { clearTimeout(prior.timer); prior.reject(new Error("superseded by a newer enable")) }
     return new Promise<RunnerChannel>((resolve, reject) => {
@@ -375,7 +486,7 @@ export class IosManager {
         this.pendingRunners.delete(key)
         reject(new Error(`InterceptorRunner did not register within ${Math.round(timeoutMs / 1000)}s`))
       }, timeoutMs)
-      this.pendingRunners.set(key, { token, resolve, reject, timer })
+      this.pendingRunners.set(key, { token, savesConnection, resolve, reject, timer })
     })
   }
 
@@ -386,8 +497,15 @@ export class IosManager {
    * usbmuxd discovered the phone on (InterfaceIndex), then the phone's IPv4
    * subnet, then the default route. See ./ws-host.ts.
    */
-  private resolveDialBack(kind: IosDeviceKind, udid: string): Promise<DialBack> {
-    return resolveRunnerDialBack(kind, udid, this.deps.wsPort)
+  private async resolveDialBack(kind: IosDeviceKind, udid: string): Promise<DialBack> {
+    const d = await resolveRunnerDialBack(kind, udid, this.deps.wsPort)
+    this.listenOn(d)
+    return d
+  }
+
+  /** The daemon answers a runner on a LAN or VPN address only through its runner-only listener there. */
+  private listenOn(d: DialBack | undefined): void {
+    if (d && d.via !== "override" && classifyDialBackHost(d.host) !== "loopback") this.deps.listenRunner?.(d.host)
   }
 
   // ── lifecycle dispatch ───────────────────────────────────────────────────────
@@ -719,10 +837,7 @@ export class IosManager {
     const udid = descriptor.udid
     const token = crypto.randomUUID()
     const dialBack = await this.resolveDialBack(descriptor.kind, udid)
-    const env: RunnerEnv = {
-      INTERCEPTOR_WS_URL: dialBack.url, INTERCEPTOR_WS_TOKEN: token,
-      INTERCEPTOR_UDID: udid, INTERCEPTOR_CONTEXT_ID: descriptor.contextId,
-    }
+    const env: RunnerEnv = this.runnerLaunchEnv(descriptor, dialBack, token)
     try {
       if (descriptor.needsTunnel) {
         // The userspace launcher owns CoreDeviceProxy, RSD, DDI lookup, appservice,
@@ -730,7 +845,7 @@ export class IosManager {
         this.deps.emit("ios_tunnel_userspace", { udid })
       }
       await testmanagerd.launchRunner(udid, { bundleId: this.runnerBundleId(udid), env })
-      const channel = await this.awaitRunner(udid, token, this.registerTimeoutMs)
+      const channel = await this.awaitRunner(udid, token, this.registerTimeoutMs, Boolean(env.INTERCEPTOR_DEVICE_SECRET))
       return { ok: true, channel, tunnel: "native", dialBack, token }
     } catch (err) {
       return { ok: false, error: registrationFailure(err as Error, dialBack) }
@@ -796,12 +911,12 @@ export class IosManager {
       const canonical = udid.toUpperCase()
       descriptor = describeIosDevice({ udid: canonical, name: aliasForUdid(canonical) ?? canonical, kind: "device", paired: true, developerMode: true })
     }
-    if (!descriptor) return { ok: false, error: "device not found — plug it in and unlock it (interceptor ios devices)" }
+    if (!descriptor) return { ok: false, error: this.withDeviceStartHint(udid, "device not found — plug it in and unlock it (interceptor ios devices)") }
     if (descriptor.wayIn === "unsupported") return { ok: false, error: `'${descriptor.name}' is not ready: ${missingSetup(descriptor)}` }
 
     const procs: Bun.Subprocess[] = []
     const brought = await this.launchRunner(descriptor, procs)
-    if (!brought.ok) { for (const p of procs) killChild(p); return { ok: false, error: brought.error } }
+    if (!brought.ok) { for (const p of procs) killChild(p); return { ok: false, error: this.withDeviceStartHint(udid, brought.error) } }
     const ctx: IosDeviceContext = {
       descriptor, channel: brought.channel, registry: new IosRefRegistry(),
       wdaPort: 0, tunnel: brought.tunnel, procs, registeredAt: Date.now(), dialBack: brought.dialBack,
@@ -810,6 +925,33 @@ export class IosManager {
     this.contexts.set(contextId, ctx)
     this.deps.emit("ios_enabled", { contextId, udid, kind: descriptor.kind, transport: "runner" })
     return { ok: true, contextId }
+  }
+
+  /**
+   * The test env for a launch from this Mac. Besides the session values,
+   * the runner gets this device's secret and the URLs to try (the launch URL,
+   * then the Mac's Tailscale URL) and saves them, so the device can start it later.
+   */
+  private runnerLaunchEnv(descriptor: IosDeviceDescriptor, dialBack: DialBack, token: string): RunnerEnv {
+    const env: RunnerEnv = {
+      INTERCEPTOR_WS_URL: dialBack.url, INTERCEPTOR_WS_TOKEN: token,
+      INTERCEPTOR_UDID: descriptor.udid, INTERCEPTOR_CONTEXT_ID: descriptor.contextId,
+    }
+    // Only loopback (simulator) and VPN addresses are saved: a LAN address
+    // replayed on someone else's network could reach a stranger.
+    const urls = [...new Set([dialBack, this.remoteDialBackFor()]
+      .filter((d): d is DialBack => Boolean(d) && classifyDialBackHost(d!.host) !== "lan")
+      .map((d) => d.url))]
+    if (urls.length === 0) return env
+    return { ...env, INTERCEPTOR_DEVICE_SECRET: getOrCreateRunnerSecret(descriptor.udid), INTERCEPTOR_WS_URLS: urls.join(",") }
+  }
+
+  /** After a failed launch, point at opening the runner on the device when it can connect that way. */
+  private withDeviceStartHint(udid: string, error: string): string {
+    if (!deviceStartReady(udid)) return error
+    const remote = this.remoteDialBackFor()
+    if (!remote) return error
+    return `${error}. Away from this Mac's network? Open InterceptorRunner on the device (tap its icon); it connects back over ${remote.url}.`
   }
 
   /**
@@ -826,7 +968,6 @@ export class IosManager {
     const udid = descriptor.udid
     const token = crypto.randomUUID()
     const dialBack = await this.resolveDialBack(descriptor.kind, udid)
-    const wsUrl = dialBack.url
 
     const staged = stageRunner()
     if (staged.error || !staged.dir) return { ok: false, error: staged.error ?? "the Interceptor agent is not available" }
@@ -843,10 +984,8 @@ export class IosManager {
     }
     const xctestrun = findXctestrun(staged.dir)
     if (!xctestrun) return { ok: false, error: "the bundled agent is missing its launch descriptor (.xctestrun) — reinstall Interceptor" }
-    const prepared = prepareXctestrunWithEnv(xctestrun, {
-      INTERCEPTOR_WS_URL: wsUrl, INTERCEPTOR_WS_TOKEN: token,
-      INTERCEPTOR_UDID: udid, INTERCEPTOR_CONTEXT_ID: descriptor.contextId,
-    }, this.runnerBundleId(udid))
+    const env = this.runnerLaunchEnv(descriptor, dialBack, token)
+    const prepared = prepareXctestrunWithEnv(xctestrun, env as Record<string, string>, this.runnerBundleId(udid))
     if (!prepared) return { ok: false, error: "could not prepare the agent launch descriptor" }
 
     if (descriptor.kind === "simulator") await runAsync("/usr/bin/xcrun", ["simctl", "boot", udid])
@@ -856,7 +995,7 @@ export class IosManager {
     this.watchLaunchProcess(udid, proc)
 
     try {
-      const channel = await this.awaitRunner(udid, token, this.registerTimeoutMs)
+      const channel = await this.awaitRunner(udid, token, this.registerTimeoutMs, Boolean(env.INTERCEPTOR_DEVICE_SECRET))
       return { ok: true, channel, tunnel: descriptor.needsTunnel ? "xcode" : "none", dialBack, token }
     } catch (err) {
       return { ok: false, error: registrationFailure(err as Error, dialBack) }
@@ -931,6 +1070,14 @@ export class IosManager {
     if (!contextId) return { success: false, error: "ios disable: specify a device (--on <name>) — see interceptor ios devices" }
     const ctx = this.contexts.get(contextId)
     if (!ctx) return { success: false, error: `ios context '${contextId}' not found` }
+    // A device-started runner re-dials until told to stop. Between sockets (or when
+    // the quit goes unanswered) it hears the quit on its next registration.
+    if (ctx.launchedBy === "device" && ctx.channel instanceof RunnerChannel) {
+      const told = !ctx.grace && await Promise.race([
+        ctx.channel.rawOp(IOS_RUNNER_OPS.quit).then(() => true, () => false), Bun.sleep(2_000).then(() => false),
+      ])
+      if (!told) this.quitRequested.add(iosUdidSlug(ctx.descriptor.udid))
+    }
     await this.teardownContext(ctx)
     this.contexts.delete(contextId)
     this.deps.emit("ios_disabled", { contextId, udid: ctx.descriptor.udid })
@@ -954,6 +1101,10 @@ export class IosManager {
 
   private async status(): Promise<IosResult> {
     const data: IosDeviceState[] = []
+    // The URL a device-started runner uses away from home, and whether this Mac answers on it.
+    const remote = this.remoteDialBackFor()
+    this.listenOn(remote)
+    const remoteFields = remote ? { remoteDialBack: remote.url, remoteReachable: await this.probeRemote(remote) } : {}
     for (const ctx of this.contexts.values()) {
       // A runner keeps the URL it was launched with; re-resolving after a route change would report an address it never had.
       const dial = ctx.dialBack ?? await this.resolveDialBack(ctx.descriptor.kind, ctx.descriptor.udid)
@@ -971,6 +1122,9 @@ export class IosManager {
         registeredAt: ctx.registeredAt,
         dialBack: dial.url,
         dialBackVia: dial.via,
+        launchedBy: ctx.launchedBy ?? "mac",
+        deviceStartReady: deviceStartReady(ctx.descriptor.udid),
+        ...remoteFields,
       })
     }
     // The runner drops on idle and re-dials per verb, so live contexts alone make
@@ -988,7 +1142,7 @@ export class IosManager {
       data.push({
         contextId, udid: d.udid, name: d.name, kind: d.kind, wayIn: d.wayIn,
         productVersion: d.productVersion, tunnel: "none", connection: "disconnected", registeredAt: 0,
-        dialBack: dial.url, dialBackVia: dial.via,
+        dialBack: dial.url, dialBackVia: dial.via, deviceStartReady: deviceStartReady(d.udid), ...remoteFields,
       })
     }
     return { success: true, data }

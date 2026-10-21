@@ -19,15 +19,20 @@
 //
 //  Connection params arrive via the test process environment (injected into the
 //  .xctestrun by the daemon at launch): INTERCEPTOR_WS_URL / _WS_TOKEN / _UDID /
-//  _CONTEXT_ID.
+//  _CONTEXT_ID, plus _DEVICE_SECRET / _WS_URLS, which the runner saves so it can
+//  also be opened on the device and connect back without a Mac launch.
 //
 //  Wire protocol (daemon → runner): { id, op, ...args }
 //                  (runner → daemon): { id, result: { success, data?, error? } }
-//  Registration   (runner → daemon): { type:"ios", udid, token, contextId }
+//  Registration   (runner → daemon): { type:"ios", udid, token, contextId, launchedBy:"mac" }
+//                 device-started:   { type:"ios", udid, contextId, launchedBy:"device", ts, nonce, proof }
+//  Ack            (daemon → runner): { type:"ios", ok, contextId, serverProof? }
+//  Quit           (daemon → runner): { id, op:"quit" }
 //
 
 import XCTest
 import Foundation
+import CryptoKit
 import ObjectiveC.runtime
 import JavaScriptCore  // Lane D: on-device JSCore scripting brain
 
@@ -35,27 +40,20 @@ final class InterceptorRunnerUITests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        ICMarkSetUpStarted()
         continueAfterFailure = true
         Runner.idleWaitPatched = disableQuiescenceWait()
     }
 
     /// Never-ending test that hosts the WebSocket agent (mirrors WDA's testRunner).
     func testRunner() {
-        let env = ProcessInfo.processInfo.environment
-        guard let urlStr = env["INTERCEPTOR_WS_URL"], let url = URL(string: urlStr) else {
-            XCTFail(
-                "INTERCEPTOR_WS_URL is not set in the test environment",
-                file: "InterceptorRunnerUITests.swift",
-                line: #line
-            )
+        // A Mac launch passes the connection in the environment; opened on the
+        // device, the runner uses the connection it saved at its last Mac launch.
+        guard let connection = RunnerConnection.resolve() else {
+            XCTFail(RunnerConnection.missingMessage, file: "InterceptorRunnerUITests.swift", line: #line)
             return
         }
-        let agent = WSAgent(
-            url: url,
-            token: env["INTERCEPTOR_WS_TOKEN"] ?? "",
-            udid: env["INTERCEPTOR_UDID"] ?? "",
-            contextId: env["INTERCEPTOR_CONTEXT_ID"] ?? ""
-        )
+        let agent = WSAgent(connection: connection)
         agent.start()
         // Keep the MAIN RUN LOOP spinning (do NOT park the thread on a semaphore).
         // XCUITest's accessibility snapshot / app-attach dispatch work to the main
@@ -97,13 +95,94 @@ private func disableQuiescenceWait() -> [String] {
     return patched
 }
 
+// MARK: - Connection
+
+/// Where the runner dials and how it proves itself.
+///
+/// A launch from the Mac passes everything in the test environment. When the
+/// Mac also passes INTERCEPTOR_DEVICE_SECRET and INTERCEPTOR_WS_URLS, the runner
+/// saves them, so it can connect when it is opened on the device (a tap on its
+/// icon) and the environment is empty. A device-started runner never sends the
+/// secret: it sends HMAC-SHA256(secret, "runner|UDID|ts|nonce"), and runs no op
+/// until the Mac answers with HMAC-SHA256(secret, "server|UDID|nonce").
+struct RunnerConnection {
+    /// URL strings, kept as text and parsed only to dial.
+    let urls: [String]
+    let token: String
+    let udid: String
+    let contextId: String
+    let secret: String
+    /// The device started this runner (no Mac launch).
+    let deviceStarted: Bool
+
+    static let missingMessage = "InterceptorRunner has no saved connection. Run any interceptor ios command once while this device is on the Mac's network or USB, then open InterceptorRunner again."
+
+    static func resolve(_ env: [String: String] = ProcessInfo.processInfo.environment) -> RunnerConnection? {
+        guard let first = env["INTERCEPTOR_WS_URL"].map(restoreScheme), URL(string: first) != nil else { return load() }
+        let conn = RunnerConnection(
+            urls: [first],
+            token: env["INTERCEPTOR_WS_TOKEN"] ?? "",
+            udid: env["INTERCEPTOR_UDID"] ?? "",
+            contextId: env["INTERCEPTOR_CONTEXT_ID"] ?? "",
+            secret: env["INTERCEPTOR_DEVICE_SECRET"] ?? "",
+            deviceStarted: false
+        )
+        let saved = (env["INTERCEPTOR_WS_URLS"] ?? "").split(separator: ",").map { restoreScheme(String($0)) }.filter { URL(string: $0) != nil }
+        if !conn.secret.isEmpty && !saved.isEmpty { save(urls: saved, conn) }
+        return conn
+    }
+
+    /// The test environment delivers "ws://host:port" as "ws:/host:port" (the
+    /// .xctestrun holds the "//"; seen on the iOS 26.1 simulator). URLSession
+    /// still connects, but the saved and reported URL should be exact.
+    static func restoreScheme(_ s: String) -> String {
+        s.replacingOccurrences(of: "^(wss?):/(?=[^/])", with: "$1://", options: .regularExpression)
+    }
+
+    private struct Saved: Codable { let urls: [String]; let udid: String; let contextId: String; let secret: String }
+
+    private static var fileURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("interceptor-connection.json")
+    }
+
+    private static func save(urls: [String], _ c: RunnerConnection) {
+        let saved = Saved(urls: urls, udid: c.udid, contextId: c.contextId, secret: c.secret)
+        guard let file = fileURL, let data = try? JSONEncoder().encode(saved) else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Readable once the device has been unlocked after boot, which is when a person can open the runner.
+        try? data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    private static func load() -> RunnerConnection? {
+        guard let file = fileURL, let data = try? Data(contentsOf: file),
+              let s = try? JSONDecoder().decode(Saved.self, from: data) else { return nil }
+        let urls = s.urls.filter { URL(string: $0) != nil }
+        guard !urls.isEmpty, !s.secret.isEmpty, !s.udid.isEmpty else { return nil }
+        return RunnerConnection(urls: urls, token: "", udid: s.udid, contextId: s.contextId, secret: s.secret, deviceStarted: true)
+    }
+
+    /// HMAC-SHA256 over "<role>|<UDID>|<parts…>" keyed by the secret, base64url (daemon/ios/state.ts computes the same).
+    func hmac(_ role: String, _ parts: [String]) -> String {
+        let message = ([role, udid.uppercased()] + parts).joined(separator: "|")
+        let mac = HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: SymmetricKey(data: Data(secret.utf8)))
+        return Data(mac).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
 // MARK: - WebSocket agent
 
 final class WSAgent: NSObject, URLSessionWebSocketDelegate {
-    private let url: URL
-    private let token: String
-    private let udid: String
-    private let contextId: String
+    #if targetEnvironment(simulator)
+    private static let kind = "simulator"
+    #else
+    private static let kind = "device"
+    #endif
+
+    private let conn: RunnerConnection
     /// Set when the socket is gone for good; the test's main run loop watches it.
     private(set) var finished = false
 
@@ -116,13 +195,27 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
         set { taskLock.lock(); _task = newValue; taskLock.unlock() }
     }
     private var reconnects = 0
+    /// A Mac launch keeps five quick tries: the daemon owns its lifetime.
     private let maxReconnects = 5
+    /// Device-started re-dial back-off in seconds; the last step repeats until `quit`.
+    private static let backoff: [Double] = [1, 2, 4, 8, 15, 30]
+    private var urlIndex = 0
 
-    init(url: URL, token: String, udid: String, contextId: String) {
-        self.url = url
-        self.token = token
-        self.udid = udid
-        self.contextId = contextId
+    // Registration state of the current socket, shared by the reconnect and delegate queues.
+    private let stateLock = NSLock()
+    private var _currentURL: String
+    private var _nonce = ""
+    /// Ops run only once the Mac proved itself. A Mac launch is trusted as before.
+    private var _authenticated: Bool
+    private var _quit = false
+    private var steppedAside = false
+
+    private func locked<T>(_ body: () -> T) -> T { stateLock.lock(); defer { stateLock.unlock() }; return body() }
+
+    init(connection: RunnerConnection) {
+        self.conn = connection
+        self._currentURL = connection.urls[0]
+        self._authenticated = !connection.deviceStarted
         super.init()
         self.session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
     }
@@ -143,7 +236,10 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func connect() {
-        let t = session.webSocketTask(with: url)
+        let url = conn.urls[urlIndex % conn.urls.count]
+        locked { _currentURL = url }
+        // Every string was checked with URL(string:) when it was loaded.
+        let t = session.webSocketTask(with: URL(string: url)!)
         task = t
         t.resume()
         register()
@@ -151,7 +247,21 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func register() {
-        send(["type": "ios", "udid": udid, "token": token, "contextId": contextId])
+        let url = locked { _currentURL }
+        var msg: [String: Any] = ["type": "ios", "udid": conn.udid, "contextId": conn.contextId, "url": url, "kind": Self.kind]
+        if conn.deviceStarted {
+            let ts = Int64(Date().timeIntervalSince1970 * 1000)
+            let nonce = UUID().uuidString
+            locked { _nonce = nonce; _authenticated = false }
+            msg["launchedBy"] = "device"
+            msg["ts"] = ts
+            msg["nonce"] = nonce
+            msg["proof"] = conn.hmac("runner", [String(ts), nonce])
+        } else {
+            msg["launchedBy"] = "mac"
+            msg["token"] = conn.token
+        }
+        send(msg)
     }
 
     private func send(_ obj: [String: Any]) {
@@ -167,22 +277,29 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
             guard let self = self else { return }
             switch result {
             case .success(let message):
-                self.reconnects = 0
+                // A device-started runner resets its back-off only once the Mac proves itself (handleAck).
+                if !self.conn.deviceStarted { self.reconnects = 0 }
                 let text: String?
                 switch message {
                 case .string(let s): text = s
                 case .data(let d): text = String(data: d, encoding: .utf8)
                 @unknown default: text = nil
                 }
-                if let text = text {
-                    // Verbs must run on the MAIN (test) thread: XCUITest's snapshot
-                    // and element queries require the thread-local XCTContext, which
-                    // exists only there ("Current context must not be nil" otherwise).
-                    // XCTest spins its own nested run loop while it works, so a verb
-                    // doesn't freeze the main loop. The receive loop stays on this
-                    // background delegate queue, so the socket stays responsive.
-                    DispatchQueue.main.async { self.handle(text) }
-                }
+                guard
+                    let data = text?.data(using: .utf8),
+                    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                else { self.receive(); return }
+                if obj["type"] as? String == "ios" { self.handleAck(obj); self.receive(); return }
+                // A device-started runner drops every op, quit included, until the Mac has proved itself.
+                if !self.locked({ self._authenticated }) { self.receive(); return }
+                if obj["op"] as? String == "quit" { self.quit(id: obj["id"] as? String); return }
+                // Verbs must run on the MAIN (test) thread: XCUITest's snapshot
+                // and element queries require the thread-local XCTContext, which
+                // exists only there ("Current context must not be nil" otherwise).
+                // XCTest spins its own nested run loop while it works, so a verb
+                // doesn't freeze the main loop. The receive loop stays on this
+                // background delegate queue, so the socket stays responsive.
+                DispatchQueue.main.async { self.handle(obj) }
                 self.receive() // re-arm immediately
             case .failure:
                 self.handleDisconnect()
@@ -190,20 +307,47 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    private func handle(_ text: String) {
-        guard
-            let data = text.data(using: .utf8),
-            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let id = obj["id"] as? String,
-            let op = obj["op"] as? String
-        else { return }
+    /// The daemon's reply to registration. A device-started runner checks the
+    /// Mac's proof, then steps aside to the Home Screen once.
+    private func handleAck(_ obj: [String: Any]) {
+        guard conn.deviceStarted else { return }
+        let nonce = locked { _nonce }
+        if obj["ok"] as? Bool == true, let proof = obj["serverProof"] as? String, proof == conn.hmac("server", [nonce]) {
+            locked { _authenticated = true }
+            reconnects = 0
+            if !steppedAside {
+                steppedAside = true
+                DispatchQueue.main.async { XCUIDevice.shared.press(.home) }
+            }
+        } else {
+            NSLog("InterceptorRunner: registration not accepted (%@)", String(describing: obj["error"] ?? "the server sent no valid proof"))
+            task?.cancel(with: .policyViolation, reason: nil)
+        }
+    }
+
+    /// `ios disable` on a device-started runner: stop re-dialing and end the test.
+    private func quit(id: String?) {
+        locked { _quit = true }
+        if let id = id { send(["id": id, "result": ["success": true]]) }
+        task?.cancel(with: .normalClosure, reason: nil)
+        finished = true
+    }
+
+    private func handle(_ obj: [String: Any]) {
+        guard let id = obj["id"] as? String, let op = obj["op"] as? String else { return }
         let result = Runner.run(op: op, args: obj)
         send(["id": id, "result": result])
     }
 
     private func handleDisconnect() {
+        if locked({ _quit }) { finished = true; return }
         reconnects += 1
-        if reconnects <= maxReconnects {
+        if conn.deviceStarted {
+            // Next saved URL; the delay grows after each full pass over them.
+            urlIndex += 1
+            let step = min((reconnects - 1) / max(conn.urls.count, 1), Self.backoff.count - 1)
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.backoff[step]) { [weak self] in self?.connect() }
+        } else if reconnects <= maxReconnects {
             DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.connect() }
         } else {
             finished = true

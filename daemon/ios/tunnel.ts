@@ -20,6 +20,10 @@ export type RunnerEnv = {
   INTERCEPTOR_WS_TOKEN: string
   INTERCEPTOR_UDID: string
   INTERCEPTOR_CONTEXT_ID: string
+  /** This device's secret; the runner saves it to register after the device starts it. */
+  INTERCEPTOR_DEVICE_SECRET?: string
+  /** Comma-separated URLs the runner saves and tries when the device starts it. */
+  INTERCEPTOR_WS_URLS?: string
 }
 
 export type ServiceEndpoint = { host: string; port: number }
