@@ -1,0 +1,88 @@
+/* The Interceptor look, the same as the Mac windows (cli/lib/hvm-window.ts
+   brandCss()): black canvas with a blue glow, the logo, Balboa headings, Raleway
+   text, Montserrat labels and buttons, brand blue.
+   Fonts and logo are the repo's assets/brand files; the bundler copies them. */
+/* ponytail: tokens copied from brandCss(); share one brand.css if a third surface needs them */
+@font-face{font-family:"Balboa";src:url("../../../../assets/brand/BalboaExtraCondensed.ttf") format("truetype")}
+@font-face{font-family:"Montserrat";src:url("../../../../assets/brand/Montserrat-SemiBold.ttf") format("truetype")}
+@font-face{font-family:"Raleway";src:url("../../../../assets/brand/RalewayRegular.ttf") format("truetype")}
+
+:root{
+  --blue:#0050e8;--blue-hover:#0040c0;--red:#e30000;--gold:#f4ba42;--green:#3ceb8b;--light:#f8fafc;--copy:#dbe3f0;--muted:#a3b0c4;
+  --surface:#1a1f29;--raised:#2e3647;--edge:#ffffff14;--line:#004ad538;--link:#8fb3ff;
+  --safe-top:0px;--safe-bottom:0px;--safe-left:0px;--safe-right:0px; /* set by a native web-view host; Safari uses env() */
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{background:#000;-webkit-text-size-adjust:100%}
+body{
+  color:var(--copy);font:16px/1.55 "Raleway",-apple-system,sans-serif;-webkit-font-smoothing:antialiased;
+  background:radial-gradient(120% 70% at 50% -10%,#0a1a3d 0%,#000 60%) #000;min-height:100vh;
+  padding:calc(max(var(--safe-top),env(safe-area-inset-top)) + 26px) calc(max(var(--safe-right),env(safe-area-inset-right)) + 20px)
+          calc(max(var(--safe-bottom),env(safe-area-inset-bottom)) + 28px) calc(max(var(--safe-left),env(safe-area-inset-left)) + 20px);
+}
+.screen{max-width:540px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+
+/* Header: logo + eyebrow + title (brandHeader) */
+.brand{display:flex;align-items:center;gap:14px;margin-bottom:4px}
+.logo{flex:0 0 52px;height:52px;border-radius:12px;background:url("../../../../assets/brand/interceptor-logo.png") center/cover;filter:drop-shadow(0 8px 14px #004ad559)}
+.eyebrow{font:600 11px "Montserrat",sans-serif;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+h1{font:400 34px/1.05 "Balboa",Impact,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:var(--light);margin-top:2px}
+.tone-act .brand .eyebrow,.tone-act .todo .eyebrow{color:var(--gold)}
+.tone-ok .brand .eyebrow{color:var(--green)}
+.tone-err .brand .eyebrow{color:var(--red)}
+.tone-work .brand .eyebrow{color:var(--link)}
+
+.leads p+p{margin-top:8px}
+
+/* Card (brand .card) */
+.card{background:#1a1f29f5;border:1px solid var(--line);border-radius:20px;padding:16px 18px}
+
+/* Spinner line, like the welcome's "Waiting for Interceptor to connect…" */
+.status{display:flex;align-items:center;gap:10px;font:600 13px "Montserrat",sans-serif;color:var(--muted)}
+.spin{flex:0 0 16px;height:16px;border-radius:50%;border:2px solid #ffffff26;border-top-color:var(--link);animation:sp .9s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+.bar{height:6px;background:var(--edge);border-radius:3px;overflow:hidden}
+.bar .fill{height:100%;background:var(--blue);border-radius:3px;transition:width .3s}
+
+/* Chooser: one tappable card per way to connect (the welcome's method cards) */
+.choices{display:flex;flex-direction:column;gap:12px}
+.choice{display:flex;align-items:center;gap:14px;color:inherit;text-decoration:none}
+.choice:active{background:var(--raised);border-color:var(--blue)}
+.choice-icon{flex:0 0 32px;color:var(--link);display:grid;place-items:center}
+.choice-icon svg{width:32px;height:32px}
+.choice-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.choice-title{font:400 22px/1.1 "Balboa",Impact,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:var(--light)}
+.choice-sub{color:var(--muted);font-size:14px;line-height:1.45}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.chip{font:600 11px "Montserrat",sans-serif;padding:3px 9px;border-radius:999px;white-space:nowrap;background:#f4ba4224;color:var(--gold)}
+.chip.ok{background:#3ceb8b24;color:var(--green)}
+.chev{color:var(--muted);font:300 28px/1 -apple-system,sans-serif}
+
+/* Numbered steps on the phone */
+.todo .eyebrow{margin-bottom:12px}
+.steps{list-style:none;display:flex;flex-direction:column;gap:12px}
+.steps li{display:flex;align-items:flex-start;gap:12px;color:var(--light)}
+.steps .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:var(--light);font:600 13px "Montserrat",sans-serif;display:grid;place-items:center;margin-top:-1px}
+.todo .note{color:var(--muted);font-size:14px;margin-top:14px}
+.todo .status{margin-top:14px}
+
+/* Buttons (brand .btn), stacked full width for thumbs */
+.actions{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.btn{display:block;width:100%;-webkit-appearance:none;appearance:none;text-align:center;text-decoration:none;cursor:pointer;
+  font:600 15px "Montserrat",sans-serif;color:var(--light);background:transparent;border:1px solid #ffffff2e;border-radius:14px;padding:14px 18px}
+.btn:active{background:#ffffff0f}
+.btn.primary{background:var(--blue);border-color:var(--blue)}
+.btn.primary:active{background:var(--blue-hover)}
+.btn[disabled]{opacity:.6}
+.btn:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+
+/* "Having trouble?" / "What is this?" */
+.more{padding:0 18px}
+.more summary{list-style:none;cursor:pointer;padding:14px 0;font:600 13px "Montserrat",sans-serif;color:var(--link)}
+.more summary::-webkit-details-marker{display:none}
+.more summary::after{content:"  ›";color:var(--muted)}
+.more[open] summary::after{content:"  ⌄"}
+.more p{color:var(--muted);font-size:14px;padding:0 0 16px}
+
+.foot{text-align:center;font:600 11px "Montserrat",sans-serif;letter-spacing:.08em;color:#6f7b91;padding-top:6px}
