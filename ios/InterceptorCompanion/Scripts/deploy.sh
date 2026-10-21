@@ -77,7 +77,9 @@ M="$DDI_SRC/BuildManifest.plist"
 mkdir -p "$DDI_DST"
 for i in $(seq 0 $(( $(plutil -extract BuildIdentities raw "$M") - 1 ))); do
   IMG=$(plutil -extract "BuildIdentities.$i.Manifest.PersonalizedDMG.Info.Path" raw "$M" 2>/dev/null) || continue
-  TC=$(plutil -extract "BuildIdentities.$i.Manifest.LoadableTrustCache.Info.Path" raw "$M"); break
+  TC=$(plutil -extract "BuildIdentities.$i.Manifest.LoadableTrustCache.Info.Path" raw "$M" 2>/dev/null) \
+    || { echo "  ERROR: build identity $i has a PersonalizedDMG but no LoadableTrustCache in $M"; exit 2; }
+  break
 done
 [ -n "${IMG:-}" ] || { echo "  ERROR: no PersonalizedDMG in $M"; exit 2; }
 cp "$DDI_SRC/$IMG" "$DDI_DST/Image.dmg"

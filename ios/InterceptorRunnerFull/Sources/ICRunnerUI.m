@@ -71,14 +71,22 @@ static void ICOpenSafariToUI(void) {
         NSURLComponents *c = [NSURLComponents componentsWithString:@"http://127.0.0.1:8723/"];
         c.queryItems = @[[NSURLQueryItem queryItemWithName:@"t" value:token]];
         NSURL *url = c.URL;
+        // The first call can come before the scene is active, when openURL fails;
+        // retry, and if every try fails let a later caller (scene connect,
+        // sharedSession) start over.
         __block void (^tryOpen)(int) = ^(int left){
+            void (^again)(void) = ^{
+                if (left > 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ tryOpen(left-1); });
+                else atomic_store(&opened, false);
+            };
             UIApplication *app = UIApplication.sharedApplication;
-            if (app) {
+            if (app && app.applicationState != UIApplicationStateBackground) {
                 [app openURL:url options:@{} completionHandler:^(BOOL ok){
                     ICLogUI([NSString stringWithFormat:@"opened Safari to the UI: %d", ok]);
+                    if (!ok) again();
                 }];
-            } else if (left > 0) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ tryOpen(left-1); });
+            } else {
+                again();
             }
         };
         tryOpen(20);

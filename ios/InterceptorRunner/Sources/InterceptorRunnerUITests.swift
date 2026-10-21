@@ -264,12 +264,13 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
         send(msg)
     }
 
-    private func send(_ obj: [String: Any]) {
+    private func send(_ obj: [String: Any], then done: (() -> Void)? = nil) {
         guard
             let data = try? JSONSerialization.data(withJSONObject: sanitize(obj)),
             let str = String(data: data, encoding: .utf8)
-        else { return }
-        task?.send(.string(str)) { _ in }
+        else { done?(); return }
+        guard let task = task else { done?(); return }
+        task.send(.string(str)) { _ in done?() }
     }
 
     private func receive() {
@@ -328,9 +329,13 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
     /// `ios disable` on a device-started runner: stop re-dialing and end the test.
     private func quit(id: String?) {
         locked { _quit = true }
-        if let id = id { send(["id": id, "result": ["success": true]]) }
-        task?.cancel(with: .normalClosure, reason: nil)
-        finished = true
+        // Close only after the reply is written, so the Mac sees the quit answered
+        // instead of a dropped socket (which it would read as "quit not delivered").
+        let close = { [weak self] in
+            self?.task?.cancel(with: .normalClosure, reason: nil)
+            self?.finished = true
+        }
+        if let id = id { send(["id": id, "result": ["success": true]], then: close) } else { close() }
     }
 
     private func handle(_ obj: [String: Any]) {

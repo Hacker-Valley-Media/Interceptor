@@ -185,13 +185,7 @@ struct ContentView: View {
                         Button("Import") { showDDIPicker = true }.buttonStyle(.bordered)
                     }
                     if !model.ddiPresent {
-                        Button {
-                            Task { await model.ddiStore.download(); model.refreshSetup() }
-                        } label: {
-                            if model.ddiStore.isDownloading {
-                                ProgressView(value: model.ddiStore.progress) { Text(model.ddiStore.statusMessage ?? "Downloading…") }
-                            } else { Text("Download DDI (~100 MB, cellular OK)") }
-                        }.disabled(model.ddiStore.isDownloading)
+                        DDIDownloadButton(store: model.ddiStore) { model.refreshSetup() }
                     }
                 }
 
@@ -223,5 +217,21 @@ struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+/// The download row observes the store itself: SwiftUI does not pass a nested
+/// ObservableObject's changes up through the model, so progress would not show.
+struct DDIDownloadButton: View {
+    @ObservedObject var store: DeveloperDiskImageStore
+    let finished: () -> Void
+    var body: some View {
+        Button {
+            Task { await store.download(); finished() }
+        } label: {
+            if store.isDownloading {
+                ProgressView(value: store.progress) { Text(store.statusMessage ?? "Downloading…") }
+            } else { Text("Download DDI (~100 MB, cellular OK)") }
+        }.disabled(store.isDownloading)
     }
 }

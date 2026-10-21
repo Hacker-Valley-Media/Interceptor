@@ -77,6 +77,10 @@ final class DDIMounter: ObservableObject {
         switch phase { case .idle, .mounted, .failed: return false; default: return true }
     }
 
+    /// Each mount gets a number; a progress report queued by an older or finished
+    /// run must not overwrite the final phase (or leave isRunning stuck true).
+    private var runID = 0
+
     /// `beforeInstall` runs on the mount thread with the tunnel open, right before
     /// the step that needs Apple's signing server (internet); on cellular that is
     /// where Cellular Data goes back on. `afterMount` runs with the same live
@@ -84,6 +88,8 @@ final class DDIMounter: ObservableObject {
     func mount(beforeInstall: (() -> Void)? = nil,
                afterMount: ((OpaquePointer, OpaquePointer) -> Void)? = nil) async {
         guard !isRunning else { return }
+        runID += 1
+        let run = runID
         phase = .connecting
         do {
             guard PairingFileStore.exists else { throw DDIError.missingPairingFile }
@@ -107,7 +113,7 @@ final class DDIMounter: ObservableObject {
                     do {
                         try Self.performMount(pairingPath: pairingPath, method: method, imageDir: imageDir,
                                               beforeInstall: beforeInstall, afterMount: afterMount) { p in
-                            Task { @MainActor in self.phase = p }
+                            Task { @MainActor in if self.runID == run && self.isRunning { self.phase = p } }
                         }
                         cont.resume()
                     } catch { cont.resume(throwing: error) }

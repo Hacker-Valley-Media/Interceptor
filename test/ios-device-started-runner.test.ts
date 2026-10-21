@@ -119,6 +119,15 @@ describe("registering a runner the device started", () => {
     expect(events.some((e) => e.event === "ios_enabled" && e.data?.launchedBy === "device")).toBe(true)
   })
 
+  test("a bare verb reaches the only live runner without asking devicectl for the phone", async () => {
+    const { m } = manager()
+    const ack = m.registerRunner(fakeWs(), { udid: UDID, launchedBy: "device", kind: "device", ...freshProof() })
+    // Away from home devicectl cannot see the phone; the live context must still win.
+    m.pickDeviceUdid = async () => { throw new Error("devicectl was asked") }
+    expect(await m.canonicalContextId(undefined)).toBe(ack.contextId)
+    expect(await m.canonicalContextId("")).toBe(ack.contextId)
+  })
+
   test("it replaces an existing context for the device (only one runner process can run there)", () => {
     const { m, events } = manager()
     let killed = 0

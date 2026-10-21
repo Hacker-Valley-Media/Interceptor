@@ -379,7 +379,9 @@ export async function runDiagnoseCommand(jsonMode: boolean, contextId?: string):
       const mismatch = extensionVersionMismatchLine(ctx.contextId, ext.version, VERSION, ext.installType)
       if (mismatch) lines.push(`${indent}${mismatch}`)
       if (ext.reachable) lines.push(`${indent}${formatEvalMainLine(ext.evalMain)}`)
-      if (ext.reachable && !ext.version && !ext.extensionId && !ext.installType) lines.push(`${indent}${cachedOldCodeLine(ctx.contextId)}`)
+      // Safari and app: contexts carry no extension identity, and an older daemon returns bare ids for every context.
+      const identityless = ctx.contextId === "safari" || ctx.contextId.startsWith("app:")
+      if (ext.reachable && !identityless && !ext.version && !ext.extensionId && !ext.installType) lines.push(`${indent}${cachedOldCodeLine(ctx.contextId)}`)
       const legacy = legacyDevelopmentCopyLine(ctx.contextId, ext.extensionId)
       if (legacy) lines.push(`${indent}${legacy}`)
 
