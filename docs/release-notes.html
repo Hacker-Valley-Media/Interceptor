@@ -26,6 +26,18 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.5">
+    <h2>Interceptor 2.1.5</h2>
+    <time datetime="2026-10-21">October 21, 2026</time>
+    <ul>
+      <li>If Interceptor disappears every time your browser restarts, this release finds and fixes it. A browser profile that loaded the unpacked extension before 1.0.1 kept an entry for the old extension ID, and the browser then skipped Interceptor at every start. Installs and updates now check every profile. On a Mac, Brave, Vivaldi and Chromium are fixed with one click on <strong>Restart</strong>; Chrome and Edge get the exact steps. Run <code>interceptor diagnose extension</code> any time to check, and <code>--fix</code> to repair.</li>
+      <li>On macOS 27, reading Chrome, Brave and Edge settings needs your permission. The check asks for it once, in Privacy &amp; Security &gt; Files &amp; Folders under <code>interceptor-bridge</code>, and carries on as soon as you turn it on.</li>
+      <li>A first install on a Mac opens a welcome window. It finds a copy of the extension already in your browser, or walks you through adding one from the Chrome Web Store, as an unpacked extension with a step-by-step guide, or for Safari. Open it again with <code>interceptor diagnose extension --welcome</code>.</li>
+      <li>The Mac packages no longer fail to install when macOS refuses a browser folder, such as Chrome's folder on a Mac without Chrome.</li>
+      <li>Drive your iPhone or iPad when it is away from your Mac, including on cellular. Open InterceptorRunner on the device and it connects back to your Mac over Tailscale, then steps aside to the Home Screen. At home, run <code>interceptor ios refresh</code> once, then any <code>interceptor ios</code> command so the device saves the connection. The device proves a per-device secret without sending it, and runs nothing until your Mac proves it back.</li>
+      <li>An iPhone on the same Wi-Fi as your Mac connects again without a VPN or a port forward. Your Mac now accepts the runner on the address it gives the phone, and only the runner.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="2.1.3">
     <h2>Interceptor 2.1.3</h2>
     <time datetime="2026-10-14">October 14, 2026</time>

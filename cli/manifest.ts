@@ -221,9 +221,9 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "status", surface: "local", usage: "interceptor status [--verbose]", summary: "Daemon/bridge/extension health + skills adoption", returns: "Status report." },
   {
     name: "diagnose", surface: "local",
-    usage: "interceptor diagnose [--context <id>] [--json]",
-    summary: "Post-failure snapshot: daemon binary, per-context connection state, NMH binary-mismatch detection",
-    returns: "Text report or JSON {daemon, binaryMismatches, contexts[], monitor}. Never auto-spawns the daemon; use after a command fails ('status' is the pre-flight check).",
+    usage: "interceptor diagnose [--context <id>] [--json] | interceptor diagnose extension [--fix | --prompt | --welcome] [--json]",
+    summary: "Post-failure snapshot: daemon binary, per-context connection state, NMH binary-mismatch detection, browser profiles that lose Interceptor at every start",
+    returns: "Text report or JSON {daemon, binaryMismatches, extensionProblems[], extensionBlocked[], contexts[], monitor}. Never auto-spawns the daemon; use after a command fails ('status' is the pre-flight check). 'diagnose extension' lists browser profiles where Interceptor cannot load (old-ID entry sharing a folder, old ID only, a --load-extension load that lasts one session, two copies), JSON {problems[{kind,state,browser,profile,autoFix,steps}]}. '--fix' quits and restarts each affected Brave, Vivaldi or Chromium on macOS (hidden one-time start, then the same windows); everything else gets exact steps by hand. '--welcome' (macOS, run by a first pkg install) opens a window that finds a copy already in a browser or helps add one: the Chrome Web Store in the chosen browser, Load unpacked with a local step-by-step guide, or the Safari package.",
   },
   { name: "init", surface: "local", usage: "interceptor init [--verbose]", summary: "Bootstrap the daemon and report status", returns: "Status report." },
   { name: "research", surface: "local", usage: "interceptor research [init|log|status|…]", summary: "Deep-research methodology + on-disk source ledger", returns: "Playbook guidance / ledger state." },

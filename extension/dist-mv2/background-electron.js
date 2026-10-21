@@ -443,6 +443,32 @@ async function addTabToInterceptorGroupSerialized(tabId) {
   }
   return groupId;
 }
+async function ungroupBeforeClose(tabIds) {
+  if (tabIds.length === 0 || !hasTabGroupApi() || typeof chrome.tabs.ungroup !== "function")
+    return;
+  try {
+    await ensureInterceptorGroup();
+    await readoptNamedGroups();
+    const managed = new Set(namedGroups.values());
+    if (interceptorGroupId !== null)
+      managed.add(interceptorGroupId);
+    const closing = new Set(tabIds);
+    const emptied = [];
+    for (const groupId of managed) {
+      const members = (await chrome.tabs.query({ groupId })).map((t) => t.id).filter((id) => typeof id === "number");
+      if (members.length > 0 && members.every((id) => closing.has(id)))
+        emptied.push(...members);
+    }
+    if (emptied.length > 0)
+      await chrome.tabs.ungroup(emptied);
+  } catch (err) {
+    console.warn("ungroupBeforeClose: the closed group may stay behind as a saved group:", err);
+  }
+}
+async function removeTabsAndEmptiedGroups(tabIds) {
+  await ungroupBeforeClose(tabIds);
+  await chrome.tabs.remove(tabIds);
+}
 var SENSITIVE_ACTIONS = new Set([
   "evaluate",
   "cookies_get",
@@ -2518,7 +2544,7 @@ async function handleTabActions(action, tabId) {
     }
     case "tab_close": {
       const closedId = action.tabId || tabId;
-      await chrome.tabs.remove(closedId);
+      await removeTabsAndEmptiedGroups([closedId]);
       const keys = ["activeTabId", typeof action.group === "string" ? activeTabKey(action.group) : null].filter((k) => !!k);
       const stored = await sessionArea6().get(keys);
       for (const key of keys) {
@@ -2589,7 +2615,7 @@ async function handleTabActions(action, tabId) {
       const groupTabs = await chrome.tabs.query({ groupId });
       const ids = groupTabs.map((t) => t.id).filter((id) => typeof id === "number");
       if (ids.length > 0)
-        await chrome.tabs.remove(ids);
+        await removeTabsAndEmptiedGroups(ids);
       return { success: true, data: { label, groupId, closedTabs: ids.length } };
     }
     case "tab_duplicate": {
@@ -2644,6 +2670,7 @@ async function handleTabActions(action, tabId) {
 
 // extension/src/background/capabilities/windows.ts
 var WINDOW_OP_TIMEOUT_MS = 8000;
+var WINDOW_CLOSE_PREP_TIMEOUT_MS = 3000;
 
 class WindowOperationTimeoutError extends Error {
   operation;
@@ -2729,6 +2756,10 @@ async function handleWindowActions(action, _tabId) {
         const windowId = windowIdFromAction(action);
         if (windowId === undefined)
           return { success: false, error: "window_close requires a window id" };
+        await withWindowTimeout("window_close", (async () => {
+          const windowTabs = await chrome.tabs.query({ windowId });
+          await ungroupBeforeClose(windowTabs.map((t) => t.id).filter((id) => typeof id === "number"));
+        })(), WINDOW_CLOSE_PREP_TIMEOUT_MS).catch(() => {});
         await withWindowTimeout("window_close", chrome.windows.remove(windowId));
         return { success: true };
       }

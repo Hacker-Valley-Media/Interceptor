@@ -366,6 +366,12 @@ build_windows_arch() {
   fi
   rm -rf "$stage/extension"
   cp -R extension/dist "$stage/extension"
+  # The same extension under the key it carried through 0.24.13 (ID hkjb…): a
+  # profile that loaded the old copy from {app}\extension needs it to come back
+  # (interceptor diagnose extension, cli/lib/extension-repair.ts).
+  rm -rf "$stage/extension-legacy"
+  cp -R extension/dist "$stage/extension-legacy"
+  bun scripts/stamp-legacy-extension.ts "$stage/extension-legacy/manifest.json"
   # Agent skills with only the Windows lines; the installer copies them from the stage.
   bun scripts/gen-skills.ts win32 "$stage/skills" interceptor interceptor-browser interceptor-research interceptor-desktop
   local engine_root="${INTERCEPTOR_DESKTOP_WINDOWS_ENGINE_ROOT:-$PWD/interceptor-desktop/target/windows-packages}"

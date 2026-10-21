@@ -41,7 +41,10 @@ import {desktopSecretActionError,desktopSecretResultError} from "../shared/deskt
 import * as browserCreds from "./browser-creds"
 import { CdpManager, CDP_ACTION_TYPES } from "./cdp/manager"
 import { CDP_CONTEXT_PREFIX } from "../shared/cdp-app"
-import { IosManager } from "./ios/manager"
+import { IosManager, type RunnerRegistration } from "./ios/manager"
+import { createRunnerListener } from "./ios/runner-listener"
+import { remoteDialBack } from "./ios/ws-host"
+import { anyRunnerSecret } from "./ios/state"
 import { IosWebManager } from "./ios/web-manager"
 import { IosDeviceServiceManager } from "./ios/service-manager"
 import { IosDevServiceManager } from "./ios/dev-manager"
@@ -1483,10 +1486,36 @@ const cdpManager = new CdpManager({
 // extension and the in-process native agent. The manager drives it over that
 // socket (RunnerChannel) — no WebDriverAgent. Keyed by ios:<udid>, parallel to
 // cdpManager. A legacy --wda-url HTTP path remains as a deprecated escape hatch.
+// The main WS server binds loopback, so a phone reaches this daemon through a
+// runner-only listener on the LAN or Tailscale address it was handed
+// (daemon/ios/runner-listener.ts), served by the same handlers.
+const ensureRunnerListener = createRunnerListener({
+  port: WS_PORT,
+  maxPayloadLength: MAX_UPLOAD_FRAME_BYTES,
+  allowOrigin: isAllowedWsOrigin,
+  runnerFrame: (ws, frame) => Buffer.isBuffer(frame)
+    ? iosManager.handleRunnerFrame(ws as any, frame)
+    : iosManager.handleRunnerMessage(ws as any, frame as { id?: string }),
+  register: (ws, msg) => registerIosRunner(ws, msg as RunnerRegistration),
+  close: handleWsClose,
+  log,
+})
 const iosManager = new IosManager({
   emit: (event, data) => emitEvent(event, data || {}),
   wsPort: WS_PORT,
+  listenRunner: (host) => { ensureRunnerListener(host) },
 })
+// The Mac's Tailscale address, now and after Tailscale comes up later, so a
+// runner opened on the phone away from home reaches this daemon. Only once a
+// runner was launched with a device secret: a Mac that never drove an iPhone
+// opens nothing on the tailnet.
+const listenOnVpn = () => {
+  if (!anyRunnerSecret()) return
+  const vpn = remoteDialBack(WS_PORT)
+  if (vpn) ensureRunnerListener(vpn.host)
+}
+listenOnVpn()
+setInterval(listenOnVpn, 60_000).unref()
 
 // web lane. Reuses iosManager's runner for native-lane work (screenshot,
 // native input) but the web lane itself needs no runner / Developer Mode.
@@ -2440,11 +2469,7 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         // per-session token, binds the socket to a RunnerChannel, and the daemon
         // tags it so subsequent frames route to handleRunnerMessage (above).
         if (request.type === IOS_REGISTER_TYPE) {
-          const r = request as { udid?: string; token?: string; contextId?: string }
-          const ack = iosManager.registerRunner(ws as any, r)
-          try { ws.send(JSON.stringify({ type: IOS_REGISTER_TYPE, ...ack })) } catch {}
-          if (ack.ok) log(`ws ios runner registered [context: ${ack.contextId}]`)
-          else log(`ws ios runner registration rejected: ${ack.error}`)
+          registerIosRunner(ws, request as RunnerRegistration)
           return
         }
 
@@ -2583,29 +2608,46 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
 
         sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
       },
-      close(ws, code, reason) {
-        // A 1009 here means a client message exceeded maxPayloadLength and
-        // Bun killed the connection — log it so the failure is diagnosable
-        // from the daemon log instead of surfacing only as a CLI timeout.
-        if (code !== 1000 && code !== 1001) {
-          log(`ws client closed: code ${code}${reason ? ` reason ${reason}` : ""}`)
-        }
-        // iOS InterceptorRunner socket closed → drop its channel + context.
-        if (iosManager.isRunnerSocket(ws as any)) {
-          iosManager.handleRunnerClose(ws as any)
-        }
-        const ctxId = (ws as any).__contextId
-        if (ctxId && extensionWsMap.get(ctxId) === ws) {
-          extensionWsMap.delete(ctxId)
-        }
-        if (ctxId && nativeAgentMeta.has(ctxId)) {
-          nativeAgentMeta.delete(ctxId)
-          emitEvent("native_agent_disconnected", { contextId: ctxId })
-        }
-        log(`ws client disconnected [context: ${ctxId ?? "unknown"}]`)
-      }
+      close: handleWsClose,
     }
   })
+}
+
+/**
+ * `{type:"ios"}` from an InterceptorRunner: register it, send the ack, log.
+ * Shared by the main server and the runner-only listeners. True when accepted.
+ */
+function registerIosRunner(ws: { send: (data: string) => unknown }, r: RunnerRegistration): boolean {
+  const ack = iosManager.registerRunner(ws as any, r)
+  try { ws.send(JSON.stringify({ type: IOS_REGISTER_TYPE, ...ack })) } catch {}
+  const how = r.launchedBy === "device" ? ` launchedBy: device` : ""
+  const via = typeof r.url === "string" && r.url ? ` url: ${r.url}` : ""
+  if (ack.ok) log(`ws ios runner registered [context: ${ack.contextId}${how}${via}]`)
+  else log(`ws ios runner registration rejected: ${ack.error}`)
+  return ack.ok
+}
+
+/** WebSocket close, shared by the main server and the runner-only listeners. */
+function handleWsClose(ws: object, code: number, reason: string): void {
+  // A 1009 here means a client message exceeded maxPayloadLength and
+  // Bun killed the connection — log it so the failure is diagnosable
+  // from the daemon log instead of surfacing only as a CLI timeout.
+  if (code !== 1000 && code !== 1001) {
+    log(`ws client closed: code ${code}${reason ? ` reason ${reason}` : ""}`)
+  }
+  // iOS InterceptorRunner socket closed → drop its channel + context.
+  if (iosManager.isRunnerSocket(ws as any)) {
+    iosManager.handleRunnerClose(ws as any)
+  }
+  const ctxId = (ws as any).__contextId
+  if (ctxId && extensionWsMap.get(ctxId) === ws) {
+    extensionWsMap.delete(ctxId)
+  }
+  if (ctxId && nativeAgentMeta.has(ctxId)) {
+    nativeAgentMeta.delete(ctxId)
+    emitEvent("native_agent_disconnected", { contextId: ctxId })
+  }
+  log(`ws client disconnected [context: ${ctxId ?? "unknown"}]`)
 }
 
 function gracefulShutdown(signal: string) {

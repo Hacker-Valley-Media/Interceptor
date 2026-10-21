@@ -1,0 +1,67 @@
+# XcodeGen spec for InterceptorCompanion — the on-device app that mounts the
+# Developer Disk Image and launches the runner after a reboot, away from home,
+# with no Mac. Generate:
+#
+#   bash Scripts/fetch-idevice.sh    # one-time: pull the idevice xcframework
+#   xcodegen generate
+#
+# Build + install on a device (paid team required for the Network Extension):
+#   xcrun xcodebuild -project InterceptorCompanion.xcodeproj -scheme InterceptorCompanion \
+#     -destination "id=<UDID>" -allowProvisioningUpdates DEVELOPMENT_TEAM=<TEAM> build
+
+name: InterceptorCompanion
+options:
+  bundleIdPrefix: com.interceptor
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1,2"
+    MARKETING_VERSION: "2.1.5"
+    CURRENT_PROJECT_VERSION: "2.1.5"
+
+targets:
+  InterceptorCompanion:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    dependencies:
+      # idevice (MIT) — lockdown / RSD tunnel / image-mounter / process-control.
+      # Fetched by Scripts/fetch-idevice.sh (a ~215MB release asset), not committed.
+      - framework: Frameworks/IDevice.xcframework
+        embed: false
+      - target: Reflector
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.interceptor.companion
+        PRODUCT_NAME: InterceptorCompanion
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Generated/InterceptorCompanion-Info.plist
+        CODE_SIGN_ENTITLEMENTS: InterceptorCompanion.entitlements
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+  Reflector:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Tunnel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.interceptor.companion.reflector
+        PRODUCT_NAME: Reflector
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Generated/Reflector-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Tunnel/Reflector.entitlements
+
+schemes:
+  InterceptorCompanion:
+    build:
+      targets:
+        InterceptorCompanion: all
+        Reflector: all

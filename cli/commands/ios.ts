@@ -262,7 +262,18 @@ Connection model (how the runner reaches the phone):
     shows whether macOS sees it as "available". iOS silently blocks a backgrounded
     runner's LAN connection until Settings › Privacy & Security › Local Network
     grants InterceptorRunner-Runner, so the daemon prefers a VPN address (Tailscale)
-    when the Mac has one — put the phone on the same VPN, or grant that switch once.
+    when the Mac has one — put the phone on the same VPN, or grant that switch once
+    (then LAN dial-back works with no VPN). The daemon answers the runner on that
+    address itself, through a listener that accepts only the runner; no forward needed.
+  • Away from this Mac's network (cellular, another Wi-Fi): open InterceptorRunner
+    on the phone (tap its icon). It connects back over the Mac's Tailscale address,
+    which it saved the last time this Mac launched it ('ios status' →
+    deviceStartReady: true), then steps aside to the Home Screen; drive it as usual.
+    Needs Tailscale on the phone and the Mac, and no phone reboot since the Mac last
+    launched it. 'ios status' → remoteReachable: false means this Mac does not
+    answer on that address. If an older setup added 'tailscale serve --tcp=<port>'
+    for this, remove it with 'tailscale serve --tcp=<port> off' (it forwards the
+    whole daemon port). 'ios disable' stops it.
 
 Troubleshooting — when things aren't working, try these IN ORDER:
   1. "device not found" / "not visible to usbmuxd" — the phone dropped off the

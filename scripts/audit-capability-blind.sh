@@ -63,7 +63,9 @@ else
 fi
 
 # 3) The core never network-fetches an extension — discovery is filesystem-only.
-if search_glob_no_tests 'fetch\(|https?://|curl|download' cli daemon shared | grep -i 'extension' 2>/dev/null; then
+#    Match "extension" in the code after `path:line:`, not in the path itself,
+#    so a file named extension-*.ts that links a release page is not a hit.
+if search_glob_no_tests 'fetch\(|https?://|curl|download' cli daemon shared | grep -iE '^[^:]+:[0-9]+:.*extension' 2>/dev/null; then
   note "FAIL: extension-related network fetch found in the core (see above)"
   fail=1
 else
