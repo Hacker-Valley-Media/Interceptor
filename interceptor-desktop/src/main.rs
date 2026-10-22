@@ -184,6 +184,8 @@ fn handle(request: DesktopRequest) -> Value {
     if ["script_run","intent_dispatch"].contains(&verb) { return script::dispatch(&action); }
     // Warmup pre-launches an Apple Events target; Windows and Linux dispatch runs --jsc only.
     if verb == "intent_warmup" { return failure("unsupported_operation", "intent warmup prepares an Apple Events target on macOS; Windows and Linux intent dispatch runs --jsc JavaScript, which needs no warmup"); }
+    // The camera session lives in the Swift bridge (AVFoundation); no Windows or Linux provider.
+    if verb == "camera" { return failure("unsupported_operation", "camera is macOS-only: the Swift bridge holds the AVCaptureSession"); }
     if verb == "pdf" { return pdf::dispatch(&action); }
     if verb == "audio" { return audio::dispatch(&action); }
     if verb == "vad" { return vad::dispatch(&action); }

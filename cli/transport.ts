@@ -171,6 +171,9 @@ export function pickTimeoutForAction(action: Action): number {
   if(action.type==='desktop_type'&&typeof action.secret==='string')return 240_000
   if(action.type==='desktop_authdialog'&&typeof action.secret==='string')return 240_000
   if(action.type === "desktop_auth")return 180_000
+  // The first camera start waits on the person answering the macOS camera prompt.
+  if(action.type==='macos_camera'&&action.sub==='start')return Math.max(INTERCEPTOR_TIMEOUT_MS,125_000)
+  if(action.type==='macos_camera'&&action.sub==='frame'&&typeof action.timeoutMs==='number')return Math.max(INTERCEPTOR_TIMEOUT_MS,action.timeoutMs+5_000)
   if (["macos_url_fetch","desktop_url_fetch"].includes(action.type)) {
     const deadline=typeof action.timeoutMs==="number"&&Number.isInteger(action.timeoutMs)&&action.timeoutMs>=100&&action.timeoutMs<=120000?action.timeoutMs:30000
     return Math.max(INTERCEPTOR_TIMEOUT_MS,deadline+5000)

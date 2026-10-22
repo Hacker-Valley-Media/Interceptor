@@ -2,6 +2,7 @@
   "about": "What `interceptor desktop` cannot do, or does only in part, on Windows and Linux. Every command not listed works on both. A row without `sub` covers the whole family (`except` names the subcommands that still work); `flag` narrows a row to one flag. scripts/gen-skills.ts writes these rows into each OS's interceptor-desktop skill, `interceptor desktop --help` and the MCP desktop menu hide the `no` rows, and test/desktop-support.test.ts checks every row against the parity cases it cites in scripts/desktop-parity/cases.",
   "rows": [
     { "family": "runtime", "win32": "no", "linux": "no", "why": "Apple-only" },
+    { "family": "camera", "win32": "no", "linux": "no", "why": "Apple-only: the Swift bridge holds the AVFoundation camera session" },
     { "family": "tcc", "win32": "no", "linux": "no", "why": "Apple-only" },
     { "family": "appintent", "win32": "no", "linux": "no", "why": "Apple-only" },
     { "family": "script", "sub": "run", "flag": "--script", "win32": "no", "linux": "no", "why": "Apple-only (AppleScript, JXA and Apple Events); `--jsc` runs plain JavaScript", "cases": ["script.run.applescript"] },
