@@ -528,6 +528,13 @@ fn main() -> io::Result<()> {
             assert_eq!(result["success"],false);assert_eq!(result["code"],"invalid_request","{result}");
         }
     }
+    #[test] fn camera_is_refused_as_macos_only() {
+        for sub in ["list", "start", "frame", "status", "stop"] {
+            let result=handle(serde_json::from_value(json!({"id":"camera","protocolVersion":1,"action":{"type":"desktop_camera","sub":sub}})).unwrap());
+            assert_eq!(result["success"],false);assert_eq!(result["code"],"unsupported_operation","{result}");
+            assert!(result["error"].as_str().is_some_and(|e| e.contains("camera is macOS-only")),"{result}");
+        }
+    }
     #[test] fn malformed_lifecycle_requests_refuse_before_platform_dispatch() {
         let fixtures: Value = serde_json::from_str(include_str!("../../shared/desktop-accessibility-fixtures.json")).unwrap();
         let actions = fixtures["invalid"].as_array().unwrap().iter()
