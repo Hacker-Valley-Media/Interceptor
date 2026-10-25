@@ -290,7 +290,7 @@ export function timeoutMessage(actionType: string, ms: number): string {
     return `timeout: no response for '${actionType}' after ${seconds}s. The native credential service or authentication may still be pending. The outcome is unknown; inspect secret metadata before retrying a storage or removal operation.`
   }
   if (actionType.startsWith("macos_")) {
-    return `timeout: no response for '${actionType}' after ${seconds}s. The macOS bridge may be waiting on a TCC permission prompt (Microphone / Speech Recognition for listen/vad, Screen Recording for screenshot/capture/vision). Check System Settings → Privacy & Security.`
+    return `timeout: no response for '${actionType}' after ${seconds}s. The macOS bridge may be waiting on a TCC permission prompt (Microphone / Speech Recognition for listen/vad, Screen Recording for screenshot/capture/vision, Camera for camera start --prompt). Check System Settings → Privacy & Security.`
   }
   if (IOS_SVC_ACTION_TYPES.has(actionType)) {
     return `timeout: no response for '${actionType}' after ${seconds}s. The classic-Lockdown service didn't reply in time — a large fs/crash pull can exceed this; confirm the device is unlocked and 'interceptor ios status' shows it connected.`

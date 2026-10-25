@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { isAbsolute, join } from "node:path"
 import { parseMacosCommand } from "../cli/commands/macos"
-import { pickTimeoutForAction } from "../cli/transport"
+import { pickTimeoutForAction, timeoutMessage } from "../cli/transport"
 
 // `macos camera` parses to one macos_camera action per subcommand. The bridge's
 // working directory is "/", so the CLI owns --out path resolution.
@@ -60,6 +60,10 @@ describe("macos camera", () => {
     expect(() => parse("frame", "--quality", "8.5")).toThrow("--quality must be an integer from 1 to 100")
     expect(() => parse("frame", "--max-long-edge", "4")).toThrow("--max-long-edge must be an integer from 16 to 8192")
     expect(() => parse("start", "--fps", "5", "--fps", "6")).toThrow("repeated flag: --fps")
+  })
+
+  test("a camera timeout points at the camera prompt", () => {
+    expect(timeoutMessage("macos_camera", 125_000)).toContain("Camera for camera start --prompt")
   })
 
   test("start --prompt outlasts the camera prompt, a plain start does not wait for one, and frame outlasts its own wait", () => {
