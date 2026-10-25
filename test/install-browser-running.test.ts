@@ -40,10 +40,11 @@ describe("install.sh browser-running detection (issue #172)", () => {
     expect(SCRIPT).not.toMatch(/pgrep -f "\$BROWSER_BIN"/)
     expect(SCRIPT).not.toMatch(/pgrep -f "\$browser_bin"/)
     expect(SCRIPT).not.toMatch(/pkill -TERM -f "\$BROWSER_BIN"/)
-    // write_developer_mode_true, dev-mode auto-enable gate, BROWSER_RUNNING,
-    // and the post-kill wait loop → 4 checks; the force-restart path → 1 kill.
-    expect(SCRIPT.match(/\bbrowser_running "\$/g)?.length).toBe(4)
-    expect(SCRIPT.match(/\bkill_browser "\$/g)?.length).toBe(1)
+    // write_developer_mode_true, dev-mode gate (browser running?), dev-mode
+    // quit-wait loop, dev-mode post-quit guard, BROWSER_RUNNING, and the
+    // force-restart wait loop → 6 checks; dev-mode quit + force-restart → 2 kills.
+    expect(SCRIPT.match(/\bbrowser_running "\$/g)?.length).toBe(6)
+    expect(SCRIPT.match(/\bkill_browser "\$/g)?.length).toBe(2)
   })
 
   test("Linux pattern is anchored to argv[0]; Darwin keeps the .app path verbatim", () => {

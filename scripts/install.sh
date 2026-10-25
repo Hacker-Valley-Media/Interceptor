@@ -657,33 +657,60 @@ load_extension() {
     echo "      3. Quit $BROWSER_NAME again."
     echo "      4. Re-run: bash scripts/install.sh ${MODE:+--$MODE} --$target${PROFILE:+ --profile \"$PROFILE\"}"
 
-    # Offer auto-remediation if and only if the browser is currently closed
-    # AND we have a Preferences file to write to. Editing while the browser
-    # runs is unsafe — the browser overwrites on shutdown.
-    local CAN_AUTO=0
-    if [[ -f "$PREFS_PATH" ]] && ! browser_running "$BROWSER_BIN"; then
-      CAN_AUTO=1
-    fi
-
-    if [[ "$CAN_AUTO" == "1" && -t 0 ]]; then
-      echo ""
-      read -r -p "    Or: enable Developer mode now (writes Preferences while $BROWSER_NAME is closed)? [y/N] " ANSWER
-      if [[ "${ANSWER:-n}" == "y" || "${ANSWER:-n}" == "Y" ]]; then
-        if write_developer_mode_true "$PREFS_PATH" "$BROWSER_BIN"; then
-          echo "    Developer mode enabled in $PREFS_PATH."
+    # Offer auto-remediation. Editing Preferences while the browser runs is
+    # unsafe (the browser overwrites on shutdown), so when the browser is
+    # running we offer to quit it first, then enable developer mode.
+    if [[ -t 0 && -f "$PREFS_PATH" ]]; then
+      if browser_running "$BROWSER_BIN"; then
+        echo ""
+        read -r -p "    Quit $BROWSER_NAME, enable Developer mode, and continue the install? [y/N] " ANSWER
+        if [[ "${ANSWER:-n}" == "y" || "${ANSWER:-n}" == "Y" ]]; then
+          echo "    Quitting $BROWSER_NAME..."
+          if [[ "$PLATFORM" == "Darwin" ]]; then
+            osascript -e "tell application \"$BROWSER_NAME Browser\" to quit" 2>/dev/null || \
+            osascript -e "tell application \"$BROWSER_NAME\" to quit" 2>/dev/null || true
+          else
+            kill_browser "$BROWSER_BIN"
+          fi
+          for j in {1..15}; do
+            if ! browser_running "$BROWSER_BIN"; then break; fi
+            sleep 1
+          done
+          if browser_running "$BROWSER_BIN"; then
+            echo "    $BROWSER_NAME did not exit in time. Quit it manually, then re-run."
+            exit 1
+          fi
+          if write_developer_mode_true "$PREFS_PATH" "$BROWSER_BIN"; then
+            echo "    Developer mode enabled in $PREFS_PATH."
+          else
+            echo "    Failed to write Preferences (file missing or JSON malformed)."
+            echo "    Use the manual path above."
+            exit 1
+          fi
         else
-          echo "    Failed to write Preferences (browser may have launched, file missing, or JSON malformed)."
-          echo "    Use the manual path above."
+          echo "    Skipped. Use the manual path above, then re-run."
           exit 1
         fi
       else
-        echo "    Skipped auto-enable. Use the manual path above, then re-run."
-        exit 1
+        echo ""
+        read -r -p "    Or: enable Developer mode now (writes Preferences while $BROWSER_NAME is closed)? [y/N] " ANSWER
+        if [[ "${ANSWER:-n}" == "y" || "${ANSWER:-n}" == "Y" ]]; then
+          if write_developer_mode_true "$PREFS_PATH" "$BROWSER_BIN"; then
+            echo "    Developer mode enabled in $PREFS_PATH."
+          else
+            echo "    Failed to write Preferences (browser may have launched, file missing, or JSON malformed)."
+            echo "    Use the manual path above."
+            exit 1
+          fi
+        else
+          echo "    Skipped auto-enable. Use the manual path above, then re-run."
+          exit 1
+        fi
       fi
     elif [[ -t 0 ]]; then
       echo ""
-      echo "    Auto-enable is unavailable (no Preferences file at '$PREFS_PATH'"
-      echo "    or $BROWSER_NAME is still running). Use the manual path."
+      echo "    Auto-enable is unavailable (no Preferences file at '$PREFS_PATH')."
+      echo "    Use the manual path."
       exit 1
     else
       # Non-interactive: hard-fail loudly so a wrapper doesn't ship a dormant install.
