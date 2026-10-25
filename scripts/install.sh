@@ -622,9 +622,18 @@ load_extension() {
   if [[ "$(profile_has_persistent_interceptor "$KEEP_PATH")" == "yes" ]]; then
     echo ""
     echo "==> [browser] $BROWSER_NAME profile '${PROFILE:-Default}' already has Interceptor; not relaunching it."
-    local REPAIR_KEY
+    local REPAIR_KEY DIAG
     if REPAIR_KEY="$(repair_key_for "$target")" && [[ -x "$ROOT/dist/interceptor" ]]; then
-      "$ROOT/dist/interceptor" diagnose extension --browser "$REPAIR_KEY" || true
+      DIAG="$("$ROOT/dist/interceptor" diagnose extension --browser "$REPAIR_KEY" 2>/dev/null || true)"
+      if [[ -n "$DIAG" ]]; then
+        echo "$DIAG"
+        if [[ "$DIAG" != *"loads normally"* && "$DIAG" != *"no problems"* ]]; then
+          echo ""
+          echo "==> WARNING: $BROWSER_NAME has extension problems that need manual repair."
+          echo "    The steps above must be completed before Interceptor will work."
+          return 1
+        fi
+      fi
     fi
     return 0
   fi
@@ -778,6 +787,20 @@ load_extension() {
     echo "         then Load unpacked -> $EXTENSION_DIR"
     echo ""
     echo "    Native messaging metadata has already been installed."
+
+    # Surface old-ID migration issues the installer cannot auto-fix on branded
+    # Chrome / Edge (they ignore --load-extension). Without this, the installer
+    # reports success while the extension is silently broken after an update.
+    local REPAIR_KEY
+    if REPAIR_KEY="$(repair_key_for "$target" 2>/dev/null)" && [[ -x "$ROOT/dist/interceptor" ]]; then
+      local DIAG
+      DIAG="$("$ROOT/dist/interceptor" diagnose extension --browser "$REPAIR_KEY" 2>/dev/null || true)"
+      if [[ -n "$DIAG" && "$DIAG" != *"loads normally"* && "$DIAG" != *"no problems"* ]]; then
+        echo ""
+        echo "==> [browser] Post-install check found extension issues:"
+        echo "$DIAG" | sed 's/^/    /'
+      fi
+    fi
     return 0
   fi
 
