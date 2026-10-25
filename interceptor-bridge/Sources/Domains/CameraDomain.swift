@@ -21,11 +21,7 @@ import UniformTypeIdentifiers
 ///   camera frame [--out <path>]         latest frame; JPEG file or data URL
 ///   camera status                       active, device, frame age, frame count
 ///   camera stop
-///
-/// The latest frame is also a Vision source: `vision faces --camera`.
 final class CameraDomain: DomainHandler, @unchecked Sendable {
-    nonisolated(unsafe) static private(set) var shared: CameraDomain?
-
     private let lock = NSLock()
     private var session: AVCaptureSession?
     // AVCaptureVideoDataOutput holds its delegate weakly; keep it alive here.
@@ -49,15 +45,6 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
     var authorizationStatus: @Sendable () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .video) }
     var requestAccess: @Sendable (@escaping @Sendable (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .video, completionHandler: $0) }
     var testForcedActive = false
-
-    init() {
-        CameraDomain.shared = self
-    }
-
-    /// The newest frame while the session runs, for Vision. Nil when stopped.
-    func latestFrame() -> CGImage? {
-        lock.withLock { (session != nil || testForcedActive) ? latestImage : nil }
-    }
 
     func _testInjectFrame(_ image: CGImage) {
         lock.withLock {

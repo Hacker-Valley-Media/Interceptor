@@ -129,14 +129,6 @@ final class CameraDomainTests: XCTestCase {
         XCTAssertEqual(props[kCGImagePropertyPixelWidth] as? Int, 640)
     }
 
-    func testLatestFrameFeedsVisionOnlyWhileRunning() {
-        let domain = CameraDomain()
-        domain._testInjectFrame(image(width: 8, height: 8))
-        XCTAssertNil(domain.latestFrame(), "a stopped camera must not serve a stale frame")
-        domain.testForcedActive = true
-        XCTAssertEqual(domain.latestFrame()?.width, 8)
-    }
-
     func testStopClearsFrameAndCounter() {
         let domain = CameraDomain()
         domain.testForcedActive = true
