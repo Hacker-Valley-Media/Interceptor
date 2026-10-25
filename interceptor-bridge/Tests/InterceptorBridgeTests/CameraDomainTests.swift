@@ -1,6 +1,7 @@
 import XCTest
 import AVFoundation
 import CoreGraphics
+import CoreMedia
 import ImageIO
 @testable import interceptor_bridge
 
@@ -246,6 +247,37 @@ final class CameraDomainTests: XCTestCase {
         XCTAssertEqual(CameraDomain.pick("camera", from: devices), 2, "an exact name beats an earlier substring match")
         XCTAssertEqual(CameraDomain.pick("pedphone", from: devices), 1)
         XCTAssertNil(CameraDomain.pick("Logitech", from: devices))
+    }
+
+    // Frame-rate cap: the value handed to activeVideoMinFrameDuration must come
+    // from a supported range, or AVFoundation raises.
+    private func range(_ minFps: Int32, _ maxFps: Int32) -> (min: CMTime, max: CMTime) {
+        (min: CMTime(value: 1, timescale: maxFps), max: CMTime(value: 1, timescale: minFps))
+    }
+
+    func testFrameDurationInsideARangeIsTheRequestedRate() {
+        let d = CameraDomain.frameDuration(fps: 10, ranges: [range(1, 30)])
+        XCTAssertEqual(d.map(CMTimeGetSeconds) ?? 0, 0.1, accuracy: 1e-9)
+    }
+
+    func testFrameDurationClampsToTheNearerEndOfARange() {
+        // 5 fps on a 15-30 range: the slowest it allows is 15.
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 5, ranges: [range(15, 30)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 15, accuracy: 1e-9)
+        // 30 fps on a 1-24 range: the fastest it allows is 24.
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 30, ranges: [range(1, 24)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 24, accuracy: 1e-9)
+    }
+
+    func testFrameDurationOnAFixedRateCameraIsThatRate() {
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 10, ranges: [range(30, 30)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 30, accuracy: 1e-9)
+    }
+
+    func testFrameDurationPicksTheClosestOfSeveralRanges() {
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 10, ranges: [range(30, 60), range(7, 12)]).map(CMTimeGetSeconds) ?? 0, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 20, ranges: [range(25, 30), range(1, 15)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 25, accuracy: 1e-9)
+    }
+
+    func testFrameDurationWithNoRangesLeavesTheCameraAlone() {
+        XCTAssertNil(CameraDomain.frameDuration(fps: 10, ranges: []))
     }
 
     func testScaleKeepsSmallImagesAndAspect() {

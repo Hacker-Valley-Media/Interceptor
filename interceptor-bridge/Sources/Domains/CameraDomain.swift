@@ -5,6 +5,7 @@ import CoreImage
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
+import ShareNative
 
 /// `macos camera`: frames from a camera (the built-in one, a Continuity Camera,
 /// Desk View, or a USB camera) with no window on screen.
@@ -27,6 +28,8 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
     // AVCaptureVideoDataOutput holds its delegate weakly; keep it alive here.
     private var output: CameraFrameOutput?
     private var device: [String: Any]?
+    // The rate the camera itself was set to, when the cap could be applied.
+    private var deviceFps: Double?
     private var latestImage: CGImage?
     private var latestTimestamp: Date?
     private var frameCount = 0
@@ -273,6 +276,7 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
         }
         session.addOutput(videoOutput)
         session.commitConfiguration()
+        let applied = Self.capFrameRate(device, fps: fps, session: session)
 
         while frameReady.wait(timeout: .now()) == .success {}
         let info = Self.describe(device)
@@ -281,6 +285,7 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
             self.session = session
             self.output = output
             self.device = info
+            self.deviceFps = applied
             self.latestImage = nil
             self.latestTimestamp = nil
             self.frameCount = 0
@@ -294,7 +299,48 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
             stop()
             return WireFormat.failure("provider_failed", "\(device.localizedName) did not start; another app may hold it exclusively")
         }
-        return WireFormat.success(["started": true, "device": info, "fps": fps])
+        var result: [String: Any] = ["started": true, "device": info, "fps": fps]
+        if let applied { result["deviceFps"] = applied }
+        return WireFormat.success(result)
+    }
+
+    /// Asks the camera itself for at most `fps`, so it does not deliver (and
+    /// the bridge convert) frames that `CameraFrameOutput` would drop. Apple:
+    /// activeVideoMinFrameDuration limits "the maximum frame rate"; setting it
+    /// to a value outside the active format's supported ranges, without the
+    /// device lock, or with auto frame rate on raises an Objective-C exception,
+    /// so the value comes from those ranges and the setters run inside
+    /// InterceptorNativeOperation. Returns the camera's rate afterwards, or nil
+    /// when it was left at its default (the output-side throttle still holds).
+    static func capFrameRate(_ device: AVCaptureDevice, fps: Int, session: AVCaptureSession) -> Double? {
+        guard !device.isAutoVideoFrameRateEnabled else { return nil }
+        let ranges = device.activeFormat.videoSupportedFrameRateRanges.map { (min: $0.minFrameDuration, max: $0.maxFrameDuration) }
+        guard let duration = frameDuration(fps: fps, ranges: ranges) else { return nil }
+        session.beginConfiguration()
+        guard (try? device.lockForConfiguration()) != nil else { session.commitConfiguration(); return nil }
+        let failure = InterceptorNativeOperation("Camera") {
+            // Keep min <= max at every step: lengthen the max first when the
+            // new minimum is longer than it.
+            if CMTimeCompare(duration, device.activeVideoMaxFrameDuration) > 0 { device.activeVideoMaxFrameDuration = duration }
+            device.activeVideoMinFrameDuration = duration
+        }
+        device.unlockForConfiguration()
+        session.commitConfiguration()
+        if let failure { Platform.log("camera frame rate left at default: \(failure.localizedDescription)"); return nil }
+        let seconds = CMTimeGetSeconds(device.activeVideoMinFrameDuration)
+        return seconds > 0 ? (1 / seconds * 100).rounded() / 100 : nil
+    }
+
+    /// The supported frame duration closest to 1/fps: 1/fps itself when a
+    /// range contains it, otherwise the nearer end of the closest range.
+    static func frameDuration(fps: Int, ranges: [(min: CMTime, max: CMTime)]) -> CMTime? {
+        let target = CMTime(value: 1, timescale: CMTimeScale(max(1, fps)))
+        let distance = { (time: CMTime) in abs(CMTimeGetSeconds(time) - CMTimeGetSeconds(target)) }
+        return ranges.map { range -> CMTime in
+            if CMTimeCompare(target, range.min) < 0 { return range.min }
+            if CMTimeCompare(target, range.max) > 0 { return range.max }
+            return target
+        }.min { distance($0) < distance($1) }
     }
 
     /// A camera can be taken away mid-session (lid closed, Continuity phone
@@ -326,6 +372,7 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
             session = nil
             output = nil
             device = nil
+            deviceFps = nil
             latestImage = nil
             latestTimestamp = nil
             frameCount = 0
@@ -346,6 +393,7 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
                 "authorization": authorization.currentStatus().permissionStatus.rawValue,
             ]
             if let device { payload["device"] = device }
+            if let deviceFps { payload["deviceFps"] = deviceFps }
             if let latestTimestamp { payload["frameAgeMs"] = Int(Date().timeIntervalSince(latestTimestamp) * 1000) }
             if let interruption { payload["interruption"] = interruption }
             return payload
