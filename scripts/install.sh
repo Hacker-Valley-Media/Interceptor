@@ -493,6 +493,38 @@ os.replace(tmp, path)
 PY
 }
 
+# Echoes "yes" when a browser profile keeps Interceptor across restarts: a store
+# copy, or an unpacked copy whose folder still exists. A --load-extension entry
+# (location 8) does not count: Chromium skips those at every start.
+profile_has_persistent_interceptor() {
+  python3 - "$1" <<'PY' 2>/dev/null || echo "no"
+import json, os, sys
+ids = ("gomcpnagjjlhehnkoobkjgnkbleiooed", "hkjbaciefhhgekldhncknbjkofbpenng")
+settings = {}
+for name in ("Preferences", "Secure Preferences"):
+    try:
+        with open(os.path.join(sys.argv[1], name)) as f:
+            settings.update(json.load(f).get("extensions", {}).get("settings", {}))
+    except Exception:
+        pass
+def keeps(e):
+    loc = e.get("location")
+    if loc == 8 or loc is None:
+        return False
+    return loc != 4 or os.path.exists(os.path.join(e.get("path", ""), "manifest.json"))
+print("yes" if any(isinstance(settings.get(i), dict) and keeps(settings[i]) for i in ids) else "no")
+PY
+}
+
+# `interceptor diagnose extension` key for an install.sh browser target, if it has one.
+repair_key_for() {
+  case "$1" in
+    brave|chrome|edge|vivaldi) echo "$1" ;;
+    chrome-for-testing)        echo "cft" ;;
+    *) return 1 ;;
+  esac
+}
+
 # Probe whether the just-launched extension is reachable. Returns 0 if yes.
 probe_extension_reachable() {
   local interceptor_bin="$ROOT/dist/interceptor"
@@ -578,6 +610,23 @@ load_extension() {
       echo "ERROR: $BROWSER_NAME binary not found in PATH on this platform." >&2
       return 1
     fi
+  fi
+
+  # ── Already installed? ───────────────────────────────────────────────────────
+  # A --load-extension start lasts one browser session, and over a copy the
+  # profile already keeps (a Chrome Web Store install) it replaces that copy with
+  # the session-only load, so Interceptor is gone after the next restart. Leave
+  # a profile that already has Interceptor alone; report its health instead.
+  local KEEP_PATH
+  KEEP_PATH="$(profile_root_for "$target" 2>/dev/null)/${PROFILE:-Default}"
+  if [[ "$(profile_has_persistent_interceptor "$KEEP_PATH")" == "yes" ]]; then
+    echo ""
+    echo "==> [browser] $BROWSER_NAME profile '${PROFILE:-Default}' already has Interceptor; not relaunching it."
+    local REPAIR_KEY
+    if REPAIR_KEY="$(repair_key_for "$target")" && [[ -x "$ROOT/dist/interceptor" ]]; then
+      "$ROOT/dist/interceptor" diagnose extension --browser "$REPAIR_KEY" || true
+    fi
+    return 0
   fi
 
   # ── Developer-mode preflight ─────────────────────────────────────────────────
@@ -742,6 +791,18 @@ load_extension() {
     echo "==> Extension loaded into $BROWSER_NAME and reachable."
     echo "    Extension ID: gomcpnagjjlhehnkoobkjgnkbleiooed (same as the Chrome Web Store listing)"
     [[ -n "$PROFILE" ]] && echo "    Profile: $PROFILE"
+    echo ""
+    echo "==> Keep it: this load lasts only until $BROWSER_NAME quits."
+    echo "    Chromium drops a --load-extension load at every restart. Do one of these once:"
+    echo "      1. Install from the Chrome Web Store: https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed"
+    case "$target" in
+      brave)   echo "      2. Open brave://extensions, keep Developer mode on, click Load unpacked and choose:" ;;
+      edge)    echo "      2. Open edge://extensions, keep Developer mode on, click Load unpacked and choose:" ;;
+      vivaldi) echo "      2. Open vivaldi://extensions, keep Developer mode on, click Load unpacked and choose:" ;;
+      *)       echo "      2. Open chrome://extensions, keep Developer mode on, click Load unpacked and choose:" ;;
+    esac
+    echo "         $EXTENSION_DIR"
+    echo "    Check it any time with: interceptor diagnose extension"
   else
     echo "==> WARNING: $BROWSER_NAME launched, but the extension is NOT reachable after 8s."
     echo ""

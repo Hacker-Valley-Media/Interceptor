@@ -7,6 +7,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <notify.h>
+#import <stdatomic.h>
 
 NSError * _Nullable ICRunCatching(void (^block)(void)) {
     @try {
@@ -272,3 +273,43 @@ NSData * _Nullable ICCaptureScreenJPEG(double scale, double quality, CGSize * _N
     if (encodeMs) *encodeMs = (t2 - t1) * 1000.0;
     return jpeg;
 }
+
+// ── A runner opened on the device steps out of the foreground ────────
+//
+// A launch from the Mac goes through Xcode, which sends the runner to the
+// background before UI testing starts. Opened on the device (a tap on its icon)
+// nothing does, and XCTest gives up after 30 s with error 10300 "Failed to
+// background test runner". So with no Mac launch environment the runner
+// suspends itself once it is the active app. It waits while something covers it
+// (XCTest's own "Enable UI Automation" passcode sheet makes it inactive, and
+// suspending under that sheet cancels the authorization) or the device is
+// locked, and it stops once setUp has started.
+
+static atomic_bool gSetUpStarted = false;
+
+void ICMarkSetUpStarted(void) { atomic_store(&gSetUpStarted, true); }
+
+@interface ICEarlyBackground : NSObject
+@end
+
+@implementation ICEarlyBackground
+
++ (void)load {
+    if ([NSProcessInfo.processInfo.environment[@"INTERCEPTOR_WS_URL"] length] > 0) return;
+    [self suspendWhenActiveWithRetries:120]; // every 0.5 s for up to a minute
+}
+
++ (void)suspendWhenActiveWithRetries:(NSInteger)left {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (atomic_load(&gSetUpStarted)) return;
+        UIApplication *app = UIApplication.sharedApplication;
+        if (!app || app.applicationState != UIApplicationStateActive || ICIsScreenLocked()) {
+            if (left > 0) [self suspendWhenActiveWithRetries:left - 1];
+            return;
+        }
+        SEL suspend = NSSelectorFromString(@"suspend");
+        if ([app respondsToSelector:suspend]) ((void (*)(id, SEL))objc_msgSend)(app, suspend);
+    });
+}
+
+@end

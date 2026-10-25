@@ -354,6 +354,11 @@ async function main() {
   }
 
   if (DIAGNOSE_CMDS.has(cmd)) {
+    if (filtered[1] === "extension") {
+      const { runExtensionRepairCommand } = await import("./lib/extension-repair")
+      await runExtensionRepairCommand(filtered.slice(2), jsonMode)
+      return
+    }
     await runDiagnoseCommand(jsonMode, globalContextId)
     return
   }

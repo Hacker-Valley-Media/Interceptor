@@ -566,6 +566,10 @@ Meta:
   interceptor diagnose                       Post-failure snapshot: daemon binary, all contexts, tabs, elements, monitor
   interceptor diagnose --context <id>        Probe a specific browser context only
   interceptor diagnose --json                Same snapshot as JSON
+  interceptor diagnose extension             Browser profiles where Interceptor cannot load (lost at every start, old ID only, one session only, running twice)
+  interceptor diagnose extension --fix       Repair what a browser restart can (closes and reopens Brave/Vivaldi/Chromium on macOS); prints the rest as steps
+  interceptor diagnose extension --prompt    Same, behind a dialog; the installers run this after each update
+  interceptor diagnose extension --welcome   macOS first-install window: finds a copy already in a browser, else helps add one (Chrome Web Store, Load unpacked with a guide, or Safari)
   interceptor daemon stop [--reason manual] [--timeout 10000]
                                              Authenticated local stop; never auto-spawns the daemon
   interceptor help [<command>|--all]         Concise help / one command's contract / the full reference

@@ -230,6 +230,8 @@ export function classify(surface: Surface, verb: string, args: string[]): Classi
       verb === "login" || verb === "logout" || verb === "kill")) return mk("destructive")
   if (surface === "ios" && verb === "location" && sub === "set") return mk("destructive")
   if (surface === "ios" && verb === "profiles" && (sub === "install" || sub === "remove")) return mk("destructive")
+  // `diagnose extension --fix/--prompt` quits and restarts the user's browser; --welcome opens browser tabs.
+  if (surface === "local" && verb === "diagnose" && (args.includes("--fix") || args.includes("--prompt") || args.includes("--welcome"))) return mk("destructive")
 
   // 3. read — whole verb reads, unless a mixed family says otherwise.
   if (READ_VERBS[surface]?.has(verb)) {

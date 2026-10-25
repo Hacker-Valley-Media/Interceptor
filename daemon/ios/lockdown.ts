@@ -154,6 +154,19 @@ export async function readPairRecord(udid: string): Promise<PairRecord | undefin
   }
 }
 
+/**
+ * The raw inner PairRecordData plist for a udid, as XML bytes. This is the
+ * pairing file the on-device idevice mounter reads (rp_pairing_file_read):
+ * HostID, SystemBUID, the host cert + key, the device/root certs, the escrow bag.
+ * ios/InterceptorCompanion/Scripts/deploy.sh writes it to disk and imports it
+ * into the InterceptorCompanion app once; it survives reboots.
+ */
+export async function exportPairRecordXml(udid: string): Promise<Buffer | undefined> {
+  const payload = await usbmuxOneShot({ MessageType: "ReadPairRecord", PairRecordID: udid })
+  const inner = xmlDataField(plistToXml(payload), "PairRecordData")
+  return inner ? Buffer.from(plistToXml(inner), "utf-8") : undefined
+}
+
 /** One-shot usbmux control request (ListDevices/ReadPairRecord/…) → response payload. */
 function usbmuxOneShot(dict: Record<string, string | number>): Promise<Buffer> {
   const CLIENT = { ProgName: "interceptor", ClientVersionString: "interceptor-lockdown-1", kLibUSBMuxVersion: 3 }

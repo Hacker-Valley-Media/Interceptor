@@ -30,6 +30,8 @@ agent use. No HTTP server, no CocoaHTTPServer, no usbmux port-forward.
 | `INTERCEPTOR_WS_TOKEN` | per-session (or shared) pairing token |
 | `INTERCEPTOR_UDID` | this device's udid |
 | `INTERCEPTOR_CONTEXT_ID` | `ios:<udid>` |
+| `INTERCEPTOR_DEVICE_SECRET` | this device's secret; the runner saves it so it can register when opened on the device |
+| `INTERCEPTOR_WS_URLS` | comma-separated loopback or Tailscale URLs the runner saves for that case |
 
 The daemon injects these into the `.xctestrun` at launch (the only point env
 reaches an on-device test process).
@@ -40,6 +42,23 @@ the Mac, use `INTERCEPTOR_WS_URL=ws://127.0.0.1:19300`. The daemon uses this
 value instead of its automatic LAN/VPN address at every runner launch;
 `interceptor ios status` reports `dialBackVia: override`. Setting it only on a
 later `interceptor ios` CLI invocation does not change the running daemon.
+
+## Opened on the device
+
+When the runner is opened on the device (a tap on its icon) the environment is
+empty, so it uses the connection it saved at its last launch from the Mac
+(`Application Support/interceptor-connection.json`). It registers with a proof of
+the device secret, waits for the Mac's proof, presses Home, and keeps re-dialing
+(back-off up to 30 s) until the daemon sends `quit`. With no saved connection the
+test fails with a message that says to run one `interceptor ios` command while the
+device is on the Mac's network.
+
+Two details make that start work on a device. `interceptor ios setup` / `refresh`
+remove the XCTest frameworks Xcode embeds in the runner app and re-sign it, so
+the runner loads the copy in the device's developer disk image (Xcode's copy
+cannot reach a newer device's testmanagerd). And with no Mac launch environment
+the runner suspends itself once it is active and unlocked, before setUp
+(`ICEarlyBackground` in `ObjCSupport.m`), which XCTest requires on a device.
 
 ## Generate the Xcode project
 

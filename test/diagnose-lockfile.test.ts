@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs"
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { readLockFile, writeLockFile, clearLockFile, clearDaemonRuntimeFiles, type LockFileData } from "../daemon/lifecycle"
@@ -183,7 +183,33 @@ describe("interceptor diagnose (spawned, no daemon)", () => {
       { browser: "chrome", manifestPath: "/somewhere/else", runningPath: LOCK.execPath },
     ])
     expect(snap.contexts).toEqual([])
+    expect(snap.extensionBlocked).toEqual([])
     // NO_DAEMON contract: diagnose must never auto-spawn
     expect(existsSync(pidPath)).toBe(false)
+  })
+
+  // A browser whose settings it may not read is named, never reported as clean.
+  test.skipIf(process.getuid?.() === 0)("a browser folder it may not read is listed, with the command that checks it", () => {
+    const home = join(dir, "home-blocked")
+    const brave = join(home, process.platform === "darwin" ? "Library/Application Support/BraveSoftware/Brave-Browser" : ".config/BraveSoftware/Brave-Browser")
+    mkdirSync(brave, { recursive: true })
+    chmodSync(brave, 0o000)
+    const run = (args: string[]) => Bun.spawnSync(["bun", "cli/index.ts", "diagnose", ...args], {
+      cwd: join(import.meta.dir, ".."),
+      env: {
+        ...process.env,
+        HOME: home,
+        XDG_CONFIG_HOME: join(home, ".config"),
+        INTERCEPTOR_LOCK_PATH: join(dir, "blocked.lock"),
+        INTERCEPTOR_PID_PATH: join(dir, "blocked.pid"),
+        INTERCEPTOR_SOCKET_PATH: join(dir, "blocked.sock"),
+      },
+    })
+    try {
+      expect(JSON.parse(run(["--json"]).stdout.toString()).extensionBlocked).toEqual(["brave"])
+      expect(run([]).stdout.toString()).toContain("could not check Brave")
+    } finally {
+      chmodSync(brave, 0o755)
+    }
   })
 })

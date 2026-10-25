@@ -235,9 +235,14 @@ export function timeoutMessageConnected(actionType: string, ms: number): string 
 // this cleanly separates "daemon up with a browser attached" from "nothing
 // listening". Never rejects — resolves null on any failure.
 export function probeContextCount(timeoutMs = 1500): Promise<number | null> {
+  return probeContexts(timeoutMs).then(ids => ids ? ids.length : null)
+}
+
+/** The connected context ids, or null when no daemon answers (never spawns one). */
+export function probeContexts(timeoutMs = 1500): Promise<string[] | null> {
   return new Promise((resolve) => {
     let done = false
-    const finish = (v: number | null): void => { if (!done) { done = true; resolve(v) } }
+    const finish = (v: string[] | null): void => { if (!done) { done = true; resolve(v) } }
     const timer = setTimeout(() => finish(null), timeoutMs)
     let buffer = Buffer.alloc(0)
     const handlers: Bun.SocketHandler<undefined> = {
@@ -257,7 +262,7 @@ export function probeContextCount(timeoutMs = 1500): Promise<number | null> {
             try {
               const resp = JSON.parse(buffer.subarray(4, 4 + msgLen).toString("utf-8")) as DaemonResponse
               const ids = resp.result?.success && Array.isArray(resp.result.data) ? resp.result.data as unknown[] : null
-              finish(ids ? ids.length : null)
+              finish(ids ? ids.map(String) : null)
             } catch { finish(null) }
             try { socket.end() } catch {}
           }

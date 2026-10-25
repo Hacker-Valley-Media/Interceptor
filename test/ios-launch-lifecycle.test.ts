@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { resolve } from "node:path"
+import { join, resolve } from "node:path"
+import { tmpdir } from "node:os"
 import { IosManager, RUNNER_RECONNECT_GRACE_MS } from "../daemon/ios/manager"
 import { RunnerChannel } from "../daemon/ios/channel"
 import { captureShell } from "./helpers/shell-capture"
@@ -49,7 +50,9 @@ async function launchIn(mode: LaunchMode): Promise<{ code: number; out: string; 
     const ms = Date.now() - started;
     console.log(JSON.stringify({ r, spawned, ms, procs: procs.length }));
   `
-  const env = { ...process.env, INTERCEPTOR_NO_XCODE: "", INTERCEPTOR_IOS_USE_XCODE: "1" }
+  // The launch env creates a device secret; keep it out of ~/.interceptor.
+  const secrets = join(tmpdir(), `ios-launch-secrets-${process.pid}.json`)
+  const env = { ...process.env, INTERCEPTOR_NO_XCODE: "", INTERCEPTOR_IOS_USE_XCODE: "1", INTERCEPTOR_IOS_SECRETS_PATH: secrets }
   if (process.platform === "darwin") {
     const result = captureShell(process.execPath, ["-e", script], { env, timeout: 5000 })
     return { code: result.status ?? -1, out: result.stdout, err: result.stderr }

@@ -1,0 +1,6 @@
+# idevice xcframework: ~215MB release asset, fetched by Scripts/fetch-idevice.sh
+Frameworks/IDevice.xcframework/
+# xcodegen-generated project (regenerate with: xcodegen generate)
+InterceptorCompanion.xcodeproj/
+# the RemotePairing helper deploy.sh compiles from Scripts/rpgen-usb.swift
+Scripts/rpgen-usb

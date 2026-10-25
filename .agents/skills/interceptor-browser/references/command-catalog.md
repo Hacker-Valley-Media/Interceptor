@@ -319,6 +319,8 @@ The default gives up back/forward history and form state, and the entry stays in
 ```bash
 interceptor capabilities                            # Available input layers
 interceptor reload                                  # Unpacked copy: picks up the installed files; store copy: asks the Chrome Web Store for an update first
+interceptor diagnose extension                      # Browser profiles that lose Interceptor at every browser start (a leftover old-ID entry on the extension folder), with the fix for each
+interceptor diagnose extension --fix [--browser brave]   # Quits and reopens that browser twice to move the entry aside; ask the user first <!-- os:darwin -->
 ```
 
 ## Branding (white-label)

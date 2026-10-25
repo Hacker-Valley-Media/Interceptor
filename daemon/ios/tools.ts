@@ -476,6 +476,33 @@ export function inspectRunnerIdentity(
   return { bundleId, teamId, profilePath, expiresAt: profile.expiresAt }
 }
 
+/** The XCTest frameworks Xcode embeds in the runner app; the device's developer disk image carries its own. */
+export const EMBEDDED_XCTEST = [
+  "XCTAutomationSupport.framework", "XCTest.framework", "XCTestCore.framework", "XCTestSupport.framework",
+  "XCUIAutomation.framework", "XCUnit.framework", "Testing.framework", "libXCTestSwiftSupport.dylib",
+]
+
+/**
+ * A runner opened on the device (no Xcode session) loads XCTest from its
+ * own Frameworks folder, which comes first in LC_RPATH. Xcode's copy could not
+ * reach the device's testmanagerd ("Connection init failed at lookup with error
+ * 3", iPhone on iOS 27.2 with Xcode 26.1, 2026-10-16), so remove it: dyld then
+ * uses the copy in the mounted developer disk image (/System/Developer/Library/
+ * Frameworks, the next rpath). Then re-sign the app with the identity Xcode used.
+ * Xcode embeds these frameworks after every script phase, so this runs after
+ * the build, as OpenMinis/iCTRL's Makefile does.
+ */
+export function useDeviceXCTest(app: string): void {
+  const frameworks = join(app, "Frameworks")
+  for (const name of EMBEDDED_XCTEST) rmSync(join(frameworks, name), { recursive: true, force: true })
+  try { if (readdirSync(frameworks).length === 0) rmSync(frameworks, { recursive: true }) } catch {}
+  const info = run("/usr/bin/codesign", ["-dvv", app])
+  const authority = /Authority=([^\n]+)/.exec(`${info.stderr}\n${info.stdout}`)?.[1]?.trim()
+  if (!authority) throw new Error("could not read the runner's signing identity to re-sign it after removing Xcode's XCTest")
+  const signed = run("/usr/bin/codesign", ["--force", "--sign", authority, "--preserve-metadata=entitlements,requirements,flags", "--generate-entitlement-der", app])
+  if (!signed.ok) throw new Error(`could not re-sign the runner after removing Xcode's XCTest: ${(signed.stderr || signed.stdout).trim()}`)
+}
+
 export async function buildRunnerWithXcode(udid: string, opts: XcodeRunnerBuildOptions = {}): Promise<XcodeRunnerBuildResult> {
   if (!(await detectToolchain()).xcodebuild) throw new Error("Xcode command-line tools are not available; install Xcode and run `sudo xcode-select -s /Applications/Xcode.app`.")
   const projectPath = resolveRunnerProject(opts.projectPath)
@@ -514,6 +541,7 @@ export async function buildRunnerWithXcode(udid: string, opts: XcodeRunnerBuildO
   const app = findRunnerApp(products)
   const xctestrun = findXctestrun(products)
   if (!app || !xctestrun) throw new Error("xcodebuild succeeded but did not produce InterceptorRunner-Runner.app and .xctestrun")
+  if (app.includes("Debug-iphoneos")) useDeviceXCTest(app)
 
   try {
     rmSync(RUNNER_STAGE_DIR, { recursive: true, force: true })
@@ -660,16 +688,16 @@ export function prepareXctestrunWithEnv(xctestrunPath: string, env: Record<strin
     }
   }
 
-  const dir = dirname(xctestrunPath)
-  const jsonTmp = join(dir, ".interceptor-xctestrun.json")
-  const outPlist = join(dir, "InterceptorRunner-interceptor.xctestrun")
+  const outPlist = join(dirname(xctestrunPath), "InterceptorRunner-interceptor.xctestrun")
   try {
-    writeFileSync(jsonTmp, JSON.stringify(doc))
-    const conv = run("/usr/bin/plutil", ["-convert", "xml1", "-o", outPlist, jsonTmp])
+    // Owner-only from creation: the env carries the session token and the device
+    // secret, so plutil converts stdin to stdout and only this write touches disk.
+    const conv = run("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", "-"], { input: JSON.stringify(doc) })
     if (!conv.ok) return undefined
+    rmSync(outPlist, { force: true })
+    writeFileSync(outPlist, conv.stdout, { mode: 0o600 })
     return outPlist
   } catch { return undefined }
-  finally { try { rmSync(jsonTmp, { force: true }) } catch {} }
 }
 
 // ── screenshot VLM-budget resize via sips (zero-dependency, native macOS) ──────
