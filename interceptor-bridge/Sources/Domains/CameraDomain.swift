@@ -213,14 +213,16 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
         let fps = max(1, min(action["fps"] as? Int ?? 10, 30))
         let output = CameraFrameOutput(minInterval: 1.0 / Double(fps)) { [weak self] image in
             guard let self else { return }
-            let accepted = self.lock.withLock { () -> Bool in
-                guard self.session === session else { return false }
+            self.lock.withLock {
+                guard self.session === session else { return }
                 self.latestImage = image
                 self.latestTimestamp = Date()
                 self.frameCount += 1
-                return true
+                // Signal under the same lock as the session check: a stop and a
+                // new start between the two would otherwise get a stale signal
+                // that wakes the new session's first `frame` with no frame.
+                self.frameReady.signal()
             }
-            if accepted { self.frameReady.signal() }
         }
         let videoOutput = AVCaptureVideoDataOutput()
         videoOutput.alwaysDiscardsLateVideoFrames = true
