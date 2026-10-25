@@ -394,6 +394,7 @@ CLI↔daemon IPC and the daemon↔extension channels use length-prefixed frames 
 - AX tree + CGEvent input (`AccessibilityDomain`, `InputDomain`, `AppsDomain`, `MenuDomain`)
 - ScreenCaptureKit (`CaptureDomain`, `StreamDomain`, `DisplayDomain`)
 - AVFoundation + speech + sound classification (`SpeechDomain`, `SoundDomain`, `AudioDomain`)
+- AVFoundation camera frames with no window (`CameraDomain`): one bridge-held `AVCaptureSession`, the camera capped to the requested frame rate, and the camera prompt only on `camera start --prompt`
 - Vision + NLP + on-device LLM (`VisionDomain`, `NLPDomain`, `IntelligenceDomain`). Every Vision verb draws its image from one `acquireImage`: a live stream frame, a window capture, or, with `--image <path>`, a saved file. The CLI sends an absolute path because the bridge's working directory is `/`. The file source decodes with ImageIO and bakes the EXIF orientation into the pixels (ImageIO does not apply it on decode), so a rotated phone capture is recognized upright, and no ScreenCaptureKit or CGS call is made. ImageIO reports every failure as nil, so `imageFailureMessage` works out whether the path is unreachable, a directory, unreadable, or not an image; `failed to capture screen` is reserved for a capture.
 - File watch / notifications / clipboard (`FilesDomain`, `NotificationsDomain`, `ClipboardDomain`)
 - Sensitive content + log query + container + URL fetch (`SensitiveDomain`, `LogDomain`, `ContainerDomain`, `NetDomain`)
