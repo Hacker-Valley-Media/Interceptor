@@ -862,14 +862,20 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
     case "camera": {
       const op = filtered[2] ?? "status"
       if (!["list", "start", "frame", "status", "stop"].includes(op)) throw new Error("camera requires list, start, frame, status or stop")
-      const allowed: Record<string, string[]> = { start: ["--device", "--fps"], frame: ["--out", "--timeout-ms", "--max-long-edge", "--quality"] }
+      // --prompt (start only) is the one opt-in that may show the macOS camera
+      // prompt; it takes no value.
+      const allowed: Record<string, string[]> = { start: ["--device", "--fps", "--prompt"], frame: ["--out", "--timeout-ms", "--max-long-edge", "--quality"] }
       const flags = allowed[op] ?? []
-      for (let i = 3; i < filtered.length; i += 2) {
-        if (!flags.includes(filtered[i])) throw new Error(`camera ${op} does not take ${filtered[i]}`)
-        if (filtered[i + 1] === undefined || filtered[i + 1].startsWith("--")) throw new Error(`${filtered[i]} requires a value`)
-        if (filtered.indexOf(filtered[i]) !== i) throw new Error(`repeated flag: ${filtered[i]}`)
+      for (let i = 3; i < filtered.length; i++) {
+        const flag = filtered[i]
+        if (!flags.includes(flag)) throw new Error(`camera ${op} does not take ${flag}`)
+        if (filtered.indexOf(flag) !== i) throw new Error(`repeated flag: ${flag}`)
+        if (flag === "--prompt") continue
+        if (filtered[i + 1] === undefined || filtered[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`)
+        i++
       }
       const action: Action = { type: "macos_camera", sub: op }
+      if (filtered.includes("--prompt", 3)) action.prompt = true
       const device = flagVal(filtered, "--device")
       if (device !== undefined) action.device = device
       const out = flagVal(filtered, "--out")

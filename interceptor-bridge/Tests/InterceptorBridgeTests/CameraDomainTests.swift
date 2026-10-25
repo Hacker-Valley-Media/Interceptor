@@ -15,11 +15,28 @@ private final class ResultHolder: @unchecked Sendable {
     func set(_ v: [String: Any]) { lock.withLock { stored = v } }
 }
 
-private final class PendingGrant: @unchecked Sendable {
+// The camera grant, through the same provider protocol production uses. With
+// `answers` set it answers at once; without it the answer waits for answer(_:),
+// the way the real prompt waits for the person.
+private final class CameraGrant: MicrophoneAuthorizationProvider, @unchecked Sendable {
     private let lock = NSLock()
-    private var done: (@Sendable (Bool) -> Void)?
-    func store(_ d: @escaping @Sendable (Bool) -> Void) { lock.withLock { done = d } }
-    func answer(_ granted: Bool) { lock.withLock { done }?(granted) }
+    private var status: AVAuthorizationStatus
+    private var pending: (@Sendable (Bool) -> Void)?
+    private var requests = 0
+    private let answers: Bool?
+    init(_ status: AVAuthorizationStatus, answers: Bool? = nil) { self.status = status; self.answers = answers }
+    var requestCount: Int { lock.withLock { requests } }
+    func set(_ newStatus: AVAuthorizationStatus) { lock.withLock { status = newStatus } }
+    func currentStatus() -> AVAuthorizationStatus { lock.withLock { status } }
+    func requestAccess(_ completion: @escaping @Sendable (Bool) -> Void) {
+        let now = lock.withLock { () -> Bool? in
+            requests += 1
+            if answers == nil { pending = completion }
+            return answers
+        }
+        if let now { completion(now) }
+    }
+    func answer(_ granted: Bool) { lock.withLock { pending }?(granted) }
 }
 
 final class CameraDomainTests: XCTestCase {
@@ -52,7 +69,7 @@ final class CameraDomainTests: XCTestCase {
 
     func testStatusWhenStoppedReportsAuthorization() {
         let domain = CameraDomain()
-        domain.authorizationStatus = { .denied }
+        domain.authorization = CameraGrant(.denied)
         let d = data(run(domain, ["sub": "status"]))
         XCTAssertEqual(d["active"] as? Bool, false)
         XCTAssertEqual(d["hasFrame"] as? Bool, false)
@@ -60,23 +77,60 @@ final class CameraDomainTests: XCTestCase {
         XCTAssertNil(d["frameAgeMs"])
     }
 
+    func testStatusNamesAnUndecidedGrant() {
+        let domain = CameraDomain()
+        domain.authorization = CameraGrant(.notDetermined)
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["authorization"] as? String, "not_determined")
+    }
+
     func testDeniedGrantRefusesStartWithoutPrompting() {
         let domain = CameraDomain()
-        domain.authorizationStatus = { .denied }
-        domain.requestAccess = { _ in XCTFail("a decided grant must not prompt") }
+        let grant = CameraGrant(.denied, answers: true)
+        domain.authorization = grant
+        for action: [String: Any] in [["sub": "start"], ["sub": "start", "prompt": true]] {
+            XCTAssertEqual(run(domain, action)["code"] as? String, "permission_required")
+        }
+        XCTAssertEqual(grant.requestCount, 0, "a decided grant must not prompt")
+    }
+
+    func testUndecidedGrantWithoutPromptRefusesAndNeverAsks() {
+        let domain = CameraDomain()
+        let grant = CameraGrant(.notDetermined, answers: true)
+        domain.authorization = grant
         let r = run(domain, ["sub": "start"])
         XCTAssertEqual(r["code"] as? String, "permission_required")
+        XCTAssertTrue((r["error"] as? String)?.contains("camera start --prompt") == true)
+        XCTAssertEqual(grant.requestCount, 0, "a plain start must never show the prompt")
+        // The refusal leaves the domain startable, not stuck in "starting".
+        XCTAssertEqual(run(domain, ["sub": "start"])["code"] as? String, "permission_required")
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["active"] as? Bool, false)
     }
 
     func testPromptDeclinedRefusesStart() {
         let domain = CameraDomain()
-        domain.authorizationStatus = { .notDetermined }
-        domain.requestAccess = { done in done(false) }
-        let r = run(domain, ["sub": "start"])
+        let grant = CameraGrant(.notDetermined, answers: false)
+        domain.authorization = grant
+        let r = run(domain, ["sub": "start", "prompt": true])
         XCTAssertEqual(r["code"] as? String, "permission_required")
+        XCTAssertEqual(grant.requestCount, 1)
         // A declined prompt leaves the domain startable again, not stuck in "starting".
-        domain.requestAccess = { done in done(false) }
-        XCTAssertEqual(run(domain, ["sub": "start"])["code"] as? String, "permission_required")
+        XCTAssertEqual(run(domain, ["sub": "start", "prompt": true])["code"] as? String, "permission_required")
+    }
+
+    func testAnswerAfterTheDeadlineDoesNotTurnTheCameraOn() {
+        let domain = CameraDomain()
+        domain.promptDeadline = 0.05
+        let grant = CameraGrant(.notDetermined)
+        domain.authorization = grant
+        let holder = ResultHolder()
+        let started = expectation(description: "start replies")
+        domain.handle("camera", action: ["type": "macos_camera", "sub": "start", "prompt": true]) { r in holder.set(r); started.fulfill() }
+        // The person allows it after the caller stopped waiting.
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(200)) { grant.answer(true) }
+        wait(for: [started], timeout: 5)
+        XCTAssertEqual(holder.value["code"] as? String, "timeout")
+        XCTAssertTrue((holder.value["error"] as? String)?.contains("was not started") == true)
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["active"] as? Bool, false)
     }
 
     func testRunningWithoutFrameTimesOut() {
@@ -142,16 +196,15 @@ final class CameraDomainTests: XCTestCase {
 
     func testStopDuringThePromptCancelsThatStart() {
         let domain = CameraDomain()
-        domain.authorizationStatus = { .notDetermined }
-        let pending = PendingGrant()
-        domain.requestAccess = { done in pending.store(done) }
+        let pending = CameraGrant(.notDetermined)
+        domain.authorization = pending
         let holder = ResultHolder()
         let started = expectation(description: "start replies")
-        domain.handle("camera", action: ["type": "macos_camera", "sub": "start"]) { r in holder.set(r); started.fulfill() }
+        domain.handle("camera", action: ["type": "macos_camera", "sub": "start", "prompt": true]) { r in holder.set(r); started.fulfill() }
         // The person is still looking at the prompt when a stop arrives.
         XCTAssertEqual(run(domain, ["sub": "stop"])["success"] as? Bool, true)
         // A new start is not blocked by the abandoned one...
-        domain.authorizationStatus = { .denied }
+        pending.set(.denied)
         XCTAssertEqual(run(domain, ["sub": "start"])["code"] as? String, "permission_required")
         // ...and the abandoned one, once allowed, does not turn the camera on.
         pending.answer(true)

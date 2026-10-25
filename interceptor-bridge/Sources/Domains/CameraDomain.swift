@@ -17,7 +17,7 @@ import UniformTypeIdentifiers
 /// way to see the camera was a frontmost app window, which freezes when covered.
 ///
 ///   camera list                         devices: id, name, type, position
-///   camera start [--device <id|name>]   start the session; prompts once for access
+///   camera start [--device <id|name>]   start the session; --prompt asks for access the first time
 ///   camera frame [--out <path>]         latest frame; JPEG file or data URL
 ///   camera status                       active, device, frame age, frame count
 ///   camera stop
@@ -41,9 +41,12 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
     private let frameReady = DispatchSemaphore(value: 0)
     private let sessionQueue = DispatchQueue(label: "interceptor.camera.session")
 
-    // Test seams. Production uses AVFoundation directly.
-    var authorizationStatus: @Sendable () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .video) }
-    var requestAccess: @Sendable (@escaping @Sendable (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .video, completionHandler: $0) }
+    // Test seams. Production asks AVFoundation about `.video` through the same
+    // provider TrustDomain uses for the microphone.
+    var authorization: MicrophoneAuthorizationProvider = LiveMicrophoneAuthorizationProvider(mediaType: .video)
+    // An answer later than this does not turn the camera on: the CLI stops
+    // waiting for `start --prompt` at 125 s, so nobody would read the frames.
+    var promptDeadline: TimeInterval = 120
     var testForcedActive = false
 
     func _testInjectFrame(_ image: CGImage) {
@@ -151,33 +154,69 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
             completion(result)
         }
         let boxed = UncheckedSendableBox(action)
-        switch authorizationStatus() {
+        switch authorization.currentStatus() {
         case .authorized:
             sessionQueue.async { [self] in finish(self.startSession(boxed.value, generation: gen)) }
         case .notDetermined:
-            // First use: macOS shows the camera prompt for interceptor-bridge.
+            // Only `start --prompt` asks: the prompt brings the bridge forward,
+            // and every other camera call stays in the background.
+            guard action["prompt"] as? Bool == true else { finish(Self.promptRequired()); return }
             // Same activation-policy upgrade as TrustDomain.checkMicrophone, so
             // the LSUIElement bridge gets a modal alert rather than a banner
             // that can auto-deny; xctest leaves its own Dock state alone.
             let isLiveBridge = Bundle.main.bundleIdentifier == "com.interceptor.bridge"
+            let previous = UncheckedSendableBox(isLiveBridge ? FrontmostResolver.frontmostApplication() : nil)
             if isLiveBridge {
                 DispatchQueue.main.async {
                     NSApplication.shared.setActivationPolicy(.regular)
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 }
             }
-            requestAccess { [self] granted in
-                if isLiveBridge { DispatchQueue.main.async { NSApplication.shared.setActivationPolicy(.accessory) } }
-                guard granted else { finish(Self.permissionFailure()); return }
-                sessionQueue.async { [self] in finish(self.startSession(boxed.value, generation: gen)) }
+            let asked = Date()
+            authorization.requestAccess { [self] granted in
+                let late = Date().timeIntervalSince(asked) > promptDeadline
+                let proceed: @Sendable (String?) -> Void = { [self] returnedTo in
+                    guard granted else { finish(Self.permissionFailure()); return }
+                    guard !late else { finish(Self.answeredTooLate()); return }
+                    sessionQueue.async { [self] in
+                        var result = self.startSession(boxed.value, generation: gen)
+                        if let returnedTo, var data = result["data"] as? [String: Any] {
+                            data["returnedTo"] = returnedTo
+                            result["data"] = data
+                        }
+                        finish(result)
+                    }
+                }
+                guard isLiveBridge else { proceed(nil); return }
+                DispatchQueue.main.async {
+                    NSApplication.shared.setActivationPolicy(.accessory)
+                    proceed(Self.giveFocusBack(to: previous.value))
+                }
             }
         default:
             finish(Self.permissionFailure())
         }
     }
 
+    /// Hands focus back to the app that was in front when the prompt was asked
+    /// for: the active app yields, then the target activates (Apple's
+    /// cooperative activation order). Returns the app's name when it worked.
+    @MainActor static func giveFocusBack(to app: NSRunningApplication?) -> String? {
+        guard let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier, !app.isTerminated else { return nil }
+        NSApplication.shared.yieldActivation(to: app)
+        return app.activate() ? (app.localizedName ?? app.bundleIdentifier) : nil
+    }
+
     static func permissionFailure() -> [String: Any] {
         WireFormat.failure("permission_required", "Camera permission required; allow interceptor-bridge in System Settings > Privacy & Security > Camera")
+    }
+
+    static func promptRequired() -> [String: Any] {
+        WireFormat.failure("permission_required", "camera access is not decided yet; run interceptor macos camera start --prompt to show the macOS camera prompt (it brings interceptor-bridge forward for the dialog, then returns to the app you were in)")
+    }
+
+    static func answeredTooLate() -> [String: Any] {
+        WireFormat.failure("timeout", "camera access was answered after the request stopped waiting; the camera was not started. Run camera start again")
     }
 
     static func stoppedWhileStarting() -> [String: Any] {
@@ -304,21 +343,12 @@ final class CameraDomain: DomainHandler, @unchecked Sendable {
                 "active": session != nil || testForcedActive,
                 "hasFrame": latestImage != nil,
                 "frames": frameCount,
-                "authorization": Self.authorizationName(authorizationStatus()),
+                "authorization": authorization.currentStatus().permissionStatus.rawValue,
             ]
             if let device { payload["device"] = device }
             if let latestTimestamp { payload["frameAgeMs"] = Int(Date().timeIntervalSince(latestTimestamp) * 1000) }
             if let interruption { payload["interruption"] = interruption }
             return payload
-        }
-    }
-
-    static func authorizationName(_ status: AVAuthorizationStatus) -> String {
-        switch status {
-        case .authorized: "granted"
-        case .notDetermined: "not_determined"
-        case .restricted: "restricted"
-        default: "denied"
         }
     }
 

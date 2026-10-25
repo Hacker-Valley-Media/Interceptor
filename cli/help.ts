@@ -682,9 +682,10 @@ macOS Bridge (full install only):
   interceptor macos capture frame [--timeout-ms 3000]      Block briefly for first frame; default 3000ms
   interceptor macos capture stop
 
-  Camera (no window on screen; prompts once for interceptor-bridge camera access):
+  Camera (no window on screen; the camera grant belongs to interceptor-bridge):
   interceptor macos camera list                           Built-in, Continuity, Desk View, USB cameras
-  interceptor macos camera start [--device <id|name>] [--fps 10]
+  interceptor macos camera start [--device <id|name>] [--fps 10] [--prompt]
+                                                          --prompt shows the macOS camera prompt once, then returns focus
   interceptor macos camera frame [--out <path>] [--max-long-edge N] [--quality 85] [--timeout-ms 3000]
   interceptor macos camera status                         active, device, frame age, frame count, authorization
   interceptor macos camera stop

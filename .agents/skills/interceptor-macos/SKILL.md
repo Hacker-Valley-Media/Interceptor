@@ -35,7 +35,7 @@ Treat `eN` refs as short-lived. AX state can change between calls; re-read befor
 
 ## The One Rule
 
-**Only two commands move focus:** `interceptor macos app activate <app>` and `interceptor macos open <app> --activate`. Everything else is background-first by contract — `open` (without `--activate`), all input verbs, all reads, capture, AX, menu, intent dispatch, scroll, drag, vision, overlays. If you call any other command and the user's frontmost app changes, that is a bug — file it.
+**Only two commands move focus:** `interceptor macos app activate <app>` and `interceptor macos open <app> --activate`. Everything else is background-first by contract — `open` (without `--activate`), all input verbs, all reads, capture, AX, menu, intent dispatch, scroll, drag, vision, overlays. If you call any other command and the user's frontmost app changes, that is a bug — file it. One opt-in asks for a permission and gives focus back: `camera start --prompt` shows the macOS camera prompt, then returns to the app that was in front.
 
 **The user is on this Mac too.** Assume the person is working while you work. Never run either focus command to make your own work easier or to test something. Use one only when the user asks for the app to come forward, or when the action truly cannot be done in the background, and then say so first, keep it to one fast batch, and put back the frontmost app and the cursor.
 

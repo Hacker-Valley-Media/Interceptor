@@ -9,6 +9,8 @@ Full contract, verb inventory, recipes, reflexes-to-drop, and pitfalls for the m
 1. `interceptor macos app activate <app>`
 2. `interceptor macos open <app> --activate`
 
+One opt-in asks for a permission and gives focus back: `interceptor macos camera start --prompt` brings interceptor-bridge forward for the macOS camera prompt, then returns focus to the app that was in front. A plain `camera start` never prompts.
+
 Everything else is background-first by contract — including `open` without `--activate`, all input verbs, all reads, capture, AX, menu, intent dispatch, scroll, drag, vision, and overlays. If you call any other command and the user's frontmost app changes, that is a bug — file it.
 
 ## The user is on this Mac too
@@ -131,8 +133,11 @@ Every verb in this table has been live-verified to leave frontmost untouched.
 | `appintent *` | yes | Runtime introspection only |
 | `maps search/complete/directions/eta/reverse` | yes | Network calls; no UI |
 | `notifications post/schedule-*/...` | yes | UNUserNotificationCenter; banner appears OS-side |
+| `camera list` / `status` / `frame` / `stop` | yes | AVFoundation in the bridge; no window |
+| `camera start` | yes | Refuses with `permission_required` until the grant is decided; never prompts |
 | `app activate <app>` | **no by design** | This command's contract is to foreground |
 | `open <app> --activate` | **no by design** | Explicit opt-in |
+| `camera start --prompt` | **no by design** | Shows the macOS camera prompt, then gives focus back to the previous frontmost app |
 | `click x,y` (no `--app`/`--pid`) | **no by design** | Legacy "drive frontmost" mode |
 | `type "..."` (no `--app`/`--pid`/ref) | **no by design** | Legacy "drive frontmost" mode |
 | `keys "..."` (no `--app`/`--pid`) | **no by design** | Legacy "drive frontmost" mode |

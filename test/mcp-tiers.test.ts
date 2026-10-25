@@ -26,6 +26,7 @@ describe("classify — tier by (surface, verb, sub-verb)", () => {
     for (const sub of ["list", "status", "frame"]) expect(classify("macos", "camera", [sub]).tier).toBe("read")
     for (const sub of ["start", "stop"]) expect(classify("macos", "camera", [sub]).tier).toBe("mutate")
     expect(classify("macos", "camera", ["start", "--device", "x"]).tier).toBe("mutate")
+    expect(classify("macos", "camera", ["start", "--prompt"]).tier).toBe("mutate")
     expect(gate(classify("macos", "camera", ["start"]), parseAllow(undefined), true).allowed).toBe(true)
   })
 

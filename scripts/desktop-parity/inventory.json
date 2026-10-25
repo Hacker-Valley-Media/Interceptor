@@ -28,7 +28,7 @@
 {"family":"capture","sub":"stop","flags":["--app","--timeout-ms"]},
 {"family":"capture","sub":"status","flags":["--app","--timeout-ms"]},
 {"family":"camera","sub":"list","flags":[]},
-{"family":"camera","sub":"start","flags":["--device","--fps"]},
+{"family":"camera","sub":"start","flags":["--device","--fps","--prompt"]},
 {"family":"camera","sub":"frame","flags":["--out","--timeout-ms","--max-long-edge","--quality"]},
 {"family":"camera","sub":"status","flags":[]},
 {"family":"camera","sub":"stop","flags":[]},

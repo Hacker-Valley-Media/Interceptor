@@ -57,6 +57,8 @@ When `--microphone-prompt` (or `--prompt` / `--walkthrough` / `--prompt-with-mic
 
 The bridge ships as `LSUIElement = true` (background-only). Without temporarily upgrading `NSApp.setActivationPolicy(.regular)`, macOS surfaces the Microphone permission alert as a *transient banner* that auto-dismisses to "denied" before most users see it. The bridge upgrades to `.regular` immediately before `AVCaptureDevice.requestAccess`, then reverts to `.accessory` in the completion handler — same canonical pattern Hammerspoon, Bartender, and Karabiner-Elements use.
 
+`camera start --prompt` uses the same upgrade for the camera prompt, and after the answer it gives focus back to the app that was frontmost when the call arrived. A plain `camera start` never prompts.
+
 Accessibility and Screen Recording prompts do NOT need this treatment because their alert / Settings flows are window-server-level and don't depend on the calling app's activation policy.
 
 ## Microphone capture writes a real file
@@ -74,7 +76,7 @@ This matters for verification: if you expect a 5-second recording to exist on di
 | Accessibility | AX tree, AX input verbs, window management, `monitor`, refs that route to AX, the entire macOS surface really | — |
 | Screen Recording | `screenshot`, `capture *`, `stream *`, `vision *`, `--frames` on `monitor` | reads that don't capture pixels |
 | Microphone | `listen`, `vad`, `sounds`, `audio input`, `--include speech` on `monitor` | text-only paths |
-| Camera | `camera start` (the first one raises the prompt; `camera status` reports `authorization`). `trust` does not list it yet | `camera list` |
+| Camera | `camera start` (`camera start --prompt` shows the prompt the first time; `camera status` reports `authorization`). `trust` does not list it yet | `camera list`, `camera status` |
 | Input Monitoring | Global key / click capture in `monitor` | one-shot synthesized input via `click` / `type` / `keys` |
 | Apple Events | `intent dispatch` against a specific bundle id | granted per-app on first dispatch |
 

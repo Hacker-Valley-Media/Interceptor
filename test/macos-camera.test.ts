@@ -25,6 +25,16 @@ describe("macos camera", () => {
     expect(parse("start", "--device", "PedPhone Camera", "--fps", "5")).toEqual({ type: "macos_camera", sub: "start", device: "PedPhone Camera", fps: 5 })
   })
 
+  test("--prompt is a bare flag, on start only", () => {
+    expect(parse("start", "--prompt")).toEqual({ type: "macos_camera", sub: "start", prompt: true })
+    expect(parse("start", "--device", "FaceTime", "--prompt", "--fps", "5")).toEqual({ type: "macos_camera", sub: "start", device: "FaceTime", fps: 5, prompt: true })
+    expect(parse("start", "--device", "FaceTime")).not.toHaveProperty("prompt")
+    expect(() => parse("frame", "--prompt")).toThrow("camera frame does not take --prompt")
+    expect(() => parse("start", "--prompt", "yes")).toThrow("camera start does not take yes")
+    expect(() => parse("start", "--prompt", "--prompt")).toThrow("repeated flag: --prompt")
+    expect(() => parse("start", "--device", "--prompt")).toThrow("--device requires a value")
+  })
+
   test("frame resolves --out against the caller's working directory", () => {
     const action = parse("frame", "--out", "shots/f.jpg", "--max-long-edge", "640", "--quality", "80", "--timeout-ms", "1500")
     expect(isAbsolute(action.out as string)).toBe(true)
@@ -52,8 +62,9 @@ describe("macos camera", () => {
     expect(() => parse("start", "--fps", "5", "--fps", "6")).toThrow("repeated flag: --fps")
   })
 
-  test("start outlasts the camera prompt and frame outlasts its own wait", () => {
-    expect(pickTimeoutForAction(parse("start") as never)).toBeGreaterThanOrEqual(125_000)
+  test("start --prompt outlasts the camera prompt, a plain start does not wait for one, and frame outlasts its own wait", () => {
+    expect(pickTimeoutForAction(parse("start", "--prompt") as never)).toBeGreaterThanOrEqual(125_000)
+    expect(pickTimeoutForAction(parse("start") as never)).toBe(pickTimeoutForAction(parse("status") as never))
     expect(pickTimeoutForAction(parse("frame", "--timeout-ms", "50000") as never)).toBeGreaterThanOrEqual(55_000)
   })
 })
