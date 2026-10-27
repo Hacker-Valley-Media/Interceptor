@@ -37,6 +37,8 @@ static WORKER:AtomicBool=AtomicBool::new(false);
 static SESSION:AtomicBool=AtomicBool::new(false);
 static STARTED_MS:AtomicU64=AtomicU64::new(0);
 static CHECKS:AtomicU64=AtomicU64::new(0);
+/// This process's last feed check; the schedule never counts from an older time than this.
+static LAST_CHECK_MS:AtomicU64=AtomicU64::new(0);
 
 fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).map_or(0,|d|d.as_millis() as u64)}
 fn timestamp()->String{time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_else(|_|"1970-01-01T00:00:00Z".to_owned())}
@@ -226,7 +228,7 @@ fn check_now()->Result<Decision>{
     set(|s|{phase(s,"checking","checking",true);s["feed"]=json!(url);s["checkStartedAt"]=json!(timestamp());
         for key in["lastError","noUpdateReason","selectedVersion","selectedDisplayVersion","artifactName","artifactURL","signatureVerified","message","userChoice","updateStage","latestFeedVersion"]{if let Some(o)=s.as_object_mut(){o.remove(key);}}});
     let decision=fetch_feed(&url,lab).and_then(|payload|select(&payload,OS,ARCH,VERSION,lab)).map(|d|offered(d,skipped_version().as_deref()));
-    let now=now_ms();let at=rfc3339(now).unwrap_or_else(timestamp);
+    let now=now_ms();let at=rfc3339(now).unwrap_or_else(timestamp);LAST_CHECK_MS.store(now,Ordering::SeqCst);
     // Sparkle records the time of every check, scheduled or not; the next scheduled check counts from it.
     if installed().is_ok()&&let Ok(dir)=directory(){let mut saved=read_state(&dir);saved["lastCheckMs"]=json!(now);let _=write_state(&dir,&saved);}
     match &decision{
@@ -387,6 +389,10 @@ fn next_check(last:Option<u64>,started:u64,now:u64)->u64{
     let interval=CHECK_INTERVAL.as_millis() as u64;let first=started+FIRST_CHECK.as_millis() as u64;
     match last{Some(last)=>(last+interval).min(now+interval).max(first),None=>first}
 }
+/// The later of the saved check time and this process's own. A state file that cannot be written
+/// (a full disk, a locked file) left the saved time old, so every pass looked overdue and 2.1.5
+/// fetched the feed back to back.
+fn last_check(saved:Option<u64>)->Option<u64>{saved.max(Some(LAST_CHECK_MS.load(Ordering::SeqCst)).filter(|&ms|ms>0))}
 fn wake(){*WAKE.lock().unwrap()=true;SIGNAL.notify_all();}
 /// Wait until `deadline` (milliseconds since the epoch; None waits for a wake). True when woken.
 fn wait_until(deadline:Option<u64>)->bool{
@@ -407,7 +413,7 @@ fn worker(){
     cleanup(&dir);
     report_failed_install(&dir);
     loop{
-        let due=automatic().is_ok().then(||next_check(read_state(&dir)["lastCheckMs"].as_u64(),STARTED_MS.load(Ordering::SeqCst),now_ms()));
+        let due=automatic().is_ok().then(||next_check(last_check(read_state(&dir)["lastCheckMs"].as_u64()),STARTED_MS.load(Ordering::SeqCst),now_ms()));
         set(|s|{match due.and_then(rfc3339){Some(at)=>s["nextCheckAt"]=json!(at),None=>{if let Some(o)=s.as_object_mut(){o.remove("nextCheckAt");}}}});
         let woken=wait_until(due);
         if woken||automatic().is_ok(){cycle();}
@@ -819,6 +825,14 @@ pub fn capability(session:&str)->Value{json!({"operation":"update","compiled":tr
         assert_eq!(next_check(Some(start-3_600_000),start,start),start-3_600_000+day);
         assert_eq!(next_check(Some(start-2*day),start,start),start+120_000);
         assert_eq!(next_check(Some(start+5*day),start,start),start+day);
+    }
+    #[test] fn a_check_that_could_not_be_saved_still_waits_a_day(){
+        let (day,start)=(86_400_000_u64,1_000_000_000_000_u64);
+        assert_eq!(last_check(None),None);
+        LAST_CHECK_MS.store(start+120_000,Ordering::SeqCst);
+        assert_eq!(last_check(Some(start-2*day)),Some(start+120_000));
+        assert_eq!(next_check(last_check(Some(start-2*day)),start,start+120_001),start+120_000+day);
+        assert_eq!(last_check(Some(start+day)),Some(start+day));
     }
     #[test] fn release_notes_hide_the_installed_release_the_way_sparkle_marks_it(){
         let notes="<main><section data-sparkle-version=\"2.1.1\">a</section><section data-sparkle-version=\"2.1.0\">b</section></main>";
