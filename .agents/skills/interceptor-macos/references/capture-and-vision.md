@@ -14,6 +14,21 @@ interceptor macos capture stop
 
 Default capture is **background-friendly** — `CGSHWCaptureWindowList` reads compositor buffers without raising the target. Use `--app "X"` instead of activating the app.
 
+## Camera (no window)
+
+```bash
+interceptor macos camera list                      # Cameras: built-in, Continuity (iPhone), Desk View, USB
+interceptor macos camera start                     # Default camera; --device <id|name>, --fps 1-30 (default 10)
+interceptor macos camera start --prompt            # First use only: show the macOS camera prompt, then return focus
+interceptor macos camera frame --out frame.jpg     # Latest frame to a JPEG; without --out, an inline data URL
+interceptor macos camera frame --out f.jpg --max-long-edge 640
+interceptor macos camera status                    # active, device, frameAgeMs, frames, authorization, interruption
+interceptor macos camera stop
+interceptor macos vision faces --image frame.jpg   # Vision over a camera frame
+```
+
+The bridge holds the camera session, so nothing has to stay on screen and covering windows do not freeze the feed. Until the camera grant is decided, `camera start` refuses with `permission_required` and names `camera start --prompt`. That one call shows the macOS camera prompt for interceptor-bridge, then returns focus to the app that was in front (the result's `returnedTo`); a denied grant returns `permission_required`. `start` reports `deviceFps`, the rate the camera itself was set to. The camera light is on while the session runs; `camera stop` turns it off. A bare `ffmpeg -f avfoundation` from a terminal or agent shell has no bundle to grant and waits on a prompt that never appears; use this instead. `status` reports `interruption` when the camera is taken away mid-session (lid closed, a Continuity iPhone walked off) rather than serving an old frame as live: check `frameAgeMs`.
+
 ## Stream (continuous frames)
 
 ```bash

@@ -7,7 +7,7 @@
 // refusals (`*.flag-rejected`).
 import { writeFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
-import { type Case, type Ctx, type Exclusion, type Family, type Res, refuse } from "../types"
+import { type Case, type Ctx, type Exclusion, type Family, type Res, macOnly, refuse, skip } from "../types"
 import { contains, list } from "./helpers"
 
 // Person-only gate: "When you call this method, the framework asks the person for permission to download the
@@ -62,6 +62,9 @@ const VISION_SUBS = ["text", "faces", "hands", "bodies", "classify", "saliency"]
 const SENTENCE = "Visit https://example.com or call 415-555-0100 tomorrow."
 const ALL_TRANSLATE_FLAGS = ["--from", "en", "--to", "es", "--sample", "Hello", "--json", '["Hello"]']
 
+const CAMERA_ON = "turns the camera on (disruptive on the shared Mac)"
+const CAMERA_SHARED = "reads or ends whatever camera session is live on the shared Mac, which may be another caller's"
+const CAMERA_PROMPT = "shows the macOS camera prompt, which only the person at the Mac can answer"
 export const media: Family[] = [
   {
     family: "audio",
@@ -260,6 +263,23 @@ export const media: Family[] = [
       { id: "sensitive.monitor-status.flag-rejected", sub: "monitor status", args: ctx => ["sensitive", "monitor", "status", "--app", app(ctx), "--image", png(ctx)], flags: ["--app", "--image"], expect: no },
     ],
     async teardown(ctx) { await ctx.run(["sensitive", "monitor", "stop"]) },
+  },
+  // camera: macOS-only (the Swift bridge holds the AVFoundation session). Starting it on the
+  // shared Mac raises the camera prompt and lights the camera, and frame or stop would touch
+  // another caller's session, so only list, status and flag refusals run there.
+  {
+    family: "camera",
+    cases: [
+      { id: "camera.list", sub: "list", args: ["camera", "list"], expect: macOnly(), check: contains('"devices"') },
+      { id: "camera.status", sub: "status", args: ["camera", "status"], expect: macOnly(), check: contains('"authorization"') },
+      { id: "camera.start", sub: "start", args: ["camera", "start", "--device", "MacBook", "--fps", "5"], expect: { ...macOnly(), darwin: skip(CAMERA_ON) }, disruptive: true },
+      { id: "camera.start.prompt", sub: "start", args: ["camera", "start", "--prompt"], expect: { ...macOnly(), darwin: skip(CAMERA_PROMPT) }, disruptive: true },
+      { id: "camera.frame", sub: "frame", args: ctx => ["camera", "frame", "--out", join(ctx.dir, "camera.jpg"), "--max-long-edge", "640", "--quality", "80", "--timeout-ms", "3000"],
+        flags: ["--out", "--max-long-edge", "--quality", "--timeout-ms"], expect: { ...macOnly(), darwin: skip(CAMERA_ON) }, disruptive: true },
+      { id: "camera.frame-not-started", sub: "frame", args: ["camera", "frame"], expect: { ...macOnly(), darwin: skip(CAMERA_SHARED) } },
+      { id: "camera.stop", sub: "stop", args: ["camera", "stop"], expect: { ...macOnly(), darwin: skip(CAMERA_SHARED) } },
+      { id: "camera.start.flag-rejected", sub: "start", args: ["camera", "start", "--out", "camera.jpg"], expect: { all: refuse() } },
+    ],
   },
 ]
 

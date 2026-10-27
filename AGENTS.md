@@ -50,7 +50,7 @@ One disclosed exception: when the default DOM-render screenshot fails outright o
 
 Safari's browser context is `safari`. Use `interceptor --context safari <verb>` for page content; use `interceptor macos` only for Safari's native chrome, menus, dialogs, or native fallback capabilities.
 
-**macOS surface:** Only two commands move focus: `interceptor macos app activate <app>` and `interceptor macos open <app> --activate`. Everything else stays invisible — `open` (without `--activate`), all input verbs (`click`, `type`, `keys`, `drag`, `scroll`), all reads, capture, AX, menu, intent dispatch, vision, and overlays. If you call any other command and the user's frontmost app changes, that is a bug — file it.
+**macOS surface:** Only two commands move focus: `interceptor macos app activate <app>` and `interceptor macos open <app> --activate`. Everything else stays invisible — `open` (without `--activate`), all input verbs (`click`, `type`, `keys`, `drag`, `scroll`), all reads, capture, AX, menu, intent dispatch, vision, and overlays. If you call any other command and the user's frontmost app changes, that is a bug — file it. `camera start --prompt` is the one permission opt-in that comes forward: it shows the macOS camera prompt, then returns focus to the app that was in front.
 
 When the user names a specific app ("screenshot of Brave", "scroll Signal", "open a tab in Brave"), do the work without bringing it forward unless the task strictly requires focus. Never reach for `app activate`, never insert `activate` into AppleScript blocks, never `--mode display`-screenshot a backgrounded app's window. The bridge's CGS capture / AX read / Apple Events / `postToPid` scroll paths all work without focus change.
 

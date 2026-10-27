@@ -22,6 +22,14 @@ describe("classify — tier by (surface, verb, sub-verb)", () => {
     expect(classify("browser", "save", ["--out", "/tmp/x", "blob"]).tier).toBe("exec")
   })
 
+  test("macOS camera: reads are read, turning it on or off is mutate", () => {
+    for (const sub of ["list", "status", "frame"]) expect(classify("macos", "camera", [sub]).tier).toBe("read")
+    for (const sub of ["start", "stop"]) expect(classify("macos", "camera", [sub]).tier).toBe("mutate")
+    expect(classify("macos", "camera", ["start", "--device", "x"]).tier).toBe("mutate")
+    expect(classify("macos", "camera", ["start", "--prompt"]).tier).toBe("mutate")
+    expect(gate(classify("macos", "camera", ["start"]), parseAllow(undefined), true).allowed).toBe(true)
+  })
+
   test("macOS vm family splits by sub-verb", () => {
     expect(classify("macos", "vm", ["list"]).tier).toBe("read")
     expect(classify("macos", "vm", ["get", "x"]).tier).toBe("read")

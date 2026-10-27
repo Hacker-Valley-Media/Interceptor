@@ -1,0 +1,290 @@
+import XCTest
+import AVFoundation
+import CoreGraphics
+import CoreMedia
+import ImageIO
+@testable import interceptor_bridge
+
+// `macos camera`: everything here runs without a camera or a camera grant.
+// Frames are injected the way CameraFrameOutput delivers them; the live
+// AVCaptureSession path was checked separately on a Developer-ID-signed build.
+
+private final class ResultHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String: Any] = [:]
+    var value: [String: Any] { lock.withLock { stored } }
+    func set(_ v: [String: Any]) { lock.withLock { stored = v } }
+}
+
+// The camera grant, through the same provider protocol production uses. With
+// `answers` set it answers at once; without it the answer waits for answer(_:),
+// the way the real prompt waits for the person.
+private final class CameraGrant: MicrophoneAuthorizationProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var status: AVAuthorizationStatus
+    private var pending: (@Sendable (Bool) -> Void)?
+    private var requests = 0
+    private let answers: Bool?
+    init(_ status: AVAuthorizationStatus, answers: Bool? = nil) { self.status = status; self.answers = answers }
+    var requestCount: Int { lock.withLock { requests } }
+    func set(_ newStatus: AVAuthorizationStatus) { lock.withLock { status = newStatus } }
+    func currentStatus() -> AVAuthorizationStatus { lock.withLock { status } }
+    func requestAccess(_ completion: @escaping @Sendable (Bool) -> Void) {
+        let now = lock.withLock { () -> Bool? in
+            requests += 1
+            if answers == nil { pending = completion }
+            return answers
+        }
+        if let now { completion(now) }
+    }
+    func answer(_ granted: Bool) { lock.withLock { pending }?(granted) }
+}
+
+final class CameraDomainTests: XCTestCase {
+    private func run(_ domain: CameraDomain, _ action: [String: Any], timeout: TimeInterval = 5) -> [String: Any] {
+        let holder = ResultHolder()
+        let exp = expectation(description: "camera \(action["sub"] ?? "")")
+        domain.handle("camera", action: action.merging(["type": "macos_camera"]) { a, _ in a }) { r in
+            holder.set(r)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: timeout)
+        return holder.value
+    }
+
+    private func image(width: Int, height: Int) -> CGImage {
+        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)!
+        ctx.setFillColor(CGColor(red: 0.57, green: 0.27, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage()!
+    }
+
+    private func data(_ r: [String: Any]) -> [String: Any] { r["data"] as? [String: Any] ?? [:] }
+
+    func testFrameBeforeStartIsRefused() {
+        let r = run(CameraDomain(), ["sub": "frame"])
+        XCTAssertEqual(r["success"] as? Bool, false)
+        XCTAssertEqual(r["code"] as? String, "invalid_request")
+    }
+
+    func testStatusWhenStoppedReportsAuthorization() {
+        let domain = CameraDomain()
+        domain.authorization = CameraGrant(.denied)
+        let d = data(run(domain, ["sub": "status"]))
+        XCTAssertEqual(d["active"] as? Bool, false)
+        XCTAssertEqual(d["hasFrame"] as? Bool, false)
+        XCTAssertEqual(d["authorization"] as? String, "denied")
+        XCTAssertNil(d["frameAgeMs"])
+    }
+
+    func testStatusNamesAnUndecidedGrant() {
+        let domain = CameraDomain()
+        domain.authorization = CameraGrant(.notDetermined)
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["authorization"] as? String, "not_determined")
+    }
+
+    func testDeniedGrantRefusesStartWithoutPrompting() {
+        let domain = CameraDomain()
+        let grant = CameraGrant(.denied, answers: true)
+        domain.authorization = grant
+        for action: [String: Any] in [["sub": "start"], ["sub": "start", "prompt": true]] {
+            XCTAssertEqual(run(domain, action)["code"] as? String, "permission_required")
+        }
+        XCTAssertEqual(grant.requestCount, 0, "a decided grant must not prompt")
+    }
+
+    func testUndecidedGrantWithoutPromptRefusesAndNeverAsks() {
+        let domain = CameraDomain()
+        let grant = CameraGrant(.notDetermined, answers: true)
+        domain.authorization = grant
+        let r = run(domain, ["sub": "start"])
+        XCTAssertEqual(r["code"] as? String, "permission_required")
+        XCTAssertTrue((r["error"] as? String)?.contains("camera start --prompt") == true)
+        XCTAssertEqual(grant.requestCount, 0, "a plain start must never show the prompt")
+        // The refusal leaves the domain startable, not stuck in "starting".
+        XCTAssertEqual(run(domain, ["sub": "start"])["code"] as? String, "permission_required")
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["active"] as? Bool, false)
+    }
+
+    func testPromptDeclinedRefusesStart() {
+        let domain = CameraDomain()
+        let grant = CameraGrant(.notDetermined, answers: false)
+        domain.authorization = grant
+        let r = run(domain, ["sub": "start", "prompt": true])
+        XCTAssertEqual(r["code"] as? String, "permission_required")
+        XCTAssertEqual(grant.requestCount, 1)
+        // A declined prompt leaves the domain startable again, not stuck in "starting".
+        XCTAssertEqual(run(domain, ["sub": "start", "prompt": true])["code"] as? String, "permission_required")
+    }
+
+    func testAnswerAfterTheDeadlineDoesNotTurnTheCameraOn() {
+        let domain = CameraDomain()
+        domain.promptDeadline = 0.05
+        let grant = CameraGrant(.notDetermined)
+        domain.authorization = grant
+        let holder = ResultHolder()
+        let started = expectation(description: "start replies")
+        domain.handle("camera", action: ["type": "macos_camera", "sub": "start", "prompt": true]) { r in holder.set(r); started.fulfill() }
+        // The person allows it after the caller stopped waiting.
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(200)) { grant.answer(true) }
+        wait(for: [started], timeout: 5)
+        XCTAssertEqual(holder.value["code"] as? String, "timeout")
+        XCTAssertTrue((holder.value["error"] as? String)?.contains("was not started") == true)
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["active"] as? Bool, false)
+    }
+
+    func testRunningWithoutFrameTimesOut() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        let started = Date()
+        let r = run(domain, ["sub": "frame", "timeoutMs": 200])
+        XCTAssertEqual(r["code"] as? String, "timeout")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    }
+
+    func testWaitingFrameReturnsOnceOneArrives() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        let frame = image(width: 64, height: 48)
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(150)) { domain._testInjectFrame(frame) }
+        let d = data(run(domain, ["sub": "frame", "timeoutMs": 3000]))
+        XCTAssertEqual(d["width"] as? Int, 64)
+        XCTAssertEqual(d["height"] as? Int, 48)
+    }
+
+    func testInlineFrameIsAJpegDataUrlWithCounterAndAge() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        domain._testInjectFrame(image(width: 320, height: 240))
+        domain._testInjectFrame(image(width: 320, height: 240))
+        let d = data(run(domain, ["sub": "frame"]))
+        XCTAssertEqual(d["format"] as? String, "jpeg")
+        XCTAssertEqual(d["frame"] as? Int, 2)
+        XCTAssertNotNil(d["frameAgeMs"] as? Int)
+        XCTAssertTrue((d["dataUrl"] as? String)?.hasPrefix("data:image/jpeg;base64,") == true)
+        XCTAssertNil(d["path"])
+    }
+
+    func testOutWritesAJpegFileAndScales() throws {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        domain._testInjectFrame(image(width: 1920, height: 1080))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("camera-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let out = dir.appendingPathComponent("nested/frame.jpg").path
+        let d = data(run(domain, ["sub": "frame", "out": out, "maxLongEdge": 640]))
+        XCTAssertEqual(d["path"] as? String, out)
+        XCTAssertNil(d["dataUrl"])
+        XCTAssertEqual(d["width"] as? Int, 640)
+        XCTAssertEqual(d["height"] as? Int, 360)
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(URL(fileURLWithPath: out) as CFURL, nil))
+        XCTAssertEqual(CGImageSourceGetType(source) as String?, "public.jpeg")
+        let props = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        XCTAssertEqual(props[kCGImagePropertyPixelWidth] as? Int, 640)
+    }
+
+    func testStopClearsFrameAndCounter() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        domain._testInjectFrame(image(width: 8, height: 8))
+        XCTAssertEqual(run(domain, ["sub": "stop"])["success"] as? Bool, true)
+        domain.testForcedActive = false
+        let d = data(run(domain, ["sub": "status"]))
+        XCTAssertEqual(d["hasFrame"] as? Bool, false)
+        XCTAssertEqual(d["frames"] as? Int, 0)
+    }
+
+    func testStopDuringThePromptCancelsThatStart() {
+        let domain = CameraDomain()
+        let pending = CameraGrant(.notDetermined)
+        domain.authorization = pending
+        let holder = ResultHolder()
+        let started = expectation(description: "start replies")
+        domain.handle("camera", action: ["type": "macos_camera", "sub": "start", "prompt": true]) { r in holder.set(r); started.fulfill() }
+        // The person is still looking at the prompt when a stop arrives.
+        XCTAssertEqual(run(domain, ["sub": "stop"])["success"] as? Bool, true)
+        // A new start is not blocked by the abandoned one...
+        pending.set(.denied)
+        XCTAssertEqual(run(domain, ["sub": "start"])["code"] as? String, "permission_required")
+        // ...and the abandoned one, once allowed, does not turn the camera on.
+        pending.answer(true)
+        wait(for: [started], timeout: 5)
+        XCTAssertEqual(holder.value["code"] as? String, "invalid_request")
+        XCTAssertTrue((holder.value["error"] as? String)?.contains("stop arrived before start finished") == true)
+        XCTAssertEqual(data(run(domain, ["sub": "status"]))["active"] as? Bool, false)
+    }
+
+    func testInterruptedCameraRefusesItsLastFrame() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        domain._testInjectFrame(image(width: 8, height: 8))
+        domain._testInterrupt("interrupted")
+        let r = run(domain, ["sub": "frame"])
+        XCTAssertEqual(r["code"] as? String, "provider_failed")
+        XCTAssertTrue((r["error"] as? String)?.contains("not live") == true)
+        domain._testInterrupt(nil)
+        XCTAssertEqual(run(domain, ["sub": "frame"])["success"] as? Bool, true)
+    }
+
+    func testInterruptionWhileWaitingForTheFirstFrameIsReported() {
+        let domain = CameraDomain()
+        domain.testForcedActive = true
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) {
+            domain._testInterrupt("interrupted")
+            domain._testInjectFrame(self.image(width: 8, height: 8))
+        }
+        XCTAssertEqual(run(domain, ["sub": "frame", "timeoutMs": 2000])["code"] as? String, "provider_failed")
+    }
+
+    func testUnknownSubcommandIsRefused() {
+        XCTAssertEqual(run(CameraDomain(), ["sub": "record"])["code"] as? String, "invalid_request")
+    }
+
+    func testDeviceSelectorPrefersIdThenExactNameThenSubstring() {
+        let devices = [(id: "A1", name: "MacBook Pro Camera"), (id: "B2", name: "PedPhone Camera"), (id: "C3", name: "Camera")]
+        XCTAssertEqual(CameraDomain.pick("B2", from: devices), 1)
+        XCTAssertEqual(CameraDomain.pick("camera", from: devices), 2, "an exact name beats an earlier substring match")
+        XCTAssertEqual(CameraDomain.pick("pedphone", from: devices), 1)
+        XCTAssertNil(CameraDomain.pick("Logitech", from: devices))
+    }
+
+    // Frame-rate cap: the value handed to activeVideoMinFrameDuration must come
+    // from a supported range, or AVFoundation raises.
+    private func range(_ minFps: Int32, _ maxFps: Int32) -> (min: CMTime, max: CMTime) {
+        (min: CMTime(value: 1, timescale: maxFps), max: CMTime(value: 1, timescale: minFps))
+    }
+
+    func testFrameDurationInsideARangeIsTheRequestedRate() {
+        let d = CameraDomain.frameDuration(fps: 10, ranges: [range(1, 30)])
+        XCTAssertEqual(d.map(CMTimeGetSeconds) ?? 0, 0.1, accuracy: 1e-9)
+    }
+
+    func testFrameDurationClampsToTheNearerEndOfARange() {
+        // 5 fps on a 15-30 range: the slowest it allows is 15.
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 5, ranges: [range(15, 30)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 15, accuracy: 1e-9)
+        // 30 fps on a 1-24 range: the fastest it allows is 24.
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 30, ranges: [range(1, 24)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 24, accuracy: 1e-9)
+    }
+
+    func testFrameDurationOnAFixedRateCameraIsThatRate() {
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 10, ranges: [range(30, 30)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 30, accuracy: 1e-9)
+    }
+
+    func testFrameDurationPicksTheClosestOfSeveralRanges() {
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 10, ranges: [range(30, 60), range(7, 12)]).map(CMTimeGetSeconds) ?? 0, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(CameraDomain.frameDuration(fps: 20, ranges: [range(25, 30), range(1, 15)]).map(CMTimeGetSeconds) ?? 0, 1.0 / 25, accuracy: 1e-9)
+    }
+
+    func testFrameDurationWithNoRangesLeavesTheCameraAlone() {
+        XCTAssertNil(CameraDomain.frameDuration(fps: 10, ranges: []))
+    }
+
+    func testScaleKeepsSmallImagesAndAspect() {
+        let small = image(width: 100, height: 50)
+        XCTAssertEqual(CameraDomain.scale(small, maxLongEdge: 640).width, 100)
+        let tall = CameraDomain.scale(image(width: 1080, height: 1920), maxLongEdge: 480)
+        XCTAssertEqual(tall.height, 480)
+        XCTAssertEqual(tall.width, 270)
+    }
+}

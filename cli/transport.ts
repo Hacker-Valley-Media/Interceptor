@@ -171,6 +171,9 @@ export function pickTimeoutForAction(action: Action): number {
   if(action.type==='desktop_type'&&typeof action.secret==='string')return 240_000
   if(action.type==='desktop_authdialog'&&typeof action.secret==='string')return 240_000
   if(action.type === "desktop_auth")return 180_000
+  // camera start --prompt waits on the person answering the macOS camera prompt.
+  if(action.type==='macos_camera'&&action.sub==='start'&&action.prompt===true)return Math.max(INTERCEPTOR_TIMEOUT_MS,125_000)
+  if(action.type==='macos_camera'&&action.sub==='frame'&&typeof action.timeoutMs==='number')return Math.max(INTERCEPTOR_TIMEOUT_MS,action.timeoutMs+5_000)
   if (["macos_url_fetch","desktop_url_fetch"].includes(action.type)) {
     const deadline=typeof action.timeoutMs==="number"&&Number.isInteger(action.timeoutMs)&&action.timeoutMs>=100&&action.timeoutMs<=120000?action.timeoutMs:30000
     return Math.max(INTERCEPTOR_TIMEOUT_MS,deadline+5000)
@@ -287,7 +290,7 @@ export function timeoutMessage(actionType: string, ms: number): string {
     return `timeout: no response for '${actionType}' after ${seconds}s. The native credential service or authentication may still be pending. The outcome is unknown; inspect secret metadata before retrying a storage or removal operation.`
   }
   if (actionType.startsWith("macos_")) {
-    return `timeout: no response for '${actionType}' after ${seconds}s. The macOS bridge may be waiting on a TCC permission prompt (Microphone / Speech Recognition for listen/vad, Screen Recording for screenshot/capture/vision). Check System Settings → Privacy & Security.`
+    return `timeout: no response for '${actionType}' after ${seconds}s. The macOS bridge may be waiting on a TCC permission prompt (Microphone / Speech Recognition for listen/vad, Screen Recording for screenshot/capture/vision, Camera for camera start --prompt). Check System Settings → Privacy & Security.`
   }
   if (IOS_SVC_ACTION_TYPES.has(actionType)) {
     return `timeout: no response for '${actionType}' after ${seconds}s. The classic-Lockdown service didn't reply in time — a large fs/crash pull can exceed this; confirm the device is unlocked and 'interceptor ios status' shows it connected.`

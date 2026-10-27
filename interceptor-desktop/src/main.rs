@@ -184,6 +184,8 @@ fn handle(request: DesktopRequest) -> Value {
     if ["script_run","intent_dispatch"].contains(&verb) { return script::dispatch(&action); }
     // Warmup pre-launches an Apple Events target; Windows and Linux dispatch runs --jsc only.
     if verb == "intent_warmup" { return failure("unsupported_operation", "intent warmup prepares an Apple Events target on macOS; Windows and Linux intent dispatch runs --jsc JavaScript, which needs no warmup"); }
+    // The camera session lives in the Swift bridge (AVFoundation); no Windows or Linux provider.
+    if verb == "camera" { return failure("unsupported_operation", "camera is macOS-only: the Swift bridge holds the AVCaptureSession"); }
     if verb == "pdf" { return pdf::dispatch(&action); }
     if verb == "audio" { return audio::dispatch(&action); }
     if verb == "vad" { return vad::dispatch(&action); }
@@ -524,6 +526,13 @@ fn main() -> io::Result<()> {
             json!({"type":"desktop_notifications","sub":"categories","verb":"register","identifier":"owned","actions":"[{\"identifier\":\"x\",\"title\":\"x\",\"extra\":true}]"})] {
             let result=handle(serde_json::from_value(json!({"id":"notification-negative","protocolVersion":1,"action":action})).unwrap());
             assert_eq!(result["success"],false);assert_eq!(result["code"],"invalid_request","{result}");
+        }
+    }
+    #[test] fn camera_is_refused_as_macos_only() {
+        for sub in ["list", "start", "frame", "status", "stop"] {
+            let result=handle(serde_json::from_value(json!({"id":"camera","protocolVersion":1,"action":{"type":"desktop_camera","sub":sub}})).unwrap());
+            assert_eq!(result["success"],false);assert_eq!(result["code"],"unsupported_operation","{result}");
+            assert!(result["error"].as_str().is_some_and(|e| e.contains("camera is macOS-only")),"{result}");
         }
     }
     #[test] fn malformed_lifecycle_requests_refuse_before_platform_dispatch() {

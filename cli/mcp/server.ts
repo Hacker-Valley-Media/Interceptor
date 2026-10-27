@@ -61,7 +61,7 @@ const MACOS_VERBS: { v: string; s: string }[] = [
   { v: "calendar", s: "Calendar read/CRUD" }, { v: "reminders", s: "Reminders read/CRUD" }, { v: "contacts", s: "Contacts read/CRUD" },
   { v: "appintent", s: "App Intent donations" }, { v: "photos", s: "Photos read/CRUD" }, { v: "maps", s: "Maps search/directions" },
   { v: "location", s: "location services" }, { v: "music", s: "Music library/playback" }, { v: "share", s: "share menu (exfil)" },
-  { v: "update", s: "self-update check/status (update window)" }, { v: "trust", s: "TCC prompts" }, { v: "tcc", s: "TCC status/profile" },
+  { v: "update", s: "self-update check/status (update window)" }, { v: "camera", s: "camera frames, no window (list/start/frame/status/stop)" }, { v: "trust", s: "TCC prompts" }, { v: "tcc", s: "TCC status/profile" },
   { v: "runtime", s: "in-process app runtime (exec)" }, { v: "cdp", s: "Electron/Chromium CDP" },
 ]
 const IOS_VERBS: { v: string; s: string }[] = [

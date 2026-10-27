@@ -18,10 +18,14 @@ protocol MicrophoneAuthorizationProvider: Sendable {
     func requestAccess(_ completion: @escaping @Sendable (Bool) -> Void)
 }
 
-// Production-default wiring. Calls Apple's APIs directly.
+// Production-default wiring. Calls Apple's APIs directly. The same two calls
+// cover the camera: CameraDomain passes `.video` (Apple's supported media
+// types for these calls are `.video` and `.audio`).
 struct LiveMicrophoneAuthorizationProvider: MicrophoneAuthorizationProvider {
+    var mediaType: AVMediaType = .audio
+
     func currentStatus() -> AVAuthorizationStatus {
-        AVCaptureDevice.authorizationStatus(for: .audio)
+        AVCaptureDevice.authorizationStatus(for: mediaType)
     }
 
     func requestAccess(_ completion: @escaping @Sendable (Bool) -> Void) {
@@ -29,7 +33,7 @@ struct LiveMicrophoneAuthorizationProvider: MicrophoneAuthorizationProvider {
         // thread while the system is prompting the user for access."
         // We deliberately do not await the completion in TrustDomain; the
         // caller re-polls `authorizationStatus(for:)` to observe the result.
-        AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
+        AVCaptureDevice.requestAccess(for: mediaType, completionHandler: completion)
     }
 }
 
