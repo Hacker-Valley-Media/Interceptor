@@ -63,6 +63,7 @@ const SENTENCE = "Visit https://example.com or call 415-555-0100 tomorrow."
 const ALL_TRANSLATE_FLAGS = ["--from", "en", "--to", "es", "--sample", "Hello", "--json", '["Hello"]']
 
 const CAMERA_ON = "turns the camera on (disruptive on the shared Mac)"
+const CAMERA_SHARED = "reads or ends whatever camera session is live on the shared Mac, which may be another caller's"
 const CAMERA_PROMPT = "shows the macOS camera prompt, which only the person at the Mac can answer"
 export const media: Family[] = [
   {
@@ -264,7 +265,8 @@ export const media: Family[] = [
     async teardown(ctx) { await ctx.run(["sensitive", "monitor", "stop"]) },
   },
   // camera: macOS-only (the Swift bridge holds the AVFoundation session). Starting it on the
-  // shared Mac raises the camera prompt and lights the camera, so only reads and refusals run there.
+  // shared Mac raises the camera prompt and lights the camera, and frame or stop would touch
+  // another caller's session, so only list, status and flag refusals run there.
   {
     family: "camera",
     cases: [
@@ -274,8 +276,8 @@ export const media: Family[] = [
       { id: "camera.start.prompt", sub: "start", args: ["camera", "start", "--prompt"], expect: { ...macOnly(), darwin: skip(CAMERA_PROMPT) }, disruptive: true },
       { id: "camera.frame", sub: "frame", args: ctx => ["camera", "frame", "--out", join(ctx.dir, "camera.jpg"), "--max-long-edge", "640", "--quality", "80", "--timeout-ms", "3000"],
         flags: ["--out", "--max-long-edge", "--quality", "--timeout-ms"], expect: { ...macOnly(), darwin: skip(CAMERA_ON) }, disruptive: true },
-      { id: "camera.frame-not-started", sub: "frame", args: ["camera", "frame"], expect: { ...macOnly(), darwin: refuse("invalid_request") } },
-      { id: "camera.stop", sub: "stop", args: ["camera", "stop"], expect: macOnly() },
+      { id: "camera.frame-not-started", sub: "frame", args: ["camera", "frame"], expect: { ...macOnly(), darwin: skip(CAMERA_SHARED) } },
+      { id: "camera.stop", sub: "stop", args: ["camera", "stop"], expect: { ...macOnly(), darwin: skip(CAMERA_SHARED) } },
       { id: "camera.start.flag-rejected", sub: "start", args: ["camera", "start", "--out", "camera.jpg"], expect: { all: refuse() } },
     ],
   },
