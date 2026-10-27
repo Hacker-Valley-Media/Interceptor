@@ -54,6 +54,8 @@ describe("macos camera", () => {
 
   test("flag values are required, bounded integers, and not repeated", () => {
     expect(() => parse("frame", "--out")).toThrow("--out requires a value")
+    expect(() => parse("frame", "--out", "")).toThrow("--out requires a value")
+    expect(() => parse("start", "--device", "")).toThrow("--device requires a value")
     expect(() => parse("start", "--fps", "--device")).toThrow("--fps requires a value")
     expect(() => parse("start", "--fps", "0")).toThrow("--fps must be an integer from 1 to 30")
     expect(() => parse("start", "--fps", "60")).toThrow("--fps must be an integer from 1 to 30")

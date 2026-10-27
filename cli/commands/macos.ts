@@ -871,7 +871,8 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         if (!flags.includes(flag)) throw new Error(`camera ${op} does not take ${flag}`)
         if (filtered.indexOf(flag) !== i) throw new Error(`repeated flag: ${flag}`)
         if (flag === "--prompt") continue
-        if (filtered[i + 1] === undefined || filtered[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`)
+        // An empty value counts as missing: --device "" would start the default camera and --out "" would return the frame inline.
+        if (!filtered[i + 1] || filtered[i + 1].startsWith("--")) throw new Error(`${flag} requires a value`)
         i++
       }
       const action: Action = { type: "macos_camera", sub: op }
