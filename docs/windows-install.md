@@ -4,6 +4,14 @@ Interceptor for Windows comes in two signed installers: Browser-only (`Intercept
 
 ## Install
 
+One command does steps 1 to 3 for the latest release, checks the signature first, and adds the agent skills and the MCP server (in PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Hacker-Valley-Media/Interceptor/main/scripts/get-interceptor.ps1 | iex
+```
+
+To do it by hand:
+
 1. Download the architecture-matched `Interceptor-Browser-X.Y.Z-windows-x64.exe` or `Interceptor-Browser-X.Y.Z-windows-arm64.exe` from the matching GitHub release.
 2. Verify that Windows reports the publisher as **Hacker Valley Media**. Do not continue with an unsigned or differently signed production artifact.
 3. Run Setup. New installs use `%LOCALAPPDATA%\Programs\Interceptor`; upgrades and repairs preserve the existing same-product directory.

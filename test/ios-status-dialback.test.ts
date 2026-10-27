@@ -3,6 +3,7 @@ import { IosManager } from "../daemon/ios/manager"
 
 test("ios_status carries the resolver's dialBack + dialBackVia on a live context", async () => {
   const manager = new IosManager({ emit() {}, wsPort: 19222 }) as any
+  manager.probeRemote = async () => true // no network: the reachability probe is covered in ios-device-started-runner.test.ts
   const asked: string[] = []
   manager.resolveDialBack = async (kind: string, udid: string) => {
     asked.push(`${kind}:${udid}`)
@@ -17,11 +18,13 @@ test("ios_status carries the resolver's dialBack + dialBackVia on a live context
   const mine = (r.data as any[]).find((d) => d.contextId === "ios:test-dialback")
   expect(mine.dialBack).toBe("ws://100.1.2.3:19222")
   expect(mine.dialBackVia).toBe("vpn")
+  expect(mine.dialBackReachable).toBe(true)
   expect(asked).toContain("device:TEST-DIALBACK")
 })
 
 test("ios_status reports the dial-back the live runner was launched with, not a fresh resolution", async () => {
   const manager = new IosManager({ emit() {}, wsPort: 19222 }) as any
+  manager.probeRemote = async () => true // no network: the reachability probe is covered in ios-device-started-runner.test.ts
   manager.resolveDialBack = async () => ({ url: "ws://100.9.9.9:19222", host: "100.9.9.9", via: "vpn" })
   manager.contexts.set("ios:test-assigned", {
     descriptor: { contextId: "ios:test-assigned", udid: "TEST-ASSIGNED", name: "t", kind: "device", wayIn: "runner", productVersion: "27.0" },

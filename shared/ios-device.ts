@@ -128,6 +128,8 @@ export type IosDeviceState = {
   /** ws://host:port the runner is handed to dial back, and which ladder rung chose it. */
   dialBack?: string
   dialBackVia?: IosDialBackVia
+  /** Whether this Mac answered a TCP connect on `dialBack` (LAN and VPN dial-backs only). */
+  dialBackReachable?: boolean
   /** Who started the live runner. `mac` = this Mac launched it; `device` = opened on the device. */
   launchedBy?: IosLaunchedBy
   /** A launch from this Mac delivered the saved connection, so the runner can be opened on the device. */

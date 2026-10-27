@@ -26,6 +26,17 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.6">
+    <h2>Interceptor 2.1.6</h2>
+    <time datetime="2026-10-27">October 27, 2026</time>
+    <ul>
+      <li>New: <code>interceptor macos camera</code> reads frames from a Mac camera with no window on screen (<code>list</code>, <code>start</code>, <code>frame</code>, <code>status</code>, <code>stop</code>). A plain <code>camera start</code> never shows the macOS camera prompt; <code>camera start --prompt</code> shows it once and then gives focus back to the app you were in. The camera runs at the frame rate you ask for. Thanks to Pedram Amini for the feature in #313.</li>
+      <li>When the iPhone runner cannot reach your Mac, the error now says why, in about 15 seconds: the address it tried and the network error, instead of "xcodebuild exited with code 0". Before launching, your Mac also checks that it answers on the address it gives the phone, and <code>interceptor ios status</code> shows that check as <code>dialBackReachable</code>. Run <code>interceptor ios refresh</code> to get a runner that reports its reason (#314).</li>
+      <li>Install with one command: <code>curl -fsSL https://raw.githubusercontent.com/Hacker-Valley-Media/Interceptor/main/scripts/get-interceptor.sh | bash</code> on a Mac or Linux, or the PowerShell line in the README on Windows. It checks the signature before installing, then adds the agent skills and offers the MCP server.</li>
+      <li>On Windows and Linux, the updater no longer checks for updates over and over when it cannot save the time of its last check. It now waits a day either way.</li>
+      <li><code>interceptor mcp status --json</code> prints JSON again instead of the text table.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="2.1.5">
     <h2>Interceptor 2.1.5</h2>
     <time datetime="2026-10-21">October 21, 2026</time>

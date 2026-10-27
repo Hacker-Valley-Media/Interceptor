@@ -111,6 +111,10 @@ async function verifyLive(version: string): Promise<void> {
       const sha = createHash("sha256").update(bytes).digest("hex")
       if (bytes.length !== artifact.length || sha !== artifact.sha256) throw new Error(`${artifact.url}: ${bytes.length} bytes ${sha} differ from the signed ${artifact.length} ${artifact.sha256}`)
       console.log(`verified ${os}/${arch}: ${artifact.file} ${artifact.length} bytes ${sha}`)
+      const latest = `${HOST}/latest/${artifact.file.replace(`-${version}-`, "-")}`
+      const location = (await fetch(latest, { redirect: "manual" })).headers.get("location") ?? ""
+      if (!location.endsWith(`/v${version}/${artifact.file}`)) throw new Error(`${latest} redirects to "${location}", not the ${version} release`)
+      console.log(`verified ${latest}`)
     }
   }
 }
@@ -143,5 +147,11 @@ if (import.meta.main) {
     mkdirSync(join(publicDir, os), { recursive: true })
     writeFileSync(`${target}.tmp`, text); renameSync(`${target}.tmp`, target)
     console.log(`wrote ${target} (${statSync(target).size} bytes): ${os} ${version}, ${ARCHES.join(" + ")}`)
+  }
+  // The host's /latest/Interceptor-{Browser,Full}-<os>-<arch> links redirect to the GitHub release this names.
+  if (!process.argv.includes("--dry-run")) {
+    mkdirSync(join(publicDir, "latest"), { recursive: true })
+    writeFileSync(join(publicDir, "latest", "desktop.txt"), `${version}\n`)
+    console.log(`wrote ${join(publicDir, "latest", "desktop.txt")}: ${version}`)
   }
 }

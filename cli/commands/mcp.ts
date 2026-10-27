@@ -85,9 +85,10 @@ function runStatus(jsonMode: boolean): void {
   }
 }
 
-export async function runMcpCommand(argv: string[]): Promise<void> {
+export async function runMcpCommand(argv: string[], opts: { jsonMode?: boolean } = {}): Promise<void> {
   const sub = argv[1] || "help"
-  const jsonMode = argv.includes("--json")
+  // cli/index.ts strips global flags (--json among them) from argv, so it passes jsonMode here.
+  const jsonMode = opts.jsonMode ?? argv.includes("--json")
 
   if (sub === "install") return runInstall(argv, jsonMode, false)
   if (sub === "uninstall") return runInstall(argv, jsonMode, true)

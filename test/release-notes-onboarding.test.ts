@@ -33,12 +33,12 @@ function visibleVersions(document: Document): string[] {
 
 describe("cumulative Sparkle release notes", () => {
   test("one-version-behind shows only the target release", () => {
-    expect(visibleVersions(releaseDocument("2.1.3"))).toEqual(["2.1.5"])
+    expect(visibleVersions(releaseDocument("2.1.5"))).toEqual(["2.1.6"])
   })
 
   test("older install shows every newer release", () => {
     expect(visibleVersions(releaseDocument("1.0.3"))).toEqual([
-      "2.1.5", "2.1.3", "2.1.2", "2.1.1", "2.1.0", "2.0.0", "1.0.24", "1.0.21", "1.0.19", "1.0.17", "1.0.15", "1.0.13", "1.0.11", "1.0.9",
+      "2.1.6", "2.1.5", "2.1.3", "2.1.2", "2.1.1", "2.1.0", "2.0.0", "1.0.24", "1.0.21", "1.0.19", "1.0.17", "1.0.15", "1.0.13", "1.0.11", "1.0.9",
     ])
   })
 
@@ -225,6 +225,18 @@ describe("Sparkle release-note publisher", () => {
     const feed = readFileSync(join(fixture.host, "public/appcast.xml"), "utf8")
     expect(feed).toContain("Interceptor (Full) 2.0.0")
     expect(feed).not.toContain("hardwareRequirements")
+  })
+
+  // The host's /latest/*.pkg links redirect to the release latest/macos.txt names.
+  test("moves the latest links forward and never back", () => {
+    const fixture = makePublishFixture(["2.0.0", "1.0.0"])
+    const latest = join(fixture.host, "public/latest/macos.txt")
+    const newer = fixture.run("2.0.0")
+    expect(newer.status, output(newer)).toBe(0)
+    expect(readFileSync(latest, "utf8")).toBe("2.0.0\n")
+    const older = fixture.run("1.0.0")
+    expect(older.status, output(older)).toBe(0)
+    expect(readFileSync(latest, "utf8")).toBe("2.0.0\n")
   })
 })
 

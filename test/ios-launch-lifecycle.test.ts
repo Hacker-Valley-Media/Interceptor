@@ -14,7 +14,7 @@ import { captureShell } from "./helpers/shell-capture"
 
 // ── R2 / R3: launchRunner against faked tools (subprocess so mock.module never leaks) ──
 
-type LaunchMode = "identity" | "exit65" | "alive"
+type LaunchMode = "identity" | "exit65" | "alive" | "unreachable"
 
 async function launchIn(mode: LaunchMode): Promise<{ code: number; out: string; err: string }> {
   const toolsPath = resolve("daemon/ios/tools.ts")
@@ -43,6 +43,8 @@ async function launchIn(mode: LaunchMode): Promise<{ code: number; out: string; 
     const manager = new IosManager({ emit() {}, wsPort: 0 });
     manager.registerTimeoutMs = 400;
     manager.resolveDialBack = async () => ({ url: "ws://100.1.2.3:19222", host: "100.1.2.3", via: "vpn" });
+    // Nothing answers on the dial-back address in "identity" (signing must still be reported first) and "unreachable".
+    manager.probeRemote = async () => mode !== "identity" && mode !== "unreachable";
     const descriptor = { contextId: "ios:test-launch", udid: "TEST-LAUNCH", name: "t", kind: "device", wayIn: "runner", needsTunnel: false };
     const procs = [];
     const started = Date.now();
@@ -95,6 +97,16 @@ describe("launchRunner validates identity before spawning and reports an early e
     expect(spawned).toBe(1)
     expect(procs).toBe(1)
     expect(ms).toBeLessThan(2000)
+  })
+
+  test("a dial-back address this Mac does not answer on fails before XCTest starts", async () => {
+    const { code, out, err } = await launchIn("unreachable")
+    expect(code, err).toBe(0)
+    const { r, spawned, ms } = lastJson(out)
+    expect(r.ok).toBe(false)
+    expect(r.error).toStartWith("this Mac does not answer on ws://100.1.2.3:19222 (vpn)")
+    expect(spawned).toBe(0)
+    expect(ms).toBeLessThan(1_000)
   })
 
   test("a launch process that stays alive still hits the registration timeout with the dial-back hint", async () => {
