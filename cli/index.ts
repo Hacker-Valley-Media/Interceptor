@@ -334,7 +334,7 @@ async function main() {
   if (MCP_CMDS.has(cmd)) {
     // Dynamic import keeps the MCP SDK out of the hot path for every other verb.
     const { runMcpCommand } = await import("./commands/mcp")
-    await runMcpCommand(filtered)
+    await runMcpCommand(filtered, { jsonMode })
     return
   }
 

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { captureShell } from "./helpers/shell-capture"
 
 import {
   detectClients, interceptorInvocation, mergeJson, mergeToml, serverEntry, stripTomlTable,
@@ -90,5 +91,19 @@ describe("detectClients", () => {
     expect(ids).toContain("cursor")
     expect(ids).not.toContain("codex")
     expect(ids).not.toContain("claude")
+  })
+})
+
+// cli/index.ts strips --json from the argv it hands commands; mcp must still print JSON.
+describe("interceptor mcp status --json through the CLI entry point", () => {
+  test("prints a JSON array, not the text table", () => {
+    const home = mkdtempSync(join(tmpdir(), "mcp-status-json-"))
+    mkdirSync(join(home, ".codex"))
+    const r = captureShell(process.execPath, [join(import.meta.dir, "../cli/index.ts"), "mcp", "status", "--json"], {
+      timeout: 30000,
+      env: { ...process.env, HOME: home, CODEX_HOME: join(home, ".codex"), INTERCEPTOR_NO_SKILLS_HINT: "1" },
+    })
+    const rows = JSON.parse(String(r.stdout)) as { id: string; detected: boolean; configured: boolean }[]
+    expect(rows.find(row => row.id === "codex")).toMatchObject({ detected: true, configured: false })
   })
 })
