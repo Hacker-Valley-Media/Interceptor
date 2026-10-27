@@ -9,8 +9,8 @@
   <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
   <key>CFBundleDisplayName</key><string>Interceptor Companion</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.1.5</string>
-  <key>CFBundleVersion</key><string>2.1.5</string>
+  <key>CFBundleShortVersionString</key><string>2.1.6</string>
+  <key>CFBundleVersion</key><string>2.1.6</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
