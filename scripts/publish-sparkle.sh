@@ -472,7 +472,10 @@ echo "==> Step 5: Per-mode publish"
 # GitHub release this file names. Republishing an older version leaves it alone.
 LATEST_MAC="$HOST_PUBLIC/latest/macos.txt"
 CURRENT_LATEST="$(cat "$LATEST_MAC" 2>/dev/null || true)"
-if [[ "$(printf '%s\n' "$CURRENT_LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
+if (( ! PUBLISH_BROWSER || ! PUBLISH_FULL )); then
+  # One pointer serves both editions, so it moves only when both packages are published.
+  echo "    latest/macos.txt keeps ${CURRENT_LATEST:-nothing}: this run did not publish both editions"
+elif [[ "$(printf '%s\n' "$CURRENT_LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
   echo "    latest/macos.txt keeps $CURRENT_LATEST, newer than $VERSION"
 elif (( DRY_RUN )); then
   echo "    DRY: write $VERSION to $LATEST_MAC"
