@@ -281,8 +281,11 @@ main() {
   if [[ $mcp == ask ]]; then
     # Only AI apps that do not have the server yet: a re-run leaves an existing registration as it is.
     local targets ids labels
-    # A failing `mcp status` means no AI apps to offer, not a failed install.
-    targets="$(mcp_targets "$cli")" || targets="|"
+    # A failing `mcp status` skips the MCP step, not the install.
+    if ! targets="$(mcp_targets "$cli")"; then
+      echo "warning: could not list AI apps, so the MCP server was not registered; run: interceptor mcp status" >&2
+      targets="|"; failed=1
+    fi
     ids="${targets%%|*}"; labels="${targets#*|}"
     if [[ -z "$ids" ]]; then
       mcp=no
