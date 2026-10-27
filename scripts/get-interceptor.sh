@@ -281,7 +281,8 @@ main() {
   if [[ $mcp == ask ]]; then
     # Only AI apps that do not have the server yet: a re-run leaves an existing registration as it is.
     local targets ids labels
-    targets="$(mcp_targets "$cli")"
+    # A failing `mcp status` means no AI apps to offer, not a failed install.
+    targets="$(mcp_targets "$cli")" || targets="|"
     ids="${targets%%|*}"; labels="${targets#*|}"
     if [[ -z "$ids" ]]; then
       mcp=no
