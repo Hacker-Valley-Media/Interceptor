@@ -226,6 +226,18 @@ describe("Sparkle release-note publisher", () => {
     expect(feed).toContain("Interceptor (Full) 2.0.0")
     expect(feed).not.toContain("hardwareRequirements")
   })
+
+  // The host's /latest/*.pkg links redirect to the release latest/macos.txt names.
+  test("moves the latest links forward and never back", () => {
+    const fixture = makePublishFixture(["2.0.0", "1.0.0"])
+    const latest = join(fixture.host, "public/latest/macos.txt")
+    const newer = fixture.run("2.0.0")
+    expect(newer.status, output(newer)).toBe(0)
+    expect(readFileSync(latest, "utf8")).toBe("2.0.0\n")
+    const older = fixture.run("1.0.0")
+    expect(older.status, output(older)).toBe(0)
+    expect(readFileSync(latest, "utf8")).toBe("2.0.0\n")
+  })
 })
 
 describe("macOS package conclusion extension routes", () => {

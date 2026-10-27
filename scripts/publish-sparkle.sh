@@ -468,7 +468,21 @@ echo "==> Step 5: Per-mode publish"
 (( PUBLISH_BROWSER )) && publish_to_sparkle "browser-only" "$SIGNED_BROWSER_PKG"
 (( PUBLISH_FULL    )) && publish_to_sparkle "full"         "$SIGNED_FULL_PKG"
 
-# ── Step 6: Deploy host (optional) ────────────────────────────────────────────
+# The host's /latest/Interceptor-{Browser,Full,Safari}.pkg links redirect to the
+# GitHub release this file names. Republishing an older version leaves it alone.
+LATEST_MAC="$HOST_PUBLIC/latest/macos.txt"
+CURRENT_LATEST="$(cat "$LATEST_MAC" 2>/dev/null || true)"
+if [[ "$(printf '%s\n' "$CURRENT_LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
+  echo "    latest/macos.txt keeps $CURRENT_LATEST, newer than $VERSION"
+elif (( DRY_RUN )); then
+  echo "    DRY: write $VERSION to $LATEST_MAC"
+else
+  mkdir -p "$HOST_PUBLIC/latest"
+  echo "$VERSION" > "$LATEST_MAC"
+  echo "    latest/macos.txt → $VERSION"
+fi
+
+# ── Step 6: Deploy host (optional)────────────────────────────────────────────
 echo "==> Step 6: Deploying update host"
 if (( ! DEPLOY )); then
   echo "    --no-deploy passed; appcast.xml updated locally, deploy skipped."
@@ -521,6 +535,7 @@ echo "  feed:   ${DOWNLOAD_URL_PREFIX}appcast.xml"
 echo "  notes:  ${DOWNLOAD_URL_PREFIX}${RELEASE_NOTES_BASENAME}"
 (( PUBLISH_BROWSER )) && echo "  browser: ${DOWNLOAD_URL_PREFIX}Interceptor-Browser-${VERSION}.pkg"
 (( PUBLISH_FULL    )) && echo "  full:    ${DOWNLOAD_URL_PREFIX}Interceptor-Full-${VERSION}.pkg"
+echo "  latest:  ${DOWNLOAD_URL_PREFIX}latest/Interceptor-Full.pkg (and Browser, Safari)"
 if (( DRY_RUN )); then
   echo ""
   echo "DRY-RUN complete — no changes made."
