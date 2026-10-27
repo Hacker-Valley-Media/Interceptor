@@ -48,6 +48,54 @@ Use it from any agent that can run shell commands, or through its built-in [Mode
 
 ## Get started
 
+### Install with one command
+
+macOS (Apple silicon) and Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Hacker-Valley-Media/Interceptor/main/scripts/get-interceptor.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Hacker-Valley-Media/Interceptor/main/scripts/get-interceptor.ps1 | iex
+```
+
+It asks two questions. Press Enter for both to get everything:
+
+1. **Full or Browser only?** Full (the default) is your browser plus desktop apps, and the iPhone on a Mac. Browser only is web pages.
+2. **Register the MCP server?** Yes is the default. It lists the AI apps it found that don't have the server yet (Claude Code, Codex, Cursor, Gemini CLI, Claude Desktop) and turns every tool on.
+
+It downloads the latest release, checks its SHA-256 and the Hacker Valley Media signature, and installs it with no Installer wizard. Nothing installs if a check fails. It adds Interceptor's skills to every AI agent on your computer. A Mac asks for your password once. Run it again any time to update: it keeps your edition and leaves an existing MCP setup alone.
+
+Options go after `bash -s --`, for example `curl -fsSL … | bash -s -- --browser --no-mcp`:
+
+| Option | Does |
+|---|---|
+| `--full`, `--browser` | Pick the edition instead of being asked. Full is the default. |
+| `--mcp`, `--no-mcp` | Register the MCP server in every AI app it finds, or skip it, instead of being asked (`--mcp=claude,codex` for some). |
+| `--safari` | macOS: also install the Safari extension package. |
+| `--no-skills` | Skip adding the skills. |
+
+On Windows, pass the same as parameters: `& ([scriptblock]::Create((irm <url>))) -Browser -NoMcp`.
+
+"Every tool on" means the agent can also run the actions that are off by default, such as quitting apps, writing files, and running scripts in a page (`INTERCEPTOR_MCP_ALLOW=all,raw`). The agent still marks each of those calls as confirmed. For reading and clicking only, run `interceptor mcp install` afterward.
+
+The last step is the browser extension. On a Mac, the Interceptor window opens by itself and walks you through it. On Windows, the Chrome Web Store page opens. With no terminal to answer (an AI agent running the command), it takes the defaults, and a Mac opens the verified package in Installer for the password.
+
+**Prefer to run each step yourself?** On a Mac, the same install with Apple's own tools:
+
+```bash
+curl -fLo /tmp/Interceptor.pkg https://updates.hackervalley.media/latest/Interceptor-Full.pkg
+spctl -a -vv -t install /tmp/Interceptor.pkg && sudo installer -pkg /tmp/Interceptor.pkg -target /
+interceptor skills adopt
+```
+
+`spctl` is Apple's Gatekeeper check: it prints `Notarized Developer ID` and `HACKER VALLEY MEDIA, LLC (TPWBZD35WW)`, and if the package is not signed and notarized, `installer` never runs. For the Browser edition, use `Interceptor-Browser.pkg`.
+
+### Download an installer
+
 Download an installer from [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest). Start with Browser for web tasks, or Full for native Mac and iPhone work. The macOS packages are built for Apple silicon. On an Intel Mac, build from source (see [Development and contributions](#development-and-contributions)).
 
 | Host / package | What it enables |
