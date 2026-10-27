@@ -86,11 +86,12 @@ export function runJson<T = unknown>(cmd: string, args: string[], opts: { timeou
  */
 export function spawnLongLived(
   cmd: string, args: string[], env?: Record<string, string>,
-  opts: { stderr?: "ignore" | "pipe" } = {},
+  opts: { stderr?: "ignore" | "pipe"; stdout?: "ignore" | "pipe" } = {},
 ): Bun.Subprocess {
   return Bun.spawn([cmd, ...args], {
     stdin: "ignore",
-    stdout: "ignore",
+    // A piped stdout must be drained for the life of the process (see watchLaunchProcess).
+    stdout: opts.stdout ?? "ignore",
     // "pipe" lets a launcher report WHY a child died (xcodebuild's signing error)
     // instead of surfacing the death as a later, unrelated timeout.
     stderr: opts.stderr ?? "ignore",
@@ -671,6 +672,11 @@ export function prepareXctestrunWithEnv(xctestrunPath: string, env: Record<strin
   try { doc = JSON.parse(asJson.stdout) } catch { return undefined }
 
   const applyToTarget = (t: Record<string, unknown>) => {
+    // No automatic screenshots or diagnostics when the test fails: nothing reads
+    // them, and collecting them held a failed runner's exit (and its error) for
+    // about 30 s.
+    t.SystemAttachmentLifetime = "keepNever"
+    t.UserAttachmentLifetime = "keepNever"
     t.EnvironmentVariables = { ...(t.EnvironmentVariables as object ?? {}), ...env }
     t.TestingEnvironmentVariables = { ...(t.TestingEnvironmentVariables as object ?? {}), ...env }
     if (bundleId) {

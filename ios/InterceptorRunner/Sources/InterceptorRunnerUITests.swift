@@ -62,6 +62,12 @@ final class InterceptorRunnerUITests: XCTestCase {
         while !agent.finished {
             RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
         }
+        // A Mac launch that never got through (or lost the Mac for good) fails the
+        // test with the address and the error, so xcodebuild exits non-zero and the
+        // daemon can say why instead of reporting a passing test.
+        if let failure = agent.failure {
+            XCTFail(failure, file: "InterceptorRunnerUITests.swift", line: #line)
+        }
     }
 }
 
@@ -185,6 +191,12 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
     private let conn: RunnerConnection
     /// Set when the socket is gone for good; the test's main run loop watches it.
     private(set) var finished = false
+    /// Why a Mac-launched runner gave up; testRunner turns it into XCTFail.
+    var failure: String? { locked { _failure } }
+    private var _failure: String?
+    /// The last connection error and whether the Mac ever accepted this runner (delegate queue).
+    private var lastError = "no error reported"
+    private var registered = false
 
     private var session: URLSession!
     // Written on the reconnect queue; read from the main, delegate, and stream queues.
@@ -302,7 +314,9 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
                 // background delegate queue, so the socket stays responsive.
                 DispatchQueue.main.async { self.handle(obj) }
                 self.receive() // re-arm immediately
-            case .failure:
+            case .failure(let error):
+                let e = error as NSError
+                self.lastError = "\(e.localizedDescription) (\(e.domain) \(e.code))"
                 self.handleDisconnect()
             }
         }
@@ -311,7 +325,11 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
     /// The daemon's reply to registration. A device-started runner checks the
     /// Mac's proof, then steps aside to the Home Screen once.
     private func handleAck(_ obj: [String: Any]) {
-        guard conn.deviceStarted else { return }
+        guard conn.deviceStarted else {
+            if obj["ok"] as? Bool == true { registered = true }
+            else { lastError = "the Mac refused the registration: \(obj["error"] ?? "no reason given")" }
+            return
+        }
         let nonce = locked { _nonce }
         if obj["ok"] as? Bool == true, let proof = obj["serverProof"] as? String, proof == conn.hmac("server", [nonce]) {
             locked { _authenticated = true }
@@ -355,6 +373,12 @@ final class WSAgent: NSObject, URLSessionWebSocketDelegate {
         } else if reconnects <= maxReconnects {
             DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.connect() }
         } else {
+            let url = locked { _currentURL }
+            let why = registered
+                ? "InterceptorRunner lost its connection to \(url) and could not reconnect in \(maxReconnects) tries: \(lastError)"
+                : "InterceptorRunner could not reach \(url) in \(maxReconnects + 1) tries: \(lastError)"
+            locked { _failure = why }
+            NSLog("%@", why)
             finished = true
         }
     }

@@ -503,6 +503,19 @@ export class IosManager {
     return d
   }
 
+  /**
+   * Before launching XCTest: when the runner is handed a LAN or VPN address and
+   * nothing on this Mac answers there, say so now instead of after the launch.
+   * Loopback (simulators) is the main server's own address, and an
+   * INTERCEPTOR_WS_URL override may name a host only the phone can resolve, so
+   * neither is probed.
+   */
+  private async dialBackUnreachable(d: DialBack): Promise<string | undefined> {
+    if (!probedDialBack(d) || await this.probeRemote(d)) return undefined
+    return `this Mac does not answer on ${d.url} (${d.via}), so InterceptorRunner could not connect to it. `
+      + `The daemon could not listen on that address: check that it still belongs to this Mac, and look for a line starting "ios runner listener" in the daemon log.`
+  }
+
   /** The daemon answers a runner on a LAN or VPN address only through its runner-only listener there. */
   private listenOn(d: DialBack | undefined): void {
     if (d && d.via !== "override" && classifyDialBackHost(d.host) !== "loopback") this.deps.listenRunner?.(d.host)
@@ -837,6 +850,8 @@ export class IosManager {
     const udid = descriptor.udid
     const token = crypto.randomUUID()
     const dialBack = await this.resolveDialBack(descriptor.kind, udid)
+    const unreachable = await this.dialBackUnreachable(dialBack)
+    if (unreachable) return { ok: false, error: unreachable }
     const env: RunnerEnv = this.runnerLaunchEnv(descriptor, dialBack, token)
     try {
       if (descriptor.needsTunnel) {
@@ -916,7 +931,7 @@ export class IosManager {
 
     const procs: Bun.Subprocess[] = []
     const brought = await this.launchRunner(descriptor, procs)
-    if (!brought.ok) { for (const p of procs) killChild(p); return { ok: false, error: this.withDeviceStartHint(udid, brought.error) } }
+    if (!brought.ok) { for (const p of procs) killChild(p); return { ok: false, error: descriptor.kind === "simulator" ? brought.error : this.withDeviceStartHint(udid, brought.error) } }
     const ctx: IosDeviceContext = {
       descriptor, channel: brought.channel, registry: new IosRefRegistry(),
       wdaPort: 0, tunnel: brought.tunnel, procs, registeredAt: Date.now(), dialBack: brought.dialBack,
@@ -951,7 +966,7 @@ export class IosManager {
     if (!deviceStartReady(udid)) return error
     const remote = this.remoteDialBackFor()
     if (!remote) return error
-    return `${error}. Away from this Mac's network? Open InterceptorRunner on the device (tap its icon); it connects back over ${remote.url}.`
+    return `${error.replace(/\.+$/, "")}. Away from this Mac's network? Open InterceptorRunner on the device (tap its icon); it connects back over ${remote.url}.`
   }
 
   /**
@@ -987,12 +1002,15 @@ export class IosManager {
     const env = this.runnerLaunchEnv(descriptor, dialBack, token)
     const prepared = prepareXctestrunWithEnv(xctestrun, env as Record<string, string>, this.runnerBundleId(udid))
     if (!prepared) return { ok: false, error: "could not prepare the agent launch descriptor" }
+    // Last check before XCTest starts; signing and staging problems are reported first.
+    const unreachable = await this.dialBackUnreachable(dialBack)
+    if (unreachable) return { ok: false, error: unreachable }
 
     if (descriptor.kind === "simulator") await runAsync("/usr/bin/xcrun", ["simctl", "boot", udid])
     const destination = descriptor.kind === "simulator" ? `platform=iOS Simulator,id=${udid}` : `id=${udid}`
-    const proc = spawnLongLived("/usr/bin/xcrun", ["xcodebuild", "test-without-building", "-xctestrun", prepared, "-destination", destination], undefined, { stderr: "pipe" })
+    const proc = spawnLongLived("/usr/bin/xcrun", ["xcodebuild", "test-without-building", "-xctestrun", prepared, "-destination", destination], undefined, { stderr: "pipe", stdout: "pipe" })
     procs.push(proc)
-    this.watchLaunchProcess(udid, proc)
+    this.watchLaunchProcess(udid, proc, dialBack)
 
     try {
       const channel = await this.awaitRunner(udid, token, this.registerTimeoutMs, Boolean(env.INTERCEPTOR_DEVICE_SECRET))
@@ -1008,14 +1026,20 @@ export class IosManager {
    * of the registration timeout. During a reconnect grace window: the runner is
    * gone for good, so end the window without waiting for it to lapse.
    */
-  private watchLaunchProcess(udid: string, proc: Bun.Subprocess): void {
+  private watchLaunchProcess(udid: string, proc: Bun.Subprocess, dialBack?: DialBack): void {
     const stderr = proc.stderr
     const tail: Promise<string> = stderr && typeof stderr !== "number"
       ? new Response(stderr as ReadableStream).text().then((t) => t.trim().split("\n").slice(-6).join("\n")).catch(() => "")
       : Promise.resolve("")
+    // xcodebuild prints the runner's XCTFail on stdout. Keep only that line: the
+    // stream runs for the whole session and must be drained, never buffered.
+    const stdout = proc.stdout
+    const failure: Promise<string | undefined> = stdout && typeof stdout !== "number"
+      ? lastRunnerFailure(stdout as ReadableStream<Uint8Array>)
+      : Promise.resolve(undefined)
     void proc.exited.then(async (code) => {
-      const detail = await tail
-      const err = new Error(`xcodebuild exited with code ${code} before the runner registered${detail ? `:\n${detail}` : ""}`)
+      const [detail, runnerSaid] = await Promise.all([tail, failure])
+      const err = new Error(launchExitMessage(code, detail, runnerSaid, dialBack))
       if (this.failPendingRunner(udid, err)) return
       const ctx = this.contexts.get(iosContextId(udid))
       if (ctx?.grace && ctx.procs.includes(proc)) this.settleGrace(ctx, false)
@@ -1108,6 +1132,13 @@ export class IosManager {
     const remote = this.remoteDialBackFor()
     this.listenOn(remote)
     const remoteFields = remote ? { remoteDialBack: remote.url, remoteReachable: await this.probeRemote(remote) } : {}
+    // Whether this Mac answers on each device's dial-back address (LAN and VPN only).
+    const probed = new Map<string, Promise<boolean>>()
+    const reachable = async (d: DialBack) => {
+      if (!probedDialBack(d)) return {}
+      if (!probed.has(d.url)) probed.set(d.url, this.probeRemote(d))
+      return { dialBackReachable: await probed.get(d.url)! }
+    }
     for (const ctx of this.contexts.values()) {
       // A runner keeps the URL it was launched with; re-resolving after a route change would report an address it never had.
       const dial = ctx.dialBack ?? await this.resolveDialBack(ctx.descriptor.kind, ctx.descriptor.udid)
@@ -1125,6 +1156,7 @@ export class IosManager {
         registeredAt: ctx.registeredAt,
         dialBack: dial.url,
         dialBackVia: dial.via,
+        ...await reachable(dial),
         launchedBy: ctx.launchedBy ?? "mac",
         deviceStartReady: deviceStartReady(ctx.descriptor.udid),
         ...remoteFields,
@@ -1145,7 +1177,7 @@ export class IosManager {
       data.push({
         contextId, udid: d.udid, name: d.name, kind: d.kind, wayIn: d.wayIn,
         productVersion: d.productVersion, tunnel: "none", connection: "disconnected", registeredAt: 0,
-        dialBack: dial.url, dialBackVia: dial.via, deviceStartReady: deviceStartReady(d.udid), ...remoteFields,
+        dialBack: dial.url, dialBackVia: dial.via, ...await reachable(dial), deviceStartReady: deviceStartReady(d.udid), ...remoteFields,
       })
     }
     return { success: true, data }
@@ -1468,6 +1500,44 @@ async function pollHealthy(channel: IosDeviceChannel, timeoutMs: number): Promis
  * before the launch (usbmuxd cannot see the phone, tunnel down, DTX handshake)
  * passes through unchanged because no runner was ever told to dial anything.
  */
+/** LAN and VPN dial-backs are served by the runner-only listener and worth probing; loopback and overrides are not. */
+export function probedDialBack(d: DialBack): boolean {
+  return d.via !== "override" && classifyDialBackHost(d.host) !== "loopback"
+}
+
+/** The text after "testRunner] : failed - " in xcodebuild's output: the runner's own XCTFail. */
+export const RUNNER_FAILURE_LINE = /testRunner\] : failed - (.+)$/
+
+/** Drain xcodebuild's stdout line by line and return the last runner failure, if any. */
+export async function lastRunnerFailure(stream: ReadableStream<Uint8Array>): Promise<string | undefined> {
+  let last: string | undefined
+  let rest = ""
+  const decoder = new TextDecoder()
+  try {
+    for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
+      const lines = (rest + decoder.decode(chunk, { stream: true })).split("\n")
+      rest = lines.pop() ?? ""
+      // A device's lines end in \r\n (a simulator's in \n); `.` does not match \r.
+      for (const line of lines) { const m = RUNNER_FAILURE_LINE.exec(line.replace(/\r$/, "")); if (m) last = m[1].trim() }
+      if (rest.length > 65_536) rest = "" // a runaway line without a newline is never a failure line
+    }
+    const m = RUNNER_FAILURE_LINE.exec(rest.replace(/\r$/, ""))
+    if (m) last = m[1].trim()
+  } catch {}
+  return last
+}
+
+/** Why the launch process ended before the runner registered. */
+export function launchExitMessage(code: number | null, stderrTail: string, runnerSaid: string | undefined, dialBack?: DialBack): string {
+  // The hint follows a full stop here, so it starts a sentence.
+  const hint = dialBack ? ` ${runnerDialHint(dialBack).replace(/^./, (c) => c.toUpperCase())}` : ""
+  if (runnerSaid) return `${runnerSaid}.${hint}`
+  if (code === 0 && dialBack) {
+    return `InterceptorRunner started but ended without reaching this Mac at ${dialBack.url} (${dialBack.via}); a runner built before 2.1.6 does not report why. Run 'interceptor ios refresh' for one that does.${hint}`
+  }
+  return `xcodebuild exited with code ${code} before the runner registered${stderrTail ? `:\n${stderrTail}` : ""}`
+}
+
 export function registrationFailure(err: Error, dialBack: DialBack): string {
   if (!/did not register/.test(err.message)) return err.message
   return `${err.message} — the runner was told to dial ${dialBack.url} (${dialBack.via}). ${runnerDialHint(dialBack)}`

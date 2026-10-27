@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import net from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { IosManager, RUNNER_DEVICE_GRACE_MS } from "../daemon/ios/manager"
+import { IosManager, RUNNER_DEVICE_GRACE_MS, launchExitMessage, lastRunnerFailure, probedDialBack } from "../daemon/ios/manager"
 import { RunnerChannel } from "../daemon/ios/channel"
 import {
   getOrCreateRunnerSecret, hasRunnerSecret, runnerProof, serverProof, verifyRunnerProof, RUNNER_PROOF_WINDOW_MS,
@@ -293,6 +293,9 @@ describe.skipIf(process.platform !== "darwin")("prepared .xctestrun", () => {
     expect(out, result.stderr).toEndWith("InterceptorRunner-interceptor.xctestrun")
     expect(statSync(out).mode & 0o777).toBe(0o600)
     expect(readFileSync(out, "utf8")).toContain("s3cret")
+    // A failed runner exits at once: no automatic screenshots or diagnostics to collect.
+    expect(readFileSync(out, "utf8")).toMatch(/<key>SystemAttachmentLifetime<\/key>\s*<string>keepNever<\/string>/)
+    expect(readFileSync(out, "utf8")).toMatch(/<key>UserAttachmentLifetime<\/key>\s*<string>keepNever<\/string>/)
   })
 })
 
@@ -471,5 +474,72 @@ describe("runner-only listener", () => {
     m.listenOn({ url: "ws://example.test:9", host: "example.test", via: "override" })
     m.listenOn(undefined)
     expect(hosts).toEqual(["192.168.0.10", "100.64.0.2"])
+  })
+})
+
+describe("a runner that cannot reach this Mac says why", () => {
+  const vpn = { url: "ws://100.64.0.2:19222", host: "100.64.0.2", via: "vpn" as const }
+  const stream = (chunks: string[]) => new ReadableStream<Uint8Array>({
+    start(c) { for (const x of chunks) c.enqueue(new TextEncoder().encode(x)); c.close() },
+  })
+
+  test("the runner's own failure line is read from xcodebuild's output, even split across chunks", async () => {
+    const line = "/InterceptorRunnerUITests.swift:69: error: -[InterceptorRunner.InterceptorRunnerUITests testRunner] : failed - InterceptorRunner could not reach ws://100.64.0.2:19222 in 6 tries: Could not connect to the server. (NSURLErrorDomain -1004)"
+    const said = await lastRunnerFailure(stream(["Test Case started\nnoise ", line.slice(0, 50), line.slice(50), "\nTest Case failed\n"]))
+    expect(said).toBe("InterceptorRunner could not reach ws://100.64.0.2:19222 in 6 tries: Could not connect to the server. (NSURLErrorDomain -1004)")
+    expect(await lastRunnerFailure(stream(["Test Case passed\n", "no newline at the end"]))).toBeUndefined()
+    // A physical device's output ends lines in \r\n.
+    expect(await lastRunnerFailure(stream(["Test Case started\r\n", line + "\r\n", "Test Case failed\r\n"])))
+      .toBe("InterceptorRunner could not reach ws://100.64.0.2:19222 in 6 tries: Could not connect to the server. (NSURLErrorDomain -1004)")
+  })
+
+  test("the exit message prefers the runner's words, then names the address for an exit with code 0", () => {
+    expect(launchExitMessage(65, "Failing tests:", "InterceptorRunner could not reach ws://100.64.0.2:19222 in 6 tries: Connection refused", vpn))
+      .toStartWith("InterceptorRunner could not reach ws://100.64.0.2:19222 in 6 tries: Connection refused. Confirm the phone is on the same VPN")
+    // A runner built before the change still exits 0 after giving up.
+    expect(launchExitMessage(0, "Testing started completed.", undefined, vpn))
+      .toStartWith("InterceptorRunner started but ended without reaching this Mac at ws://100.64.0.2:19222 (vpn)")
+    // Any other exit keeps xcodebuild's own words (signing, a missing destination).
+    expect(launchExitMessage(70, "xcodebuild: error: Unable to find a destination", undefined, vpn))
+      .toBe("xcodebuild exited with code 70 before the runner registered:\nxcodebuild: error: Unable to find a destination")
+  })
+
+  test("only LAN and VPN dial-backs are probed", () => {
+    expect(probedDialBack(vpn)).toBe(true)
+    expect(probedDialBack({ url: "ws://192.168.0.10:19222", host: "192.168.0.10", via: "subnet" })).toBe(true)
+    expect(probedDialBack({ url: "ws://127.0.0.1:19222", host: "127.0.0.1", via: "loopback" })).toBe(false)
+    expect(probedDialBack({ url: "ws://phone-only.lan:19222", host: "phone-only.lan", via: "override" })).toBe(false)
+  })
+
+  test("a launch stops before XCTest when this Mac does not answer on the dial-back address", async () => {
+    const { m } = manager()
+    let probes = 0
+    m.probeRemote = async () => { probes++; return false }
+    expect(await m.dialBackUnreachable(vpn)).toStartWith("this Mac does not answer on ws://100.64.0.2:19222 (vpn)")
+    m.probeRemote = async () => { probes++; return true }
+    expect(await m.dialBackUnreachable(vpn)).toBeUndefined()
+    // Simulators and overrides are never probed.
+    expect(await m.dialBackUnreachable({ url: "ws://127.0.0.1:19222", host: "127.0.0.1", via: "loopback" })).toBeUndefined()
+    expect(await m.dialBackUnreachable({ url: "ws://phone-only.lan:19222", host: "phone-only.lan", via: "override" })).toBeUndefined()
+    expect(probes).toBe(2)
+  })
+
+  test("the away-from-home hint follows a sentence once, and never a simulator's error", () => {
+    const { m } = manager()
+    markDeviceStartReady(UDID)
+    expect(m.withDeviceStartHint(UDID, "could not reach ws://100.64.0.2:19222. confirm the phone is unlocked."))
+      .toStartWith("could not reach ws://100.64.0.2:19222. confirm the phone is unlocked. Away from this Mac's network?")
+    const src = readFileSync(resolve("daemon/ios/manager.ts"), "utf8")
+    expect(src).toContain('descriptor.kind === "simulator" ? brought.error : this.withDeviceStartHint(udid, brought.error)')
+  })
+
+  test("ios status reports whether this Mac answers on each dial-back address", async () => {
+    const { m } = manager()
+    const ack = m.registerRunner(fakeWs(), { udid: UDID, launchedBy: "device", url: "ws://100.64.0.2:19222", ...freshProof() })
+    m.probeRemote = async (d: { url: string }) => d.url !== "ws://100.64.0.2:19222"
+    const r = await m.handle({ type: "ios_status" })
+    const mine = (r.data as any[]).find((d) => d.contextId === ack.contextId)
+    expect(mine.dialBack).toBe("ws://100.64.0.2:19222")
+    expect(mine.dialBackReachable).toBe(false)
   })
 })
