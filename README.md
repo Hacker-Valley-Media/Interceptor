@@ -13,16 +13,27 @@
 </p>
 
 <p align="center">
+  Works with Claude Code, Codex, Cursor, Gemini CLI, Claude Desktop, OpenClaw, OpenCode, and any agent that can run a shell command.
+</p>
+
+<p align="center">
   <a href="#get-started"><strong>Get started</strong></a> ·
+  <a href="#how-it-compares">How it compares</a> ·
   <a href="#browser-automation">Browser</a> ·
   <a href="#macos-automation">macOS</a> ·
+  <a href="#windows">Windows</a> ·
+  <a href="#linux">Linux</a> ·
   <a href="#iphone-and-ios-automation">iPhone</a> ·
   <a href="#record-and-reuse-workflows">Record &amp; replay</a> ·
-  <a href="#documentation">Docs</a>
+  <a href="#documentation">Docs</a> ·
+  <a href="https://github.com/Hacker-Valley-Media/Interceptor/discussions">Discussions</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/Hacker-Valley-Media/Interceptor/releases/latest"><img src="https://img.shields.io/github/v/release/Hacker-Valley-Media/Interceptor?label=release" alt="Latest release"></a>
+  <a href="https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed"><img src="https://img.shields.io/badge/Chrome%20Web%20Store-Add%20to%20Chrome-4285F4?logo=googlechrome&logoColor=white" alt="Chrome Web Store"></a>
+  <a href="https://github.com/Hacker-Valley-Media/Interceptor/releases"><img src="https://img.shields.io/github/downloads/Hacker-Valley-Media/Interceptor/total?label=downloads" alt="Total downloads"></a>
+  <a href="https://github.com/Hacker-Valley-Media/Interceptor"><img src="https://img.shields.io/github/stars/Hacker-Valley-Media/Interceptor?style=flat&label=stars" alt="GitHub stars"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Elastic%202.0-blue" alt="Elastic License 2.0"></a>
 </p>
 
@@ -44,13 +55,16 @@ Interceptor connects an AI agent or script to your signed-in browser, native app
 
 Use it from any agent that can run shell commands, or through its built-in [Model Context Protocol (MCP) server](docs/mcp.md). Interceptor does not require a model API key; your chosen agent or model may have its own subscription or API costs.
 
-## Why Interceptor
+## What Interceptor adds
 
-- **Your existing browser session.** Work with the profiles, cookies, and logins you already use. The default browser path uses an extension rather than launching a separate automated browser.
-- **Look beyond pixels.** Read DOM and accessibility structure, inspect network activity, and use specialized interfaces for rich editors, Electron apps, native runtimes, and iPhone services.
-- **Background automation.** Browser and native Mac operations default to background execution so you can keep working. Explicit activation brings a target forward when needed. [Behavior and exceptions](.agents/skills/interceptor-macos/references/background-first.md).
-- **Keep the evidence.** Return text or JSON, save artifacts, record workflows, and verify task state before marking a browser task complete.
-- **Use one command vocabulary.** `open`, `read`, `act`, and `inspect` combine common steps; detailed verbs and agent skills cover deeper work.
+Many tools now let an agent use your signed-in Chrome, and several work on a Mac in the background. Interceptor does both, and adds what the tools in [How it compares](#how-it-compares) don't:
+
+- **Safari and Chromium in one CLI.** Chrome, Brave, Edge, and Safari pages, with the same commands, in the profiles you already use.
+- **Your own iPhone.** Drive the apps on a physical iPhone, not a simulator, over USB, Wi-Fi, or Tailscale away from home, including on cellular.
+- **Page traffic without a debugger.** Read fetch, XHR, SSE, WebSocket, Beacon, and BroadcastChannel traffic through standard page APIs. The browser shows no debugging banner and needs no remote-debugging switch.
+- **Real editors, not screenshots.** Read and change Google Docs, Slides, Sheets, and Canva through their scene graphs, and save the files they export.
+- **Admin work without showing the password.** Vault secrets go by name into a web login, `sudo`, the macOS administrator prompt, or the iPhone passcode. The model never sees the value.
+- **One tool across browser, Mac, Windows, Linux, and iPhone,** with any agent and any model. Work runs in the background so you keep using your computer. [Behavior and exceptions](.agents/skills/interceptor-macos/references/background-first.md).
 
 ## Get started
 
@@ -73,7 +87,7 @@ It asks two questions. Press Enter for both to get everything:
 1. **Full or Browser only?** Full (the default) is your browser plus desktop apps, and the iPhone on a Mac. Browser only is web pages.
 2. **Register the MCP server?** Yes is the default. It lists the AI apps it found that don't have the server yet (Claude Code, Codex, Cursor, Gemini CLI, Claude Desktop) and turns every tool on.
 
-It downloads the latest release, checks its SHA-256 and the Hacker Valley Media signature, and installs it with no Installer wizard. Nothing installs if a check fails. It adds Interceptor's skills to every AI agent on your computer. A Mac asks for your password once. Run it again any time to update: it keeps your edition and leaves an existing MCP setup alone.
+It downloads the latest release from `updates.hackervalley.media`, checks its SHA-256 and the Hacker Valley Media signature, and installs it with no Installer wizard. Nothing installs if a check fails. It adds Interceptor's skills to every AI agent on your computer. A Mac asks for your password once. Run it again any time to update: it keeps your edition and leaves an existing MCP setup alone.
 
 Options go after `bash -s --`, for example `curl -fsSL … | bash -s -- --browser --no-mcp`:
 
@@ -88,7 +102,9 @@ On Windows, pass the same as parameters: `& ([scriptblock]::Create((irm <url>)))
 
 "Every tool on" means the agent can also run the actions that are off by default, such as quitting apps, writing files, and running scripts in a page (`INTERCEPTOR_MCP_ALLOW=all,raw`). The agent still marks each of those calls as confirmed. For reading and clicking only, run `interceptor mcp install` afterward.
 
-The last step is the browser extension. On a Mac, the Interceptor window opens by itself and walks you through it. On Windows, the Chrome Web Store page opens. With no terminal to answer (an AI agent running the command), it takes the defaults, and a Mac opens the verified package in Installer for the password.
+The last step is the browser extension. On a Mac, the Interceptor window opens by itself and walks you through it. On Windows, the Chrome Web Store page opens.
+
+Want your AI agent to do it? Ask it to run the same command. With no terminal to answer, it takes the defaults: Full and the MCP server with every tool on. A Mac then opens the verified package in Installer for you to type your password.
 
 **Prefer to run each step yourself?** On a Mac, the same install with Apple's own tools:
 
@@ -98,38 +114,38 @@ spctl -a -vv -t install /tmp/Interceptor.pkg && sudo installer -pkg /tmp/Interce
 interceptor skills adopt
 ```
 
-`spctl` is Apple's Gatekeeper check: it prints `Notarized Developer ID` and `HACKER VALLEY MEDIA, LLC (TPWBZD35WW)`, and if the package is not signed and notarized, `installer` never runs. For the Browser edition, use `Interceptor-Browser.pkg`.
+`spctl` is Apple's Gatekeeper check. It prints `Notarized Developer ID` and `HACKER VALLEY MEDIA, LLC (TPWBZD35WW)`, and if the package is not signed and notarized, `installer` never runs. For the Browser edition, use `Interceptor-Browser.pkg`. Add `interceptor mcp install --allow all,raw` to register the MCP server with every tool on.
 
 ### Download an installer
 
-Download an installer from [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest). Start with Browser for web tasks, or Full for native Mac and iPhone work. The macOS packages are built for Apple silicon. On an Intel Mac, build from source (see [Development and contributions](#development-and-contributions)).
+Each link below always gets the newest release. Start with Browser for web tasks, or Full for native apps and the iPhone. Every version is on [Releases](https://github.com/Hacker-Valley-Media/Interceptor/releases), and [SHA256SUMS-ALL](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest/download/SHA256SUMS-ALL) lists each file's SHA-256. The macOS packages are built for Apple silicon. On an Intel Mac, build from source (see [Development and contributions](#development-and-contributions)).
 
-| Host / package | What it enables |
-|---|---|
-| macOS: `Interceptor-Browser-<version>.pkg` | CLI, daemon, and browser extension files. |
-| macOS: `Interceptor-Full-<version>.pkg` | Browser package plus the native Mac bridge and iPhone tooling. The bridge requires macOS 15+. |
-| macOS: `Interceptor-Safari-<version>.pkg` | Safari extension add-on, installed after either core package. |
-| Windows 11 24H2+: `Interceptor-Browser-<version>-windows-{x64,arm64}.exe` | Browser automation. [Windows installation guide](docs/windows-install.md). |
-| Windows 11 24H2+: `Interceptor-Full-<version>-windows-{x64,arm64}.exe` | Browser automation plus native app control with `interceptor desktop`. [Desktop guide](docs/desktop-bridge.md). |
-| Linux: `Interceptor-Browser-<version>-linux-{x64,arm64}.tar.gz` | Browser automation and install scripts. |
-| Linux: `Interceptor-Full-<version>-linux-{x64,arm64}.tar.gz` | Browser automation plus native app control with `interceptor desktop`, with a signed release manifest. |
+| Package | Download | What it enables |
+|---|---|---|
+| macOS Browser | [Interceptor-Browser.pkg](https://updates.hackervalley.media/latest/Interceptor-Browser.pkg) | CLI, daemon, and browser extension files. |
+| macOS Full | [Interceptor-Full.pkg](https://updates.hackervalley.media/latest/Interceptor-Full.pkg) | Browser package plus the native Mac bridge and iPhone tooling. The bridge requires macOS 15+. |
+| macOS Safari add-on | [Interceptor-Safari.pkg](https://updates.hackervalley.media/latest/Interceptor-Safari.pkg) | Safari extension, installed after either core package. |
+| Windows Browser | [x64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-arm64.exe) | Browser automation on Windows 11 24H2+. [Windows guide](docs/windows-install.md). |
+| Windows Full | [x64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-arm64.exe) | Browser automation plus [native app control](#windows) with `interceptor desktop`. |
+| Linux Browser | [x64](https://updates.hackervalley.media/latest/Interceptor-Browser-linux-x64.tar.gz) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Browser-linux-arm64.tar.gz) | Browser automation and install scripts. |
+| Linux Full | [x64](https://updates.hackervalley.media/latest/Interceptor-Full-linux-x64.tar.gz) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Full-linux-arm64.tar.gz) | Browser automation plus [native app control](#linux) with `interceptor desktop`. |
 
 The macOS release binaries target Apple silicon. On Windows and Linux, the Full packages add native app control through `interceptor desktop`; run `interceptor desktop capabilities` to see what works on that computer. iPhone setup requires a Mac.
 
 ### macOS installation
 
-1. Install the Browser or Full `.pkg` from Releases. On a first install, the Interceptor window opens: it checks whether the extension is already in your browser, and if not, walks you through adding it from the Chrome Web Store, as an unpacked extension (with a step-by-step guide in the browser), or for Safari. Open it again any time with `interceptor diagnose extension --welcome`.
+1. Install the [Browser](https://updates.hackervalley.media/latest/Interceptor-Browser.pkg) or [Full](https://updates.hackervalley.media/latest/Interceptor-Full.pkg) `.pkg`. On a first install, the Interceptor window opens: it checks whether the extension is already in your browser, and if not, walks you through adding it from the Chrome Web Store, as an unpacked extension (with a step-by-step guide in the browser), or for Safari. Open it again any time with `interceptor diagnose extension --welcome`.
 2. In Chrome or Brave, install the [Interceptor extension](https://chromewebstore.google.com/detail/interceptor/gomcpnagjjlhehnkoobkjgnkbleiooed) if the window did not already do it. The local runtime and browser extension are both required.
-3. For Safari, also install the Safari `.pkg`, open `/Applications/InterceptorSafari.app` once, then enable Interceptor and website access in **Safari → Settings → Extensions**. Safari requires your approval.
+3. For Safari, also install the [Safari `.pkg`](https://updates.hackervalley.media/latest/Interceptor-Safari.pkg), open `/Applications/InterceptorSafari.app` once, then enable Interceptor and website access in **Safari → Settings → Extensions**. Safari requires your approval.
 4. With Full, grant the permissions needed by your task to `interceptor-bridge`. Run `interceptor macos trust --walkthrough` for guidance. Accessibility enables native UI control; screen, microphone, and app-automation access are needed for their respective features.
 
 For an unpacked Chrome/Brave extension, enable Developer Mode on the browser's extensions page and load `/Library/Application Support/Interceptor/extension/`. Keep one copy per profile. Store and unpacked installations share an extension ID; store updates arrive after store review.
 
 ### Windows and Linux
 
-On **Windows**, run the architecture-matched installer, install the browser extension, then open a new terminal. Chrome, Brave, and Edge can use the Chrome Web Store listing; Edge requires allowing extensions from other stores. The [Windows guide](docs/windows-install.md) also covers unpacked extensions, silent installation, updates, and removal.
+On **Windows**, run the [installer](#download-an-installer) for your PC (x64 or ARM64), install the browser extension, then open a new terminal. Chrome, Brave, and Edge can use the Chrome Web Store listing; Edge requires allowing extensions from other stores. The [Windows guide](docs/windows-install.md) also covers unpacked extensions, silent installation, updates, and removal.
 
-On **Linux**, extract the architecture-matched archive and run this from its directory:
+On **Linux**, extract the [archive](#download-an-installer) for your machine (x64 or ARM64) and run this from its directory:
 
 ```bash
 bash scripts/install.sh --browser-only --brave
@@ -139,7 +155,7 @@ bash scripts/install.sh --browser-only --brave
 
 Follow the installer's extension-loading instructions. The archive includes compiled binaries, so a separate Bun installation is not needed for this release path.
 
-For native app control on Linux, download the Full archive with `SHA256SUMS` and `SHA256SUMS.cms`, verify them with `bash scripts/verify-release-manifest.sh <folder>`, then run `bash scripts/install.sh --full` from your graphical session. On Windows, run the Full installer instead of the Browser one. The [desktop guide](docs/desktop-bridge.md) lists what each OS supports and the optional Linux packages that light up OCR, face detection, and personal data.
+For native app control on Linux, the [one-command install](#install-with-one-command) checks the signed checksum list for you. To do it by hand, download the Full archive with [SHA256SUMS](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest/download/SHA256SUMS), [SHA256SUMS.cms](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest/download/SHA256SUMS.cms), [verify-release-manifest.sh](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest/download/verify-release-manifest.sh) and [linux-release-apple-root.pem](https://github.com/Hacker-Valley-Media/Interceptor/releases/latest/download/linux-release-apple-root.pem), run `bash verify-release-manifest.sh <folder>` (it checks every archive the list names, so put all four Linux archives in the folder), then run `bash scripts/install.sh --full` from your graphical session. On Windows, run the Full installer instead of the Browser one. The [desktop guide](docs/desktop-bridge.md) lists what each OS supports and the optional Linux packages that light up OCR, face detection, and personal data.
 
 ### Your first browser task
 
@@ -223,6 +239,35 @@ These commands inspect Finder without activating it. Use returned element refere
 
 [Mac command reference](.agents/skills/interceptor-macos/references/command-catalog.md) · [Background behavior](.agents/skills/interceptor-macos/references/background-first.md) · [System and media tools](.agents/skills/interceptor-macos/references/advanced-domains.md) · [Documents](docs/native/document.md) · [Personal data](docs/native/personal-data.md) · [Overlays](docs/native/overlays.md) · [VMs](.agents/skills/interceptor-macos/workflows/vm-lifecycle.md)
 
+## Windows and Linux automation
+
+**Drive native apps on Windows and Linux with the same commands as on the Mac.** The Full package adds `interceptor desktop`, which takes the same verbs, flags and JSON replies as `interceptor macos`. Input goes to the target window in the background, without bringing it forward or moving your cursor. Not every operation exists on every system, so check first: `capabilities` says whether each one works on this computer, and why not when it doesn't.
+
+```bash
+interceptor desktop capabilities
+interceptor desktop windows --app "Notepad"
+interceptor desktop tree --app "Notepad"
+```
+
+| Area | Capabilities |
+|---|---|
+| App control | Accessibility trees, element search, values and text. Clicks, typing, keys, scrolling, dragging, menus and actions sent to a background window. List, open, resize, and move apps and windows. |
+| Capture and perception | Screenshots, screen capture and streaming with recording, OCR, face, hand and body detection, image classification, speech recognition, and sound classification. |
+| Local AI | Prompts, translation, entity and sentiment analysis, and data detection with Gemma 4 E2B, downloaded once on first use (2.8 GB) and run on your computer by the bundled llama.cpp server. |
+| Files and system work | Files, thumbnails, clipboard, URL fetching, PDF, logs, JavaScript scripts, monitor and replay, and overlays. |
+| Personal data | Contacts, calendar, reminders, notifications, and sharing. |
+| Secrets and updates | Vault secrets typed by name into apps, plus `sudo` on Linux. Updates ask first, like Sparkle on a Mac: you see the release notes and click **Install Update**. |
+
+### Windows
+
+Windows 11 24H2 or later, on x64 or ARM64. The Full installer is signed by Hacker Valley Media LLC and installs for your user only, with no administrator prompt. Commands run in your signed-in desktop session; one started over SSH is refused. OCR, face detection and speech recognition use the engines Windows ships. [Windows guide](docs/windows-install.md)
+
+### Linux
+
+Tested on Arch Linux ARM64 with Hyprland on Wayland. Run commands from your own graphical session; a plain SSH shell is refused. OCR, face detection, language detection, and contacts and calendar each need one optional distribution package, and `capabilities` names the package when it is missing. [Package list](docs/desktop-bridge.md)
+
+[Desktop guide](docs/desktop-bridge.md) · [Desktop skill](.agents/skills/interceptor-desktop/SKILL.md)
+
 <a id="iphone"></a>
 
 ## iPhone and iOS automation
@@ -267,6 +312,30 @@ Native Mac recording uses `interceptor macos monitor` and the same `export <sess
 For longer browser jobs, `monitor task` stores checkpoints, target context, lessons, and verification checks. Resume a task across agent sessions; `task complete` runs its checks and marks it complete only when they all return `true`.
 
 [Browser recording](.agents/skills/interceptor-browser/workflows/record-and-replay.md) · [Mac recording](.agents/skills/interceptor-macos/workflows/record-and-replay-mac-flow.md) · [Durable task state](.agents/skills/interceptor-browser/workflows/task-state.md)
+
+## How it compares
+
+As of 2026-10-22, from each project's own documentation (sources below the table). Corrections are welcome in [Discussions](https://github.com/Hacker-Valley-Media/Interceptor/discussions).
+
+| Tool | Browsers it drives | How it reaches the page | Desktop apps | Physical iPhone | Works with |
+|---|---|---|---|---|---|
+| **Interceptor** | Chrome, Brave, Edge, Safari, in your own profiles | Its extension; Chrome's debugger only when you ask for it | macOS, Windows, Linux | Yes, installed apps | Any agent that runs commands, or MCP |
+| Playwright MCP, `--extension` mode | Chrome, Edge (its own launched Chromium, Firefox, or WebKit otherwise) | An extension that uses Chrome's `debugger` permission | No | No | Any MCP client |
+| Chrome DevTools MCP, `--autoConnect` | Chrome 144+ | Chrome DevTools Protocol; you turn on remote debugging and click Allow | No | No | Any MCP client |
+| agent-browser | Chrome and Chromium (your profile with `--profile` or `--auto-connect`); Safari on iOS through Appium | Chrome DevTools Protocol; WebDriver for Safari | Electron apps, through CDP | Safari only, over USB with WebDriverAgent | Any agent that runs commands |
+| Claude in Chrome | Chrome, Edge, and other Chromium browsers | An extension that declares Chrome's `debugger` permission | Separate product: Claude Desktop computer use | No (Claude's iOS pane drives simulators only) | Claude, with a direct Anthropic plan |
+| Cua Driver | Chrome and Edge windows, Electron apps; Safari and Firefox are not supported | Chrome DevTools Protocol | macOS, Windows, Linux | No | Any agent that runs commands, or MCP |
+| Tencent BrowserSkill | Chrome, Edge | An extension that drives pages through `chrome.debugger` | No | No | Any agent that runs commands |
+
+Sources: [Playwright MCP README](https://github.com/microsoft/playwright-mcp) (`--extension`: "Edge/Chrome only") and [extension manifest](https://github.com/microsoft/playwright/blob/main/packages/extension/manifest.json); [Chrome auto-connect guide](https://developer.chrome.com/docs/devtools/agents/use-cases/auto-connect); [agent-browser README](https://github.com/vercel-labs/agent-browser) (iOS and real-device sections); [Claude Code Chrome docs](https://code.claude.com/docs/en/chrome), [iOS Simulator docs](https://code.claude.com/docs/en/desktop-ios-simulator), [Claude Desktop docs](https://code.claude.com/docs/en/desktop), and the [Claude extension](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn) package manifest (version 1.0.102); [Cua Driver docs](https://cua.ai/docs/cua-driver) and [browser guide](https://cua.ai/docs/cua-driver/guides/browsers); [BrowserSkill README](https://github.com/Tencent/BrowserSkill) and [extension config](https://github.com/Tencent/BrowserSkill/blob/main/apps/extension/wxt.config.ts).
+
+**When to use something else**
+
+- **Headless runs in CI, or many browsers in the cloud:** use Playwright or a cloud browser service. Interceptor drives a desktop browser on your own computer.
+- **Chrome only, and one assistant already covers the task:** Claude in Chrome or your assistant's own browser extension may be enough.
+- **Testing your own iOS app in the Simulator:** Xcode's simulator tooling or Claude's iOS Simulator pane fits better. Interceptor is for a physical iPhone.
+- **Android phones:** Interceptor does not drive Android; [mobile-mcp](https://github.com/mobile-next/mobile-mcp) does.
+- **Disposable virtual machines or sandboxes for agents:** see [Cua](https://github.com/trycua/cua).
 
 ## Go deeper
 
@@ -343,5 +412,7 @@ bun run build
 ## License and credits
 
 Interceptor is licensed under [Elastic License 2.0](LICENSE). See [commercial terms](COMMERCIAL.md).
+
+**If Interceptor saves you time, a star on this repo helps other people find it.**
 
 Created by [Ron Eddings](https://github.com/ronaldeddings/). Thanks to [Pedram Amini](https://github.com/pedramamini/) for early feedback and [Maestro](https://runmaestro.ai), [Daniel Miessler](https://github.com/danielmiessler/) for the name and [PAI](https://github.com/danielmiessler/PAI), [Klaus Agnoletti](https://github.com/klausagnoletti/) for Edge/Vivaldi installer support, and [Alex Tabisz](https://github.com/atabisz/) for Linux support.
