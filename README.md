@@ -26,6 +26,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Elastic%202.0-blue" alt="Elastic License 2.0"></a>
 </p>
 
+Interceptor reads GitHub stats, fills a Numbers sheet, and builds an on-screen overlay.
+
+https://github.com/user-attachments/assets/b8af57d1-8a22-4955-8b2b-f43f09d52286
+
+*30-second edited demo. The terminal is staged from real Interceptor output.*
+
 Interceptor connects an AI agent or script to your signed-in browser, native apps on macOS, Windows, and Linux, and a physical iPhone. It combines structured UI reads and actions with access to page traffic, rich editors, app internals, and device state. The agent can inspect what happened after an action and use that evidence for its next step.
 
 | Work you can build with Interceptor | Tools available |
