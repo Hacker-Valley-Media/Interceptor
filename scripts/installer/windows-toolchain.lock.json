@@ -3,9 +3,9 @@
   "runner": {
     "label": "windows-2025",
     "imageOS": "win25-vs2026",
-    "imageVersion": "20261021.278.1",
-    "releaseTag": "win25-vs2026/20261021.278",
-    "osBuild": "10.0.26100.33438"
+    "imageVersion": "20261030.294.1",
+    "releaseTag": "win25-vs2026/20261030.294",
+    "osBuild": "10.0.26100.33674"
   },
   "bun": {
     "versionFile": ".bun-version",
