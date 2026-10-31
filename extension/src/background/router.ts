@@ -1,4 +1,4 @@
-import { sendToContentScript } from "./content-bridge"
+import { sendToContentScript, waitStable } from "./content-bridge"
 import { activeTransport } from "./transport"
 import { handleOsInputActions } from "./capabilities/os-input"
 import { handleScreenshotActions } from "./capabilities/screenshot"
@@ -41,7 +41,7 @@ export function initializeActionRouter(): void {
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number; warning?: string }
 
-const OS_INPUT_ACTIONS = new Set(["os_click", "os_key", "os_type", "os_move"])
+const OS_INPUT_ACTIONS = new Set(["os_click", "os_key", "os_type", "os_move", "os_receipt", "os_detach", "os_return"])
 const SCREENSHOT_ACTIONS = new Set(["screenshot", "screenshot_background", "page_capture", "ocr"])
 const CAPTURE_STREAM_ACTIONS = new Set(["capture_start", "capture_frame", "capture_stop", "canvas_diff"])
 const CANVAS_ACTIONS = new Set([
@@ -104,6 +104,9 @@ export async function routeAction(
   tabId: number
 ): Promise<ActionResult> {
   if (OS_INPUT_ACTIONS.has(action.type)) return handleOsInputActions(action, tabId)
+  if (action.type === "wait_stable") {
+    return waitStable(tabId, action.ms as number | undefined, action.timeout as number | undefined, action.frameId as number | undefined)
+  }
   if (SCREENSHOT_ACTIONS.has(action.type)) return handleScreenshotActions(action, tabId)
   if (CAPTURE_STREAM_ACTIONS.has(action.type)) return handleCaptureStreamActions(action, tabId)
   if (CANVAS_ACTIONS.has(action.type)) return handleCanvasActions(action, tabId)

@@ -42,8 +42,9 @@ describe("strict unknown-flag rejection (#212)", () => {
     expect(exitCode).toBeUndefined()
   })
 
-  test("the issue's sharpest trap: screenshot --out points at --save", () => {
-    expect(() => normalizeArgs(["screenshot", "--out", "/tmp/shot.png"])).toThrow("'screenshot --save' writes the image to disk")
+  test("the issue's sharpest trap: screenshot --out is a real flag; the rest of the family still points at it", () => {
+    expect(normalizeArgs(["screenshot", "--out", "/tmp/shot.png"])).toEqual(["screenshot", "--out", "/tmp/shot.png"])
+    expect(() => normalizeArgs(["canvas", "--out", "/tmp/shot.png"])).toThrow("'screenshot --out <path>' or '--save' writes an image to disk")
   })
 
   test("--flag=value form validates the name before '='", () => {

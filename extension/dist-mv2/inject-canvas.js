@@ -390,3 +390,5 @@ if (!window[K_CANVAS]) {
   patchGetContext(window.OffscreenCanvas, "OffscreenCanvas");
   window[K_CANVAS_OBSERVER] = observer;
 }
+
+//# sourceURL=<anonymous>

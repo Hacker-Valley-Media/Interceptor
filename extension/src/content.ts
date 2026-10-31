@@ -2,15 +2,16 @@ import "./content/canvas-bridge"
 import "./content/dom-observer"
 import "./content/monitor"
 import { getDomDirty, setDomDirty } from "./content/dom-observer"
-import { cacheSnapshot, computeSnapshotDiff } from "./content/snapshot-diff"
+import { cacheSnapshot, computeSnapshotDiff, computeTextDiff } from "./content/snapshot-diff"
 import { pruneStaleRefs } from "./content/ref-registry"
 import { buildA11yTree } from "./content/a11y-tree"
 import { getPageState } from "./content/state"
-import { dispatchClickSequence, dispatchKeySequence, resolveElement, staleElementError, waitForDomStable } from "./content/input-simulation"
+import { dispatchClickSequence, dispatchKeySequence, resolveElement, staleElementError } from "./content/input-simulation"
 import { handleClick, handleClickSelector, handleDblclick, handleRightclick, handleClickAt, handleWhatAt } from "./content/actions/click"
-import { handleInputText, handleSelectOption, handleCheck } from "./content/actions/type"
+import { handleInputText, handleSelectOption, handleCheck, handleSubmitForm } from "./content/actions/type"
 import { handleScroll, handleScrollAbsolute, handleScrollTo, handleGetPageDimensions } from "./content/actions/scroll"
-import { handleWait, handleWaitFor, handleWaitStable } from "./content/actions/wait"
+import { handleWait, handleWaitFor, handleWaitStable, handleDomQuiet } from "./content/actions/wait"
+import { handleInputWatch, handleInputWatchRead } from "./content/actions/input-watch"
 import { handleDrag } from "./content/actions/drag"
 import { handleFileUpload, handleFileUploadChunk } from "./content/actions/file"
 import { handleHover } from "./content/actions/hover"
@@ -87,6 +88,7 @@ async function executeAction(action: Action): Promise<ActionResult> {
       case "file_upload":         return handleFileUpload(action)
       case "file_upload_chunk":   return handleFileUploadChunk(action)
       case "input_text":          return handleInputText(action)
+      case "submit_form":         return handleSubmitForm(action)
       case "select_option":       return handleSelectOption(action)
       case "check":               return handleCheck(action)
       case "scroll":              return handleScroll(action)
@@ -95,7 +97,12 @@ async function executeAction(action: Action): Promise<ActionResult> {
       case "scroll_to":           return handleScrollTo(action)
       case "send_keys": {
         const keys = action.keys as string
-        const target = document.activeElement || document.body
+        // `act <ref> --keys` names its target; bare `keys` goes to the focused element.
+        const named = action.ref !== undefined || action.index !== undefined
+        const el = named ? resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null : null
+        if (named && !el) return staleElementError(action, "sent keys to")
+        el?.focus()
+        const target = el || document.activeElement || document.body
         dispatchKeySequence(target, keys)
         return { success: true }
       }
@@ -148,8 +155,11 @@ async function executeAction(action: Action): Promise<ActionResult> {
         return { success: true, data: truncated }
       }
       case "diff": {
+        // Text first: it is compared even when no element changed (the DOM
+        // observer does not see text-node edits).
+        const textDiff = computeTextDiff() ?? {}
         if (!getDomDirty() && (await import("./content/snapshot-diff")).lastSnapshot.length > 0) {
-          return { success: true, data: { changes: 0, added: [], removed: [], changed: [] } }
+          return { success: true, data: { changes: 0, added: [], removed: [], changed: [], ...textDiff } }
         }
         const diffResult = computeSnapshotDiff()
         if (diffResult.success && typeof diffResult.data === "string") {
@@ -157,7 +167,7 @@ async function executeAction(action: Action): Promise<ActionResult> {
           const added = lines.filter(l => l.startsWith("+ "))
           const removed = lines.filter(l => l.startsWith("- "))
           const changed = lines.filter(l => l.startsWith("~ "))
-          return { success: true, data: { changes: lines.length, added, removed, changed, total: lines.length } }
+          return { success: true, data: { changes: lines.length, added, removed, changed, total: lines.length, ...textDiff } }
         }
         return diffResult
       }
@@ -192,6 +202,9 @@ async function executeAction(action: Action): Promise<ActionResult> {
       case "scene_profile":
         return await handleCanvasAction(action)
       case "wait_stable":         return handleWaitStable(action)
+      case "dom_quiet":           return handleDomQuiet(action)
+      case "input_watch":         return handleInputWatch(action)
+      case "input_watch_read":    return handleInputWatchRead()
       case "batch": {
         const actions = action.actions as Array<Action>
         if (!actions || !Array.isArray(actions)) return { success: false, error: "batch requires actions array" }

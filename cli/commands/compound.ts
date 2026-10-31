@@ -51,6 +51,14 @@ function envInt(name: string, fallback: number): number {
 export const TREE_MAX_CHARS = envInt("INTERCEPTOR_TREE_MAX_CHARS", 50_000)
 export const TEXT_MAX_CHARS = envInt("INTERCEPTOR_TEXT_MAX_CHARS", 8_000)
 
+// --full (or INTERCEPTOR_TEXT_MAX_CHARS above the
+// daemon's 50K default cut) asks for the extension's whole 200K page text;
+// the daemon sizes its cut to the request's maxChars.
+const FULL_TEXT_CHARS = 200_000
+export function textCap(full: boolean): { maxChars?: number } {
+  return full || TEXT_MAX_CHARS > 50_000 ? { maxChars: FULL_TEXT_CHARS } : {}
+}
+
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
   // Explicit truncation marker so agents know to scope or widen instead of
@@ -63,13 +71,25 @@ function truncateText(text: string, maxChars: number): string {
 // compound sub-actions get it here (it was accepted and dropped before).
 let anyTabForCompound = false
 
+// A read that fell back to the user's tab says so once,
+// on stderr (compound verbs do not print their sub-actions' warnings).
+let fallbackNoted = false
+function noteFallback(result: Result): void {
+  const w = (result as { warning?: unknown }).warning
+  if (fallbackNoted || !result.success || typeof w !== "string" || !w.startsWith("reading the active tab")) return
+  fallbackNoted = true
+  console.error(`warning: ${w.split("; ")[0]}`)
+}
+
 async function send(action: Action, tabId?: number, useWs = false, contextId?: string): Promise<Result> {
   if (anyTabForCompound) action.anyTab = true
   try {
     const resp = useWs
       ? await sendCommandWs(action, tabId, contextId)
       : await sendCommand(action, tabId, contextId)
-    return unwrap(resp)
+    const result = unwrap(resp)
+    noteFallback(result)
+    return result
   } catch (err) {
     return { success: false, error: (err as Error).message, deliveryAttempted: !(err instanceof ActionValidationError) }
   }
@@ -233,7 +253,7 @@ export async function runOpen(
       const waitResult = await send({ type: "wait_stable", ms: 200, timeout: Math.min(3000, waitDeadline - Date.now()) }, tabId, useWs, contextId)
       if (waitResult.success) { waitOk = true; break }
     } catch {}
-    await Bun.sleep(500)
+    await Bun.sleep(50)
   }
   if (!waitOk) {
     // Proceed anyway with whatever tree/text is available
@@ -255,7 +275,7 @@ export async function runOpen(
 
   if (!treeOnly) {
     const textActionType: "extract_text" | "extract_markdown" = markdown ? "extract_markdown" : "extract_text"
-    textResult = await send({ type: textActionType }, tabId, useWs, contextId)
+    textResult = await send({ type: textActionType, ...textCap(full) }, tabId, useWs, contextId)
   }
 
   const aggregate = aggregateReadResults({
@@ -464,7 +484,7 @@ export async function runWebsearch(
     treeResult = await send({ type: "get_a11y_tree", depth: 15, filter: "interactive", maxChars: TREE_MAX_CHARS }, tabId, useWs, contextId)
   }
   if (!treeOnly) {
-    textResult = await send({ type: markdown ? "extract_markdown" : "extract_text" }, tabId, useWs, contextId)
+    textResult = await send({ type: markdown ? "extract_markdown" : "extract_text", ...textCap(full) }, tabId, useWs, contextId)
   }
   const aggregate = aggregateReadResults({
     treeRequested: !textOnly,
@@ -577,7 +597,7 @@ export async function runRead(
   }
 
   if (!treeOnly) {
-    const textAction: Action = { type: markdown ? "extract_markdown" : "extract_text", ...target }
+    const textAction: Action = { type: markdown ? "extract_markdown" : "extract_text", ...target, ...textCap(full) }
     textResult = await send(textAction, globalTabId, useWs, contextId)
   }
 
@@ -643,6 +663,7 @@ export async function runAct(
   }
   const useOs = hasTrustedFlag(flags)
   const append = flags.includes("--append")
+  const submit = flags.includes("--submit")
   const noRead = flags.includes("--no-read")
   const keysIdx = flags.indexOf("--keys")
   if (keysIdx !== -1 && (flags[keysIdx + 1] === undefined || flags[keysIdx + 1].startsWith("--"))) {
@@ -655,6 +676,14 @@ export async function runAct(
   const value = valueArgs.length > 0 ? valueArgs.join(" ") : undefined
 
   const target = parseElementTarget(ref)
+  if (submit && keysIdx !== -1) {
+    output(jsonMode, { success: false, error: "act takes --submit or --keys, not both; --submit already does what Enter would" })
+    return
+  }
+  if (submit && target.semantic) {
+    output(jsonMode, { success: false, error: "act --submit needs an element ref (e.g. e5); run 'interceptor find \"<label>\"' to get one" })
+    return
+  }
 
   // Step 1: Perform the action (may throw if click navigates the page)
   let actionResult: Result
@@ -668,8 +697,11 @@ export async function runAct(
       const modifiers = keyParts.slice(0, -1)
       actionResult = await send({ type: "os_key", key, modifiers }, globalTabId, useWs, contextId)
     } else {
-      actionResult = await send({ type: "send_keys", keys }, globalTabId, useWs, contextId)
+      // The ref names where the keys go (it used to be ignored).
+      actionResult = await send({ type: "send_keys", keys, ...target }, globalTabId, useWs, contextId)
     }
+  } else if (submit && value === undefined) {
+    actionResult = await send({ type: "submit_form", ...target }, globalTabId, useWs, contextId)
   } else if (value !== undefined) {
     // Type
     if (useOs) {
@@ -707,6 +739,11 @@ export async function runAct(
     actionResult = { success: false, error: (err as Error).message }
   }
 
+  // `act <ref> "text" --submit`: the text is in; submit its form.
+  if (submit && value !== undefined && actionResult!.success) {
+    actionResult = await send({ type: "submit_form", ...target }, globalTabId, useWs, contextId)
+  }
+
   if (!actionResult!.success) {
     const errMsg = humanizeError(actionResult!.error) || "action failed"
     const nothingHappened = actionResult!.deliveryAttempted === false || actionResult!.delivered === false
@@ -714,7 +751,8 @@ export async function runAct(
       success: false,
       error: nothingHappened ? errMsg : `${errMsg.replace(/[.\s]+$/, "")}. Delivery is unverified; read the target before retrying.`,
       ...(actionResult!.delivered === false ? { delivered: false } : {}),
-    })
+      data: actionResult!.data,
+    } as Result)
     return
   }
 
@@ -729,7 +767,11 @@ export async function runAct(
   try {
     await send({ type: "wait_stable", ms: 200, timeout }, globalTabId, useWs, contextId)
 
-    // Step 3: Get updated tree + diff
+    // Step 3: diff BEFORE the tree read. The tree read caches a fresh
+    // snapshot, so a diff after it compared the page with itself and was
+    // always empty. Now it compares with the agent's last
+    // read of this page.
+    diffResult = await send({ type: "diff" }, globalTabId, useWs, contextId)
     const readTree = () => send(
       { type: "get_a11y_tree", depth: 15, filter: "interactive", maxChars: TREE_MAX_CHARS },
       globalTabId, useWs, contextId
@@ -743,7 +785,6 @@ export async function runAct(
       await send({ type: "wait_stable", ms: 200, timeout }, globalTabId, useWs, contextId)
       treeResult = await readTree()
     }
-    diffResult = await send({ type: "diff" }, globalTabId, useWs, contextId)
   } catch (err) {
     treeResult = { success: false, error: (err as Error).message }
   }
@@ -756,22 +797,56 @@ export async function runAct(
   const treeData = textData(treeResult)
   const diffData = textData(diffResult)
 
+  // A new page has no diff to show, so `act` reads it the way `open` does.
+  const textContent = opensNewPage(diffResult)
+    ? truncateText(textData(await send({ type: "extract_text", ...textCap(false) }, globalTabId, useWs, contextId)), TEXT_MAX_CHARS)
+    : ""
+
   if (jsonMode) {
     output(jsonMode, {
       success: true,
-      data: { tree: treeData || undefined, diff: diffData || undefined }
+      data: { tree: treeData || undefined, diff: diffData || undefined, text: textContent || undefined }
     })
     return
   }
 
   const parts: string[] = []
   if (treeData) parts.push(treeData)
-  if (diffData) {
-    parts.push("")
-    parts.push("--- diff ---")
-    parts.push(diffData)
-  }
+  parts.push("", "--- changes ---", ...formatActChanges(diffResult))
+  if (textContent) parts.push("", "---", textContent)
   console.log(parts.join("\n"))
+}
+
+function opensNewPage(diffResult: Result): boolean {
+  return !(diffResult.success && diffResult.data && typeof diffResult.data === "object")
+}
+
+const ACT_CHANGE_LINES = 20
+
+/**
+ * `act`'s change report in plain lines (it was the
+ * diff's JSON). Text lines come from extensions that report them; an older
+ * extension shows element changes only.
+ */
+export function formatActChanges(diffResult: Result): string[] {
+  const d = opensNewPage(diffResult) ? null : diffResult.data as Record<string, unknown>
+  if (!d) return ["(no earlier read of this page to compare; the action may have opened a new page)"]
+  const list = (k: string) => Array.isArray(d[k]) ? (d[k] as unknown[]).map(String) : []
+  const out: string[] = []
+  const group = (title: string, lines: string[], total: number, prefix = "") => {
+    if (lines.length === 0) return
+    out.push(`${title}:`)
+    for (const line of lines.slice(0, ACT_CHANGE_LINES)) out.push(`  ${prefix}${line}`)
+    if (total > ACT_CHANGE_LINES) out.push(`  … ${total - ACT_CHANGE_LINES} more`)
+  }
+  const textAdded = list("textAdded"), textRemoved = list("textRemoved")
+  group("text added", textAdded, typeof d.textAddedTotal === "number" ? d.textAddedTotal : textAdded.length, "+ ")
+  group("text removed", textRemoved, typeof d.textRemovedTotal === "number" ? d.textRemovedTotal : textRemoved.length, "- ")
+  for (const [title, key] of [["elements added", "added"], ["elements removed", "removed"], ["changed", "changed"]] as const) {
+    const lines = list(key)
+    group(title, lines, lines.length)
+  }
+  return out.length ? out : ["no visible changes"]
 }
 
 // ── interceptor inspect ─────────────────────────────────────────────────────────────
@@ -858,6 +933,8 @@ function output(jsonMode: boolean, result: { success: boolean; error?: string; d
     if (!result.success) process.exitCode = 1
   } else if (!result.success) {
     console.error(`error: ${result.error}`)
+    const hint = (result.data as { hint?: unknown } | undefined)?.hint
+    if (typeof hint === "string" && hint) console.error(`hint: ${hint}`)
     process.exit(1)
   } else if (typeof result.data === "string") {
     console.log(result.data)

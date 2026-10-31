@@ -1,5 +1,5 @@
 import { IK_SINK_TT_POLICY, SINK_TT_POLICY_NAME } from "../../inject-keys"
-import { runWithCspStripBypass } from "./evaluate"
+import { isCspEvalError, runWithCspStripBypass } from "./evaluate"
 import { wsEndpoint } from "../ws-endpoint"
 
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; tabId?: number }
@@ -130,6 +130,8 @@ async function executeNormalize(
   return (results[0]?.result as ActionResult) ?? { success: false, error: "no result" }
 }
 
+export const ISOLATED_SAVE_UNAVAILABLE = "save --isolated cannot run on this browser: the extension's isolated world blocks running an expression string there (extension policy, not the page). Run the same command without --isolated, which uses the page world: interceptor save --out <path> '<expr>'"
+
 export async function prepareByteSource(
   tabId: number,
   code: string,
@@ -146,6 +148,11 @@ export async function prepareByteSource(
     world,
     (t, w) => executeNormalize(t, w, code)
   )
+  if (!evalResult.success && world === "ISOLATED" && isCspEvalError(evalResult.error)) {
+    // The isolated world runs under the extension's own CSP, which forbids
+    // eval on every page; the CLI relabelled this "page CSP".
+    return { success: false, error: ISOLATED_SAVE_UNAVAILABLE, data: { originalError: evalResult.error, requestedWorld: world } }
+  }
   if (!evalResult.success) return evalResult
 
   // The TT / CSP fallback paths wrap the value as

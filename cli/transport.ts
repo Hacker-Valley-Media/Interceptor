@@ -3,6 +3,7 @@
  */
 
 import { IPC_PORT, IS_WIN, SOCKET_PATH, WS_PORT, LOCK_PATH, MAX_UPLOAD_FRAME_BYTES } from "../shared/platform"
+import { readDefaultContext } from "../shared/user-config"
 import {readLockFile} from '../daemon/lifecycle'
 import {isSecretBearing} from '../daemon/redact'
 import { callDesktopProvider } from "../daemon/desktop-provider"
@@ -281,6 +282,11 @@ export function probeContexts(timeoutMs = 1500): Promise<string[] | null> {
 
 // Branch the timeout hint on `macos_*` so bridge commands don't get a
 // Chrome/Brave-extension troubleshooting hint.
+/** The trace line is hidden by default, so a timeout names its request id for the daemon log. */
+export function withRequestId(message: string, shortId: string): string {
+  return `${message} (request ${shortId}; the daemon log has it)`
+}
+
 export function timeoutMessage(actionType: string, ms: number): string {
   const seconds = Math.round(ms / 1000)
   if (actionType === "daemon_shutdown") {
@@ -364,6 +370,30 @@ export function withGroup(action: Action): Action {
   return scoped
 }
 
+// The default context the person saved with
+// `contexts default <name>`, read once per process. The daemon uses it only
+// when this call names no context and several contexts are connected.
+let savedDefaultContext: string | undefined | null = null
+export function defaultContextField(contextId?: string): { defaultContextId?: string } {
+  if (contextId !== undefined) return {}
+  if (savedDefaultContext === null) savedDefaultContext = readDefaultContext()
+  return savedDefaultContext ? { defaultContextId: savedDefaultContext } : {}
+}
+
+/**
+ * Request-trace lines (`[<id>] → <action>`) are for a person at a terminal.
+ * Agent harnesses merge stderr into what the model reads, and the lines were
+ * 8.6% of it. The daemon log keeps every id either way.
+ * A Bun-compiled binary reports isTTY as undefined when piped: test truthiness.
+ */
+export function traceEnabled(stream: { isTTY?: boolean } = process.stderr, env: Record<string, string | undefined> = process.env): boolean {
+  return !!stream.isTTY || env.INTERCEPTOR_DEBUG === "1"
+}
+
+function trace(line: string): void {
+  if (traceEnabled()) process.stderr.write(line)
+}
+
 export function sendCommand(rawAction: Action, tabId?: number, contextId?: string): Promise<DaemonResponse> {
   const action = withGroup(rawAction)
   if (process.platform !== "darwin" && isDesktopActionType(action.type) && !CDP_ACTION_TYPES.has(action.type) && !isSecretBearing(action)) {
@@ -372,7 +402,7 @@ export function sendCommand(rawAction: Action, tabId?: number, contextId?: strin
     // would substitute its own login and lose the caller's session boundary.
     if (!/^(?:desktop|macos)_/.test(action.type)) return Promise.resolve({ id, result: {
       success: false, code: "unsupported_operation", error: "this native surface is not implemented by the host provider" } } as DaemonResponse)
-    process.stderr.write(`[${id.slice(0, 8)}] → ${action.type}\n`)
+    trace(`[${id.slice(0, 8)}] → ${action.type}\n`)
     return callDesktopProvider(action, pickTimeoutForAction(action)).then(result => ({ id, result } as DaemonResponse))
   }
   // The vault is daemon-owned on every host. Its native store and metadata
@@ -383,7 +413,7 @@ export function sendCommand(rawAction: Action, tabId?: number, contextId?: strin
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID()
     const shortId = id.slice(0, 8)
-    process.stderr.write(`[${shortId}] → ${action.type}\n`)
+    trace(`[${shortId}] → ${action.type}\n`)
     let buffer = Buffer.alloc(0)
     let resolved = false
     let socketRef: Bun.Socket<undefined> | null = null
@@ -415,12 +445,12 @@ export function sendCommand(rawAction: Action, tabId?: number, contextId?: strin
         // their tailored hints without the probe round-trip.
         if (isGenericBrowserAction(action.type)) {
           void probeContextCount().then((count) => {
-            reject(new Error(count && count > 0
+            reject(new Error(withRequestId(count && count > 0
               ? timeoutMessageConnected(action.type, timeoutMs)
-              : timeoutMessage(action.type, timeoutMs)))
+              : timeoutMessage(action.type, timeoutMs), shortId)))
           })
         } else {
-          reject(new Error(timeoutMessage(action.type, timeoutMs)))
+          reject(new Error(withRequestId(timeoutMessage(action.type, timeoutMs), shortId)))
         }
       }
     }, timeoutMs)
@@ -428,7 +458,7 @@ export function sendCommand(rawAction: Action, tabId?: number, contextId?: strin
     const socketHandlers: Bun.SocketHandler<undefined> = {
       open(socket: Bun.Socket<undefined>) {
         socketRef = socket
-        const payload = JSON.stringify({ id, action, ...(vaultToken !== undefined && { vaultToken }), ...(tabId !== undefined && { tabId }), ...(contextId !== undefined && { contextId }) })
+        const payload = JSON.stringify({ id, action, ...(vaultToken !== undefined && { vaultToken }), ...(tabId !== undefined && { tabId }), ...(contextId !== undefined && { contextId }), ...defaultContextField(contextId) })
         const encoded = Buffer.from(payload, "utf-8")
         const header = Buffer.alloc(4)
         header.writeUInt32LE(encoded.byteLength, 0)
@@ -485,7 +515,7 @@ export function sendCommandWs(rawAction: Action, tabId?: number, contextId?: str
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID()
     const shortId = id.slice(0, 8)
-    process.stderr.write(`[${shortId}] →ws ${action.type}\n`)
+    trace(`[${shortId}] →ws ${action.type}\n`)
 
     const timeoutMs = pickTimeoutForAction(action)
     const timer = setTimeout(() => {
@@ -493,18 +523,18 @@ export function sendCommandWs(rawAction: Action, tabId?: number, contextId?: str
       // means the extension is reachable and payload size is the likely cause.
       if (isGenericBrowserAction(action.type)) {
         void probeContextCount().then((count) => {
-          reject(new Error(count && count > 0
+          reject(new Error(withRequestId(count && count > 0
             ? timeoutMessageConnected(action.type, timeoutMs)
-            : `timeout: no response for '${action.type}' after ${timeoutMs / 1000}s via WebSocket.`))
+            : `timeout: no response for '${action.type}' after ${timeoutMs / 1000}s via WebSocket.`, shortId)))
         })
       } else {
-        reject(new Error(`timeout: no response for '${action.type}' after ${timeoutMs / 1000}s via WebSocket.`))
+        reject(new Error(withRequestId(`timeout: no response for '${action.type}' after ${timeoutMs / 1000}s via WebSocket.`, shortId)))
       }
     }, timeoutMs)
 
     const ws = new WebSocket(`ws://localhost:${WS_PORT}`)
     ws.onopen = () => {
-      ws.send(JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }), ...(contextId !== undefined && { contextId }) }))
+      ws.send(JSON.stringify({ id, action, ...(tabId !== undefined && { tabId }), ...(contextId !== undefined && { contextId }), ...defaultContextField(contextId) }))
     }
     ws.onmessage = (event) => {
       clearTimeout(timer)

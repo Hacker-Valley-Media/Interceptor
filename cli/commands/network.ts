@@ -75,7 +75,9 @@ export function parseNetworkCommand(filtered: string[]): Action {
       break
 
     case "net":
-      switch (filtered[1]) {
+      // Bare `net` (flags only) means `net log`: every round-2 trial error
+      // "unknown net subcommand" was a bare `net`.
+      switch (filtered[1] && !filtered[1].startsWith("-") ? filtered[1] : "log") {
         case "monitor": {
           const sub = filtered[2]
           if (sub === "on") {
@@ -133,7 +135,7 @@ export function parseNetworkCommand(filtered: string[]): Action {
             filter: filtered.includes("--filter") ? filtered[filtered.indexOf("--filter") + 1] : undefined
           }
         default:
-          console.error("error: unknown net subcommand. Use: log, clear, headers")
+          console.error(`error: unknown net subcommand '${filtered[1]}'. Use: log (the default), clear, headers, monitor, page-comm`)
           process.exit(1)
       }
       break

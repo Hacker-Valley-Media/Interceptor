@@ -45,8 +45,21 @@ export function chooseOutboundTransport(
   return "queue"
 }
 
+/**
+ * The person's saved default context (sent by the CLI as
+ * `defaultContextId`) applies only when the call named no context and more
+ * than one extension context is connected. One connected context keeps
+ * routing to it, whatever the default says.
+ */
+export function applyDefaultContext(contextId: string | undefined, defaultContextId: string | undefined, connectedContexts: string[]): { contextId: string | undefined; fromDefault: boolean } {
+  if (contextId || !defaultContextId || connectedContexts.length <= 1) return { contextId, fromDefault: false }
+  return { contextId: defaultContextId, fromDefault: true }
+}
+
 export function validateContextRouting(input: {
   contextId?: string
+  /** The contextId came from the saved default (applyDefaultContext). */
+  fromDefault?: boolean
   connectedContexts: string[]
   nativeRelayAvailable: boolean
   /** CDP-app contexts. Verbs for these are routed before this check,
@@ -62,6 +75,11 @@ export function validateContextRouting(input: {
   const cdpContexts = input.cdpContexts ?? []
   const iosContexts = input.iosContexts ?? []
   const auxContexts = [...cdpContexts, ...iosContexts]
+
+  if (contextId && input.fromDefault) {
+    if (connectedContexts.includes(contextId)) return { ok: true }
+    return { ok: false, code: "target_gone", error: `your saved default context '${contextId}' is not connected (connected: ${[...connectedContexts, ...auxContexts].join(", ")}); pass --context <id>, or change the default: interceptor contexts default <name>` }
+  }
 
   if (contextId) {
     if (connectedContexts.includes(contextId)) return { ok: true }
@@ -87,6 +105,39 @@ export function validateContextRouting(input: {
   return {
     ok: false,
     code: "target_ambiguous",
-    error: `multiple extensions connected, use --context <id> (connected: ${[...connectedContexts, ...auxContexts].join(", ")})`,
+    error: `multiple extensions connected, use --context <id> (connected: ${[...connectedContexts, ...auxContexts].join(", ")}); set a default once: interceptor contexts default <name>`,
   }
+}
+
+/** The daemon's default cut for one CLI response string. */
+export const MAX_RESPONSE_CHARS = 50_000
+/** Eval answers up to the documented `--full` size. */
+export const EVAL_RESPONSE_CHARS = 200_000
+
+/**
+ * The cut never undercuts what the request asked for.
+ * `evaluate` gets 200K; an action whose `maxChars` is above the default gets
+ * that, plus room for the extension's own marker; everything else keeps 50K,
+ * so plain `text` and `html` output do not grow.
+ */
+export function responseCapFor(action: unknown): number {
+  const a = action as { type?: unknown; maxChars?: unknown } | null | undefined
+  if (a?.type === "evaluate") return EVAL_RESPONSE_CHARS
+  if (typeof a?.maxChars === "number" && a.maxChars > MAX_RESPONSE_CHARS) return a.maxChars + 2_000
+  return MAX_RESPONSE_CHARS
+}
+
+/** Cut an over-long string result and say so, in the text and in `truncated`. */
+export function truncateResponse(payload: string, cap = MAX_RESPONSE_CHARS): string {
+  if (payload.length <= cap) return payload
+  try {
+    const parsed = JSON.parse(payload)
+    const data = parsed.result?.data
+    if (typeof data === "string" && data.length > cap) {
+      parsed.result.data = `${data.slice(0, cap)}\n... (truncated: showed ${cap} of ${data.length} chars)`
+      parsed.result.truncated = { shown: cap, total: data.length }
+      return JSON.stringify(parsed)
+    }
+  } catch {}
+  return payload
 }

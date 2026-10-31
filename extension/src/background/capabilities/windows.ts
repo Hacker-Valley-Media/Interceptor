@@ -1,4 +1,4 @@
-import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE, moveNamedGroupToWindow, ungroupBeforeClose } from "../tab-group"
+import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE, hydrateNamedGroups, isTabInInterceptorGroup, labelForGroupId, moveNamedGroupToWindow, ungroupBeforeClose } from "../tab-group"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -58,6 +58,42 @@ function windowUpdateInfoFromAction(action: { [key: string]: unknown }): chrome.
   return info
 }
 
+// Where a tab lived before detachTab, so returnTab can put it back.
+export type TabHome = {
+  windowId: number; index: number; active: boolean
+  groupId: number; group: string | null; managed: boolean
+}
+
+/**
+ * Gives a tab a new background window of its own. On macOS a hidden tab moved
+ * into a window that is already covered keeps its native view hidden, so a click
+ * has nothing to land on (WebContentsImpl goes HIDDEN to OCCLUDED and never
+ * shows the view). A new window is not covered yet, so the tab shows first and
+ * stays hit-testable when the window is covered later. Same size as home, so
+ * the page does not reflow.
+ */
+export async function detachTab(tabId: number): Promise<TabHome> {
+  const tab = await chrome.tabs.get(tabId)
+  const win = await chrome.windows.get(tab.windowId)
+  await hydrateNamedGroups()
+  const home: TabHome = {
+    windowId: tab.windowId, index: tab.index, active: tab.active,
+    groupId: tab.groupId, group: labelForGroupId(tab.groupId), managed: await isTabInInterceptorGroup(tabId),
+  }
+  await withWindowTimeout("os_detach", chrome.windows.create({ tabId, focused: false, width: win.width, height: win.height }))
+  return home
+}
+
+/** Undoes detachTab. A tab that was alone in its window has no home left and stays put, regrouped. */
+export async function returnTab(tabId: number, home: TabHome): Promise<void> {
+  const homeWindow = await chrome.windows.get(home.windowId).catch(() => null)
+  if (homeWindow) await chrome.tabs.move(tabId, { windowId: home.windowId, index: home.index })
+  if (home.group) await addTabToNamedGroup(tabId, home.group)
+  else if (home.managed) await addTabToInterceptorGroup(tabId)
+  else if (home.groupId !== -1) await chrome.tabs.group({ tabIds: [tabId], groupId: home.groupId }).catch(() => {})
+  if (homeWindow && home.active) await chrome.tabs.update(tabId, { active: true })
+}
+
 export async function handleWindowActions(
   action: { type: string; [key: string]: unknown },
   _tabId: number
@@ -68,6 +104,7 @@ export async function handleWindowActions(
         const win = await withWindowTimeout(
           "window_create",
           chrome.windows.create({
+            tabId: action.moveTabId as number | undefined,
             url: action.url as string | undefined,
             type: (action.windowType as chrome.windows.CreateData["type"]) || "normal",
             width: action.width as number | undefined,

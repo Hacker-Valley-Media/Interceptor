@@ -69,7 +69,7 @@ describe("screenshot CLI flag parsing", () => {
 
   test("rejects a positional path instead of silently discarding it", () => {
     expect(() => parseScreenshotCommand(["screenshot", "named.png", "--save"]))
-      .toThrow("--save takes no value")
+      .toThrow("pass the file with --out <path>")
   })
 
   test("positional rejection exits before creating a screenshot file", () => {
@@ -77,7 +77,7 @@ describe("screenshot CLI flag parsing", () => {
     try {
       const result = captureShell(process.execPath, [resolve(import.meta.dir, "../cli/index.ts"), "screenshot", "--save", "named.png"], { cwd: dir })
       expect(result.status).toBe(1)
-      expect(result.stderr.toString()).toContain("--save takes no value")
+      expect(result.stderr.toString()).toContain("pass the file with --out <path>")
       expect(readdirSync(dir)).toEqual([])
     } finally {
       rmSync(dir, { recursive: true, force: true })

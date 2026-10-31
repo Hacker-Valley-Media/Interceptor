@@ -53,7 +53,7 @@ describe("daemon outbound transport routing", () => {
     })).toEqual({
       ok: false,
       code: "target_ambiguous",
-      error: "multiple extensions connected, use --context <id> (connected: chrome-main, brave-work)",
+      error: "multiple extensions connected, use --context <id> (connected: chrome-main, brave-work); set a default once: interceptor contexts default <name>",
     })
   })
 
