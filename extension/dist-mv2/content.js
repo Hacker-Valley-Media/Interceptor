@@ -2215,7 +2215,7 @@ async function handleSubmitForm(action) {
   if (!form) {
     return { success: false, error: "this element is not inside a form, so there is nothing to submit; click the page's search or submit button instead (or use --keys Enter --trusted)" };
   }
-  const submitter = Array.from(form.elements).find((e) => e instanceof HTMLButtonElement && e.type === "submit" || e instanceof HTMLInputElement && (e.type === "submit" || e.type === "image"));
+  const submitter = Array.from(form.ownerDocument.querySelectorAll("button, input[type=submit], input[type=image]")).find((e) => e.form === form && (e.type === "submit" || e.type === "image"));
   if (submitter?.matches(":disabled")) {
     return { success: false, error: "the form's submit button is disabled, so Enter would not submit it; read the page for what it is waiting on" };
   }

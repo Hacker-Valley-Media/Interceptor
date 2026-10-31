@@ -20,6 +20,19 @@ describe("submit_form", () => {
     expect((r.data as { submitter: string }).submitter).toBe("Apply")
   })
 
+  test("an image button and a button outside the form count, in tree order", async () => {
+    document.body.innerHTML = `<form id="f"><input id="q"><input id="img" type="image" alt="Go"><button id="late" type="submit">Later</button></form>`
+    let clicked = ""
+    for (const id of ["img", "late"]) document.getElementById(id)!.addEventListener("click", (e) => { clicked ||= id; e.preventDefault() })
+    await handleSubmitForm({ type: "submit_form", ref: getOrAssignRef(document.getElementById("q")!) })
+    expect(clicked).toBe("img")
+    document.body.innerHTML = `<form id="g"><input id="r"></form><button id="out" type="submit" form="g">Out</button>`
+    let outside = false
+    document.getElementById("out")!.addEventListener("click", (e) => { outside = true; e.preventDefault() })
+    await handleSubmitForm({ type: "submit_form", ref: getOrAssignRef(document.getElementById("r")!) })
+    expect(outside).toBe(true)
+  })
+
   test("a disabled default button refuses, as Enter would do nothing", async () => {
     document.body.innerHTML = `<form><input id="q"><button type="submit" disabled>Pay</button></form>`
     const r = await handleSubmitForm({ type: "submit_form", ref: getOrAssignRef(document.getElementById("q")!) })

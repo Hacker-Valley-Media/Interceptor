@@ -95,10 +95,12 @@ export async function handleSubmitForm(action: Action): Promise<ActionResult> {
   if (!form) {
     return { success: false, error: "this element is not inside a form, so there is nothing to submit; click the page's search or submit button instead (or use --keys Enter --trusted)" }
   }
-  // Enter clicks the default button, and does nothing when it is disabled.
-  const submitter = Array.from(form.elements).find(e =>
-    (e instanceof HTMLButtonElement && e.type === "submit") ||
-    (e instanceof HTMLInputElement && (e.type === "submit" || e.type === "image"))) as HTMLButtonElement | HTMLInputElement | undefined
+  // Enter clicks the default button: the first submit button in tree order
+  // whose form is this one. form.elements leaves out image buttons, and a
+  // button can sit outside the form through its form attribute.
+  const submitter = Array.from(form.ownerDocument.querySelectorAll("button, input[type=submit], input[type=image]")).find(e =>
+    (e as HTMLButtonElement).form === form && ((e as HTMLButtonElement).type === "submit" || (e as HTMLInputElement).type === "image")
+  ) as HTMLButtonElement | HTMLInputElement | undefined
   if (submitter?.matches(":disabled")) {
     return { success: false, error: "the form's submit button is disabled, so Enter would not submit it; read the page for what it is waiting on" }
   }

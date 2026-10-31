@@ -1,6 +1,6 @@
 import { sendToHost, activeTransport, connectToHost, connectWsChannel } from "./transport"
 import {
-  SENSITIVE_ACTIONS, verifyTabUrl, hasTabGroupApi, hydrateNamedGroups, labelForGroupId,
+  SENSITIVE_ACTIONS, verifyTabUrl, hasTabGroupApi, hydrateNamedGroups, readoptNamedGroups, labelForGroupId,
   GROUP_LABEL_RE, ensureNamedGroup, isTabInNamedGroup, isTabInAnyManagedGroup, anyManagedGroupKnown
 } from "./tab-group"
 import { routeAction } from "./router"
@@ -338,7 +338,8 @@ export async function handleDaemonMessage(msg: {
       const closeId = moveTabId ?? ((action.tabId as number) || tabId)
       try {
         const tab = await chrome.tabs.get(closeId!)
-        await hydrateNamedGroups()
+        // A restart empties the session registry; titles still name the group.
+        await readoptNamedGroups()
         refusal = foreignSessionCloseError("tab", labelForGroupId(tab.groupId), groupLabel!, closeId!)
       } catch {}
     }

@@ -16,10 +16,16 @@
 type Tagged = Event & { __interceptor_trust?: boolean }
 
 const INPUT_EVENT = /^(click|dblclick|auxclick|contextmenu|mouse|pointer|key|touch|wheel|drag|drop|input|beforeinput|change|composition|focus|blur|paste|copy|cut)/
+// Taken while this runs at document_start, before page scripts: a page may
+// later define its own global Node, Window, Object or Reflect.
 const sourceOf = Function.prototype.toString
+const { apply } = Reflect
+const NodeCtor = typeof Node === "function" ? Node : undefined
+const WindowCtor = typeof Window === "function" ? Window : undefined
+const ObjectCtor = Object
 
 const isPageTarget = (target: unknown): boolean =>
-  target == null || target instanceof Node || target instanceof Window
+  target == null || (!!NodeCtor && target instanceof NodeCtor) || (!!WindowCtor && target instanceof WindowCtor)
 
 export function installTrustShim(proto: EventTarget, isTarget: (target: unknown) => boolean = isPageTarget): void {
   const views = new WeakMap<Event, Event>()
@@ -52,14 +58,14 @@ export function installTrustShim(proto: EventTarget, isTarget: (target: unknown)
   const wrap = (listener: unknown): unknown => {
     // Skips non-objects and listeners from another realm: the browser stops
     // calling those when their frame goes away, and a wrapper here would not.
-    if (!(listener instanceof Object)) return listener
+    if (!(listener instanceof ObjectCtor)) return listener
     let wrapper = wrappers.get(listener)
     if (!wrapper) {
       // Built in a call so the function has no name to show in a stack trace.
       wrapper = (() => function (this: unknown, event: Event) {
         const seen = eventFor(listener, event)
         return typeof listener === "function"
-          ? Reflect.apply(listener, this, [seen])
+          ? apply(listener, this, [seen])
           : (listener as EventListenerObject).handleEvent(seen)
       })()
       wrappers.set(listener, wrapper)
@@ -67,24 +73,29 @@ export function installTrustShim(proto: EventTarget, isTarget: (target: unknown)
     return wrapper
   }
 
-  const isInput = (self: unknown, args: unknown[]): boolean =>
-    args.length > 1 && INPUT_EVENT.test(String(args[0])) && isTarget(self)
+  // Any failure here means the page gets the native behavior, never an error.
+  const isInput = (self: unknown, args: unknown[]): boolean => {
+    try { return args.length > 1 && typeof args[0] === "string" && INPUT_EVENT.test(args[0]) && isTarget(self) } catch { return false }
+  }
+  const wrapperOf = (listener: unknown): EventListener | undefined => {
+    try { return listener instanceof ObjectCtor ? wrappers.get(listener) : undefined } catch { return undefined }
+  }
 
   // Proxies over the native functions, like window.fetch, so toString still
   // reads as native code.
   proto.addEventListener = new Proxy(proto.addEventListener, {
     apply(target, self, args) {
-      if (isInput(self, args)) args[1] = wrap(args[1])
-      return Reflect.apply(target, self, args)
+      if (isInput(self, args)) { try { args[1] = wrap(args[1]) } catch {} }
+      return apply(target, self, args)
     },
   })
   proto.removeEventListener = new Proxy(proto.removeEventListener, {
     apply(target, self, args) {
       // Both forms: the page's own function may have been added before this
       // ran, or through a path that does not come here.
-      const wrapper = isInput(self, args) && args[1] instanceof Object ? wrappers.get(args[1]) : undefined
-      if (wrapper) Reflect.apply(target, self, [args[0], wrapper, ...args.slice(2)])
-      return Reflect.apply(target, self, args)
+      const wrapper = isInput(self, args) ? wrapperOf(args[1]) : undefined
+      if (wrapper) apply(target, self, [args[0], wrapper, ...args.slice(2)])
+      return apply(target, self, args)
     },
   })
 }

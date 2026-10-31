@@ -927,7 +927,7 @@ async function detachTab(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const win = await chrome.windows.get(tab.windowId);
   await hydrateNamedGroups();
-  const group = tab.groupId !== -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null;
+  const group = hasTabGroupApi() && tab.groupId > -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null;
   const home = {
     windowId: tab.windowId,
     index: tab.index,
@@ -960,7 +960,7 @@ async function adoptsMovedTab(moveTabId, group) {
   const tab = await chrome.tabs.get(moveTabId).catch(() => null);
   if (!tab)
     return false;
-  await hydrateNamedGroups();
+  await readoptNamedGroups();
   return typeof group === "string" ? labelForGroupId(tab.groupId) === group : isTabInInterceptorGroup(moveTabId);
 }
 async function handleWindowActions(action, _tabId) {
@@ -6030,7 +6030,7 @@ async function handleDaemonMessage(msg) {
       const closeId = moveTabId ?? (action.tabId || tabId);
       try {
         const tab = await chrome.tabs.get(closeId);
-        await hydrateNamedGroups();
+        await readoptNamedGroups();
         refusal = foreignSessionCloseError("tab", labelForGroupId(tab.groupId), groupLabel, closeId);
       } catch {}
     }

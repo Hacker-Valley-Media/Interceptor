@@ -1,4 +1,4 @@
-import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE, hydrateNamedGroups, isTabInInterceptorGroup, labelForGroupId, moveNamedGroupToWindow, ungroupBeforeClose } from "../tab-group"
+import { addTabToInterceptorGroup, addTabToNamedGroup, GROUP_LABEL_RE, hydrateNamedGroups, hasTabGroupApi, readoptNamedGroups, isTabInInterceptorGroup, labelForGroupId, moveNamedGroupToWindow, ungroupBeforeClose } from "../tab-group"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -76,7 +76,7 @@ export async function detachTab(tabId: number): Promise<TabHome> {
   const tab = await chrome.tabs.get(tabId)
   const win = await chrome.windows.get(tab.windowId)
   await hydrateNamedGroups()
-  const group = tab.groupId !== -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null
+  const group = hasTabGroupApi() && tab.groupId > -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null
   const home: TabHome = {
     windowId: tab.windowId, index: tab.index, active: tab.active,
     groupId: tab.groupId, group: labelForGroupId(tab.groupId), color: group?.color,
@@ -109,7 +109,7 @@ async function adoptsMovedTab(moveTabId: unknown, group: unknown): Promise<boole
   if (typeof moveTabId !== "number") return true
   const tab = await chrome.tabs.get(moveTabId).catch(() => null)
   if (!tab) return false
-  await hydrateNamedGroups()
+  await readoptNamedGroups()
   return typeof group === "string" ? labelForGroupId(tab.groupId) === group : isTabInInterceptorGroup(moveTabId)
 }
 

@@ -30,7 +30,7 @@
     <h2>Interceptor 2.1.8</h2>
     <time datetime="2026-10-31">October 31, 2026</time>
     <ul>
-      <li>In browsers with tab groups, an agent can no longer type into the tab you are looking at by accident. When an agent's own tab group is empty, clicks, typing, keys, eval and navigation refuse and say to open a page first; reads still work on your tab and say which tab they read. Closing another agent session's group or tabs now needs <code>--any-tab</code>, and <code>interceptor group close</code> with no label closes your own.</li>
+      <li>In browsers with tab groups (not Safari), an agent can no longer type into the tab you are looking at by accident. When an agent's own tab group is empty, clicks, typing, keys, eval and navigation refuse and say to open a page first; reads still work on your tab and say which tab they read. Closing another agent session's group or tabs now needs <code>--any-tab</code>, and <code>interceptor group close</code> with no label closes your own.</li>
       <li>Several browser profiles connected? Name a default once with <code>interceptor contexts default &lt;name&gt;</code>. It is used only when a command names no context.</li>
       <li><code>act</code> now lists what a click changed in plain lines, including text it revealed, and <code>act &lt;ref&gt; "text" --submit</code> types and submits a form in one call.</li>
       <li><code>screenshot --out &lt;path&gt;</code> saves where you ask. <code>tab list</code> lists tabs. Bare <code>interceptor net</code> shows the network log.</li>

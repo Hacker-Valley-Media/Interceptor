@@ -139,7 +139,7 @@ describe("wiring", () => {
 
   test("the move outlasts the window timeout, so a slow create is not abandoned", () => {
     expect(daemon).toContain("route.contextId, moveTabId, 10_000)")
-    expect(read("extension/src/background/capabilities/windows.ts")).toMatch(/WINDOW_API_TIMEOUT_MS = 8_?000|8_?000/)
+    expect(read("extension/src/background/capabilities/windows.ts")).toMatch(/WINDOW_OP_TIMEOUT_MS = 8_?000\b/)
   })
 
   test("the retry runs once and carries a resolved secret", () => {
@@ -228,6 +228,16 @@ describe("listener shim", () => {
     target.removeEventListener("click", fn)
     fire(target)
     expect(calls).toBe(1)
+  })
+
+  test("page globals cannot make addEventListener throw", () => {
+    const added: unknown[] = []
+    const fake = { addEventListener(_t: string, l: unknown) { added.push(l) }, removeEventListener() {} } as unknown as EventTarget
+    installTrustShim(fake, () => { throw new TypeError("Right-hand side of 'instanceof' is not callable") })
+    const fn = () => {}
+    expect(() => fake.addEventListener("click", fn)).not.toThrow()
+    expect(added[0]).toBe(fn)
+    expect(() => fake.removeEventListener("click", fn)).not.toThrow()
   })
 
   test("targets other than nodes and windows are left alone", () => {

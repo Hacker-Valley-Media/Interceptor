@@ -822,7 +822,9 @@ export async function runAct(
   console.log(parts.join("\n"))
 }
 
-const NO_DIFF = JSON.stringify({ changes: 0, added: [], removed: [], changed: [] }, null, 2)
+// No earlier read of this page, so nothing was compared. `changes: null` keeps
+// the shape for scripts that parse it without claiming the page is unchanged.
+const NO_DIFF = JSON.stringify({ changes: null, added: [], removed: [], changed: [], note: "no earlier read of this page to compare" }, null, 2)
 
 function opensNewPage(diffResult: Result): boolean {
   return !(diffResult.success && diffResult.data && typeof diffResult.data === "object")
