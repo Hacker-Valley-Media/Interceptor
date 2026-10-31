@@ -66,12 +66,13 @@ export const COMMAND_SPECS: CommandSpec[] = [
   },
   {
     name: "act", surface: "browser",
-    usage: "interceptor act <ref> [value…] [--keys <combo>] [--trusted] [--append] [--no-read] [--timeout <ms>]",
-    summary: "Click (no value) or type (with value) on a ref, wait, return updated tree + diff",
-    returns: "Updated a11y tree + '--- diff ---' of what changed. 'ok (page navigated…)' when the action triggered navigation.",
+    usage: "interceptor act <ref> [value…] [--submit] [--keys <combo>] [--trusted] [--append] [--no-read] [--timeout <ms>]",
+    summary: "Click (no value) or type (with value) on a ref, wait, return updated tree + what changed",
+    returns: "Updated a11y tree, then a '--- changes ---' block of plain lines: text added/removed and elements added/removed/changed since your last read of the page. --json keeps {tree, diff}; the diff gains textAdded/textRemoved.",
     flags: [
-      { name: "--keys", value: "<combo>", description: "send a keyboard shortcut instead (e.g. Enter, cmd+shift+p)" },
-      { name: "--trusted", description: "HID-sourced input — page sees isTrusted: true; requires the target tab active in the OS-focused window (refuses otherwise, never moves focus)" },
+      { name: "--keys", value: "<combo>", description: "focus the ref, then send a keyboard shortcut (e.g. Escape, cmd+shift+p); a synthetic Enter does not submit a form" },
+      { name: "--submit", description: "after typing (or alone), submit the ref's form the way Enter would (form.requestSubmit with its default button); refuses outside a form" },
+      { name: "--trusted", description: "HID-sourced input — page sees isTrusted: true; on a full install it reaches a background window, and a tab that is not showing gets a background window of its own and goes back (never moves focus); elsewhere it needs the tab active in the OS-focused window" },
       { name: "--append", description: "type without clearing the field first" },
       { name: "--no-read", description: "skip the post-action tree read" },
     ],
@@ -168,10 +169,10 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "wait", surface: "browser", usage: "interceptor wait <ms>", summary: "Sleep", returns: "ok." },
   { name: "wait-stable", surface: "browser", usage: "interceptor wait-stable [--ms <n>] [--timeout <ms>]", summary: "Wait for DOM stability", returns: "ok when the DOM stops mutating." },
   // ── tabs / network / capture / data ─────────────────────────────────────────
-  { name: "tabs", surface: "browser", usage: "interceptor tabs", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
+  { name: "tabs", surface: "browser", usage: "interceptor tabs   (or: interceptor tab list)", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
   {
     name: "tab", surface: "browser",
-    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab close [id] | tab switch <id> | tab keepalive <id> [--off]",
+    usage: "interceptor tab new [url] [--reuse|--no-reuse] [--activate] | tab list | tab close [id] | tab switch <id> | tab keepalive <id> [--off]",
     summary: "Create, reuse, activate, keep rendering, or close managed tabs",
     returns: "Tab metadata for creation, or ok / error for exact-ID lifecycle actions; keepalive returns the flag state and its limits.",
     flags: [
@@ -188,9 +189,9 @@ export const COMMAND_SPECS: CommandSpec[] = [
     returns: "check: started, concluded, outcome, phase, selected/latest version or error, and feed. status: the same observed lifecycle plus lastCheck, nextCheckAt, automaticChecks, checkInterval, canCheckForUpdates, sessionInProgress and the last install (lastInstallVersion, lastInstallOutcome, lastInstallAt).",
     example: "interceptor update",
   },
-  { name: "network", surface: "browser", usage: "interceptor net [--filter <pattern>] [--limit <n>] [--format har|json|pcapng --out <path>]", summary: "Passive network log", returns: "Recent requests (method, url, status, type); exportable to HAR/pcapng." },
+  { name: "network", surface: "browser", usage: "interceptor net [log] [--filter <pattern>] [--limit <n>] [--format har|json|pcapng --out <path>]", summary: "Passive network log (bare 'net' is 'net log')", returns: "Recent requests (method, url, status, type); exportable to HAR/pcapng." },
   { name: "headers", surface: "browser", usage: "interceptor headers [--filter <pattern>]", summary: "Request headers seen", returns: "Header sets per request." },
-  { name: "screenshot", surface: "browser", usage: "interceptor screenshot [--element <ref>] [--save] [--format png|jpeg|webp] [--quality <n>]", summary: "Screenshot page/element", returns: "Image. --save takes no value and writes one auto-named file in the current directory." },
+  { name: "screenshot", surface: "browser", usage: "interceptor screenshot [--element <ref>] [--out <path> | --save] [--format png|jpeg|webp] [--quality <n>]", summary: "Screenshot page/element", returns: "Image. --out <path> writes that file (the extension picks the format; the folder must exist); --save writes one auto-named file in the current directory. Either prints 'saved: <path>' on stderr and filePath in the result." },
   { name: "eval", surface: "browser", usage: "interceptor eval <expr> [--main] [--frame <id>] [--no-reload]", summary: "Evaluate JS in the requested frame and world (isolated by default)", returns: "Expression result. Isolated eval needs userScripts support when extension CSP blocks eval. MAIN CSP recovery can reload the tab and returns {value,cspBypassApplied,originalError}; never switches world or frame. --no-reload refuses that reload and returns the CSP error instead. Use it on a stateful page a reload would destroy." },
   { name: "save", surface: "browser", usage: "interceptor save --out <abs-path> <expr>", summary: "Stream page-produced bytes (Blob/File/ArrayBuffer) to disk", returns: "{path, bytes, sha256} — integrity-checked." },
   { name: "cookies", surface: "browser", usage: "interceptor cookies [domain] | cookies set/delete …", summary: "Read/write cookies", returns: "Cookie list." },

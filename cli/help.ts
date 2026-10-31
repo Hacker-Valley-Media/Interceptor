@@ -220,7 +220,8 @@ GLOBAL FLAGS (any command, any position — flag order never changes meaning):
   e.g. 'open --text-only <url>' ≡ 'open <url> --text-only'
   unknown flags are rejected (exit 1) on browser commands; INTERCEPTOR_LAX_FLAGS=1 downgrades to a warning
   env defaults, set once per lane: INTERCEPTOR_CONTEXT=<id> (browser profile when several are connected),
-  INTERCEPTOR_GROUP=<label> (tab group), INTERCEPTOR_TREE_MAX_CHARS / INTERCEPTOR_TEXT_MAX_CHARS (open/read output budget)
+  INTERCEPTOR_GROUP=<label> (tab group), INTERCEPTOR_TREE_MAX_CHARS / INTERCEPTOR_TEXT_MAX_CHARS (open/read output budget),
+  INTERCEPTOR_DEBUG=1 (print request-trace lines when stderr is not a terminal)
 
 Docs & issues: https://github.com/Hacker-Valley-Media/Interceptor`
 
@@ -276,12 +277,14 @@ Compound (agent-optimized):
   interceptor style inject --css "<rules>"  Inject a stylesheet; returns a handle (all frames by default)
   interceptor style inject --css "<rules>" --top-only   Inject only into the top frame
   interceptor style remove <handle>          Remove a previously injected stylesheet
-  interceptor act <ref>                      Click + wait + return updated tree + diff
-  interceptor act <ref> "value"              Type into field + wait + return updated tree
-  interceptor act <ref> --trusted            HID-sourced trusted input (isTrusted: true); the target tab must be the
-                                             active tab of a non-minimized window. A window that is not OS-focused is
-                                             reached in the background on a full install; never moves focus
-  interceptor act <ref> --keys "Enter"       Send keyboard shortcut instead
+  interceptor act <ref>                      Click + wait + return updated tree + what changed (text and elements)
+  interceptor act <ref> "value"              Type into field + wait + return updated tree + what changed
+  interceptor act <ref> "value" --submit     Type, then submit the field's form (what Enter would do); 'act <ref> --submit' submits only
+  interceptor act '[e5]'                     A ref copied with its brackets works too (quote it: zsh treats [..] as a pattern)
+  interceptor act <ref> --trusted            HID-sourced trusted input (isTrusted: true). On a full install a window that
+                                             is not OS-focused is reached in the background, and a tab that is not showing
+                                             gets a background window of its own and goes back; never moves focus
+  interceptor act <ref> --keys "Enter"       Focus the ref, then send a keyboard shortcut (synthetic Enter never submits a form: use --submit)
   interceptor act <ref> --no-read            Skip post-action tree read
   interceptor inspect                        Tree + text + network log + headers
   interceptor inspect --net-only             Skip tree/text, return only network data
@@ -384,14 +387,15 @@ Navigation:
   interceptor wait <ms>                      Wait milliseconds
 
 Tabs:
-  interceptor tabs                           List all tabs
+  interceptor tabs                           List all tabs ('tab list' does the same)
   interceptor tab new [url]                  Open new tab in background (creates by default; --reuse opts in)
   interceptor tab new [url] --activate       Open new tab and foreground it (explicit opt-in)
   interceptor tab new [url] --reuse          Navigate the group's most-recent tab instead of creating
   interceptor tab close [id]                 Close tab
   interceptor tab keepalive <id> [--off]     Make a hidden managed tab read as visible and run its animation frames (no focus change)
   interceptor tab switch <id>                Switch to tab (explicit focus move; 'tab switch' back to the tab that was showing is allowed)
-  interceptor window new [url]               Open a background window and move your tab group into it (your own window: its tabs paint, and 'tab switch' there never touches the user's view)
+  interceptor window new [url]               Open a background window and move your tab group into it (your own window: its tab paints, and 'tab switch' there never touches the user's view)
+  interceptor window new --tab <id>          The same, built around a tab you already have; the page and its state stay
   interceptor window new [url] --activate    Open a new browser window and focus it (explicit opt-in)
   interceptor window list                    List all browser windows
   interceptor window close <id>              Close a browser window
@@ -409,6 +413,7 @@ Capture:
   interceptor screenshot --region X,Y,W,H   Capture page region (rendered + cropped)
   interceptor screenshot --scale 2           Override pixel ratio (e.g. retina from 1x display)
   interceptor screenshot --pixel             Pixel-true compositor capture (captureVisibleTab — the tab's window must be on screen; the browser need not be focused; a fully covered Chrome window can return a stale frame)
+  interceptor screenshot --out <path>        Save to that file (.png/.jpg/.jpeg/.webp picks the format; the folder must exist)
   interceptor screenshot --save              Save one auto-named file in cwd; takes no path value
   interceptor screenshot --format png        Output format: png (default), jpeg, or webp
   interceptor screenshot --quality 80        Encode quality 0-100 (defaults: png 92, jpeg 92, webp 85)
@@ -445,7 +450,7 @@ Request Override (passive, no CDP):
   interceptor override clear                  Remove all overrides
 
 Passive Network (always-on, no CDP):
-  interceptor net log                        Passively captured fetch/XHR traffic
+  interceptor net log                        Passively captured fetch/XHR traffic (bare 'interceptor net' does the same)
   interceptor net log --filter <pattern>     Filter by URL substring
   interceptor net log --since <30s|5m|ts>    Entries from the last 30s/5m/2h/1d, or after an epoch-ms timestamp
   interceptor net log --limit <n>            Max entries (default 100)
@@ -558,6 +563,8 @@ Recording (Session Monitor):
 Meta:
   interceptor contexts [--verbose]           List connected browser contexts (verbose: version, store/unpacked, id, transports)
   interceptor contexts rename <name>         Name the targeted context (what the popup does); use --context <id> to pick it
+  interceptor contexts default <name>        Save the context to use when a command names none and several are connected
+  interceptor contexts default [--clear]     Show or remove the saved default (~/.interceptor/config.json, or $INTERCEPTOR_CONFIG)
   interceptor init                           First-run preflight: verify daemon, bridge, and extension are reachable
   interceptor init --verbose                 Same as 'init', plus a per-component reachability breakdown
   interceptor status                         Check daemon status (local — no connection needed)
@@ -588,8 +595,9 @@ Branding:
 
 Tab groups (per-agent isolation):
   interceptor open <url> --group <label>     Open into the named group "<brand>-<label>" (created on first use)
-  interceptor group list                     All live tab groups: label, title, color, tab count
+  interceptor group list                     All live tab groups: label, title, color, tab count; "own": true marks yours
   interceptor group close <label>            Atomically close every tab in a named group and delete the group (other groups untouched)
+  interceptor group close                    Close your own group (your session group, or the --group you run under)
   interceptor group prune [--dry-run]        Delete every closed saved group Interceptor left on the bookmarks bar (Full install)
   interceptor group prune <label>...         Delete only those groups' closed saved copies (a delete syncs and cannot be undone)
   interceptor group prune --app <name>       One browser only (default: every running Chromium browser)
@@ -638,6 +646,12 @@ macOS Bridge (full install only):
   interceptor macos tree --depth N --max-chars N    Limit depth and output size
   interceptor macos find "<query>" [--role button] [--app <name>]
   interceptor macos value <ref> ["<text>"]   Read or set element value
+  interceptor macos text <ref> [--selection|--visible]   Text of an element: all of it, the selection, or the visible part
+  interceptor macos vm list|get|inspect [<name>]              Local virtual machines and their state
+  interceptor macos vm start <name> [--headless] [--wait-for-agent] [--detach] | stop <name> [--force] [--timeout <ms>]
+  interceptor macos vm clone <src> <dst> | delete <name> | pause|resume|reset <name> | snapshot|restore <name> <tag>
+  interceptor macos vm exec <name> <cmd> [args...] | cp <src> <dst> (one side <vm>:<guest-path>) | mount <name> <tag> <guest-path>
+  interceptor macos vm screenshot <name> | type <name> <text> | click <name> <x,y> | keys <name> <keys> | read-ax <name> | logs <name>
   interceptor macos action <ref> press|increment|decrement|...
   interceptor macos focused [--app <name>]   Currently focused element
   interceptor macos windows [--app <name>]   All windows with frames and window ids
@@ -852,7 +866,21 @@ const HELP_IOS = `  iOS — automate your iPhone (Xcode-signed device runner):
   interceptor ios stream start|stop|status [--fps N] [--out <path>] Continuous JPEG frames from the phone
   interceptor ios frame [--out <path>]                              Save the newest streamed frame
   interceptor ios type <ref> --secret <name> | keys --secret <name> | unlock --secret <name>   Vault-backed passcode entry
-  interceptor ios screenshot | apps | app launch|activate|terminate <id> [--on <name>]
+  interceptor ios screenshot [--on <name>]                          One JPEG of the screen (VLM-budget resized)
+  interceptor ios apps [--on <name>]                                Installed apps
+  interceptor ios app launch|activate|terminate <bundle-id> [--on <name>]   App lifecycle
+  interceptor ios status                                            Live device contexts and the runner's dial-back address (dialBack, dialBackVia, dialBackReachable)
+  interceptor ios discover                                          Phones this Mac can see
+  interceptor ios refresh [<device>] [--team <id>]                  Re-sign the runner now (also automatic before expiry)
+  interceptor ios login|logout                                      login is unavailable (use setup); logout removes legacy stored Apple-ID data
+  interceptor ios unlock --secret <name> | --probe [--on <name>]    Type the passcode into the lock screen (runner must be resident)
+  interceptor ios eval "<js>" | --file <f.js> [--on <name>]         Run a JS program in the on-device brain (Interceptor.tree/tap/type/sleep/log)
+  interceptor ios web targets|attach|eval ... [--on <name>]         Web content on the phone; run 'interceptor ios web' for the full list
+  interceptor ios proc|top|gpu [--follow] [--on <name>]             Processes, per-process CPU/memory, FPS/GPU samples (Instruments, no runner)
+  interceptor ios spawn|kill <bundle> [--env K=V] [--arg X] | <pid> Launch an app with env/args, or kill a process by pid
+  interceptor ios location set <lat> <lon> | location clear         Simulate or clear GPS
+  interceptor ios shot|screen [<out.png>] | [--out <dir>] [--seconds N] [--fps F]   One screenshot, or live frames from the runner
+  interceptor ios backup|axtree [--on <name>]                       mobilebackup2 handshake info, or the runner-free accessibility probe
   Run 'interceptor ios help' for the full iOS surface.`
 
 // Back-compat: the complete dump (all surfaces), used by helpForCommand's

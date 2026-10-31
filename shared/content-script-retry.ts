@@ -23,7 +23,7 @@ export function shouldRetryContentScript(error?: string): boolean {
 // clipboard_write) are idempotent and stay on the retry path.
 export const INPUT_ACTIONS = new Set([
   "click", "click_selector", "click_at", "dblclick", "rightclick", "drag",
-  "input_text", "send_keys", "select_option", "check",
+  "input_text", "send_keys", "select_option", "check", "submit_form",
   "file_upload", "file_upload_chunk",
   "find_and_click", "find_and_type", "find_and_check",
   "scene_click", "scene_dblclick", "scene_select", "scene_insert",

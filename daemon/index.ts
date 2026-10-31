@@ -7,7 +7,7 @@ import { createHash } from "node:crypto"
 import { dirname } from "node:path"
 import { validateBinarySinkPath, binarySinkIntegrityError } from "./binary-sink"
 import { osClick, osKey, osType, osMove, generateBezierPath, translateCoords } from "./os-input-loader"
-import { BACKGROUND_OS_ACTIONS, deliverInBackground } from "./os-background"
+import { BACKGROUND_OS_ACTIONS, confirmDelivery, deliverInBackground, deliverInOwnWindow, type BackgroundTarget } from "./os-background"
 import { IS_WIN, SOCKET_PATH, IPC_PORT, PID_PATH, LOCK_PATH, LOG_PATH, EVENTS_PATH, WS_PORT, EVENTS_MAX_SIZE, MAX_UPLOAD_FRAME_BYTES, transportLabel } from "../shared/platform"
 import {
   MONITOR_EVENT_NAMES,
@@ -18,7 +18,7 @@ import {
   type MonitorSessionMeta,
   updateSessionMeta,
 } from "../shared/monitor-artifacts"
-import { chooseOutboundTransport, isRelayPing, relaySlotAfterClose, validateContextRouting } from "./outbound-routing"
+import { applyDefaultContext, chooseOutboundTransport, isRelayPing, MAX_RESPONSE_CHARS, relaySlotAfterClose, responseCapFor, truncateResponse, validateContextRouting } from "./outbound-routing"
 import { claimContextId, describeContexts, recordExtensionIdentity, type ContextSocket } from "./context-registration"
 import { extensionIdFromOrigin, installTypeLabel, isAllowedWsOrigin } from "../shared/extension-identity"
 import { bridgePidPath, bridgeSocketPath } from "../shared/bridge-paths"
@@ -298,7 +298,7 @@ function sendToBridge(id: string, action: Record<string, unknown>, cliSocket: { 
   bridgePending.set(id, {
     resolve: (response: string) => {
       clearTimeout(timer)
-      socketWriteFramed(cliSocket, response)
+      socketWriteFramed(cliSocket, response, responseCapFor(action))
     },
     timer,
     cliSocket: cliSocket,
@@ -379,7 +379,7 @@ function routeToBridge(id: string, action: Record<string, unknown>, socket: { wr
 // then resolves, then hands the value to exactly one delivery leg.
 
 type DaemonResult = { success: boolean; error?: string; data?: unknown; [k: string]: unknown }
-type CliRequest = { id?: string; action?: unknown; tabId?: number; contextId?: string }
+type CliRequest = { id?: string; action?: unknown; tabId?: number; contextId?: string; defaultContextId?: string }
 
 /** Ask the bridge and await its result as a promise (same framing as sendToBridge). */
 function bridgeCall(action: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<DaemonResult> {
@@ -417,7 +417,7 @@ function bridgeCall(action: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT
 }
 
 /** Ask the extension (one tab) and await its result as a promise. */
-function extensionCall(action: Record<string, unknown>, contextId?: string, tabId?: number, timeoutMs = 15_000): Promise<DaemonResult> {
+function extensionCall(action: Record<string, unknown>, contextId?: string, tabId?: number, timeoutMs = 15_000, osRoute?: OsRoute): Promise<DaemonResult> {
   return new Promise((resolve) => {
     const validation = validateContextRouting({
       contextId,
@@ -441,6 +441,8 @@ function extensionCall(action: Record<string, unknown>, contextId?: string, tabI
       socket: { write: () => 0, remoteAddress: "daemon" } as any,
       startTime: Date.now(),
       actionType: String(action.type ?? "unknown"),
+      sensitiveText: osRoute?.sensitiveText,
+      osRoute,
     })
     sendNativeMessage({ id, action, tabId }, contextId)
   })
@@ -448,8 +450,11 @@ function extensionCall(action: Record<string, unknown>, contextId?: string, tabI
 
 /** The extension dispatch tail: context validation, timeout, pending entry, send. */
 function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket<undefined>, actionType: string, sensitiveText?: string): void {
+  const routed = applyDefaultContext(request.contextId, request.defaultContextId, [...extensionWsMap.keys()])
+  request.contextId = routed.contextId
   const contextValidation = validateContextRouting({
     contextId: request.contextId,
+    fromDefault: routed.fromDefault,
     connectedContexts: [...extensionWsMap.keys()],
     nativeRelayAvailable: !!nativeRelaySocket,
     cdpContexts: cdpManager.contextIds(),
@@ -471,7 +476,7 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
   pendingRequests.set(id, {
     resolve: (response: string) => {
       clearTimeout(timer)
-      socketWriteFramed(socket, response)
+      socketWriteFramed(socket, response, responseCapFor(request.action))
     },
     timer,
     socket,
@@ -486,7 +491,9 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
   if (process.platform === "darwin" && BACKGROUND_OS_ACTIONS.has(actionType)
       && request.action && typeof request.action === "object"
       && readBridgeRecoveryLayout().mode !== "browser-only") {
-    (request.action as Record<string, unknown>).backgroundOk = true
+    const action = request.action as Record<string, unknown>
+    action.backgroundOk = true
+    pendingRequests.get(id)!.osRoute = { action, contextId: request.contextId, sensitiveText }
   }
 
   sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
@@ -742,7 +749,8 @@ async function targetForAction(action: Record<string, unknown>, actionType: stri
       // active tab, which may sit outside the caller's group).
       const probe: Record<string, unknown> = { type: "page_info" }
       for (const k of ["group", "groupSoft", "groupColor"]) if (action[k] !== undefined) probe[k] = action[k]
-      const info = await extensionCall(probe, request.contextId, request.tabId)
+      const { contextId } = applyDefaultContext(request.contextId, request.defaultContextId, [...extensionWsMap.keys()])
+      const info = await extensionCall(probe, contextId, request.tabId)
       const url = (info.data as { url?: unknown } | undefined)?.url
       if (!info.success || typeof url !== "string") throw new Error(`could not read the page URL for the target check: ${info.error ?? "no url"}`)
       let host = ""
@@ -1266,35 +1274,28 @@ try {
 // register first and its process.exit(0) would stop gracefulShutdown from
 // ever running, skipping the CDP/iOS manager teardown.
 
-const pendingRequests = new Map<string, {
+type PendingRequest = {
   resolve: (v: string) => void
   timer: ReturnType<typeof setTimeout>
   // issue #244: a resolved secret for os_type stays here, never in the extension
   // round trip, and is dropped with the entry.
   sensitiveText?: string
+  osRoute?: OsRoute
   socket: { write: (data: Buffer | string) => number; readonly remoteAddress: string }
   startTime: number
   actionType: string
-}>()
+}
+
+const pendingRequests = new Map<string, PendingRequest>()
 
 const socketBuffers = new Map<object, Buffer>()
 
 const LARGE_PAYLOAD_THRESHOLD = 16 * 1024
-const MAX_RESPONSE_CHARS = 50000
 const NATIVE_HOST_TO_CHROME_MAX_BYTES = 1024 * 1024
 
-function socketWriteFramed(socket: { write: (data: Buffer | string) => number }, json: string): boolean {
+function socketWriteFramed(socket: { write: (data: Buffer | string) => number }, json: string, maxChars = MAX_RESPONSE_CHARS): boolean {
   try {
-    let payload = json
-    if (payload.length > MAX_RESPONSE_CHARS) {
-      try {
-        const parsed = JSON.parse(payload)
-        if (parsed.result?.data && typeof parsed.result.data === "string" && parsed.result.data.length > MAX_RESPONSE_CHARS) {
-          parsed.result.data = parsed.result.data.slice(0, MAX_RESPONSE_CHARS) + "\n... (truncated)"
-          payload = JSON.stringify(parsed)
-        }
-      } catch {}
-    }
+    const payload = truncateResponse(json, maxChars)
 
     const encoded = Buffer.from(payload, "utf-8")
 
@@ -1408,14 +1409,17 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
             enrichedAction.duration = data.duration
           }
           log(`[${requestId.slice(0, 8)}] posting OS event for ${pending.actionType}`)
-          handleOsAction(requestId, enrichedAction).then((osResult) => {
-            const finalResult = osResult || { success: false, error: "os action failed" }
-            emitEvent("request_complete", { requestId, action: pending.actionType, duration: Date.now() - pending.startTime, success: finalResult.success })
-            pending.resolve(JSON.stringify({ id: requestId, result: finalResult }))
-            pendingRequests.delete(requestId)
+          handleOsAction(requestId, enrichedAction, pending.osRoute).then((osResult) => {
+            settleOsAction(requestId, pending, osResult || { success: false, error: "os action failed" })
           })
           return
         }
+      }
+
+      // A tab that is not showing: the gate refused and named the tab to move.
+      if (!success && moveTargetOf(pending, result as DaemonResult) !== undefined) {
+        settleOsAction(requestId, pending, result as DaemonResult)
+        return
       }
 
       log(`[${msg.id.slice(0, 8)}] resp ${success ? "ok" : "err"} ${pending.actionType} ${duration}ms`)
@@ -1890,10 +1894,43 @@ function handleBinarySinkFrame(ws: { send: (data: string) => unknown }, raw: Buf
   return true
 }
 
+// What a trusted browser action needs in order to be sent again.
+type OsRoute = { action: Record<string, unknown>; contextId?: string; sensitiveText?: string; retried?: boolean }
+
+// Calls the daemon makes for a request that already passed the extension's
+// group gate. They are not the caller's: they never change its stored target.
+function routeScope(route: OsRoute | undefined): Record<string, unknown> {
+  return { group: route?.action.group, groupSoft: route?.action.groupSoft, anyTab: true, keepTarget: true }
+}
+
+function moveTargetOf(pending: { osRoute?: OsRoute }, result: DaemonResult): number | undefined {
+  if (!pending.osRoute || pending.osRoute.retried) return undefined
+  const moveTabId = (result.data as { moveTabId?: unknown } | undefined)?.moveTabId
+  return typeof moveTabId === "number" ? moveTabId : undefined
+}
+
+function settleOsAction(requestId: string, pending: PendingRequest, result: DaemonResult): void {
+  const finish = (final: DaemonResult) => {
+    emitEvent("request_complete", { requestId, action: pending.actionType, duration: Date.now() - pending.startTime, success: final.success })
+    pending.resolve(JSON.stringify({ id: requestId, result: final }))
+    pendingRequests.delete(requestId)
+  }
+  const moveTabId = result.success ? undefined : moveTargetOf(pending, result)
+  if (moveTabId === undefined) return finish(result)
+  const route = pending.osRoute!
+  log(`[${requestId.slice(0, 8)}] ${pending.actionType} → tab ${moveTabId} gets a background window of its own`)
+  void deliverInOwnWindow(
+    result,
+    (action) => extensionCall({ ...action, ...routeScope(route) }, route.contextId, moveTabId, 10_000),
+    () => extensionCall({ ...route.action, ...routeScope(route) }, route.contextId, moveTabId, 15_000, { ...route, retried: true }),
+  ).then(finish)
+}
+
 async function handleOsAction(
   id: string,
-  action: { type?: string; [key: string]: unknown } | undefined
-): Promise<{ success: boolean; error?: string; data?: unknown } | null> {
+  action: { type?: string; [key: string]: unknown } | undefined,
+  route?: OsRoute
+): Promise<DaemonResult | null> {
   if (!action) return null
   const startTime = Date.now()
 
@@ -1902,8 +1939,11 @@ async function handleOsAction(
   if (action.background) {
     log(`[${id.slice(0, 8)}] ${action.type} → bridge (window not OS-focused)`)
     const result = await deliverInBackground(action, (nativeAction) => process.platform === "darwin" ? bridgeCall(nativeAction) : callDesktopProvider(nativeAction), process.platform)
-    emitEvent("os_action", { requestId: id, action: action.type, duration: Date.now() - startTime, success: result.success, background: true })
-    return result
+    const target = action.background as BackgroundTarget
+    const confirmed = await confirmDelivery(result, target, () =>
+      extensionCall({ type: "os_receipt", frameId: target.frameId, ...routeScope(route) }, route?.contextId, target.tabId, 3_000))
+    emitEvent("os_action", { requestId: id, action: action.type, duration: Date.now() - startTime, success: confirmed.success, background: true })
+    return confirmed
   }
 
   switch (action.type) {
@@ -2361,7 +2401,7 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
         }
         const rawStr = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8")
         log(`ws recv: ${rawStr.length} bytes`)
-        let request: { id?: string; action?: unknown; tabId?: number; contextId?: string; type?: string; result?: unknown }
+        let request: { id?: string; action?: unknown; tabId?: number; contextId?: string; defaultContextId?: string; type?: string; result?: unknown }
         try {
           request = JSON.parse(rawStr)
         } catch {
@@ -2575,8 +2615,11 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           return
         }
 
+        const routed = applyDefaultContext(request.contextId, request.defaultContextId, [...extensionWsMap.keys()])
+        request.contextId = routed.contextId
         const contextValidation = validateContextRouting({
           contextId: request.contextId,
+          fromDefault: routed.fromDefault,
           connectedContexts: [...extensionWsMap.keys()],
           nativeRelayAvailable: !!nativeRelaySocket,
           cdpContexts: cdpManager.contextIds(),

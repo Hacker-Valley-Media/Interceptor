@@ -1,10 +1,11 @@
 import { sendToHost, activeTransport, connectToHost, connectWsChannel } from "./transport"
 import {
-  SENSITIVE_ACTIONS, verifyTabUrl,
+  SENSITIVE_ACTIONS, verifyTabUrl, hasTabGroupApi, hydrateNamedGroups, readoptNamedGroups, labelForGroupId,
   GROUP_LABEL_RE, ensureNamedGroup, isTabInNamedGroup, isTabInAnyManagedGroup, anyManagedGroupKnown
 } from "./tab-group"
 import { routeAction } from "./router"
 import { needsTab } from "./no-tab-actions"
+import { isReadAction, TAB_FREE_ACTIONS } from "./read-actions"
 import { resolveWorkingTabId } from "./resolve-tab"
 import { recordGroupActivity } from "./tab-lifecycle"
 import { consumeSwitchBack } from "./switch-back"
@@ -61,6 +62,53 @@ export async function managedTabGateError(
   } catch {
     const groupArg = groupHard && groupLabel ? ` --group ${groupLabel}` : ""
     return `tab ${tabId} is unavailable; run 'interceptor tabs${groupArg}' to refresh tab IDs and retry`
+  }
+}
+
+/**
+ * A soft session group with no tab of its own falls back
+ * to the tab the user is viewing. A read may still use it (and says so);
+ * anything else refuses, so input never lands on the user's tab.
+ */
+export function softFallbackError(actionType: string, label: string, tabId: number, host: string): string | null {
+  if (isReadAction(actionType)) return null
+  return `your session group '${label}' has no tabs, so this would act on the tab the user is viewing (${tabId}, ${host}). Open a page first (interceptor open <url>), or pass --any-tab if the user asked you to act on that tab.`
+}
+
+/** A soft fallback read that the managed-tab gate refused (other groups are open). */
+export function softFallbackGateError(label: string, tabId: number, host: string): string {
+  return `your session group '${label}' has no tabs, and the tab the user is viewing (${tabId}, ${host}) is not an Interceptor tab. Open a page first (interceptor open <url>), or pass --any-tab if the user asked you to read that tab.`
+}
+
+export function softFallbackNote(tabId: number, host: string): string {
+  return `reading the active tab ${tabId} (${host}), which is not one of this session's tabs; run 'interceptor open <url>' to work in your own tab`
+}
+
+/** Automatic session labels (cli/parse.ts deriveSessionGroupLabel). */
+export const SESSION_LABEL_RE = /^s-[0-9a-f]{16}$/
+
+/**
+ * A caller with a session identity may not close another
+ * session's group or tabs without --any-tab. `owner` is the label of the
+ * group being closed (or holding the tab being closed).
+ */
+export function foreignSessionCloseError(kind: "group" | "tab", owner: string | null, caller: string, target: string | number): string | null {
+  if (!owner || owner === caller || !SESSION_LABEL_RE.test(owner)) return null
+  return kind === "group"
+    ? `group '${owner}' belongs to another agent session that may still be working (yours is '${caller}'). Leave it. Close your own with 'interceptor group close'; pass --any-tab only if the user named this group`
+    : `tab ${target} belongs to another agent session's group '${owner}' (yours is '${caller}'). Leave it to that agent; pass --any-tab only if the user named this tab`
+}
+
+async function tabHost(tabId: number): Promise<string> {
+  try {
+    const tab = await chrome.tabs.get(tabId)
+    if (!tab.url) return "unknown page"
+    // A hostless URL such as data: is page-controlled text, and this ends up
+    // in a warning that sits outside the MCP fence.
+    const url = new URL(tab.url)
+    return url.host || url.protocol
+  } catch {
+    return "unknown page"
   }
 }
 
@@ -220,6 +268,9 @@ export async function handleDaemonMessage(msg: {
     }
   }
 
+  let softFallback: string | undefined
+  let softFallbackRefusal: string | undefined
+  let softFallbackTab = false
   if (!tabId && needsTab(action.type)) {
     // No pre-gate persist here: the post-gate persist below is the only
     // auto-target write, so a request the group gate rejects (e.g. the
@@ -230,6 +281,25 @@ export async function handleDaemonMessage(msg: {
     // noActiveTabError below.
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [] as chrome.tabs.Tab[])
     tabId = activeTab?.id
+    // A soft session that reaches this point has no tab of its own. Browsers
+    // without tab groups (Safari) cannot give a session its own tab, so they
+    // keep the old fallback.
+    if (tabId && groupSoft && hasTabGroupApi()) {
+      // The user's tab is never saved as the session's target, even when
+      // --any-tab authorized this one call: the next call without it must
+      // not inherit the user's tab through the stored-target path.
+      softFallbackTab = true
+      if (action.anyTab !== true && !TAB_FREE_ACTIONS.has(action.type)) {
+        const host = await tabHost(tabId)
+        const refusal = softFallbackError(action.type, groupLabel!, tabId, host)
+        if (refusal) {
+          fail(refusal)
+          return
+        }
+        softFallback = softFallbackNote(tabId, host)
+        softFallbackRefusal = softFallbackGateError(groupLabel!, tabId, host)
+      }
+    }
   }
 
   if (!tabId && needsTab(action.type)) {
@@ -238,8 +308,12 @@ export async function handleDaemonMessage(msg: {
     return
   }
 
+  // `window new --tab` moves a tab, so it passes the same gate as any verb on it.
+  const moveTabId = action.type === "window_create" && typeof action.moveTabId === "number" ? action.moveTabId : undefined
+  if (moveTabId !== undefined) tabId = moveTabId
+
   let switchBack = false
-  if (tabId && needsTab(action.type) && !action.anyTab) {
+  if (tabId && (needsTab(action.type) || moveTabId !== undefined) && !action.anyTab) {
     const membershipError = await managedTabGateError(tabId, groupLabel, groupHard)
     if (membershipError) {
       // One exemption: `tab switch` back to the tab the window was
@@ -247,16 +321,38 @@ export async function handleDaemonMessage(msg: {
       // persisted as an auto-target below.
       switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId, groupLabel)
       if (!switchBack) {
-        fail(membershipError)
+        fail(softFallbackRefusal ?? membershipError)
         return
       }
     }
   }
 
+  // Closing another session's group or tab needs --any-tab.
+  if (groupSoft && action.anyTab !== true && hasTabGroupApi()
+      && (action.type === "group_close" || action.type === "tab_close" || moveTabId !== undefined)) {
+    let refusal: string | null = null
+    if (action.type === "group_close") {
+      const label = typeof action.label === "string" ? action.label : null
+      if (label && await ensureNamedGroup(label) !== -1) refusal = foreignSessionCloseError("group", label, groupLabel!, label)
+    } else {
+      const closeId = moveTabId ?? ((action.tabId as number) || tabId)
+      try {
+        const tab = await chrome.tabs.get(closeId!)
+        // A restart empties the session registry; titles still name the group.
+        await readoptNamedGroups()
+        refusal = foreignSessionCloseError("tab", labelForGroupId(tab.groupId), groupLabel!, closeId!)
+      } catch {}
+    }
+    if (refusal) {
+      fail(refusal)
+      return
+    }
+  }
+
   // Persist the auto-target only AFTER the group gate has passed — a rejected
   // cross-group request must never poison another group's (or the global)
-  // auto-target key.
-  if (tabId && !switchBack) setActiveTabId(tabId, groupLabel)
+  // auto-target key. A soft fallback tab is the user's, never the session's.
+  if (tabId && !switchBack && !softFallbackTab && action.keepTarget !== true) setActiveTabId(tabId, groupLabel)
 
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
     const urlErr = await verifyTabUrl(tabId, action.expectedUrl as string)
@@ -277,6 +373,7 @@ export async function handleDaemonMessage(msg: {
   try {
     const result = await routeAction(action, tabId!)
     if (tabId) result.tabId = tabId
+    if (softFallback && result.success) result.warning = result.warning ? `${softFallback}; ${result.warning}` : softFallback
     clearTimeout(requestTimer)
     pendingRequests.delete(msg.id)
     console.log(`[${shortId}] complete ${action.type} ${Date.now() - startTime}ms`)

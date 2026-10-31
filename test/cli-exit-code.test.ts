@@ -18,6 +18,9 @@ const IPC_PORT = 38231
 const CONTEXT = "exit-code-test"
 const ENV = {
   ...process.env,
+  // The transport assertion below reads the request-trace line, which prints
+  // only to a terminal or with INTERCEPTOR_DEBUG=1.
+  INTERCEPTOR_DEBUG: "1",
   INTERCEPTOR_TEMP: TEMP,
   INTERCEPTOR_WS_PORT: String(WS_PORT),
   INTERCEPTOR_IPC_PORT: String(IPC_PORT),

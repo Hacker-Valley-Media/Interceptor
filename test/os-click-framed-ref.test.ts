@@ -91,21 +91,24 @@ describe("os_click on a ref inside an iframe", () => {
     const sent = install([{ frameId: 0, parentFrameId: -1, url: "a" }, { frameId: 7, parentFrameId: 0, url: "b" }], () => ({ success: true }))
     const result = await handleOsInputActions({ type: "os_type", backgroundOk: true, ref: "e3", frameId: 7, text: "hello" }, 42)
     expect(result.success).toBe(true)
-    expect(sent.map(s => [s.frameId, s.action.type, s.action.ref])).toEqual([[7, "focus", "e3"]])
+    expect(sent.map(s => [s.frameId, s.action.type, s.action.ref])).toEqual([[7, "focus", "e3"], [7, "input_watch", undefined]])
     // An index target with --frame goes to that frame too.
     sent.length = 0
     await handleOsInputActions({ type: "os_type", backgroundOk: true, index: 3, frameId: 7, text: "hello" }, 42)
-    expect(sent.map(s => [s.frameId, s.action.index])).toEqual([[7, 3]])
+    expect(sent.filter(s => s.action.type === "focus").map(s => [s.frameId, s.action.index])).toEqual([[7, 3]])
     // No ref: the already-focused element is used, and the request stays on the top frame.
     sent.length = 0
     await handleOsInputActions({ type: "os_type", backgroundOk: true, sensitive: true, frameId: 7, text: "hello" }, 42)
-    expect(sent.map(s => s.frameId)).toEqual([0])
+    expect(sent.filter(s => s.action.type === "focus").map(s => s.frameId)).toEqual([0])
   })
 
   test("a top-frame ref is unchanged: one rect request, to frame 0", async () => {
     const sent = install([], () => ({ success: true, data: { left: 10, top: 20, width: 100, height: 40, ...TOP_PAGE } }))
     const data = (await click({ ref: "e5" })).data as ClickData
     expect(data.screenTarget).toEqual({ pageX: 60, pageY: 40 })
-    expect(sent).toEqual([{ frameId: 0, action: { type: "rect", index: undefined, ref: "e5" } }])
+    expect(sent).toEqual([
+      { frameId: 0, action: { type: "rect", index: undefined, ref: "e5" } },
+      { frameId: 0, action: { type: "input_watch", x: 60, y: 40 } },
+    ])
   })
 })

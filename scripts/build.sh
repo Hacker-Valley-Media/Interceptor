@@ -108,6 +108,11 @@ build_extension() {
   bun build extension/src/content.ts --outdir=extension/dist --target=browser
   bun build extension/src/inject-net.ts --outdir=extension/dist --target=browser
   bun build extension/src/inject-canvas.ts --outdir=extension/dist --target=browser
+  # These two run in the page. Without this line a stack trace read by page code
+  # names chrome-extension://<id>/inject-net.js, and error trackers collect it.
+  for script in inject-net inject-canvas; do
+    printf '\n//# sourceURL=<anonymous>\n' >> "extension/dist/$script.js"
+  done
   bun build extension/src/offscreen.ts --outfile=extension/dist/offscreen.js --target=browser
   bun build extension/src/popup.ts --outfile=extension/dist/popup.js --target=browser --format=iife
   cp extension/manifest.json extension/dist/

@@ -5,6 +5,15 @@
 import { createHash } from "node:crypto"
 import { globalGroupFlagIndex } from "./global-flags"
 
+/**
+ * A ref copied with its tree brackets means the bare ref:
+ * `[e5]`, `e5]`, `[e5|button|Search]`, a whole tree line `[e5] link "x" …`,
+ * and framed `[e2_7]`. Anything else is returned unchanged.
+ */
+export function normalizeRefArg(arg: string): string {
+  return /^\[?(e\d+(?:_\d+)?)(?:\]|\|)/.exec(arg)?.[1] ?? arg
+}
+
 export function parseElementTarget(arg: string): { index?: number; ref?: string; frameId?: number; semantic?: { role: string; name: string } } {
   // Every caller that allows an absent target guards before calling (focus,
   // upload, text, html, read, act) — reaching here with no arg is always a
@@ -17,6 +26,7 @@ export function parseElementTarget(arg: string): { index?: number; ref?: string;
     )
     process.exit(1)
   }
+  arg = normalizeRefArg(arg)
   const framed = /^e(\d+)_(\d+)$/.exec(arg)
   if (framed) {
     return { ref: `e${framed[2]}`, frameId: parseInt(framed[1], 10) }

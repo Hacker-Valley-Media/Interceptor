@@ -1,13 +1,15 @@
 import { sendToContentScript } from "../content-bridge"
 import { debuggerAttached } from "../cdp"
+import { hasTabGroupApi } from "../tab-group"
+import { detachTab, returnTab, type TabHome } from "./windows"
 
-type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
+type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number; delivered?: boolean }
 
 type WindowBounds = { left: number; top: number; width: number; height: number }
 
 // What the daemon needs to deliver to a window that is not OS-focused, and
 // what to answer when it cannot.
-type BackgroundTarget = { title: string; error: string; hint: string }
+type BackgroundTarget = { title: string; error: string; hint: string; tabId: number }
 
 // Leads with the background-safe paths on purpose: agents follow the first
 // suggestion in a hint literally. A `tab switch` in a window the user is
@@ -16,9 +18,8 @@ type BackgroundTarget = { title: string; error: string; hint: string }
 const FOREGROUND_HINT =
   "trusted OS input reaches a tab only when it is the active tab of a window that is not minimized. " +
   "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " +
-  "If the page really needs an OS click, run `interceptor window new`: it moves your tab group into its own background window. " +
-  "`interceptor tab switch <id>` there shows the tab in that window only, and a full install then delivers the click without changing the frontmost app. " +
-  "Never switch tabs in a window the user is working in."
+  "If the page really needs an OS click, run `interceptor window new --tab <id>`: it gives the tab its own background window, and a full install then delivers the click there without changing the frontmost app. " +
+  "`tab switch` belongs only in that window. Never switch tabs in a window the user is working in."
 
 // Trusted OS events posted to the global HID tap are routed by macOS by
 // screen position and window z-order — not by tab. That delivery is only
@@ -38,6 +39,10 @@ const FOREGROUND_HINT =
 // Always refused: a missing tab or window, a minimized window (no pixels to
 // hit), and a tab that is not the active tab of its window (the event would
 // reach the visible tab instead).
+// A tab that is not showing can still get the event: `moveTabId` tells a daemon
+// that can do it to give the tab a window of its own and send the action again.
+// An older daemon passes this refusal on unchanged. Safari has no tab groups and
+// may ignore `focused: false`, so it keeps the refusal.
 async function requireForegroundTab(tabId: number, backgroundOk = false): Promise<
   { ok: true; windowBounds: WindowBounds; background?: BackgroundTarget } | { ok: false; result: ActionResult }
 > {
@@ -49,18 +54,21 @@ async function requireForegroundTab(tabId: number, backgroundOk = false): Promis
   if (!win) {
     return { ok: false, result: { success: false, error: `window ${tab.windowId} not found for tab ${tabId}` } }
   }
+  const moveTarget = backgroundOk && hasTabGroupApi() ? { moveTabId: tabId } : {}
   if (win.state === "minimized") {
     return { ok: false, result: {
       success: false,
+      delivered: false,
       error: `window ${tab.windowId} is minimized — trusted OS input needs on-screen pixels to hit`,
-      data: { hint: FOREGROUND_HINT, windowState: win.state }
+      data: { hint: FOREGROUND_HINT, windowState: win.state, ...moveTarget }
     } }
   }
   if (!tab.active) {
     return { ok: false, result: {
       success: false,
+      delivered: false,
       error: `tab ${tabId} is not the active tab of window ${tab.windowId} — a trusted OS event would hit the window's visible tab instead`,
-      data: { hint: FOREGROUND_HINT }
+      data: { hint: FOREGROUND_HINT, ...moveTarget }
     } }
   }
   const windowBounds = {
@@ -70,9 +78,9 @@ async function requireForegroundTab(tabId: number, backgroundOk = false): Promis
   if (!win.focused) {
     const error = `window ${tab.windowId} is not the OS-focused window — trusted OS events are routed by the OS to whatever is frontmost, not to the target tab`
     if (!backgroundOk) {
-      return { ok: false, result: { success: false, error, data: { hint: FOREGROUND_HINT } } }
+      return { ok: false, result: { success: false, delivered: false, error, data: { hint: FOREGROUND_HINT } } }
     }
-    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT } }
+    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT, tabId } }
   }
   return { ok: true, windowBounds }
 }
@@ -92,6 +100,21 @@ async function chromeUiHeightFor(tabId: number, windowHeight: number, viewportHe
 }
 
 type Rect = { left: number; top: number; width: number; height: number; viewportHeight?: number; pageHidden?: boolean }
+
+const ARM_TIMEOUT_MS = 500
+
+// Arms the page's receipt right before a background delivery. False when the
+// page could not answer honestly (an iframe under the point, or an older
+// content script), and then the result claims nothing either way.
+// A page stuck in alert() or a long task never answers, and trusted input is
+// one way to reach such a page, so the arm never holds up delivery.
+async function armReceipt(tabId: number, frameId?: number, point?: { x: number; y: number }): Promise<boolean> {
+  const armed = await Promise.race([
+    sendToContentScript(tabId, { type: "input_watch", ...point }, frameId).catch(() => null),
+    new Promise(resolve => setTimeout(() => resolve(null), ARM_TIMEOUT_MS)),
+  ]) as { success: boolean; data?: { armed?: boolean } } | null
+  return armed?.success === true && armed.data?.armed === true
+}
 
 async function rectIn(tabId: number, query: Record<string, unknown>, frameId?: number): Promise<Rect | null> {
   const result = await sendToContentScript(tabId, { type: "rect", ...query }, frameId) as { success: boolean; data?: Rect }
@@ -126,6 +149,17 @@ export async function handleOsInputActions(
 ): Promise<ActionResult> {
   const backgroundOk = action.backgroundOk === true
   switch (action.type) {
+    case "os_receipt":
+      return sendToContentScript(tabId, { type: "input_watch_read" }, action.frameId as number | undefined) as Promise<ActionResult>
+
+    case "os_detach":
+      try { return { success: true, data: await detachTab(tabId) } }
+      catch (err) { return { success: false, error: (err as Error).message } }
+
+    case "os_return":
+      try { await returnTab(tabId, action.home as TabHome); return { success: true } }
+      catch (err) { return { success: false, error: (err as Error).message } }
+
     case "os_click": {
       const fg = await requireForegroundTab(tabId, backgroundOk)
       if (!fg.ok) return fg.result
@@ -170,6 +204,11 @@ export async function handleOsInputActions(
 
       const chromeUiHeight = (action.chromeUiHeight as number) ||
         await chromeUiHeightFor(tabId, windowBounds.height, viewportHeight)
+      // Inside its own frame the event needs no point check: the ref already
+      // named the document that will hear it.
+      const watching = fg.background
+        ? await armReceipt(tabId, frameId || undefined, origin ? undefined : { x: pageX, y: pageY })
+        : false
       return {
         success: true,
         data: {
@@ -179,7 +218,7 @@ export async function handleOsInputActions(
           button: action.button || "left",
           clickCount: action.clickCount || 1,
           chromeUiHeight,
-          ...(fg.background ? { background: { ...fg.background, pageHidden } } : {})
+          ...(fg.background ? { background: { ...fg.background, pageHidden, watching, frameId } } : {})
         }
       }
     }
@@ -190,19 +229,23 @@ export async function handleOsInputActions(
       // unless the bridge addresses the window.
       const fg = await requireForegroundTab(tabId, backgroundOk)
       if (!fg.ok) return fg.result
+      // The browser keeps its own shortcuts (⌘T, ⌘W) from the page, so silence
+      // proves nothing for a chord.
+      const chord = ((action.modifiers as string[] | undefined) ?? []).some(m => /^(cmd|command|meta|win|super|ctrl|control)$/i.test(m))
+      const watching = fg.background && !chord ? await armReceipt(tabId) : false
       return { success: true, data: {
         method: "os_event", key: action.key, modifiers: action.modifiers || [],
-        ...(fg.background ? { background: fg.background, windowBounds: fg.windowBounds } : {})
+        ...(fg.background ? { background: { ...fg.background, watching }, windowBounds: fg.windowBounds } : {})
       } }
     }
 
     case "os_type": {
       const fg = await requireForegroundTab(tabId, backgroundOk)
       if (!fg.ok) return fg.result
+      // A framed target lives in its own frame; the top frame has a different
+      // element under the same ref or index.
+      const frameId = (action.ref || action.index !== undefined) && typeof action.frameId === "number" ? action.frameId : undefined
       if (action.index !== undefined || action.ref || action.sensitive === true) {
-        // A framed target lives in its own frame; the top frame has a
-        // different element under the same ref or index.
-        const frameId = (action.ref || action.index !== undefined) && typeof action.frameId === "number" ? action.frameId : undefined
         const focused = await sendToContentScript(tabId, {
           type: "focus", index: action.index, ref: action.ref,
           sensitive: action.sensitive, focused: action.index === undefined && !action.ref
@@ -210,9 +253,10 @@ export async function handleOsInputActions(
         if (!focused.success) return focused
         await new Promise(r => setTimeout(r, 50))
       }
+      const watching = fg.background ? await armReceipt(tabId, frameId) : false
       return { success: true, data: {
         method: "os_event", text: action.text,
-        ...(fg.background ? { background: fg.background, windowBounds: fg.windowBounds } : {})
+        ...(fg.background ? { background: { ...fg.background, watching, frameId }, windowBounds: fg.windowBounds } : {})
       } }
     }
 

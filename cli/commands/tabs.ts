@@ -132,6 +132,12 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
 
     case "tab":
       switch (filtered[1]) {
+        // `tab list` was the most guessed verb after the 0.26.1 hint
+        // (287 calls since 2026-10-01); it was an error, so running
+        // `tabs` for it changes nothing that worked.
+        case "list":
+        case "ls":
+          return { type: "tab_list" }
         case "new": {
           // Background-first by default; --activate is the opt-in. Shares the
           // open-verb parser so --reuse works here too (it was silently ignored
@@ -177,8 +183,7 @@ export async function parseTabsCommand(filtered: string[]): Promise<Action | nul
           // review); the listing verb is `tabs`, so say so instead of only
           // naming the real subcommands.
           const sub = filtered[1]
-          const listHint = sub === "list" || sub === "ls" ? " To list tabs run 'interceptor tabs'." : " (to list tabs: 'interceptor tabs')"
-          console.error(`error: unknown tab subcommand${sub ? ` '${sub}'` : ""}. Use: new, close, switch, keepalive.${listHint}`)
+          console.error(`error: unknown tab subcommand${sub ? ` '${sub}'` : ""}. Use: new, close, switch, keepalive, list. (to list tabs: 'interceptor tabs')`)
           process.exit(1)
         }
       }

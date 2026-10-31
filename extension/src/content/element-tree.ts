@@ -1,5 +1,5 @@
 import { safeValue } from "./sensitive"
-import { getEffectiveRole } from "./a11y-tree"
+import { getEffectiveRole, displayRoleName } from "./a11y-tree"
 import type { IndexedElement } from "./element-discovery"
 
 export function buildSelector(el: Element): string {
@@ -27,6 +27,13 @@ export function buildSelector(el: Element): string {
   return parts.join(" > ")
 }
 
+// The href attribute as written, whole up to 300
+// characters (a 60-character cut sent agents to broken URLs); longer ends in
+// "…" so a reader knows not to open it. Not `el.href`: that resolves against
+// the current URL, which an SPA changes, and would make diffs report every
+// relative link as changed.
+export const TREE_HREF_CHARS = 300
+
 export function getRelevantAttrs(el: Element): string {
   const attrs: string[] = []
   const tag = el.tagName.toLowerCase()
@@ -36,7 +43,7 @@ export function getRelevantAttrs(el: Element): string {
 
   if (tag === "a") {
     const href = el.getAttribute("href")
-    if (href) attrs.push(`href="${href.slice(0, 60)}"`)
+    if (href) attrs.push(`href="${href.length > TREE_HREF_CHARS ? `${href.slice(0, TREE_HREF_CHARS)}…` : href}"`)
   }
   if (tag === "input") {
     const type = el.getAttribute("type")
@@ -120,9 +127,9 @@ export function getStyleBundle(el: Element): string {
 
 export function buildElementTree(elements: IndexedElement[]): string {
   return elements.map(e => {
-    const role = getEffectiveRole(e.element)
-    const name = e.text ? ` "${e.text}"` : ""
+    const shown = displayRoleName(e.element, getEffectiveRole(e.element) || e.tag, e.text || "")
+    const name = shown.name ? ` "${shown.name}"` : ""
     const attrStr = e.attrs ? ` ${e.attrs}` : ""
-    return `[${e.refId}] ${role || e.tag}${name}${attrStr}`
+    return `[${e.refId}] ${shown.role}${name}${attrStr}`
   }).join("\n")
 }

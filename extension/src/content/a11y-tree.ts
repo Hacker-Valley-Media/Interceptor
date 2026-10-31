@@ -100,6 +100,30 @@ export function getEffectiveRole(el: Element, style?: CSSStyleDeclaration): stri
   return ""
 }
 
+/** One tree line per element, whatever the name holds. */
+export function lineName(name: string): string {
+  return name.replace(/\s+/g, " ").trim()
+}
+
+const BUTTON_INPUT_TYPES = new Set(["submit", "button", "reset", "image"])
+
+/**
+ * How a tree line shows an element. A button-like <input> prints as a button
+ * named by its value; getEffectiveRole still answers
+ * "textbox" for it, so semantic matching, monitor recordings and replays keep
+ * today's roles.
+ */
+export function displayRoleName(el: Element, role: string, name: string): { role: string; name: string } {
+  if (el.tagName === "INPUT") {
+    const type = (el.getAttribute("type") || "").toLowerCase()
+    if (BUTTON_INPUT_TYPES.has(type)) {
+      const fallback = type === "reset" ? "Reset" : type === "button" ? "" : "Submit"
+      return { role: "button", name: lineName(name || (el as HTMLInputElement).value || el.getAttribute("alt") || fallback) }
+    }
+  }
+  return { role, name: lineName(name) }
+}
+
 export function getAccessibleName(el: Element): string {
   const ariaLabel = el.getAttribute("aria-label")
   if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim()
@@ -185,8 +209,9 @@ export function buildA11yTree(
     const prefix = compact ? ">".repeat(d) : "  ".repeat(d)
 
     if (selfVisible && isLandmark && !isInteractiveEl) {
-      const name = getAccessibleName(el)
-      const hasName = !!name && name !== (el.textContent || "").trim().slice(0, 80)
+      const rawName = getAccessibleName(el)
+      const hasName = !!rawName && rawName !== (el.textContent || "").trim().slice(0, 80)
+      const name = lineName(rawName)
       if (compact) {
         lines.push(`${prefix}${role || tag}${hasName ? `|${name}` : ""}`)
       } else {
@@ -196,7 +221,7 @@ export function buildA11yTree(
     }
 
     if (selfVisible && isHeading && filter === "all") {
-      const name = getAccessibleName(el)
+      const name = lineName(getAccessibleName(el))
       if (compact) {
         lines.push(`${prefix}heading|${name}`)
       } else {
@@ -206,7 +231,8 @@ export function buildA11yTree(
 
     if (selfVisible && isInteractiveEl) {
       const refId = getOrAssignRef(el)
-      const name = getAccessibleName(el)
+      const shown = displayRoleName(el, role || tag, getAccessibleName(el))
+      const name = shown.name
       const attrs = getRelevantAttrs(el)
       const styleBundle = includeStyle ? getStyleBundle(el) : ""
       const uploadable = isUploadTarget(el)
@@ -215,13 +241,13 @@ export function buildA11yTree(
         const attrClause = compactAttrClause(attrs)
         const styleClause = styleBundle ? `|style={${styleBundle}}` : ""
         const uploadClause = uploadable ? "|upload" : ""
-        lines.push(`${prefix}[${refId}|${role || tag}${nameClause}${attrClause}${styleClause}${uploadClause}]`)
+        lines.push(`${prefix}[${refId}|${shown.role}${nameClause}${attrClause}${styleClause}${uploadClause}]`)
       } else {
         const nameStr = name ? ` "${name}"` : ""
         const attrStr = attrs ? ` ${attrs}` : ""
         const styleStr = styleBundle ? ` style="${styleBundle}"` : ""
         const uploadStr = uploadable ? ` upload="interceptor upload ${refId} <path>"` : ""
-        lines.push(`${prefix}[${refId}] ${role || tag}${nameStr}${attrStr}${styleStr}${uploadStr}`)
+        lines.push(`${prefix}[${refId}] ${shown.role}${nameStr}${attrStr}${styleStr}${uploadStr}`)
       }
     }
 

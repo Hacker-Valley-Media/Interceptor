@@ -18,7 +18,7 @@ async function injectContentScript(
 
 type ContentScriptResult = { success: boolean; error?: string; data?: unknown; warning?: string }
 
-const NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector"])
+const NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector", "submit_form"])
 
 /**
  * Safari can unload a content script before delivering its async sendResponse
@@ -317,12 +317,38 @@ export function waitForTabLoad(
   })
 }
 
+/**
+ * `wait_stable`, timed here and not in the page. A hidden tab throttles every
+ * page timer to about one second (setTimeout, AbortSignal.timeout and
+ * scheduler.postTask all measured so, 2026-10-31), so a 200 ms debounce run in
+ * the page cost a second on every background tab. The page only reports how
+ * long it has been quiet.
+ */
+export async function waitStable(
+  tabId: number, debounceMs = 200, timeoutMs = 5000, frameId?: number
+): Promise<ContentScriptResult> {
+  const start = Date.now()
+  const quiet = () => sendToContentScript(tabId, { type: "dom_quiet" }, frameId) as Promise<ContentScriptResult>
+  let read = await quiet()
+  try {
+    while (read.success) {
+      const { quietMs, mutations } = read.data as { quietMs: number; mutations: number }
+      const elapsed = Date.now() - start
+      if (quietMs >= debounceMs) return { success: true, data: { stable: true, elapsed, mutations } }
+      if (elapsed >= timeoutMs) return { success: true, data: { stable: false, elapsed, mutations } }
+      await new Promise(r => setTimeout(r, Math.min(debounceMs - quietMs, timeoutMs - elapsed)))
+      read = await quiet()
+    }
+    return read
+  } finally {
+    sendToContentScriptOnce(tabId, { type: "dom_quiet", stop: true }, frameId).catch(() => {})
+  }
+}
+
 export async function probeContentReady(tabId: number, timeoutMs: number): Promise<boolean> {
   try {
-    const result = await sendToContentScript(tabId, {
-      type: "wait_stable", ms: 500, timeout: Math.min(timeoutMs, 5000)
-    }) as { success: boolean; data?: { stable: boolean } }
-    return result.success && (result.data?.stable ?? true)
+    const result = await waitStable(tabId, 500, Math.min(timeoutMs, 5000))
+    return result.success && ((result.data as { stable?: boolean } | undefined)?.stable ?? true)
   } catch {
     return false
   }

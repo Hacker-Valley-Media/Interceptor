@@ -4,9 +4,11 @@ import { detectSurfaces, SURFACE_UPGRADE_HINT } from "./lib/surfaces"
 import { runSkillsCommand, maybeEmitSkillsHint } from "./commands/skills"
 import { runManifestCommand } from "./manifest"
 import { parseTabFlag, resolveContextId, resolveGroupScope, parseGroupColorFlag } from "./parse"
-import { formatState, formatTabs, formatCookies, formatFind, formatResult } from "./format"
+import { formatState, formatTabs, formatCookies, formatFind, formatResult, printResult } from "./format"
 import { sendCommand, sendCommandWs, setGlobalGroup, setGlobalFrame, type DaemonResult, type DaemonResponse, type Action } from "./transport"
 import { UPLOAD_CHUNK_B64_BYTES } from "../shared/platform"
+import { readDefaultContext, setDefaultContext, userConfigPath } from "../shared/user-config"
+import { writeFileSync } from "node:fs"
 import { chunkBase64 } from "../shared/upload"
 import { fromPassive, writeExport, type PassiveNetEntry, type ExportFormat } from "../shared/exports"
 import {
@@ -24,10 +26,10 @@ import { parseNetworkCommand } from "./commands/network"
 import { parseScreenshotCommand } from "./commands/screenshot"
 import { parseDataCommand } from "./commands/data"
 import { parseMetaCommand } from "./commands/meta"
-import { parseEvalCommand } from "./commands/eval"
+import { parseEvalCommand, evalCutMessage } from "./commands/eval"
 import { parseSaveCommand } from "./commands/save"
 import { parseBrandCommand } from "./commands/brand"
-import { parseGroupCommand, listExtensionContextIds, runGroupAcrossContexts } from "./commands/group"
+import { parseGroupCommand, listExtensionContextIds, runGroupAcrossContexts, markOwnGroup } from "./commands/group"
 import { parseGroupPruneOptions, runGroupPrune } from "./commands/group-prune"
 import { parseBatchCommand } from "./commands/batch"
 import { parseMonitorCommand } from "./commands/monitor"
@@ -49,7 +51,7 @@ import { runExtensionsCommand } from "./commands/extensions"
 import { runDaemonCommand } from "./commands/daemon"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs, parseFrameFlag } from "./global-flags"
-import { normalizeArgsSplit } from "./normalize"
+import { normalizeArgsSplit, flagBundleHint } from "./normalize"
 
 // console.log must not be used for CLI output: Bun's console.log writer
 // silently drops everything past 64 KiB at exit when stderr and stdout share
@@ -67,6 +69,7 @@ const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
 const ACTION_CMDS = new Set(["click", "type", "select", "focus", "blur", "hover", "drag", "upload", "dblclick", "rightclick", "check", "keys", "click-at", "what-at", "regions"])
 const NAV_CMDS = new Set(["navigate", "back", "forward", "scroll", "wait", "wait-stable", "wait_for"])
 const TAB_CMDS = new Set(["tabs", "tab", "window", "frames", "session"])
+const PRETTY_TYPES = new Set(["get_state", "tab_list", "cookies_get", "find_element", "frames_find"])
 const NET_CMDS = new Set(["network", "net", "headers"])
 const SS_CMDS = new Set(["screenshot", "canvas", "capture", "ocr"])
 const DATA_CMDS = new Set(["cookies", "storage", "history", "bookmarks", "downloads", "clear", "clipboard"])
@@ -241,7 +244,7 @@ async function main() {
   }
 
   if (!ALL_KNOWN_CMDS.has(cmd)) {
-    console.error(`error: unknown command '${cmd}'. Run 'interceptor help' for usage.`)
+    console.error(`error: unknown command '${cmd}'. Run 'interceptor help' for usage.${flagBundleHint(cmd)}`)
     process.exit(1)
   }
 
@@ -385,6 +388,32 @@ async function main() {
 
   if (cmd === "contexts") {
     try {
+      // A default the person names, used only when a
+      // call names no context and several contexts are connected.
+      if (filtered[1] === "default") {
+        const name = filtered[2] && !filtered[2].startsWith("--") ? filtered[2] : undefined
+        if (filtered.includes("--clear")) {
+          setDefaultContext(undefined)
+          console.log(jsonMode ? JSON.stringify({ defaultContext: null, path: userConfigPath() }) : "default context cleared")
+          return
+        }
+        if (!name) {
+          const current = readDefaultContext()
+          console.log(jsonMode
+            ? JSON.stringify({ defaultContext: current ?? null, path: userConfigPath() })
+            : current ? `default context: ${current} (${userConfigPath()})` : "no default context set; set one with: interceptor contexts default <name>")
+          return
+        }
+        setDefaultContext(name)
+        const connected = await sendCommand({ type: "contexts" }, undefined, undefined).catch(() => null)
+        const ids = Array.isArray(connected?.result.data) ? (connected!.result.data as Array<string | { contextId: string }>).map(e => typeof e === "string" ? e : e.contextId) : []
+        if (jsonMode) console.log(JSON.stringify({ defaultContext: name, path: userConfigPath(), connected: ids.includes(name) }))
+        else {
+          console.log(`default context set to '${name}' (${userConfigPath()}); it is used when a command names no context and several are connected`)
+          if (!ids.includes(name)) console.error(`warning: '${name}' is not connected right now (connected: ${ids.join(", ") || "none"})`)
+        }
+        return
+      }
       // `contexts rename <name>`: give the targeted extension copy a context
       // name (what the popup does). Needed once after the store-key switch,
       // which gave unpacked copies a new ID and therefore fresh storage.
@@ -473,7 +502,11 @@ async function main() {
   if (STATE_CMDS.has(cmd))       action = parseStateCommand(filtered)
   else if (ACTION_CMDS.has(cmd)) action = parseActionsCommand(filtered, normalized.positionalCount)
   else if (NAV_CMDS.has(cmd))    action = parseNavigationCommand(filtered)
-  else if (TAB_CMDS.has(cmd))    action = await parseTabsCommand(filtered)
+  else if (TAB_CMDS.has(cmd)) {
+    action = await parseTabsCommand(filtered)
+    // `window new --tab <id>`: give that tab a window instead of opening a new page.
+    if (action?.type === "window_create" && globalTabId !== undefined && !action.url) action.moveTabId = globalTabId
+  }
   else if (NET_CMDS.has(cmd))    action = parseNetworkCommand(filtered)
   else if (SS_CMDS.has(cmd))     action = parseScreenshotCommand(filtered, normalized.positionalCount)
   else if (DATA_CMDS.has(cmd))   action = parseDataCommand(filtered)
@@ -487,10 +520,10 @@ async function main() {
     const pruneOpts = parseGroupPruneOptions(filtered)
     if ("error" in pruneOpts) { console.error(`error: ${pruneOpts.error}`); process.exit(1) }
     const result = await runGroupPrune(pruneOpts, (a, tabId, ctx) => useWs ? sendCommandWs(a, tabId, ctx) : sendCommand(a, tabId, ctx))
-    console.log(formatResult(result, jsonMode))
+    printResult(result, jsonMode)
     process.exit(result.success ? 0 : 1)
   }
-  else if (GROUP_CMDS.has(cmd))  action = parseGroupCommand(filtered)
+  else if (GROUP_CMDS.has(cmd))  action = parseGroupCommand(filtered, groupScope.label)
   else if (BATCH_CMDS.has(cmd))  action = parseBatchCommand(filtered)
   else if (POWER_CMDS.has(cmd))   action = parsePowerCommand(filtered)
   else if (MONITOR_CMDS.has(cmd)) action = await parseMonitorCommand(filtered, jsonMode, useWs)
@@ -533,7 +566,7 @@ async function main() {
       if (action.dropzone) assemble.dropzone = true
       if (action.picker) assemble.picker = true
       const finalResult = unwrapResult(await send(assemble))
-      console.log(formatResult(finalResult, jsonMode))
+      printResult(finalResult, jsonMode)
     } catch (err) {
       console.error(`error: ${(err as Error).message}`)
       process.exit(1)
@@ -611,18 +644,33 @@ async function main() {
     const sendFn = (a: Action, tabId?: number, ctx?: string) => useWs ? sendCommandWs(a, tabId, ctx) : sendCommand(a, tabId, ctx)
     const contextIds = await listExtensionContextIds(sendFn)
     if (contextIds.length > 1) {
-      const result = await runGroupAcrossContexts(action, contextIds, sendFn)
-      console.log(formatResult(result, jsonMode))
+      const result = markOwnGroup(await runGroupAcrossContexts(action, contextIds, sendFn), groupScope.label)
+      printResult(result, jsonMode)
       if (!result.success) process.exitCode = 1
       return
     }
   }
+
+  // The --out path stays in the CLI, and the CLI saves
+  // from the flags it sent (the background capture never echoed `save`).
+  const isScreenshot = action.type === "screenshot" || action.type === "screenshot_background"
+  const screenshotOutPath = isScreenshot && typeof action.out === "string" ? action.out : undefined
+  if (screenshotOutPath !== undefined) delete action.out
+  const screenshotSave = isScreenshot && action.save === true
 
   try {
     const response = useWs
       ? await sendCommandWs(action, globalTabId, globalContextId)
       : await sendCommand(action, globalTabId, globalContextId)
     const result = unwrapResult(response)
+    if (action.type === "group_list") markOwnGroup(result, groupScope.label)
+    if (action.type === "evaluate") {
+      const cut = evalCutMessage(result as Parameters<typeof evalCutMessage>[0])
+      if (cut) {
+        console.log(jsonMode ? JSON.stringify({ success: false, error: cut }, null, 2) : `error: ${cut}`)
+        process.exit(1)
+      }
+    }
     if (pendingMonitorTaskId) {
       if (result.success) {
         const data = (result.data || {}) as Record<string, unknown>
@@ -650,17 +698,28 @@ async function main() {
 
     // Screenshot save-to-disk post-processing
     if (result.success && result.data && typeof result.data === "object" &&
-        (result.data as Record<string, unknown>).save &&
+        ((result.data as Record<string, unknown>).save || screenshotSave) &&
         (result.data as Record<string, unknown>).dataUrl) {
       const d = result.data as Record<string, unknown>
       const dataUrl = d.dataUrl as string
       const base64 = dataUrl.split(",")[1]
       const formatStr = d.format as string
       const ext = formatStr === "png" ? "png" : formatStr === "webp" ? "webp" : "jpg"
-      const filename = `interceptor-screenshot-${Date.now()}.${ext}`
       const bytes = Buffer.from(base64, "base64")
-      await Bun.write(filename, bytes)
-      d.filePath = `${process.cwd()}/${filename}`
+      if (screenshotOutPath !== undefined) {
+        // writeFileSync, not Bun.write: Bun.write creates missing folders.
+        try {
+          writeFileSync(screenshotOutPath, bytes)
+        } catch (err) {
+          console.error(`error: could not write ${screenshotOutPath}: ${(err as Error).message}`)
+          process.exit(1)
+        }
+        d.filePath = screenshotOutPath
+      } else {
+        const filename = `interceptor-screenshot-${Date.now()}.${ext}`
+        await Bun.write(filename, bytes)
+        d.filePath = `${process.cwd()}/${filename}`
+      }
       delete d.save
       delete d.dataUrl
       process.stderr.write(`saved: ${d.filePath}\n`)
@@ -697,6 +756,8 @@ async function main() {
 
     // Pretty-print known result types
     if (!jsonMode && result.success) {
+      const { warning } = result as { warning?: string }
+      if (warning && PRETTY_TYPES.has(action.type)) console.error(`warning: ${warning}`)
       if (action.type === "get_state") {
         console.log(formatState(result.data as Parameters<typeof formatState>[0]))
         return
@@ -722,7 +783,7 @@ async function main() {
     if (!result.success && typeof result.error === "string" && result.error.startsWith("unknown action type:")) {
       process.stderr.write(`${await staleExtensionHint(VERSION, globalContextId)}\n`)
     }
-    console.log(formatResult(result, jsonMode))
+    printResult(result, jsonMode)
     // Issue #237: a failed action (`back` with no history, a rejected
     // `navigate`, …) printed `error:` but the process still exited 0, so a
     // scripted check read the failure as success. Every generic action funnels

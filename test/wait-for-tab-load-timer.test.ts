@@ -13,7 +13,7 @@ beforeEach(() => {
     runtime: { lastError: undefined },
     tabs: {
       get: async () => { getCalls++; return { id: 7, status: "complete" } },
-      sendMessage: (_id: number, _msg: unknown, _opts: unknown, cb: (r: unknown) => void) => { sendCalls++; cb({ success: true, data: { stable: true } }) },
+      sendMessage: (_id: number, msg: { action?: { stop?: boolean }; stop?: boolean }, _opts: unknown, cb: (r: unknown) => void) => { if (!(msg.action ?? msg).stop) sendCalls++; cb({ success: true, data: { quietMs: 1000, mutations: 0 } }) },
       onUpdated: {
         addListener: (fn: (id: number, info: { status: string }) => void) => { queueMicrotask(() => fn(7, { status: "complete" })) },
         removeListener() {},

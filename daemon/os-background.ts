@@ -14,18 +14,85 @@
 
 import { translateCoords } from "./os-input-loader"
 
-export type BackgroundTarget = { title: string; error: string; hint: string; pageHidden?: boolean }
+export type BackgroundTarget = {
+  title: string; error: string; hint: string; pageHidden?: boolean
+  tabId?: number; frameId?: number; watching?: boolean
+}
 
 type OsAction = { type?: string; [key: string]: unknown }
-type Result = { success: boolean; error?: string; data?: unknown; warning?: string; code?: string; details?: unknown }
+type Result = { success: boolean; error?: string; data?: unknown; warning?: string; code?: string; details?: unknown; delivered?: boolean; received?: boolean }
 type WindowBounds = { left: number; top: number; width: number; height: number }
+
+// The read goes through the page's main thread, the same thread that handles
+// the input, so a busy page delays the answer. Silence is still not proof:
+// input can land in a document this read cannot hear, so nothing here ever
+// sends input again.
+const RECEIPT_READS = 4
+const RECEIPT_WAIT_MS = 100
+
+/**
+ * Turns "the OS accepted it" into what the page reports receiving. A page that
+ * cannot answer (it navigated away, an older extension, an iframe under the
+ * point) gets the old result, which claims nothing. A page that answers with
+ * silence fails, and the caller reads the page before sending anything again.
+ */
+export async function confirmDelivery(
+  result: Result,
+  target: BackgroundTarget | undefined,
+  readReceipt: () => Promise<Result>,
+  sleep: (ms: number) => Promise<unknown> = Bun.sleep
+): Promise<Result> {
+  if (!result.success || !target?.watching) return result
+  let hidden = false
+  for (let read = 0; read < RECEIPT_READS; read++) {
+    await sleep(RECEIPT_WAIT_MS)
+    const receipt = await readReceipt()
+    const data = receipt.data as { events?: unknown; hidden?: unknown } | undefined
+    if (!receipt.success || !Array.isArray(data?.events)) return result
+    if (data.events.length > 0) {
+      const { warning: _unneeded, ...received } = result
+      return { ...received, data: `${result.data}; the page received it`, received: true }
+    }
+    hidden = data.hidden === true
+  }
+  return {
+    success: false, received: false,
+    error: "the OS accepted the input, but the page reported none of it, so read the page before sending it again",
+    data: {
+      hint: hidden
+        ? `A tab navigated or switched to in a covered window can miss input. If the page did not change, run \`interceptor window new --tab ${target.tabId}\` and send it again.`
+        : "A browser that is itself the frontmost app drops a background click. If the page did not change, use synthetic input or try again once the person has left the browser.",
+    },
+  }
+}
+
+/**
+ * Runs an action the gate refused, so nothing was delivered yet, from a
+ * background window of the tab's own, then takes the tab home. A tab that
+ * cannot be moved keeps the refusal. A tab that cannot go home says so.
+ */
+export async function deliverInOwnWindow(
+  miss: Result,
+  ask: (action: Record<string, unknown>) => Promise<Result>,
+  retry: () => Promise<Result>
+): Promise<Result> {
+  const moved = await ask({ type: "os_detach" })
+  if (!moved.success) return miss
+  let result: Result | undefined
+  try {
+    result = await retry()
+  } finally {
+    const back = await ask({ type: "os_return", home: moved.data })
+    if (result && !back.success) result = { ...result, warning: `the tab stayed in its own window: ${back.error}` }
+  }
+  return result!
+}
 
 /** Action types the extension may answer with a `background` target. */
 export const BACKGROUND_OS_ACTIONS = new Set(["os_click", "os_type", "os_key"])
 
 const HIDDEN_PAGE_WARNING =
-  "the page reports hidden (the browser pauses a window that is fully covered); " +
-  "if nothing happened, uncover part of the window and retry"
+  "the page reports hidden and could not confirm the input; read it before retrying"
 
 /** The bridge action for a background os_* action, or null when it lacks what delivery needs. */
 export function bridgeActionFor(action: OsAction, platform: string = "darwin"): Record<string, unknown> | null {

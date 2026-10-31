@@ -138,3 +138,18 @@ export function formatResult(result: { success: boolean; error?: string; data?: 
   // non-JSON caller.
   return result.warning ? `${body}\nwarning: ${result.warning}` : body
 }
+
+/**
+ * On success, stdout carries only the value and the
+ * warning goes to stderr, so a caller that reads stdout never gets
+ * "warning: …" mixed into a value it types back. Errors keep their block on
+ * stdout, and --json keeps the warning inside the object.
+ */
+export function printResult(result: { success: boolean; error?: string; data?: unknown; warning?: string }, jsonMode: boolean): void {
+  if (!jsonMode && result.success && result.warning) {
+    console.log(formatResult({ ...result, warning: undefined }, false))
+    console.error(`warning: ${result.warning}`)
+    return
+  }
+  console.log(formatResult(result, jsonMode))
+}

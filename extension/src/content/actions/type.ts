@@ -45,6 +45,17 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
     if (action.clear) {
       document.execCommand("selectAll", false)
       document.execCommand("delete", false)
+    } else {
+      // --append: focus() leaves the caret at the start of an editor with no
+      // selection inside it, so the text was prepended.
+      const selection = window.getSelection()
+      if (selection) {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        range.collapse(false)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      }
     }
     document.execCommand("insertText", false, text)
     el.dispatchEvent(new Event("input", { bubbles: true }))
@@ -70,6 +81,37 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
   }
 
   return { success: false, error: `element is <${tag.toLowerCase()}${isContentEditable ? " contenteditable" : ""}> — unsupported input type` }
+}
+
+/**
+ * Submit the form that holds a field, the way the
+ * browser's own Enter would (implicit submission clicks the default button).
+ * A synthetic Enter runs no default action, so it never submits.
+ */
+export async function handleSubmitForm(action: Action): Promise<ActionResult> {
+  const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
+  if (!el) return staleElementError(action, "submitted")
+  const form = (el as HTMLInputElement).form ?? el.closest("form")
+  if (!form) {
+    return { success: false, error: "this element is not inside a form, so there is nothing to submit; click the page's search or submit button instead (or use --keys Enter --trusted)" }
+  }
+  // Enter clicks the default button: the first submit button in tree order
+  // whose form is this one. form.elements leaves out image buttons, and a
+  // button can sit outside the form through its form attribute.
+  const submitter = Array.from(form.ownerDocument.querySelectorAll("button, input[type=submit], input[type=image]")).find(e =>
+    (e as HTMLButtonElement).form === form && ((e as HTMLButtonElement).type === "submit" || (e as HTMLInputElement).type === "image")
+  ) as HTMLButtonElement | HTMLInputElement | undefined
+  if (submitter?.matches(":disabled")) {
+    return { success: false, error: "the form's submit button is disabled, so Enter would not submit it; read the page for what it is waiting on" }
+  }
+  if (!form.noValidate && !submitter?.formNoValidate && !form.checkValidity()) {
+    const invalid = Array.from(form.elements).find(e => (e as HTMLInputElement).validity && !(e as HTMLInputElement).validity.valid) as HTMLInputElement | undefined
+    return { success: false, error: `the form did not pass its own validation${invalid ? `: ${invalid.validationMessage || "a field is invalid"}` : ""}` }
+  }
+  if (submitter) submitter.click()
+  else if (typeof form.requestSubmit === "function") form.requestSubmit()
+  else form.submit()
+  return { success: true, data: { submitted: true, action: form.getAttribute("action") ?? "", method: (form.getAttribute("method") || "get").toLowerCase(), submitter: submitter ? (submitter.value || submitter.textContent || "").trim() : null } }
 }
 
 export async function handleSelectOption(action: Action): Promise<ActionResult> {
