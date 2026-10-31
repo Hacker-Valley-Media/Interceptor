@@ -19,7 +19,7 @@ const INPUT_EVENT = /^(click|dblclick|auxclick|contextmenu|mouse|pointer|key|tou
 // Taken while this runs at document_start, before page scripts: a page may
 // later define its own global Node, Window, Object or Reflect.
 const sourceOf = Function.prototype.toString
-const { apply } = Reflect
+const { apply, get, set } = Reflect
 const NodeCtor = typeof Node === "function" ? Node : undefined
 const WindowCtor = typeof Window === "function" ? Window : undefined
 const ObjectCtor = Object
@@ -35,10 +35,10 @@ export function installTrustShim(proto: EventTarget, isTarget: (target: unknown)
       view = new Proxy(event, {
         get(target, key) {
           if (key === "isTrusted") return true
-          const value = Reflect.get(target, key)
+          const value = get(target, key)
           return typeof value === "function" && key !== "constructor" ? value.bind(target) : value
         },
-        set: (target, key, value) => Reflect.set(target, key, value),
+        set: (target, key, value) => set(target, key, value),
       })
       views.set(event, view)
     }
