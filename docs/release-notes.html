@@ -26,6 +26,27 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.8">
+    <h2>Interceptor 2.1.8</h2>
+    <time datetime="2026-10-31">October 31, 2026</time>
+    <ul>
+      <li>An agent can no longer type into the tab you are looking at by accident. When an agent's own tab group is empty, clicks, typing, keys, eval and navigation refuse and say to open a page first; reads still work on your tab and say which tab they read. Closing another agent session's group or tabs now needs <code>--any-tab</code>, and <code>interceptor group close</code> with no label closes your own.</li>
+      <li>Several browser profiles connected? Name a default once with <code>interceptor contexts default &lt;name&gt;</code>. It is used only when a command names no context.</li>
+      <li><code>act</code> now lists what a click changed in plain lines, including text it revealed, and <code>act &lt;ref&gt; "text" --submit</code> types and submits a form in one call.</li>
+      <li><code>screenshot --out &lt;path&gt;</code> saves where you ask. <code>tab list</code> lists tabs. Bare <code>interceptor net</code> shows the network log.</li>
+      <li><code>read --full</code> returns up to 200,000 characters as its help says, and <code>eval</code> no longer prints a cut value with a marker inside it.</li>
+      <li>Values on stdout are only values: warnings go to stderr, and request-trace lines show only in a terminal or with <code>INTERCEPTOR_DEBUG=1</code>.</li>
+      <li>Page trees show whole links (up to 300 characters), keep each element on one line, print submit inputs as buttons, and accept a ref copied with its brackets.</li>
+      <li>A trusted click now works on a tab that is not showing. The tab gets a background window of its own, takes the click, and goes back where it was, with its group and page state.</li>
+      <li>Trusted input says what the page received. If the page got nothing, the command fails instead of saying it was delivered.</li>
+      <li><code>interceptor window new --tab &lt;id&gt;</code> builds a background window around a tab you already have.</li>
+      <li>Hidden tabs are faster: waiting for a page to settle no longer depends on the page's own timers, which a hidden tab slows to once a second.</li>
+      <li><code>act</code> returns the page text when a click opens a new page, so there is less to read again.</li>
+      <li>Scripted events tagged <code>__interceptor_trust</code> now read <code>isTrusted: true</code> in page listeners. The old override never ran.</li>
+      <li>Stack traces read by a page no longer name the extension.</li>
+      <li>The README now opens with a 30-second demo and has one-click download links for every package, a Windows and Linux section, and a dated comparison with other tools.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="2.1.6">
     <h2>Interceptor 2.1.6</h2>
     <time datetime="2026-10-27">October 27, 2026</time>
