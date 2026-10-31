@@ -10,15 +10,30 @@ import { getOrAssignRef, refRegistry } from "../extension/src/content/ref-regist
 beforeEach(() => { document.body.innerHTML = ""; refRegistry.clear() })
 
 describe("submit_form", () => {
-  test("submits through requestSubmit with the default button", async () => {
-    document.body.innerHTML = `<form id="f" action="/search"><input id="q" name="q"><input type="submit" value="Apply"></form>`
-    const form = document.getElementById("f") as HTMLFormElement
-    let submitter: unknown = "none"
-    form.addEventListener("submit", (e) => { submitter = (e as SubmitEvent).submitter; e.preventDefault() })
-    const ref = getOrAssignRef(document.getElementById("q")!)
-    const r = await handleSubmitForm({ type: "submit_form", ref })
+  test("clicks the default button, the way Enter does", async () => {
+    document.body.innerHTML = `<form id="f" action="/search"><input id="q" name="q"><input id="go" type="submit" value="Apply"></form>`
+    let clicks = 0
+    document.getElementById("go")!.addEventListener("click", (e) => { clicks++; e.preventDefault() })
+    const r = await handleSubmitForm({ type: "submit_form", ref: getOrAssignRef(document.getElementById("q")!) })
     expect(r.success).toBe(true)
-    expect((submitter as HTMLInputElement | null)?.value).toBe("Apply")
+    expect(clicks).toBe(1)
+    expect((r.data as { submitter: string }).submitter).toBe("Apply")
+  })
+
+  test("a disabled default button refuses, as Enter would do nothing", async () => {
+    document.body.innerHTML = `<form><input id="q"><button type="submit" disabled>Pay</button></form>`
+    const r = await handleSubmitForm({ type: "submit_form", ref: getOrAssignRef(document.getElementById("q")!) })
+    expect(r.success).toBe(false)
+    expect(r.error).toContain("disabled")
+  })
+
+  test("novalidate and formnovalidate skip the validity check, as the browser does", async () => {
+    document.body.innerHTML = `<form novalidate><input id="q" required><button id="b" type="submit">Go</button></form>`
+    document.getElementById("b")!.addEventListener("click", (e) => e.preventDefault())
+    expect((await handleSubmitForm({ type: "submit_form", ref: getOrAssignRef(document.getElementById("q")!) })).success).toBe(true)
+    document.body.innerHTML = `<form><input id="r" required><button id="c" type="submit" formnovalidate>Go</button></form>`
+    document.getElementById("c")!.addEventListener("click", (e) => e.preventDefault())
+    expect((await handleSubmitForm({ type: "submit_form", ref: getOrAssignRef(document.getElementById("r")!) })).success).toBe(true)
   })
 
   test("refuses outside a form and on invalid forms", async () => {

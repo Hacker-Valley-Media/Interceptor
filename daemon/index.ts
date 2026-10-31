@@ -749,7 +749,8 @@ async function targetForAction(action: Record<string, unknown>, actionType: stri
       // active tab, which may sit outside the caller's group).
       const probe: Record<string, unknown> = { type: "page_info" }
       for (const k of ["group", "groupSoft", "groupColor"]) if (action[k] !== undefined) probe[k] = action[k]
-      const info = await extensionCall(probe, request.contextId, request.tabId)
+      const { contextId } = applyDefaultContext(request.contextId, request.defaultContextId, [...extensionWsMap.keys()])
+      const info = await extensionCall(probe, contextId, request.tabId)
       const url = (info.data as { url?: unknown } | undefined)?.url
       if (!info.success || typeof url !== "string") throw new Error(`could not read the page URL for the target check: ${info.error ?? "no url"}`)
       let host = ""
@@ -1897,9 +1898,9 @@ function handleBinarySinkFrame(ws: { send: (data: string) => unknown }, raw: Buf
 type OsRoute = { action: Record<string, unknown>; contextId?: string; sensitiveText?: string; retried?: boolean }
 
 // Calls the daemon makes for a request that already passed the extension's
-// group gate. They keep the caller's group, so its stored target stays its own.
+// group gate. They are not the caller's: they never change its stored target.
 function routeScope(route: OsRoute | undefined): Record<string, unknown> {
-  return { group: route?.action.group, groupSoft: route?.action.groupSoft, anyTab: true }
+  return { group: route?.action.group, groupSoft: route?.action.groupSoft, anyTab: true, keepTarget: true }
 }
 
 function moveTargetOf(pending: { osRoute?: OsRoute }, result: DaemonResult): number | undefined {
@@ -1920,7 +1921,7 @@ function settleOsAction(requestId: string, pending: PendingRequest, result: Daem
   log(`[${requestId.slice(0, 8)}] ${pending.actionType} → tab ${moveTabId} gets a background window of its own`)
   void deliverInOwnWindow(
     result,
-    (action) => extensionCall({ ...action, ...routeScope(route) }, route.contextId, moveTabId, 5_000),
+    (action) => extensionCall({ ...action, ...routeScope(route) }, route.contextId, moveTabId, 10_000),
     () => extensionCall({ ...route.action, ...routeScope(route) }, route.contextId, moveTabId, 15_000, { ...route, retried: true }),
   ).then(finish)
 }

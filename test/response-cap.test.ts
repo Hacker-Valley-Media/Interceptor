@@ -33,8 +33,11 @@ describe("daemon response cap", () => {
 describe("CLI", () => {
   test("a cut eval value is an error naming save --out", () => {
     expect(evalCutMessage({ success: true, data: "x", truncated: { shown: 200_000, total: 250_000 } })).toContain("save --out")
-    expect(evalCutMessage({ success: true, data: "abc\n... (truncated)" })).toContain("save --out")
-    expect(evalCutMessage({ success: true, data: "abc\n... (truncated: showed 50000 of 60000 chars)" })).toContain("save --out")
+    const cut = "x".repeat(50_000)
+    expect(evalCutMessage({ success: true, data: `${cut}\n... (truncated)` })).toContain("save --out")
+    expect(evalCutMessage({ success: true, data: `${cut}\n... (truncated: showed 50000 of 60000 chars)` })).toContain("save --out")
+    // A short value that happens to end in those words is the page's own text.
+    expect(evalCutMessage({ success: true, data: "abc\n... (truncated)" })).toBeNull()
     expect(evalCutMessage({ success: true, data: "a whole value" })).toBeNull()
     expect(evalCutMessage({ success: false, error: "x" } as never)).toBeNull()
   })

@@ -101,12 +101,18 @@ async function chromeUiHeightFor(tabId: number, windowHeight: number, viewportHe
 
 type Rect = { left: number; top: number; width: number; height: number; viewportHeight?: number; pageHidden?: boolean }
 
+const ARM_TIMEOUT_MS = 500
+
 // Arms the page's receipt right before a background delivery. False when the
 // page could not answer honestly (an iframe under the point, or an older
 // content script), and then the result claims nothing either way.
+// A page stuck in alert() or a long task never answers, and trusted input is
+// one way to reach such a page, so the arm never holds up delivery.
 async function armReceipt(tabId: number, frameId?: number, point?: { x: number; y: number }): Promise<boolean> {
-  const armed = await sendToContentScript(tabId, { type: "input_watch", ...point }, frameId).catch(() => null) as
-    { success: boolean; data?: { armed?: boolean } } | null
+  const armed = await Promise.race([
+    sendToContentScript(tabId, { type: "input_watch", ...point }, frameId).catch(() => null),
+    new Promise(resolve => setTimeout(() => resolve(null), ARM_TIMEOUT_MS)),
+  ]) as { success: boolean; data?: { armed?: boolean } } | null
   return armed?.success === true && armed.data?.armed === true
 }
 
@@ -224,8 +230,8 @@ export async function handleOsInputActions(
       const fg = await requireForegroundTab(tabId, backgroundOk)
       if (!fg.ok) return fg.result
       // The browser keeps its own shortcuts (⌘T, ⌘W) from the page, so silence
-      // proves nothing for a chord and the action must not be sent twice.
-      const chord = ((action.modifiers as string[] | undefined) ?? []).some(m => /^(cmd|command|meta|ctrl|control)$/i.test(m))
+      // proves nothing for a chord.
+      const chord = ((action.modifiers as string[] | undefined) ?? []).some(m => /^(cmd|command|meta|win|super|ctrl|control)$/i.test(m))
       const watching = fg.background && !chord ? await armReceipt(tabId) : false
       return { success: true, data: {
         method: "os_event", key: action.key, modifiers: action.modifiers || [],

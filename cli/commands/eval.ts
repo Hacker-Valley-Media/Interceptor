@@ -34,7 +34,7 @@ export function parseEvalCommand(filtered: string[], positionalCount?: number): 
 export function evalCutMessage(result: { success: boolean; data?: unknown; truncated?: { shown?: number; total?: number } }): string | null {
   if (!result.success) return null
   const cut = result.truncated
-    ?? (typeof result.data === "string" && /\n\.\.\. \(truncated(?:: showed \d+ of \d+ chars)?\)$/.test(result.data) ? {} : undefined)
+    ?? (typeof result.data === "string" && result.data.length >= 50_000 && /\n\.\.\. \(truncated(?:: showed \d+ of \d+ chars)?\)$/.test(result.data) ? {} : undefined)
   if (!cut) return null
   const size = cut.total ? `${cut.total} characters, over the ${cut.shown} limit` : "too long"
   return `eval result is ${size}, so it was cut and is not printed; write it to a file instead: interceptor save --out <path> '<expression>'`

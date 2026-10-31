@@ -248,12 +248,14 @@ export async function runOpen(
   // Step 2: Wait for content script + DOM stability (retry for new tab load)
   const waitDeadline = Date.now() + timeout
   let waitOk = false
+  let retryDelay = 50
   while (Date.now() < waitDeadline) {
     try {
       const waitResult = await send({ type: "wait_stable", ms: 200, timeout: Math.min(3000, waitDeadline - Date.now()) }, tabId, useWs, contextId)
       if (waitResult.success) { waitOk = true; break }
     } catch {}
-    await Bun.sleep(50)
+    await Bun.sleep(retryDelay)
+    retryDelay = Math.min(retryDelay * 2, 500)
   }
   if (!waitOk) {
     // Proceed anyway with whatever tree/text is available
@@ -805,17 +807,22 @@ export async function runAct(
   if (jsonMode) {
     output(jsonMode, {
       success: true,
-      data: { tree: treeData || undefined, diff: diffData || undefined, text: textContent || undefined }
+      data: { tree: treeData || undefined, diff: diffData || NO_DIFF, text: textContent || undefined }
     })
     return
   }
 
   const parts: string[] = []
   if (treeData) parts.push(treeData)
-  parts.push("", "--- changes ---", ...formatActChanges(diffResult))
+  const changes = formatActChanges(diffResult)
+  // submit_form returns before the server answers, so the old page can still be here.
+  if (submit && changes[0] === "no visible changes") changes[0] = "no visible changes yet; the form may still be submitting, so read the page before submitting again"
+  parts.push("", "--- changes ---", ...changes)
   if (textContent) parts.push("", "---", textContent)
   console.log(parts.join("\n"))
 }
+
+const NO_DIFF = JSON.stringify({ changes: 0, added: [], removed: [], changed: [] }, null, 2)
 
 function opensNewPage(diffResult: Result): boolean {
   return !(diffResult.success && diffResult.data && typeof diffResult.data === "object")

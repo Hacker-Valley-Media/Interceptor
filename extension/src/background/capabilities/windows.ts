@@ -61,7 +61,7 @@ function windowUpdateInfoFromAction(action: { [key: string]: unknown }): chrome.
 // Where a tab lived before detachTab, so returnTab can put it back.
 export type TabHome = {
   windowId: number; index: number; active: boolean
-  groupId: number; group: string | null; managed: boolean
+  groupId: number; group: string | null; color?: string; managed: boolean
 }
 
 /**
@@ -76,22 +76,41 @@ export async function detachTab(tabId: number): Promise<TabHome> {
   const tab = await chrome.tabs.get(tabId)
   const win = await chrome.windows.get(tab.windowId)
   await hydrateNamedGroups()
+  const group = tab.groupId !== -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null
   const home: TabHome = {
     windowId: tab.windowId, index: tab.index, active: tab.active,
-    groupId: tab.groupId, group: labelForGroupId(tab.groupId), managed: await isTabInInterceptorGroup(tabId),
+    groupId: tab.groupId, group: labelForGroupId(tab.groupId), color: group?.color,
+    managed: await isTabInInterceptorGroup(tabId),
   }
   await withWindowTimeout("os_detach", chrome.windows.create({ tabId, focused: false, width: win.width, height: win.height }))
   return home
 }
 
-/** Undoes detachTab. A tab that was alone in its window has no home left and stays put, regrouped. */
+/**
+ * Undoes detachTab. A tab that was alone in its window has no home left and
+ * stays put, regrouped. The move can fail while a person is dragging a tab, so
+ * the tab keeps its group either way and the caller hears about the move.
+ */
 export async function returnTab(tabId: number, home: TabHome): Promise<void> {
   const homeWindow = await chrome.windows.get(home.windowId).catch(() => null)
-  if (homeWindow) await chrome.tabs.move(tabId, { windowId: home.windowId, index: home.index })
-  if (home.group) await addTabToNamedGroup(tabId, home.group)
+  const moved = homeWindow
+    ? await chrome.tabs.move(tabId, { windowId: home.windowId, index: home.index }).then(() => null, (err: Error) => err)
+    : null
+  if (home.group) await addTabToNamedGroup(tabId, home.group, home.color)
   else if (home.managed) await addTabToInterceptorGroup(tabId)
   else if (home.groupId !== -1) await chrome.tabs.group({ tabIds: [tabId], groupId: home.groupId }).catch(() => {})
+  if (moved) throw moved
   if (homeWindow && home.active) await chrome.tabs.update(tabId, { active: true })
+}
+
+// A moved tab joins the caller's group only if it already was in it, so
+// --any-tab cannot turn someone else's tab into the agent's.
+async function adoptsMovedTab(moveTabId: unknown, group: unknown): Promise<boolean> {
+  if (typeof moveTabId !== "number") return true
+  const tab = await chrome.tabs.get(moveTabId).catch(() => null)
+  if (!tab) return false
+  await hydrateNamedGroups()
+  return typeof group === "string" ? labelForGroupId(tab.groupId) === group : isTabInInterceptorGroup(moveTabId)
 }
 
 export async function handleWindowActions(
@@ -101,6 +120,7 @@ export async function handleWindowActions(
   try {
     switch (action.type) {
       case "window_create": {
+        const adopts = await adoptsMovedTab(action.moveTabId, action.group)
         const win = await withWindowTimeout(
           "window_create",
           chrome.windows.create({
@@ -123,7 +143,7 @@ export async function handleWindowActions(
         const firstTab = win.tabs?.[0]
         let groupId: number | undefined
         let groupWarning: string | undefined
-        if (firstTab?.id && !action.incognito) {
+        if (firstTab?.id && !action.incognito && adopts) {
           // honor the caller's named group; default group otherwise.
           const group = typeof action.group === "string" && GROUP_LABEL_RE.test(action.group)
             ? action.group

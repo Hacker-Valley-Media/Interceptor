@@ -72,7 +72,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
     flags: [
       { name: "--keys", value: "<combo>", description: "focus the ref, then send a keyboard shortcut (e.g. Escape, cmd+shift+p); a synthetic Enter does not submit a form" },
       { name: "--submit", description: "after typing (or alone), submit the ref's form the way Enter would (form.requestSubmit with its default button); refuses outside a form" },
-      { name: "--trusted", description: "HID-sourced input — page sees isTrusted: true; requires the target tab active in the OS-focused window (refuses otherwise, never moves focus)" },
+      { name: "--trusted", description: "HID-sourced input — page sees isTrusted: true; on a full install it reaches a background window, and a tab that is not showing gets a background window of its own and goes back (never moves focus); elsewhere it needs the tab active in the OS-focused window" },
       { name: "--append", description: "type without clearing the field first" },
       { name: "--no-read", description: "skip the post-action tree read" },
     ],

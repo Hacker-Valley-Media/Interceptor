@@ -2215,19 +2215,21 @@ async function handleSubmitForm(action) {
   if (!form) {
     return { success: false, error: "this element is not inside a form, so there is nothing to submit; click the page's search or submit button instead (or use --keys Enter --trusted)" };
   }
-  if (!form.checkValidity()) {
+  const submitter = Array.from(form.elements).find((e) => e instanceof HTMLButtonElement && e.type === "submit" || e instanceof HTMLInputElement && (e.type === "submit" || e.type === "image"));
+  if (submitter?.matches(":disabled")) {
+    return { success: false, error: "the form's submit button is disabled, so Enter would not submit it; read the page for what it is waiting on" };
+  }
+  if (!form.noValidate && !submitter?.formNoValidate && !form.checkValidity()) {
     const invalid = Array.from(form.elements).find((e) => e.validity && !e.validity.valid);
     return { success: false, error: `the form did not pass its own validation${invalid ? `: ${invalid.validationMessage || "a field is invalid"}` : ""}` };
   }
-  const submitter = Array.from(form.elements).find((e) => e instanceof HTMLButtonElement && e.type === "submit" || e instanceof HTMLInputElement && (e.type === "submit" || e.type === "image"));
-  const usable = submitter && !submitter.disabled ? submitter : undefined;
-  if (typeof form.requestSubmit === "function")
-    form.requestSubmit(usable);
-  else if (usable)
-    usable.click();
+  if (submitter)
+    submitter.click();
+  else if (typeof form.requestSubmit === "function")
+    form.requestSubmit();
   else
     form.submit();
-  return { success: true, data: { submitted: true, action: form.getAttribute("action") ?? "", method: (form.getAttribute("method") || "get").toLowerCase(), submitter: usable ? (usable.value || usable.textContent || "").trim() : null } };
+  return { success: true, data: { submitted: true, action: form.getAttribute("action") ?? "", method: (form.getAttribute("method") || "get").toLowerCase(), submitter: submitter ? (submitter.value || submitter.textContent || "").trim() : null } };
 }
 async function handleSelectOption(action) {
   const el = resolveElement(action.index, action.ref);
@@ -2357,21 +2359,22 @@ function handleDomQuiet(action) {
       mutations += records.length;
       lastMutation = performance.now();
     });
-    quietObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+    quietObserver.observe(document.body ?? document.documentElement, { childList: true, subtree: true, attributes: true });
   }
   return { success: true, data: { quietMs: performance.now() - lastMutation, mutations } };
 }
 
 // extension/src/content/actions/input-watch.ts
+init_element_discovery();
 var WATCHED = ["pointerdown", "mousedown", "mouseup", "click", "keydown", "beforeinput", "input"];
-var FRAME_TAGS = new Set(["IFRAME", "FRAME", "OBJECT", "EMBED"]);
+var FRAME_TAGS = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "OBJECT", "EMBED"]);
 var seen = [];
 var disarm2 = null;
 function targetOf(x, y) {
   const inRoot = (root) => x !== undefined && y !== undefined ? root.elementFromPoint(x, y) : root.activeElement;
   let el = inRoot(document);
-  while (el?.shadowRoot) {
-    const inner = inRoot(el.shadowRoot);
+  for (let root = el && getShadowRoot(el);root; root = el && getShadowRoot(el)) {
+    const inner = inRoot(root);
     if (!inner || inner === el)
       break;
     el = inner;

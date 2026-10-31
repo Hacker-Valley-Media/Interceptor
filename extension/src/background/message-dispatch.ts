@@ -5,7 +5,7 @@ import {
 } from "./tab-group"
 import { routeAction } from "./router"
 import { needsTab } from "./no-tab-actions"
-import { isReadAction } from "./read-actions"
+import { isReadAction, TAB_FREE_ACTIONS } from "./read-actions"
 import { resolveWorkingTabId } from "./resolve-tab"
 import { recordGroupActivity } from "./tab-lifecycle"
 import { consumeSwitchBack } from "./switch-back"
@@ -95,14 +95,18 @@ export const SESSION_LABEL_RE = /^s-[0-9a-f]{16}$/
 export function foreignSessionCloseError(kind: "group" | "tab", owner: string | null, caller: string, target: string | number): string | null {
   if (!owner || owner === caller || !SESSION_LABEL_RE.test(owner)) return null
   return kind === "group"
-    ? `group '${owner}' belongs to another agent session that may still be working (yours is '${caller}'). Leave it: Interceptor closes an agent's group after it sits unused. Close your own with 'interceptor group close'; pass --any-tab only if the user named this group`
+    ? `group '${owner}' belongs to another agent session that may still be working (yours is '${caller}'). Leave it. Close your own with 'interceptor group close'; pass --any-tab only if the user named this group`
     : `tab ${target} belongs to another agent session's group '${owner}' (yours is '${caller}'). Leave it to that agent; pass --any-tab only if the user named this tab`
 }
 
 async function tabHost(tabId: number): Promise<string> {
   try {
     const tab = await chrome.tabs.get(tabId)
-    return tab.url ? new URL(tab.url).host || tab.url : "unknown page"
+    if (!tab.url) return "unknown page"
+    // A hostless URL such as data: is page-controlled text, and this ends up
+    // in a warning that sits outside the MCP fence.
+    const url = new URL(tab.url)
+    return url.host || url.protocol
   } catch {
     return "unknown page"
   }
@@ -285,7 +289,7 @@ export async function handleDaemonMessage(msg: {
       // --any-tab authorized this one call: the next call without it must
       // not inherit the user's tab through the stored-target path.
       softFallbackTab = true
-      if (action.anyTab !== true) {
+      if (action.anyTab !== true && !TAB_FREE_ACTIONS.has(action.type)) {
         const host = await tabHost(tabId)
         const refusal = softFallbackError(action.type, groupLabel!, tabId, host)
         if (refusal) {
@@ -325,13 +329,13 @@ export async function handleDaemonMessage(msg: {
 
   // Closing another session's group or tab needs --any-tab.
   if (groupSoft && action.anyTab !== true && hasTabGroupApi()
-      && (action.type === "group_close" || action.type === "tab_close")) {
+      && (action.type === "group_close" || action.type === "tab_close" || moveTabId !== undefined)) {
     let refusal: string | null = null
     if (action.type === "group_close") {
       const label = typeof action.label === "string" ? action.label : null
       if (label && await ensureNamedGroup(label) !== -1) refusal = foreignSessionCloseError("group", label, groupLabel!, label)
     } else {
-      const closeId = (action.tabId as number) || tabId
+      const closeId = moveTabId ?? ((action.tabId as number) || tabId)
       try {
         const tab = await chrome.tabs.get(closeId!)
         await hydrateNamedGroups()
@@ -347,7 +351,7 @@ export async function handleDaemonMessage(msg: {
   // Persist the auto-target only AFTER the group gate has passed — a rejected
   // cross-group request must never poison another group's (or the global)
   // auto-target key. A soft fallback tab is the user's, never the session's.
-  if (tabId && !switchBack && !softFallbackTab) setActiveTabId(tabId, groupLabel)
+  if (tabId && !switchBack && !softFallbackTab && action.keepTarget !== true) setActiveTabId(tabId, groupLabel)
 
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
     const urlErr = await verifyTabUrl(tabId, action.expectedUrl as string)

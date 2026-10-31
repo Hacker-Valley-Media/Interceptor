@@ -69,6 +69,7 @@ const STATE_CMDS = new Set(["state", "tree", "diff", "find", "text", "html"])
 const ACTION_CMDS = new Set(["click", "type", "select", "focus", "blur", "hover", "drag", "upload", "dblclick", "rightclick", "check", "keys", "click-at", "what-at", "regions"])
 const NAV_CMDS = new Set(["navigate", "back", "forward", "scroll", "wait", "wait-stable", "wait_for"])
 const TAB_CMDS = new Set(["tabs", "tab", "window", "frames", "session"])
+const PRETTY_TYPES = new Set(["get_state", "tab_list", "cookies_get", "find_element", "frames_find"])
 const NET_CMDS = new Set(["network", "net", "headers"])
 const SS_CMDS = new Set(["screenshot", "canvas", "capture", "ocr"])
 const DATA_CMDS = new Set(["cookies", "storage", "history", "bookmarks", "downloads", "clear", "clipboard"])
@@ -755,6 +756,8 @@ async function main() {
 
     // Pretty-print known result types
     if (!jsonMode && result.success) {
+      const { warning } = result as { warning?: string }
+      if (warning && PRETTY_TYPES.has(action.type)) console.error(`warning: ${warning}`)
       if (action.type === "get_state") {
         console.log(formatState(result.data as Parameters<typeof formatState>[0]))
         return

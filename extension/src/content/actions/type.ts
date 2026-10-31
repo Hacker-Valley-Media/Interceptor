@@ -95,18 +95,21 @@ export async function handleSubmitForm(action: Action): Promise<ActionResult> {
   if (!form) {
     return { success: false, error: "this element is not inside a form, so there is nothing to submit; click the page's search or submit button instead (or use --keys Enter --trusted)" }
   }
-  if (!form.checkValidity()) {
-    const invalid = Array.from(form.elements).find(e => (e as HTMLInputElement).validity && !(e as HTMLInputElement).validity.valid) as HTMLInputElement | undefined
-    return { success: false, error: `the form did not pass its own validation${invalid ? `: ${invalid.validationMessage || "a field is invalid"}` : ""}` }
-  }
+  // Enter clicks the default button, and does nothing when it is disabled.
   const submitter = Array.from(form.elements).find(e =>
     (e instanceof HTMLButtonElement && e.type === "submit") ||
     (e instanceof HTMLInputElement && (e.type === "submit" || e.type === "image"))) as HTMLButtonElement | HTMLInputElement | undefined
-  const usable = submitter && !submitter.disabled ? submitter : undefined
-  if (typeof form.requestSubmit === "function") form.requestSubmit(usable)
-  else if (usable) usable.click()
+  if (submitter?.matches(":disabled")) {
+    return { success: false, error: "the form's submit button is disabled, so Enter would not submit it; read the page for what it is waiting on" }
+  }
+  if (!form.noValidate && !submitter?.formNoValidate && !form.checkValidity()) {
+    const invalid = Array.from(form.elements).find(e => (e as HTMLInputElement).validity && !(e as HTMLInputElement).validity.valid) as HTMLInputElement | undefined
+    return { success: false, error: `the form did not pass its own validation${invalid ? `: ${invalid.validationMessage || "a field is invalid"}` : ""}` }
+  }
+  if (submitter) submitter.click()
+  else if (typeof form.requestSubmit === "function") form.requestSubmit()
   else form.submit()
-  return { success: true, data: { submitted: true, action: form.getAttribute("action") ?? "", method: (form.getAttribute("method") || "get").toLowerCase(), submitter: usable ? (usable.value || usable.textContent || "").trim() : null } }
+  return { success: true, data: { submitted: true, action: form.getAttribute("action") ?? "", method: (form.getAttribute("method") || "get").toLowerCase(), submitter: submitter ? (submitter.value || submitter.textContent || "").trim() : null } }
 }
 
 export async function handleSelectOption(action: Action): Promise<ActionResult> {

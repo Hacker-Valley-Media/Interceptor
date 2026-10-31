@@ -2,12 +2,14 @@
 // this just before a background delivery and reads it after, so the result can
 // say what the page received instead of what the OS accepted.
 
+import { getShadowRoot } from "../element-discovery"
+
 type Action = { type: string; [key: string]: unknown }
 
 const WATCHED = ["pointerdown", "mousedown", "mouseup", "click", "keydown", "beforeinput", "input"]
 // An event aimed at one of these lands in that frame's own document, where a
 // listener here never hears it.
-const FRAME_TAGS = new Set(["IFRAME", "FRAME", "OBJECT", "EMBED"])
+const FRAME_TAGS = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "OBJECT", "EMBED"])
 
 let seen: string[] = []
 let disarm: (() => void) | null = null
@@ -16,8 +18,8 @@ function targetOf(x?: number, y?: number): Element | null {
   const inRoot = (root: DocumentOrShadowRoot) =>
     x !== undefined && y !== undefined ? root.elementFromPoint(x, y) : root.activeElement
   let el = inRoot(document)
-  while (el?.shadowRoot) {
-    const inner = inRoot(el.shadowRoot)
+  for (let root = el && getShadowRoot(el); root; root = el && getShadowRoot(el)) {
+    const inner = inRoot(root)
     if (!inner || inner === el) break
     el = inner
   }

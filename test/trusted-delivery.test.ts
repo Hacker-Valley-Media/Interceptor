@@ -33,17 +33,22 @@ describe("confirmDelivery", () => {
     expect(result.received).toBe(true)
   })
 
-  test("silence from a hidden page fails and names the tab to move", async () => {
+  test("silence fails, says to read the page, and never asks for a move", async () => {
+    // Input can land in a document the receipt cannot hear, so a move and a
+    // second send could deliver it twice.
     const result = await confirmDelivery(delivered, target, receipts({ events: [], hidden: true }), noWait)
-    expect(result).toMatchObject({ success: false, delivered: false, received: false, data: { hint: "h", moveTabId: 7 } })
-    expect(result.error).toContain("the page received nothing")
-    expect(result.error).toContain("frontmost app")
+    expect(result).toMatchObject({ success: false, received: false })
+    expect(result.delivered).toBeUndefined()
+    expect(result.error).toContain("the page reported none of it")
+    expect(result.error).toContain("read the page before sending it again")
+    expect((result.data as { hint: string }).hint).toContain("interceptor window new --tab 7")
+    expect((result.data as Record<string, unknown>).moveTabId).toBeUndefined()
   })
 
-  test("silence from a visible page fails without a move", async () => {
+  test("silence from a visible page points at the frontmost browser", async () => {
     const result = await confirmDelivery(delivered, target, receipts({ events: [], hidden: false }), noWait)
     expect(result.success).toBe(false)
-    expect((result.data as Record<string, unknown>).moveTabId).toBeUndefined()
+    expect((result.data as { hint: string }).hint).toContain("frontmost app")
   })
 
   test("no answer keeps the old result: it claims nothing either way", async () => {
@@ -78,6 +83,13 @@ describe("deliverInOwnWindow", () => {
     expect(result).toEqual(miss)
   })
 
+  test("a tab that cannot go home says so", async () => {
+    const result = await deliverInOwnWindow(miss,
+      async (a) => a.type === "os_detach" ? { success: true, data: {} } : { success: false, error: "dragging" },
+      async () => ({ success: true, data: "ok" }))
+    expect(result).toMatchObject({ success: true, data: "ok", warning: "the tab stayed in its own window: dragging" })
+  })
+
   test("the tab comes home even when the retry throws", async () => {
     const types: unknown[] = []
     const run = deliverInOwnWindow(miss, async (a) => { types.push(a.type); return { success: true, data: {} } },
@@ -98,6 +110,36 @@ describe("wiring", () => {
 
   test("a browser chord is never read back: the browser keeps it from the page", () => {
     expect(gate).toContain("fg.background && !chord ? await armReceipt(tabId) : false")
+  })
+
+  test("only a refusal is ever sent again: nothing was delivered yet", () => {
+    expect(read("daemon/os-background.ts")).not.toContain("moveTabId")
+    expect(gate.match(/moveTarget/g)!.length).toBe(3)
+  })
+
+  test("the daemon's own calls never change the caller's stored target", () => {
+    expect(daemon).toContain("anyTab: true, keepTarget: true")
+    expect(dispatch).toContain("!softFallbackTab && action.keepTarget !== true) setActiveTabId(tabId, groupLabel)")
+  })
+
+  test("a page that cannot answer never holds up delivery", () => {
+    expect(gate).toContain("setTimeout(() => resolve(null), ARM_TIMEOUT_MS)")
+  })
+
+  test("every spelling of the command key counts as a chord", () => {
+    expect(gate).toContain("/^(cmd|command|meta|win|super|ctrl|control)$/i")
+  })
+
+  test("window new --tab cannot take another session's tab, and --any-tab never adopts one", () => {
+    expect(dispatch).toContain('|| moveTabId !== undefined)) {')
+    const windows = read("extension/src/background/capabilities/windows.ts")
+    expect(windows).toContain("labelForGroupId(tab.groupId) === group")
+    expect(windows).toContain("if (firstTab?.id && !action.incognito && adopts) {")
+  })
+
+  test("the move outlasts the window timeout, so a slow create is not abandoned", () => {
+    expect(daemon).toContain("route.contextId, moveTabId, 10_000)")
+    expect(read("extension/src/background/capabilities/windows.ts")).toMatch(/WINDOW_API_TIMEOUT_MS = 8_?000|8_?000/)
   })
 
   test("the retry runs once and carries a resolved secret", () => {
@@ -136,7 +178,7 @@ describe("listener shim", () => {
   const proto = Target.prototype as unknown as EventTarget
   Object.defineProperty(proto, "addEventListener", { writable: true, configurable: true, value: EventTarget.prototype.addEventListener })
   Object.defineProperty(proto, "removeEventListener", { writable: true, configurable: true, value: EventTarget.prototype.removeEventListener })
-  installTrustShim(proto)
+  installTrustShim(proto, () => true)
 
   const fire = (target: EventTarget, type = "click", tagged = true) => {
     const event = new Event(type, { cancelable: true }) as Event & { __interceptor_trust?: boolean }
@@ -147,19 +189,65 @@ describe("listener shim", () => {
 
   test("a tagged event reads trusted, an untagged one reaches the listener unchanged", () => {
     const target = new Target()
-    const seen: Event[] = []
-    target.addEventListener("click", (e) => { seen.push(e) })
+    const seen: boolean[] = [], events: Event[] = []
+    target.addEventListener("click", (e) => { seen.push(e.isTrusted); events.push(e) })
     const tagged = fire(target), plain = fire(target, "click", false)
-    expect(seen[0].isTrusted).toBe(true)
-    expect(seen[0]).not.toBe(tagged)
-    expect(seen[1]).toBe(plain)
-    expect(seen[1].isTrusted).not.toBe(true)
+    expect(seen[0]).toBe(true)
+    expect(events[0]).not.toBe(tagged)
+    expect(events[1]).toBe(plain)
+    expect(seen[1]).not.toBe(true)
+  })
+
+  test("a listener that does not name isTrusted gets the real event, so brand checks hold", () => {
+    const target = new Target()
+    let got: Event | undefined
+    target.addEventListener("click", (e) => { got = e })
+    const event = fire(target)
+    expect(got).toBe(event)
+  })
+
+  test("a function that is not of this realm reaches the native call unwrapped", () => {
+    const added: unknown[] = []
+    const fake = { addEventListener(_type: string, listener: unknown) { added.push(listener) }, removeEventListener() {} } as unknown as EventTarget
+    installTrustShim(fake, () => true)
+    const foreign = () => {}
+    Object.setPrototypeOf(foreign, null)
+    fake.addEventListener("click", foreign as EventListener)
+    expect(added[0]).toBe(foreign)
+  })
+
+  test("removing a listener added before the shim, or by another path, still works", () => {
+    const target = new Target()
+    let calls = 0
+    const fn = () => { calls++ }
+    const nativeAdd = Object.getPrototypeOf(Object.getPrototypeOf(target)).addEventListener
+      ?? EventTarget.prototype.addEventListener
+    nativeAdd.call(target, "click", fn)
+    fire(target)
+    expect(calls).toBe(1)
+    target.removeEventListener("click", fn)
+    fire(target)
+    expect(calls).toBe(1)
+  })
+
+  test("targets other than nodes and windows are left alone", () => {
+    class Other extends EventTarget {}
+    const proto2 = Other.prototype as unknown as EventTarget
+    Object.defineProperty(proto2, "addEventListener", { writable: true, configurable: true, value: EventTarget.prototype.addEventListener })
+    Object.defineProperty(proto2, "removeEventListener", { writable: true, configurable: true, value: EventTarget.prototype.removeEventListener })
+    installTrustShim(proto2, () => false)
+    const target = new Other()
+    let got: Event | undefined
+    target.addEventListener("change", (e) => { got = e; void e.isTrusted })
+    const event = fire(target, "change")
+    expect(got).toBe(event)
   })
 
   test("event methods and setters work through the view", () => {
     const target = new Target()
     let type = ""
     target.addEventListener("click", (e) => {
+      void e.isTrusted
       e.preventDefault()
       e.stopPropagation()
       ;(e as Event & { note?: string }).note = "kept"
@@ -175,8 +263,8 @@ describe("listener shim", () => {
     const target = new Target()
     const views: Event[] = []
     let self: unknown
-    target.addEventListener("click", function (this: unknown, e) { views.push(e); self = this })
-    target.addEventListener("click", (e) => { views.push(e) })
+    target.addEventListener("click", function (this: unknown, e) { void e.isTrusted; views.push(e); self = this })
+    target.addEventListener("click", (e) => { void e.isTrusted; views.push(e) })
     fire(target)
     expect(views[0]).toBe(views[1])
     expect(views[0] instanceof Event).toBe(true)
@@ -199,7 +287,7 @@ describe("listener shim", () => {
     fire(target)
     expect(count).toBe(2)
 
-    const object = { trusted: false, handleEvent(e: Event) { this.trusted = e.isTrusted } }
+    const object = { trusted: false as boolean, handleEvent(e: Event) { this.trusted = e.isTrusted } }
     target.addEventListener("keydown", object)
     fire(target, "keydown")
     expect(object.trusted).toBe(true)

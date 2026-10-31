@@ -105,7 +105,7 @@ export async function routeAction(
 ): Promise<ActionResult> {
   if (OS_INPUT_ACTIONS.has(action.type)) return handleOsInputActions(action, tabId)
   if (action.type === "wait_stable") {
-    return waitStable(tabId, action.ms as number | undefined, action.timeout as number | undefined, action.frameId as number | undefined)
+    return waitStable(tabId, (action.ms as number) || undefined, (action.timeout as number) || undefined, action.frameId as number | undefined)
   }
   if (SCREENSHOT_ACTIONS.has(action.type)) return handleScreenshotActions(action, tabId)
   if (CAPTURE_STREAM_ACTIONS.has(action.type)) return handleCaptureStreamActions(action, tabId)

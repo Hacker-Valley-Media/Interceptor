@@ -9,7 +9,7 @@ import {
   foreignSessionCloseError,
   SESSION_LABEL_RE,
 } from "../extension/src/background/message-dispatch"
-import { READ_ACTIONS, isReadAction } from "../extension/src/background/read-actions"
+import { READ_ACTIONS, TAB_FREE_ACTIONS, isReadAction } from "../extension/src/background/read-actions"
 import { deriveSessionGroupLabel } from "../cli/parse"
 
 const root = join(import.meta.dir, "..")
@@ -42,20 +42,25 @@ describe("soft fallback refuses input, keeps reads", () => {
     expect(isReadAction("click")).toBe(false)
   })
 
+  test("verbs that never use the tab keep working in an empty session", () => {
+    for (const type of TAB_FREE_ACTIONS) expect(routerSrc.includes(`"${type}"`), type).toBe(true)
+    for (const type of ["click", "input_text", "evaluate", "navigate", "search_query"]) expect(TAB_FREE_ACTIONS.has(type), type).toBe(false)
+  })
+
   test("the refusal runs before the membership gate, only for soft callers with tab groups", () => {
     const refusal = dispatchSrc.indexOf("softFallbackError(action.type")
     expect(refusal).toBeGreaterThan(dispatchSrc.indexOf("query({ active: true, currentWindow: true })"))
     expect(refusal).toBeLessThan(dispatchSrc.indexOf("managedTabGateError(tabId, groupLabel, groupHard)"))
     expect(dispatchSrc).toContain("if (tabId && groupSoft && hasTabGroupApi())")
-    expect(dispatchSrc).toContain("if (action.anyTab !== true) {")
+    expect(dispatchSrc).toContain("if (action.anyTab !== true && !TAB_FREE_ACTIONS.has(action.type)) {")
   })
 
   test("a fallback tab is never saved as the session's target, even under --any-tab", () => {
     // Found in live validation: an --any-tab call saved the user's tab, and the
     // next plain click reached it through the stored-target path.
-    expect(dispatchSrc).toContain("if (tabId && !switchBack && !softFallbackTab) setActiveTabId(tabId, groupLabel)")
+    expect(dispatchSrc).toContain("if (tabId && !switchBack && !softFallbackTab && action.keepTarget !== true) setActiveTabId(tabId, groupLabel)")
     const fallbackBlock = dispatchSrc.slice(dispatchSrc.indexOf("if (tabId && groupSoft && hasTabGroupApi())"))
-    expect(fallbackBlock.indexOf("softFallbackTab = true")).toBeLessThan(fallbackBlock.indexOf("if (action.anyTab !== true)"))
+    expect(fallbackBlock.indexOf("softFallbackTab = true")).toBeLessThan(fallbackBlock.indexOf("if (action.anyTab !== true && !TAB_FREE_ACTIONS"))
   })
 })
 
@@ -78,7 +83,7 @@ describe("sessions own their groups and tabs", () => {
   })
 
   test("the check applies only to soft callers without --any-tab on browsers with tab groups", () => {
-    expect(dispatchSrc).toContain('if (groupSoft && action.anyTab !== true && hasTabGroupApi()\n      && (action.type === "group_close" || action.type === "tab_close"))')
+    expect(dispatchSrc).toContain('if (groupSoft && action.anyTab !== true && hasTabGroupApi()\n      && (action.type === "group_close" || action.type === "tab_close" || moveTabId !== undefined)) {')
   })
 })
 

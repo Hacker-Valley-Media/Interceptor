@@ -18,7 +18,7 @@ async function injectContentScript(
 
 type ContentScriptResult = { success: boolean; error?: string; data?: unknown; warning?: string }
 
-const NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector"])
+const NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector", "submit_form"])
 
 /**
  * Safari can unload a content script before delivering its async sendResponse

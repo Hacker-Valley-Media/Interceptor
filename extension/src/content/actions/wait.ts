@@ -47,7 +47,7 @@ export function handleDomQuiet(action: Action): ActionResult {
       mutations += records.length
       lastMutation = performance.now()
     })
-    quietObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true })
+    quietObserver.observe(document.body ?? document.documentElement, { childList: true, subtree: true, attributes: true })
   }
   return { success: true, data: { quietMs: performance.now() - lastMutation, mutations } }
 }

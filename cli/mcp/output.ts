@@ -91,11 +91,16 @@ export async function toResult(o: ToResultOpts): Promise<McpResult> {
     return { ...nativeStructured, content: [{ type: "text", text }], isError: true }
   }
 
+  // Success warnings moved to stderr; keep them visible to MCP clients, outside
+  // the fence: they are Interceptor's own words.
+  const warnings = stderr.split("\n").filter(line => line.startsWith("warning: ")).join("\n")
+  const warningContent = warnings ? [{ type: "text" as const, text: warnings }] : []
+
   // Image payload — dataUrl in JSON, or a saved image file.
   const dataUrl = findDataUrl(json)
   if (dataUrl) {
     const m = dataUrl.match(IMG_RE)!
-    return { ...nativeStructured, content: [{ type: "image", data: m[2].replace(/\s+/g, ""), mimeType: m[1] }] }
+    return { ...nativeStructured, content: [{ type: "image", data: m[2].replace(/\s+/g, ""), mimeType: m[1] }, ...warningContent] }
   }
   const savedPath = findSavedPath(json, stderr)
   if (savedPath && IMG_EXT_RE.test(savedPath) && existsSync(savedPath)) {
@@ -104,7 +109,7 @@ export async function toResult(o: ToResultOpts): Promise<McpResult> {
       const b64 = Buffer.from(bytes).toString("base64")
       const ext = (savedPath.match(IMG_EXT_RE)![1] || "png").toLowerCase()
       const mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`
-      return { ...nativeStructured, content: [{ type: "image", data: b64, mimeType: mime }, { type: "text", text: `saved: ${savedPath}` }] }
+      return { ...nativeStructured, content: [{ type: "image", data: b64, mimeType: mime }, { type: "text", text: `saved: ${savedPath}` }, ...warningContent] }
     } catch { /* fall through to text */ }
   }
   // Saved non-image artifact (save / net export) → ResourceLink.
@@ -116,6 +121,7 @@ export async function toResult(o: ToResultOpts): Promise<McpResult> {
         { type: "text", text: o.fenceEnabled && FENCE_VERBS.has(o.verb)
           ? fence(o.verb, stdout.trim() || `saved: ${savedPath}`)
           : stdout.trim() || `saved: ${savedPath}` },
+        ...warningContent,
       ],
     }
   }
@@ -125,12 +131,7 @@ export async function toResult(o: ToResultOpts): Promise<McpResult> {
   const fromStdout = !!text
   if (!text) text = stderr.trim() || "ok"
   if (o.fenceEnabled && FENCE_VERBS.has(o.verb)) text = fence(o.verb, text)
-  // Success warnings moved to stderr; keep them visible
-  // to MCP clients (outside the fence: they are Interceptor's own words).
-  if (fromStdout) {
-    const warnings = stderr.split("\n").filter(line => line.startsWith("warning: "))
-    if (warnings.length) text = `${text}\n${warnings.join("\n")}`
-  }
+  if (fromStdout && warnings) text = `${text}\n${warnings}`
 
   const result: McpResult = { content: [{ type: "text", text }] }
   if (json) result.structuredContent = Array.isArray(json) ? { items: json } : json

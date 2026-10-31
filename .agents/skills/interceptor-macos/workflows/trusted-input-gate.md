@@ -26,7 +26,7 @@ interceptor type <ref> "text" --trusted --tab <id>
 interceptor keys Enter --trusted --tab <id>
 ```
 
-A tab that is not showing gets a background window of its own and goes back (full install). The frontmost app and the cursor stay where they are. The result ends `the page received it`, or fails with `the page received nothing`, which means nothing happened: a browser that is itself the frontmost app drops the click, so use synthetic input or try again later. With `warning: the page reports hidden`, the page could not confirm the input: read it before retrying.
+A tab that is not showing gets a background window of its own and goes back (full install). The frontmost app and the cursor stay where they are. The result ends `the page received it`, or fails with `the page reported none of it`: read the page before sending anything again. If it did not change, a browser that is itself the frontmost app drops the click, so use synthetic input or try again later. With `warning: the page reports hidden`, the page could not confirm the input: read it before retrying.
 
 ## Verify permissions first
 

@@ -514,6 +514,7 @@ var INPUT_ACTIONS = new Set([
   "send_keys",
   "select_option",
   "check",
+  "submit_form",
   "file_upload",
   "file_upload_chunk",
   "find_and_click",
@@ -541,7 +542,7 @@ async function injectContentScript(tabId, frameId) {
     return { success: false, error: err.message };
   }
 }
-var NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector"]);
+var NAVIGATION_CAPABLE_ACTIONS = new Set(["click", "click_at", "dblclick", "find_and_click", "click_selector", "submit_form"]);
 async function sendToContentScriptOnce(tabId, action, frameId) {
   const watchesNavigation = NAVIGATION_CAPABLE_ACTIONS.has(action.type);
   let initialUrl;
@@ -926,12 +927,14 @@ async function detachTab(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const win = await chrome.windows.get(tab.windowId);
   await hydrateNamedGroups();
+  const group = tab.groupId !== -1 ? await chrome.tabGroups.get(tab.groupId).catch(() => null) : null;
   const home = {
     windowId: tab.windowId,
     index: tab.index,
     active: tab.active,
     groupId: tab.groupId,
     group: labelForGroupId(tab.groupId),
+    color: group?.color,
     managed: await isTabInInterceptorGroup(tabId)
   };
   await withWindowTimeout("os_detach", chrome.windows.create({ tabId, focused: false, width: win.width, height: win.height }));
@@ -939,21 +942,32 @@ async function detachTab(tabId) {
 }
 async function returnTab(tabId, home) {
   const homeWindow = await chrome.windows.get(home.windowId).catch(() => null);
-  if (homeWindow)
-    await chrome.tabs.move(tabId, { windowId: home.windowId, index: home.index });
+  const moved = homeWindow ? await chrome.tabs.move(tabId, { windowId: home.windowId, index: home.index }).then(() => null, (err) => err) : null;
   if (home.group)
-    await addTabToNamedGroup(tabId, home.group);
+    await addTabToNamedGroup(tabId, home.group, home.color);
   else if (home.managed)
     await addTabToInterceptorGroup(tabId);
   else if (home.groupId !== -1)
     await chrome.tabs.group({ tabIds: [tabId], groupId: home.groupId }).catch(() => {});
+  if (moved)
+    throw moved;
   if (homeWindow && home.active)
     await chrome.tabs.update(tabId, { active: true });
+}
+async function adoptsMovedTab(moveTabId, group) {
+  if (typeof moveTabId !== "number")
+    return true;
+  const tab = await chrome.tabs.get(moveTabId).catch(() => null);
+  if (!tab)
+    return false;
+  await hydrateNamedGroups();
+  return typeof group === "string" ? labelForGroupId(tab.groupId) === group : isTabInInterceptorGroup(moveTabId);
 }
 async function handleWindowActions(action, _tabId) {
   try {
     switch (action.type) {
       case "window_create": {
+        const adopts = await adoptsMovedTab(action.moveTabId, action.group);
         const win = await withWindowTimeout("window_create", chrome.windows.create({
           tabId: action.moveTabId,
           url: action.url,
@@ -970,7 +984,7 @@ async function handleWindowActions(action, _tabId) {
         const firstTab = win.tabs?.[0];
         let groupId;
         let groupWarning;
-        if (firstTab?.id && !action.incognito) {
+        if (firstTab?.id && !action.incognito && adopts) {
           const group = typeof action.group === "string" && GROUP_LABEL_RE.test(action.group) ? action.group : undefined;
           if (group && typeof win.id === "number")
             await moveNamedGroupToWindow(group, win.id);
@@ -1099,8 +1113,12 @@ async function chromeUiHeightFor(tabId, windowHeight, viewportHeight) {
   const fromViewport = windowHeight - viewportHeight;
   return zoom === 1 && fromViewport >= 0 && fromViewport <= 200 ? fromViewport : fallback;
 }
+var ARM_TIMEOUT_MS = 500;
 async function armReceipt(tabId, frameId, point) {
-  const armed = await sendToContentScript(tabId, { type: "input_watch", ...point }, frameId).catch(() => null);
+  const armed = await Promise.race([
+    sendToContentScript(tabId, { type: "input_watch", ...point }, frameId).catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), ARM_TIMEOUT_MS))
+  ]);
   return armed?.success === true && armed.data?.armed === true;
 }
 async function rectIn(tabId, query, frameId) {
@@ -1198,7 +1216,7 @@ async function handleOsInputActions(action, tabId) {
       const fg = await requireForegroundTab(tabId, backgroundOk);
       if (!fg.ok)
         return fg.result;
-      const chord = (action.modifiers ?? []).some((m) => /^(cmd|command|meta|ctrl|control)$/i.test(m));
+      const chord = (action.modifiers ?? []).some((m) => /^(cmd|command|meta|win|super|ctrl|control)$/i.test(m));
       const watching = fg.background && !chord ? await armReceipt(tabId) : false;
       return { success: true, data: {
         method: "os_event",
@@ -5542,7 +5560,7 @@ async function routeAction(action, tabId) {
   if (OS_INPUT_ACTIONS.has(action.type))
     return handleOsInputActions(action, tabId);
   if (action.type === "wait_stable") {
-    return waitStable(tabId, action.ms, action.timeout, action.frameId);
+    return waitStable(tabId, action.ms || undefined, action.timeout || undefined, action.frameId);
   }
   if (SCREENSHOT_ACTIONS.has(action.type))
     return handleScreenshotActions(action, tabId);
@@ -5768,6 +5786,33 @@ var READ_ACTIONS = new Set([
   "capabilities",
   "cdp_tree"
 ]);
+var TAB_FREE_ACTIONS = new Set([
+  "cookies_set",
+  "cookies_delete",
+  "history_search",
+  "history_visits",
+  "history_delete",
+  "history_delete_range",
+  "history_delete_all",
+  "bookmark_tree",
+  "bookmark_search",
+  "bookmark_create",
+  "bookmark_delete",
+  "bookmark_update",
+  "downloads_start",
+  "downloads_search",
+  "downloads_cancel",
+  "downloads_pause",
+  "downloads_resume",
+  "session_list",
+  "session_restore",
+  "notification_create",
+  "notification_clear",
+  "browsing_data_remove",
+  "headers_modify",
+  "keepawake",
+  "idle_state"
+]);
 function isReadAction(type) {
   return READ_ACTIONS.has(type);
 }
@@ -5818,12 +5863,15 @@ var SESSION_LABEL_RE = /^s-[0-9a-f]{16}$/;
 function foreignSessionCloseError(kind, owner, caller, target) {
   if (!owner || owner === caller || !SESSION_LABEL_RE.test(owner))
     return null;
-  return kind === "group" ? `group '${owner}' belongs to another agent session that may still be working (yours is '${caller}'). Leave it: Interceptor closes an agent's group after it sits unused. Close your own with 'interceptor group close'; pass --any-tab only if the user named this group` : `tab ${target} belongs to another agent session's group '${owner}' (yours is '${caller}'). Leave it to that agent; pass --any-tab only if the user named this tab`;
+  return kind === "group" ? `group '${owner}' belongs to another agent session that may still be working (yours is '${caller}'). Leave it. Close your own with 'interceptor group close'; pass --any-tab only if the user named this group` : `tab ${target} belongs to another agent session's group '${owner}' (yours is '${caller}'). Leave it to that agent; pass --any-tab only if the user named this tab`;
 }
 async function tabHost(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
-    return tab.url ? new URL(tab.url).host || tab.url : "unknown page";
+    if (!tab.url)
+      return "unknown page";
+    const url = new URL(tab.url);
+    return url.host || url.protocol;
   } catch {
     return "unknown page";
   }
@@ -5941,7 +5989,7 @@ async function handleDaemonMessage(msg) {
     tabId = activeTab?.id;
     if (tabId && groupSoft && hasTabGroupApi()) {
       softFallbackTab = true;
-      if (action.anyTab !== true) {
+      if (action.anyTab !== true && !TAB_FREE_ACTIONS.has(action.type)) {
         const host = await tabHost(tabId);
         const refusal = softFallbackError(action.type, groupLabel, tabId, host);
         if (refusal) {
@@ -5972,14 +6020,14 @@ async function handleDaemonMessage(msg) {
       }
     }
   }
-  if (groupSoft && action.anyTab !== true && hasTabGroupApi() && (action.type === "group_close" || action.type === "tab_close")) {
+  if (groupSoft && action.anyTab !== true && hasTabGroupApi() && (action.type === "group_close" || action.type === "tab_close" || moveTabId !== undefined)) {
     let refusal = null;
     if (action.type === "group_close") {
       const label = typeof action.label === "string" ? action.label : null;
       if (label && await ensureNamedGroup(label) !== -1)
         refusal = foreignSessionCloseError("group", label, groupLabel, label);
     } else {
-      const closeId = action.tabId || tabId;
+      const closeId = moveTabId ?? (action.tabId || tabId);
       try {
         const tab = await chrome.tabs.get(closeId);
         await hydrateNamedGroups();
@@ -5991,7 +6039,7 @@ async function handleDaemonMessage(msg) {
       return;
     }
   }
-  if (tabId && !switchBack && !softFallbackTab)
+  if (tabId && !switchBack && !softFallbackTab && action.keepTarget !== true)
     setActiveTabId(tabId, groupLabel);
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
     const urlErr = await verifyTabUrl(tabId, action.expectedUrl);

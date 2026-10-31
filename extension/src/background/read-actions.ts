@@ -22,6 +22,19 @@ export const READ_ACTIONS = new Set([
   "frames_list", "frames_read_tree", "frames_find", "tab_zoom_get", "capabilities", "cdp_tree",
 ])
 
+// Tab-free: these handlers ignore the tab they are handed, so a session with
+// no tab of its own is not about to touch the person's tab.
+export const TAB_FREE_ACTIONS: ReadonlySet<string> = new Set([
+  "cookies_set", "cookies_delete",
+  "history_search", "history_visits", "history_delete", "history_delete_range", "history_delete_all",
+  "bookmark_tree", "bookmark_search", "bookmark_create", "bookmark_delete", "bookmark_update",
+  "downloads_start", "downloads_search", "downloads_cancel", "downloads_pause", "downloads_resume",
+  "session_list", "session_restore",
+  "notification_create", "notification_clear",
+  "browsing_data_remove", "headers_modify",
+  "keepawake", "idle_state",
+])
+
 export function isReadAction(type: string): boolean {
   return READ_ACTIONS.has(type)
 }
