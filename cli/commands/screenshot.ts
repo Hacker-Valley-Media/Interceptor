@@ -1,9 +1,34 @@
 /**
  * cli/commands/screenshot.ts — screenshot, canvas, capture
  */
+import { existsSync } from "node:fs"
+import { dirname, extname, resolve } from "node:path"
 import { normalizeArgsSplit } from "../normalize"
+import { normalizeRefArg } from "../parse"
 
 type Action = { type: string; [key: string]: unknown }
+
+const OUT_FORMATS: Record<string, string> = { ".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".webp": "webp" }
+
+/**
+ * `screenshot --out <path>` writes there. The path stays
+ * in the CLI (cli/index.ts strips `out` before sending); the format follows
+ * the file extension, and a missing folder is an error before any capture.
+ */
+export function screenshotOut(filtered: string[], format: string | undefined): { out: string; format: string } | undefined {
+  const idx = filtered.indexOf("--out")
+  if (idx === -1) return undefined
+  const raw = filtered[idx + 1]
+  if (!raw || raw.startsWith("--")) throw new Error("screenshot --out requires a file path, e.g. --out ./page.png")
+  const out = resolve(raw)
+  const inferred = OUT_FORMATS[extname(out).toLowerCase()]
+  if (!inferred) throw new Error(`screenshot --out must end in .png, .jpg, .jpeg or .webp (got '${raw}')`)
+  if (format && format !== inferred && !(format === "jpg" && inferred === "jpeg")) {
+    throw new Error(`screenshot --out '${raw}' is a ${inferred} file but --format is '${format}'; drop --format or change the extension`)
+  }
+  if (!existsSync(dirname(out))) throw new Error(`screenshot --out: folder '${dirname(out)}' does not exist`)
+  return { out, format: inferred }
+}
 
 export function parseScreenshotCommand(filtered: string[], positionalCount?: number): Action {
   const normalized = positionalCount === undefined ? normalizeArgsSplit(filtered) : { argv: filtered, positionalCount }
@@ -13,17 +38,22 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
   switch (cmd) {
     case "screenshot": {
       if (normalized.positionalCount > 0) {
-        throw new Error("screenshot does not accept positional arguments; --save takes no value and writes an automatically named image to the current directory.")
+        throw new Error("screenshot does not accept positional arguments; pass the file with --out <path>, or use --save for an automatically named image in the current directory.")
       }
+      const formatFlag = filtered.includes("--format") ? filtered[filtered.indexOf("--format") + 1] : undefined
+      const outTarget = screenshotOut(filtered, formatFlag)
       if (filtered.includes("--background")) {
         const bgAction: Action = { type: "screenshot_background" }
-        if (filtered.includes("--format")) bgAction.format = filtered[filtered.indexOf("--format") + 1]
+        if (formatFlag) bgAction.format = formatFlag
         if (filtered.includes("--quality")) bgAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
+        if (filtered.includes("--save")) bgAction.save = true
+        if (outTarget) Object.assign(bgAction, { save: true, out: outTarget.out, format: outTarget.format })
         return bgAction
       }
       const ssAction: Action = { type: "screenshot" }
       if (filtered.includes("--save")) ssAction.save = true
-      if (filtered.includes("--format")) ssAction.format = filtered[filtered.indexOf("--format") + 1]
+      if (formatFlag) ssAction.format = formatFlag
+      if (outTarget) Object.assign(ssAction, { save: true, out: outTarget.out, format: outTarget.format })
       if (filtered.includes("--quality")) ssAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
       if (filtered.includes("--full")) ssAction.full = true
       if (filtered.includes("--pixel")) ssAction.pixel = true
@@ -45,7 +75,7 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
         ssAction.clip = { x: clipParts[0], y: clipParts[1], width: clipParts[2], height: clipParts[3] }
       }
       if (filtered.includes("--element")) ssAction.element = parseInt(filtered[filtered.indexOf("--element") + 1])
-      if (filtered.includes("--ref")) ssAction.ref = filtered[filtered.indexOf("--ref") + 1]
+      if (filtered.includes("--ref")) ssAction.ref = normalizeRefArg(filtered[filtered.indexOf("--ref") + 1])
       if (filtered.includes("--target-max-long-edge")) {
         const raw = filtered[filtered.indexOf("--target-max-long-edge") + 1]
         const parsed = parseInt(raw)
@@ -61,11 +91,12 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
       const a: Action = { type: "ocr" }
       const pos = filtered[1]
       if (pos && !pos.startsWith("--")) {
-        if (/^e\d/.test(pos)) a.ref = pos
+        const ref = normalizeRefArg(pos)
+        if (/^e\d/.test(ref)) a.ref = ref
         else a.selector = pos
       }
       if (filtered.includes("--selector")) a.selector = filtered[filtered.indexOf("--selector") + 1]
-      if (filtered.includes("--ref")) a.ref = filtered[filtered.indexOf("--ref") + 1]
+      if (filtered.includes("--ref")) a.ref = normalizeRefArg(filtered[filtered.indexOf("--ref") + 1])
       if (filtered.includes("--element")) a.element = parseInt(filtered[filtered.indexOf("--element") + 1])
       if (filtered.includes("--region")) {
         const rp = filtered[filtered.indexOf("--region") + 1].split(",").map(Number)

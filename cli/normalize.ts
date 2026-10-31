@@ -113,7 +113,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   // network
   network: NET, net: NET, headers: NET,
   // screenshot
-  screenshot: SCREENSHOT, canvas: SCREENSHOT, capture: SCREENSHOT, ocr: SCREENSHOT,
+  screenshot: [...SCREENSHOT, "--out"], canvas: SCREENSHOT, capture: SCREENSHOT, ocr: SCREENSHOT,
   // data
   cookies: DATA, storage: DATA, history: DATA, bookmarks: DATA, downloads: DATA, clear: DATA, clipboard: DATA,
   // meta
@@ -157,7 +157,7 @@ const RESEARCH_BOOL = ["--capture", "--full", "--stdin", "--no-research-hint"]
 const SKILLS_BOOL = ["--all", "--force", "--no-skills-hint"]
 
 const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
-  open: COMPOUND_BOOL, read: COMPOUND_BOOL, act: COMPOUND_BOOL, inspect: COMPOUND_BOOL,
+  open: COMPOUND_BOOL, read: COMPOUND_BOOL, act: [...COMPOUND_BOOL, "--submit"], inspect: COMPOUND_BOOL,
   websearch: COMPOUND_BOOL, search: COMPOUND_BOOL,
   state: STATE_BOOL, tree: STATE_BOOL, diff: STATE_BOOL, find: STATE_BOOL, text: STATE_BOOL, html: STATE_BOOL,
   click: ACTIONS_BOOL, type: ACTIONS_BOOL, select: ACTIONS_BOOL, focus: ACTIONS_BOOL, blur: ACTIONS_BOOL,
@@ -174,7 +174,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   capabilities: META_BOOL, modals: META_BOOL, panels: META_BOOL,
   eval: EVAL_BOOL, save: SAVE_BOOL, brand: [], group: ["--allow-frontmost", "--dry-run"], batch: BATCH_BOOL, raw: BATCH_BOOL,
   monitor: MONITOR_BOOL, scene: SCENE_BOOL, sse: [], override: [],
-  upgrade: ["--full"], init: ["--explain", "--verbose"], research: RESEARCH_BOOL, extensions: ["--remove"], contexts: ["--verbose"],
+  upgrade: ["--full"], init: ["--explain", "--verbose"], research: RESEARCH_BOOL, extensions: ["--remove"], contexts: ["--clear", "--verbose"],
   skills: SKILLS_BOOL, daemon: [], manifest: [],
   keepawake: POWER_BOOL, idle: POWER_BOOL,
 }
@@ -191,19 +191,30 @@ export const FLAG_INVENTORY = {
 
 let warnedLaxFlags = false
 
+/**
+ * One argv word that holds several flags (`'--context main --group x'`): zsh
+ * does not split an unquoted `$VAR`, so a flag bundle kept in a variable
+ * arrives whole (67 errors in 54 sessions). Explain it;
+ * never split it, since guessing at quoting could pass the wrong value.
+ */
+export function flagBundleHint(tok: string): string {
+  if (!tok.startsWith("--") || !/\s/.test(tok)) return ""
+  return ` That one argument holds several flags, because the shell passed them as a single word (zsh does not split an unquoted $VAR). Split them: write \${=VAR} in zsh (interceptor \${=IC} tabs), or use a shell function such as ic() { interceptor --context <id> "$@"; }.`
+}
+
 function rejectUnknownFlag(cmd: string, tok: string): void {
   const lax = process.env.INTERCEPTOR_LAX_FLAGS === "1"
   let extra = ""
-  // The trap issue #212 documents verbatim: --out belongs to save/net; the
-  // screenshot family's write-to-disk flag is --save.
+  // The trap issue #212 documents verbatim. `screenshot --out <path>` exists
+  //; the rest of the screenshot family writes with --save.
   const name = tok.includes("=") ? tok.slice(0, tok.indexOf("=")) : tok
-  if (name === "--out" && (cmd === "screenshot" || cmd === "canvas" || cmd === "capture" || cmd === "ocr")) {
-    extra = " (--out belongs to 'save' and 'net'; 'screenshot --save' writes the image to disk)"
+  if (name === "--out" && (cmd === "canvas" || cmd === "capture" || cmd === "ocr")) {
+    extra = " (--out belongs to 'save', 'net log' and 'screenshot'; 'screenshot --out <path>' or '--save' writes an image to disk)"
   }
   if ((name === "--selector" || name === "--nth") && cmd !== "click") {
     extra = ` (CSS targeting is a 'click' flag; for '${cmd}' run 'interceptor query "<css>"' to get an e<ref>, then 'interceptor ${cmd} e<ref>')`
   }
-  const msg = `unknown flag '${tok}' for '${cmd}'${extra}. Run 'interceptor help ${cmd}' for its flags; use '--' before positional values that begin with --.`
+  const msg = `unknown flag '${tok}' for '${cmd}'${extra}. Run 'interceptor help ${cmd}' for its flags; use '--' before positional values that begin with --.${flagBundleHint(tok)}`
   if (lax) {
     if (!warnedLaxFlags) {
       warnedLaxFlags = true

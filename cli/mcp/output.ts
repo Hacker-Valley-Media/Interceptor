@@ -122,8 +122,15 @@ export async function toResult(o: ToResultOpts): Promise<McpResult> {
 
   // Text (default). Fence content-bearing reads.
   let text = stdout.trim()
+  const fromStdout = !!text
   if (!text) text = stderr.trim() || "ok"
   if (o.fenceEnabled && FENCE_VERBS.has(o.verb)) text = fence(o.verb, text)
+  // Success warnings moved to stderr; keep them visible
+  // to MCP clients (outside the fence: they are Interceptor's own words).
+  if (fromStdout) {
+    const warnings = stderr.split("\n").filter(line => line.startsWith("warning: "))
+    if (warnings.length) text = `${text}\n${warnings.join("\n")}`
+  }
 
   const result: McpResult = { content: [{ type: "text", text }] }
   if (json) result.structuredContent = Array.isArray(json) ? { items: json } : json

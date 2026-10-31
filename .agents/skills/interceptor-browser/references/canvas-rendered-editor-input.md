@@ -79,7 +79,7 @@ Not relevant for this mechanic — the technique operates at the DOM/event layer
 
 - ❌ The iframe's `<td>` `.getBoundingClientRect()` — iframe is offscreen (`docs-offscreen-z-index`), so cell rects are not at canvas pixel coordinates.
 - ❌ Setting `Selection.setBaseAndExtent()` into an iframe `<td>` and dispatching `InputEvent` — iframe DOM mirror IS dirtied (visible in `.textContent`) but Docs **does not propagate that change to the canvas model**. The iframe selection is read-only from Docs' perspective; only navigation-driven selection updates count.
-- ❌ `event.isTrusted` override on `Event.prototype` — Chrome installs `isTrusted` as a **non-configurable own property** on every Event instance at construction time. The prototype getter is shadowed and never consulted. Use `userActivation` override instead (which IS effective).
+- ❌ `event.isTrusted` override on `Event.prototype` — Chrome installs `isTrusted` as a **non-configurable own property** on every Event instance at construction time. The prototype getter is shadowed and never consulted. Interceptor wraps `addEventListener` instead, so a listener receives a view of a tagged event that answers `isTrusted: true`; the `userActivation` override handles the browser's own gate.
 - ❌ Using the OUTER window's `KeyboardEvent` constructor (`new KeyboardEvent(...)`) and dispatching to the iframe document — Docs' event router rejects events whose `view` doesn't match the iframe's contentWindow.
 
 ## Waits + reasons
@@ -125,7 +125,7 @@ Not relevant for this mechanic — the technique operates at the DOM/event layer
 
 `extension/src/inject-net.ts:5-29` defines two pre-load overrides that run at `document_start` in MAIN world on `<all_urls>`:
 
-- `Event.prototype.isTrusted` getter — checks `event.__interceptor_trust === true` first, then falls back to native (note: only effective for sites that read isTrusted via the prototype chain — Docs reads via the per-instance own property which is non-configurable, so this override is informational for Docs but useful elsewhere).
+- `addEventListener` shim — hands listeners a view of any event tagged `event.__interceptor_trust === true` that reads `isTrusted: true`. Every other event passes through unchanged. `on*` handler properties do not go through it.
 - `navigator.userActivation.isActive` and `hasBeenActive` — always `true`. **This is the load-bearing override for Docs.** It satisfies the transient-activation gate that browsers attach to `execCommand`, `Selection`-driven mutation APIs, and dispatched `InputEvent` propagation.
 
 No `chrome.debugger`, no yellow banner, no detection signal. The page sees an extension script that ran before its own bundle loaded; the page-side checks for activation pass; the dispatched events propagate as if from real user input.

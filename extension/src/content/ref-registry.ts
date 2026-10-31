@@ -53,7 +53,11 @@ export function getOrAssignRef(el: Element): string {
 // row B (browser-ref probe, reliability review 2026-09-10). Search stays the
 // contract of `find` / `find_and_click`; identity stays the contract of a ref.
 export function resolveRef(refId: string): Element | null {
-  const ref = refRegistry.get(refId)
+  // A ref copied with its tree brackets (`[e5]`, `[e5|button|…]`) is the same
+  // ref. Framed refs are split by the CLI before they
+  // reach a frame, so only a plain eN is unwrapped here.
+  const bare = /^\[(e\d+)(?:\]|\|)/.exec(refId)?.[1] ?? refId
+  const ref = refRegistry.get(bare)
   if (!ref) return null
   const el = ref.deref()
   // Visibility intentionally not in this gate. A transient layout hiccup

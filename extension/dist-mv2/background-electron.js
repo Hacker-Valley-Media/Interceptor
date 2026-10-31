@@ -469,6 +469,14 @@ async function removeTabsAndEmptiedGroups(tabIds) {
   await ungroupBeforeClose(tabIds);
   await chrome.tabs.remove(tabIds);
 }
+async function isTabInInterceptorGroup(tabId) {
+  if (!hasTabGroupApi())
+    return true;
+  const tab = await chrome.tabs.get(tabId);
+  if (interceptorGroupId === null)
+    await ensureInterceptorGroup();
+  return interceptorGroupId !== null && tab.groupId === interceptorGroupId;
+}
 var SENSITIVE_ACTIONS = new Set([
   "evaluate",
   "cookies_get",
@@ -748,13 +756,29 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
     chrome.tabs.onUpdated.addListener(listener);
   });
 }
+async function waitStable(tabId, debounceMs = 200, timeoutMs = 5000, frameId) {
+  const start = Date.now();
+  const quiet = () => sendToContentScript(tabId, { type: "dom_quiet" }, frameId);
+  let read = await quiet();
+  try {
+    while (read.success) {
+      const { quietMs, mutations } = read.data;
+      const elapsed = Date.now() - start;
+      if (quietMs >= debounceMs)
+        return { success: true, data: { stable: true, elapsed, mutations } };
+      if (elapsed >= timeoutMs)
+        return { success: true, data: { stable: false, elapsed, mutations } };
+      await new Promise((r) => setTimeout(r, Math.min(debounceMs - quietMs, timeoutMs - elapsed)));
+      read = await quiet();
+    }
+    return read;
+  } finally {
+    sendToContentScriptOnce(tabId, { type: "dom_quiet", stop: true }, frameId).catch(() => {});
+  }
+}
 async function probeContentReady(tabId, timeoutMs) {
   try {
-    const result = await sendToContentScript(tabId, {
-      type: "wait_stable",
-      ms: 500,
-      timeout: Math.min(timeoutMs, 5000)
-    });
+    const result = await waitStable(tabId, 500, Math.min(timeoutMs, 5000));
     return result.success && (result.data?.stable ?? true);
   } catch {
     return false;
@@ -855,8 +879,172 @@ async function cdpAttachActDetach(tabId, method, params) {
   }
 }
 
+// extension/src/background/capabilities/windows.ts
+var WINDOW_OP_TIMEOUT_MS = 8000;
+var WINDOW_CLOSE_PREP_TIMEOUT_MS = 3000;
+
+class WindowOperationTimeoutError extends Error {
+  operation;
+  timeoutMs;
+  constructor(operation, timeoutMs) {
+    super(`${operation} timed out after ${timeoutMs}ms (service worker may be wedged)`);
+    this.operation = operation;
+    this.timeoutMs = timeoutMs;
+    this.name = "WindowOperationTimeoutError";
+  }
+}
+function withWindowTimeout(op, p, ms = WINDOW_OP_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new WindowOperationTimeoutError(op, ms)), ms);
+    p.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    }, (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+function windowIdFromAction(action) {
+  return typeof action.windowId === "number" && Number.isFinite(action.windowId) ? action.windowId : undefined;
+}
+function windowUpdateInfoFromAction(action) {
+  const info = {};
+  if (typeof action.width === "number")
+    info.width = action.width;
+  if (typeof action.height === "number")
+    info.height = action.height;
+  if (typeof action.left === "number")
+    info.left = action.left;
+  if (typeof action.top === "number")
+    info.top = action.top;
+  if (typeof action.state === "string")
+    info.state = action.state;
+  return info;
+}
+async function detachTab(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  const win = await chrome.windows.get(tab.windowId);
+  await hydrateNamedGroups();
+  const home = {
+    windowId: tab.windowId,
+    index: tab.index,
+    active: tab.active,
+    groupId: tab.groupId,
+    group: labelForGroupId(tab.groupId),
+    managed: await isTabInInterceptorGroup(tabId)
+  };
+  await withWindowTimeout("os_detach", chrome.windows.create({ tabId, focused: false, width: win.width, height: win.height }));
+  return home;
+}
+async function returnTab(tabId, home) {
+  const homeWindow = await chrome.windows.get(home.windowId).catch(() => null);
+  if (homeWindow)
+    await chrome.tabs.move(tabId, { windowId: home.windowId, index: home.index });
+  if (home.group)
+    await addTabToNamedGroup(tabId, home.group);
+  else if (home.managed)
+    await addTabToInterceptorGroup(tabId);
+  else if (home.groupId !== -1)
+    await chrome.tabs.group({ tabIds: [tabId], groupId: home.groupId }).catch(() => {});
+  if (homeWindow && home.active)
+    await chrome.tabs.update(tabId, { active: true });
+}
+async function handleWindowActions(action, _tabId) {
+  try {
+    switch (action.type) {
+      case "window_create": {
+        const win = await withWindowTimeout("window_create", chrome.windows.create({
+          tabId: action.moveTabId,
+          url: action.url,
+          type: action.windowType || "normal",
+          width: action.width,
+          height: action.height,
+          left: action.left,
+          top: action.top,
+          incognito: !!action.incognito,
+          focused: action.focused === true
+        }));
+        if (!win)
+          return { success: false, error: "window creation returned no window" };
+        const firstTab = win.tabs?.[0];
+        let groupId;
+        let groupWarning;
+        if (firstTab?.id && !action.incognito) {
+          const group = typeof action.group === "string" && GROUP_LABEL_RE.test(action.group) ? action.group : undefined;
+          if (group && typeof win.id === "number")
+            await moveNamedGroupToWindow(group, win.id);
+          groupId = group ? await addTabToNamedGroup(firstTab.id, group, action.groupColor) : await addTabToInterceptorGroup(firstTab.id);
+          try {
+            const landed = await chrome.tabs.get(firstTab.id);
+            if (landed.windowId !== win.id) {
+              groupWarning = group ? `group '${group}' could not be moved, so the tab joined it in window ${landed.windowId} and has no window of its own` : `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`;
+            }
+          } catch {}
+        }
+        return {
+          success: true,
+          data: {
+            windowId: win.id,
+            groupId,
+            tabs: win.tabs?.map((t) => ({ id: t.id, url: t.url })),
+            ...groupWarning ? { groupWarning } : {}
+          }
+        };
+      }
+      case "window_close": {
+        const windowId = windowIdFromAction(action);
+        if (windowId === undefined)
+          return { success: false, error: "window_close requires a window id" };
+        await withWindowTimeout("window_close", (async () => {
+          const windowTabs = await chrome.tabs.query({ windowId });
+          await ungroupBeforeClose(windowTabs.map((t) => t.id).filter((id) => typeof id === "number"));
+        })(), WINDOW_CLOSE_PREP_TIMEOUT_MS).catch(() => {});
+        await withWindowTimeout("window_close", chrome.windows.remove(windowId));
+        return { success: true };
+      }
+      case "window_focus": {
+        const windowId = windowIdFromAction(action);
+        if (windowId === undefined)
+          return { success: false, error: "window_focus requires a window id" };
+        await withWindowTimeout("window_focus", chrome.windows.update(windowId, { focused: true }));
+        return { success: true };
+      }
+      case "window_resize": {
+        const targetId = windowIdFromAction(action) ?? (await withWindowTimeout("window_getCurrent", chrome.windows.getCurrent())).id;
+        if (targetId === undefined)
+          return { success: false, error: "no target window id available" };
+        await withWindowTimeout("window_resize", chrome.windows.update(targetId, windowUpdateInfoFromAction(action)));
+        return { success: true };
+      }
+      case "window_list":
+      case "window_get_all": {
+        const windows = await withWindowTimeout("window_list", chrome.windows.getAll({ populate: true }));
+        return {
+          success: true,
+          data: windows.map((w) => ({
+            id: w.id,
+            type: w.type,
+            state: w.state,
+            focused: w.focused,
+            width: w.width,
+            height: w.height,
+            left: w.left,
+            top: w.top,
+            incognito: w.incognito,
+            tabs: w.tabs?.map((t) => ({ id: t.id, url: t.url, title: t.title, active: t.active }))
+          }))
+        };
+      }
+    }
+    return { success: false, error: `unknown window action: ${action.type}` };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // extension/src/background/capabilities/os-input.ts
-var FOREGROUND_HINT = "trusted OS input reaches a tab only when it is the active tab of a window that is not minimized. " + "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " + "If the page really needs an OS click, run `interceptor window new`: it moves your tab group into its own background window. " + "`interceptor tab switch <id>` there shows the tab in that window only, and a full install then delivers the click without changing the frontmost app. " + "Never switch tabs in a window the user is working in.";
+var FOREGROUND_HINT = "trusted OS input reaches a tab only when it is the active tab of a window that is not minimized. " + "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " + "If the page really needs an OS click, run `interceptor window new --tab <id>`: it gives the tab its own background window, and a full install then delivers the click there without changing the frontmost app. " + "`tab switch` belongs only in that window. Never switch tabs in a window the user is working in.";
 async function requireForegroundTab(tabId, backgroundOk = false) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) {
@@ -866,18 +1054,21 @@ async function requireForegroundTab(tabId, backgroundOk = false) {
   if (!win) {
     return { ok: false, result: { success: false, error: `window ${tab.windowId} not found for tab ${tabId}` } };
   }
+  const moveTarget = backgroundOk && hasTabGroupApi() ? { moveTabId: tabId } : {};
   if (win.state === "minimized") {
     return { ok: false, result: {
       success: false,
+      delivered: false,
       error: `window ${tab.windowId} is minimized — trusted OS input needs on-screen pixels to hit`,
-      data: { hint: FOREGROUND_HINT, windowState: win.state }
+      data: { hint: FOREGROUND_HINT, windowState: win.state, ...moveTarget }
     } };
   }
   if (!tab.active) {
     return { ok: false, result: {
       success: false,
+      delivered: false,
       error: `tab ${tabId} is not the active tab of window ${tab.windowId} — a trusted OS event would hit the window's visible tab instead`,
-      data: { hint: FOREGROUND_HINT }
+      data: { hint: FOREGROUND_HINT, ...moveTarget }
     } };
   }
   const windowBounds = {
@@ -889,9 +1080,9 @@ async function requireForegroundTab(tabId, backgroundOk = false) {
   if (!win.focused) {
     const error = `window ${tab.windowId} is not the OS-focused window — trusted OS events are routed by the OS to whatever is frontmost, not to the target tab`;
     if (!backgroundOk) {
-      return { ok: false, result: { success: false, error, data: { hint: FOREGROUND_HINT } } };
+      return { ok: false, result: { success: false, delivered: false, error, data: { hint: FOREGROUND_HINT } } };
     }
-    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT } };
+    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT, tabId } };
   }
   return { ok: true, windowBounds };
 }
@@ -907,6 +1098,10 @@ async function chromeUiHeightFor(tabId, windowHeight, viewportHeight) {
   }
   const fromViewport = windowHeight - viewportHeight;
   return zoom === 1 && fromViewport >= 0 && fromViewport <= 200 ? fromViewport : fallback;
+}
+async function armReceipt(tabId, frameId, point) {
+  const armed = await sendToContentScript(tabId, { type: "input_watch", ...point }, frameId).catch(() => null);
+  return armed?.success === true && armed.data?.armed === true;
 }
 async function rectIn(tabId, query, frameId) {
   const result = await sendToContentScript(tabId, { type: "rect", ...query }, frameId);
@@ -933,6 +1128,21 @@ async function frameOrigin(tabId, frameId) {
 async function handleOsInputActions(action, tabId) {
   const backgroundOk = action.backgroundOk === true;
   switch (action.type) {
+    case "os_receipt":
+      return sendToContentScript(tabId, { type: "input_watch_read" }, action.frameId);
+    case "os_detach":
+      try {
+        return { success: true, data: await detachTab(tabId) };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    case "os_return":
+      try {
+        await returnTab(tabId, action.home);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
     case "os_click": {
       const fg = await requireForegroundTab(tabId, backgroundOk);
       if (!fg.ok)
@@ -970,6 +1180,7 @@ async function handleOsInputActions(action, tabId) {
         pageHidden = origin.pageHidden === true;
       }
       const chromeUiHeight = action.chromeUiHeight || await chromeUiHeightFor(tabId, windowBounds.height, viewportHeight);
+      const watching = fg.background ? await armReceipt(tabId, frameId || undefined, origin ? undefined : { x: pageX, y: pageY }) : false;
       return {
         success: true,
         data: {
@@ -979,7 +1190,7 @@ async function handleOsInputActions(action, tabId) {
           button: action.button || "left",
           clickCount: action.clickCount || 1,
           chromeUiHeight,
-          ...fg.background ? { background: { ...fg.background, pageHidden } } : {}
+          ...fg.background ? { background: { ...fg.background, pageHidden, watching, frameId } } : {}
         }
       };
     }
@@ -987,19 +1198,21 @@ async function handleOsInputActions(action, tabId) {
       const fg = await requireForegroundTab(tabId, backgroundOk);
       if (!fg.ok)
         return fg.result;
+      const chord = (action.modifiers ?? []).some((m) => /^(cmd|command|meta|ctrl|control)$/i.test(m));
+      const watching = fg.background && !chord ? await armReceipt(tabId) : false;
       return { success: true, data: {
         method: "os_event",
         key: action.key,
         modifiers: action.modifiers || [],
-        ...fg.background ? { background: fg.background, windowBounds: fg.windowBounds } : {}
+        ...fg.background ? { background: { ...fg.background, watching }, windowBounds: fg.windowBounds } : {}
       } };
     }
     case "os_type": {
       const fg = await requireForegroundTab(tabId, backgroundOk);
       if (!fg.ok)
         return fg.result;
+      const frameId = (action.ref || action.index !== undefined) && typeof action.frameId === "number" ? action.frameId : undefined;
       if (action.index !== undefined || action.ref || action.sensitive === true) {
-        const frameId = (action.ref || action.index !== undefined) && typeof action.frameId === "number" ? action.frameId : undefined;
         const focused = await sendToContentScript(tabId, {
           type: "focus",
           index: action.index,
@@ -1011,10 +1224,11 @@ async function handleOsInputActions(action, tabId) {
           return focused;
         await new Promise((r) => setTimeout(r, 50));
       }
+      const watching = fg.background ? await armReceipt(tabId, frameId) : false;
       return { success: true, data: {
         method: "os_event",
         text: action.text,
-        ...fg.background ? { background: fg.background, windowBounds: fg.windowBounds } : {}
+        ...fg.background ? { background: { ...fg.background, watching, frameId }, windowBounds: fg.windowBounds } : {}
       } };
     }
     case "os_move": {
@@ -2668,141 +2882,6 @@ async function handleTabActions(action, tabId) {
   return { success: false, error: `unknown tab action: ${action.type}` };
 }
 
-// extension/src/background/capabilities/windows.ts
-var WINDOW_OP_TIMEOUT_MS = 8000;
-var WINDOW_CLOSE_PREP_TIMEOUT_MS = 3000;
-
-class WindowOperationTimeoutError extends Error {
-  operation;
-  timeoutMs;
-  constructor(operation, timeoutMs) {
-    super(`${operation} timed out after ${timeoutMs}ms (service worker may be wedged)`);
-    this.operation = operation;
-    this.timeoutMs = timeoutMs;
-    this.name = "WindowOperationTimeoutError";
-  }
-}
-function withWindowTimeout(op, p, ms = WINDOW_OP_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new WindowOperationTimeoutError(op, ms)), ms);
-    p.then((value) => {
-      clearTimeout(timer);
-      resolve(value);
-    }, (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
-}
-function windowIdFromAction(action) {
-  return typeof action.windowId === "number" && Number.isFinite(action.windowId) ? action.windowId : undefined;
-}
-function windowUpdateInfoFromAction(action) {
-  const info = {};
-  if (typeof action.width === "number")
-    info.width = action.width;
-  if (typeof action.height === "number")
-    info.height = action.height;
-  if (typeof action.left === "number")
-    info.left = action.left;
-  if (typeof action.top === "number")
-    info.top = action.top;
-  if (typeof action.state === "string")
-    info.state = action.state;
-  return info;
-}
-async function handleWindowActions(action, _tabId) {
-  try {
-    switch (action.type) {
-      case "window_create": {
-        const win = await withWindowTimeout("window_create", chrome.windows.create({
-          url: action.url,
-          type: action.windowType || "normal",
-          width: action.width,
-          height: action.height,
-          left: action.left,
-          top: action.top,
-          incognito: !!action.incognito,
-          focused: action.focused === true
-        }));
-        if (!win)
-          return { success: false, error: "window creation returned no window" };
-        const firstTab = win.tabs?.[0];
-        let groupId;
-        let groupWarning;
-        if (firstTab?.id && !action.incognito) {
-          const group = typeof action.group === "string" && GROUP_LABEL_RE.test(action.group) ? action.group : undefined;
-          if (group && typeof win.id === "number")
-            await moveNamedGroupToWindow(group, win.id);
-          groupId = group ? await addTabToNamedGroup(firstTab.id, group, action.groupColor) : await addTabToInterceptorGroup(firstTab.id);
-          try {
-            const landed = await chrome.tabs.get(firstTab.id);
-            if (landed.windowId !== win.id) {
-              groupWarning = group ? `group '${group}' could not be moved, so the tab joined it in window ${landed.windowId} and has no window of its own` : `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`;
-            }
-          } catch {}
-        }
-        return {
-          success: true,
-          data: {
-            windowId: win.id,
-            groupId,
-            tabs: win.tabs?.map((t) => ({ id: t.id, url: t.url })),
-            ...groupWarning ? { groupWarning } : {}
-          }
-        };
-      }
-      case "window_close": {
-        const windowId = windowIdFromAction(action);
-        if (windowId === undefined)
-          return { success: false, error: "window_close requires a window id" };
-        await withWindowTimeout("window_close", (async () => {
-          const windowTabs = await chrome.tabs.query({ windowId });
-          await ungroupBeforeClose(windowTabs.map((t) => t.id).filter((id) => typeof id === "number"));
-        })(), WINDOW_CLOSE_PREP_TIMEOUT_MS).catch(() => {});
-        await withWindowTimeout("window_close", chrome.windows.remove(windowId));
-        return { success: true };
-      }
-      case "window_focus": {
-        const windowId = windowIdFromAction(action);
-        if (windowId === undefined)
-          return { success: false, error: "window_focus requires a window id" };
-        await withWindowTimeout("window_focus", chrome.windows.update(windowId, { focused: true }));
-        return { success: true };
-      }
-      case "window_resize": {
-        const targetId = windowIdFromAction(action) ?? (await withWindowTimeout("window_getCurrent", chrome.windows.getCurrent())).id;
-        if (targetId === undefined)
-          return { success: false, error: "no target window id available" };
-        await withWindowTimeout("window_resize", chrome.windows.update(targetId, windowUpdateInfoFromAction(action)));
-        return { success: true };
-      }
-      case "window_list":
-      case "window_get_all": {
-        const windows = await withWindowTimeout("window_list", chrome.windows.getAll({ populate: true }));
-        return {
-          success: true,
-          data: windows.map((w) => ({
-            id: w.id,
-            type: w.type,
-            state: w.state,
-            focused: w.focused,
-            width: w.width,
-            height: w.height,
-            left: w.left,
-            top: w.top,
-            incognito: w.incognito,
-            tabs: w.tabs?.map((t) => ({ id: t.id, url: t.url, title: t.title, active: t.active }))
-          }))
-        };
-      }
-    }
-    return { success: false, error: `unknown window action: ${action.type}` };
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
 // extension/src/background/capabilities/navigation.ts
 var HISTORY_GO_START_MS = 2000;
 async function waitForNavigationStart(tabId, beforeUrl, timeoutMs = HISTORY_GO_START_MS) {
@@ -3582,8 +3661,12 @@ async function executeNormalize(tabId, world, code) {
   });
   return results[0]?.result ?? { success: false, error: "no result" };
 }
+var ISOLATED_SAVE_UNAVAILABLE = "save --isolated cannot run on this browser: the extension's isolated world blocks running an expression string there (extension policy, not the page). Run the same command without --isolated, which uses the page world: interceptor save --out <path> '<expr>'";
 async function prepareByteSource(tabId, code, world) {
   const evalResult = await runWithCspStripBypass(tabId, world, (t, w) => executeNormalize(t, w, code));
+  if (!evalResult.success && world === "ISOLATED" && isCspEvalError(evalResult.error)) {
+    return { success: false, error: ISOLATED_SAVE_UNAVAILABLE, data: { originalError: evalResult.error, requestedWorld: world } };
+  }
   if (!evalResult.success)
     return evalResult;
   let descriptor = evalResult.data;
@@ -5345,7 +5428,7 @@ function initializeActionRouter() {
   restorePageCommCaptureConfig();
   registerKeepaliveListeners();
 }
-var OS_INPUT_ACTIONS = new Set(["os_click", "os_key", "os_type", "os_move"]);
+var OS_INPUT_ACTIONS = new Set(["os_click", "os_key", "os_type", "os_move", "os_receipt", "os_detach", "os_return"]);
 var SCREENSHOT_ACTIONS = new Set(["screenshot", "screenshot_background", "page_capture", "ocr"]);
 var CAPTURE_STREAM_ACTIONS = new Set(["capture_start", "capture_frame", "capture_stop", "canvas_diff"]);
 var CANVAS_ACTIONS = new Set([
@@ -5458,6 +5541,9 @@ var SCENE_ACTIONS = new Set([
 async function routeAction(action, tabId) {
   if (OS_INPUT_ACTIONS.has(action.type))
     return handleOsInputActions(action, tabId);
+  if (action.type === "wait_stable") {
+    return waitStable(tabId, action.ms, action.timeout, action.frameId);
+  }
   if (SCREENSHOT_ACTIONS.has(action.type))
     return handleScreenshotActions(action, tabId);
   if (CAPTURE_STREAM_ACTIONS.has(action.type))
@@ -5607,6 +5693,85 @@ function needsTab(type) {
   return !NO_TAB_ACTIONS.has(type);
 }
 
+// extension/src/background/read-actions.ts
+var READ_ACTIONS = new Set([
+  "get_a11y_tree",
+  "extract_text",
+  "extract_html",
+  "extract_markdown",
+  "page_info",
+  "query",
+  "query_one",
+  "count",
+  "exists",
+  "table_data",
+  "find_element",
+  "forms",
+  "links",
+  "images",
+  "meta",
+  "modals",
+  "panels",
+  "regions",
+  "rect",
+  "what_at",
+  "get_focus",
+  "get_page_dimensions",
+  "get_state",
+  "attr_get",
+  "style_get",
+  "selection_get",
+  "semantic_resolve",
+  "diff",
+  "wait",
+  "wait_for",
+  "wait_stable",
+  "dom_screenshot",
+  "storage_read",
+  "clipboard_read",
+  "scene_list",
+  "scene_selected",
+  "scene_text",
+  "scene_profile",
+  "scene_hit",
+  "scene_slide_list",
+  "scene_slide_current",
+  "scene_notes",
+  "scene_render",
+  "scene_cursor",
+  "screenshot",
+  "screenshot_background",
+  "page_capture",
+  "ocr",
+  "canvas_list",
+  "canvas_read",
+  "canvas_status",
+  "canvas_log",
+  "canvas_objects",
+  "canvas_model",
+  "canvas_routes",
+  "canvas_ocr",
+  "canvas_diff",
+  "cookies_get",
+  "net_log",
+  "net_headers",
+  "sse_log",
+  "sse_streams",
+  "sse_chunk",
+  "page_comm_log",
+  "page_comm_status",
+  "network_log",
+  "frames_list",
+  "frames_read_tree",
+  "frames_find",
+  "tab_zoom_get",
+  "capabilities",
+  "cdp_tree"
+]);
+function isReadAction(type) {
+  return READ_ACTIONS.has(type);
+}
+
 // extension/src/background/resolve-tab.ts
 function resolveWorkingTabId(msgTabId, actionTabId) {
   if (typeof actionTabId === "number" && !Number.isNaN(actionTabId))
@@ -5636,6 +5801,31 @@ async function managedTabGateError(tabId, groupLabel, groupHard) {
   } catch {
     const groupArg = groupHard && groupLabel ? ` --group ${groupLabel}` : "";
     return `tab ${tabId} is unavailable; run 'interceptor tabs${groupArg}' to refresh tab IDs and retry`;
+  }
+}
+function softFallbackError(actionType, label, tabId, host) {
+  if (isReadAction(actionType))
+    return null;
+  return `your session group '${label}' has no tabs, so this would act on the tab the user is viewing (${tabId}, ${host}). Open a page first (interceptor open <url>), or pass --any-tab if the user asked you to act on that tab.`;
+}
+function softFallbackGateError(label, tabId, host) {
+  return `your session group '${label}' has no tabs, and the tab the user is viewing (${tabId}, ${host}) is not an Interceptor tab. Open a page first (interceptor open <url>), or pass --any-tab if the user asked you to read that tab.`;
+}
+function softFallbackNote(tabId, host) {
+  return `reading the active tab ${tabId} (${host}), which is not one of this session's tabs; run 'interceptor open <url>' to work in your own tab`;
+}
+var SESSION_LABEL_RE = /^s-[0-9a-f]{16}$/;
+function foreignSessionCloseError(kind, owner, caller, target) {
+  if (!owner || owner === caller || !SESSION_LABEL_RE.test(owner))
+    return null;
+  return kind === "group" ? `group '${owner}' belongs to another agent session that may still be working (yours is '${caller}'). Leave it: Interceptor closes an agent's group after it sits unused. Close your own with 'interceptor group close'; pass --any-tab only if the user named this group` : `tab ${target} belongs to another agent session's group '${owner}' (yours is '${caller}'). Leave it to that agent; pass --any-tab only if the user named this tab`;
+}
+async function tabHost(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return tab.url ? new URL(tab.url).host || tab.url : "unknown page";
+  } catch {
+    return "unknown page";
   }
 }
 function activeTabKey2(group) {
@@ -5743,27 +5933,65 @@ async function handleDaemonMessage(msg) {
       return;
     }
   }
+  let softFallback;
+  let softFallbackRefusal;
+  let softFallbackTab = false;
   if (!tabId && needsTab(action.type)) {
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
     tabId = activeTab?.id;
+    if (tabId && groupSoft && hasTabGroupApi()) {
+      softFallbackTab = true;
+      if (action.anyTab !== true) {
+        const host = await tabHost(tabId);
+        const refusal = softFallbackError(action.type, groupLabel, tabId, host);
+        if (refusal) {
+          fail(refusal);
+          return;
+        }
+        softFallback = softFallbackNote(tabId, host);
+        softFallbackRefusal = softFallbackGateError(groupLabel, tabId, host);
+      }
+    }
   }
   if (!tabId && needsTab(action.type)) {
     const windows = await chrome.windows.getAll().catch(() => null);
     fail(noActiveTabError(windows ? windows.length : null));
     return;
   }
+  const moveTabId = action.type === "window_create" && typeof action.moveTabId === "number" ? action.moveTabId : undefined;
+  if (moveTabId !== undefined)
+    tabId = moveTabId;
   let switchBack = false;
-  if (tabId && needsTab(action.type) && !action.anyTab) {
+  if (tabId && (needsTab(action.type) || moveTabId !== undefined) && !action.anyTab) {
     const membershipError = await managedTabGateError(tabId, groupLabel, groupHard);
     if (membershipError) {
       switchBack = action.type === "tab_switch" && await consumeSwitchBack(tabId, groupLabel);
       if (!switchBack) {
-        fail(membershipError);
+        fail(softFallbackRefusal ?? membershipError);
         return;
       }
     }
   }
-  if (tabId && !switchBack)
+  if (groupSoft && action.anyTab !== true && hasTabGroupApi() && (action.type === "group_close" || action.type === "tab_close")) {
+    let refusal = null;
+    if (action.type === "group_close") {
+      const label = typeof action.label === "string" ? action.label : null;
+      if (label && await ensureNamedGroup(label) !== -1)
+        refusal = foreignSessionCloseError("group", label, groupLabel, label);
+    } else {
+      const closeId = action.tabId || tabId;
+      try {
+        const tab = await chrome.tabs.get(closeId);
+        await hydrateNamedGroups();
+        refusal = foreignSessionCloseError("tab", labelForGroupId(tab.groupId), groupLabel, closeId);
+      } catch {}
+    }
+    if (refusal) {
+      fail(refusal);
+      return;
+    }
+  }
+  if (tabId && !switchBack && !softFallbackTab)
     setActiveTabId(tabId, groupLabel);
   if (SENSITIVE_ACTIONS.has(action.type) && tabId && action.expectedUrl) {
     const urlErr = await verifyTabUrl(tabId, action.expectedUrl);
@@ -5780,6 +6008,8 @@ async function handleDaemonMessage(msg) {
     const result = await routeAction(action, tabId);
     if (tabId)
       result.tabId = tabId;
+    if (softFallback && result.success)
+      result.warning = result.warning ? `${softFallback}; ${result.warning}` : softFallback;
     clearTimeout(requestTimer);
     pendingRequests.delete(msg.id);
     console.log(`[${shortId}] complete ${action.type} ${Date.now() - startTime}ms`);

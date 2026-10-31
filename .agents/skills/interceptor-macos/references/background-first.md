@@ -21,7 +21,7 @@ Before a focus move, go down this list and stop at the first rung that works:
 
 1. A ref (`act`, `click <ref>`, `type <ref>`): pure accessibility, no events.
 2. Addressed input: `--app` / `--pid`, plus `--window <id>` when the app has several windows.
-3. For a page in a browser: `interceptor click <ref> --trusted` (delivered to an unfocused window), and `interceptor window new` to give your tabs their own background window.
+3. For a page in a browser: `interceptor click <ref> --trusted` (delivered to an unfocused window, and a tab that is not showing gets a background window of its own and goes back), and `interceptor window new` to give your tabs their own background window.
 4. Only then a focus move. Say so first, keep it to one fast batch, and put back the frontmost app and the cursor.
 
 What is truly foreground-only today:
@@ -43,7 +43,7 @@ When the user says "screenshot of Brave", "scroll Signal", "open a tab in Brave"
 | Scroll a backgrounded app | `interceptor macos scroll <dir> <amount> --app "X" [--ref <ref>]` (stamped for the window, at the ref or the window center) | Chrome with the window fully covered: tell the user it needs to be partly uncovered; do not raise it |
 | Click or drag in a backgrounded app | `interceptor macos click X,Y --app "X"` / `drag X1,Y1 X2,Y2 --app "X"`; add `--window <id>` when another window of that app covers the point | Minimized window or hidden app: the verb refuses. Unminimizing takes focus, so say so first |
 | Drive a native Cocoa app | AX `interceptor macos act/click/type` against the target's PID without `activate` | (no escalation needed; a bare `--os` call goes to the frontmost app, so it is only for a target the user already has in front) |
-| Trusted click or typing in a browser page | `interceptor click <ref> --trusted` / `type <ref> "..." --trusted` / `keys ... --trusted`: delivered to the tab's window while it is unfocused or covered | Tab is not the active tab of its window: `interceptor window new`, then `tab switch <id>` in that window |
+| Trusted click or typing in a browser page | `interceptor click <ref> --trusted` / `type <ref> "..." --trusted` / `keys ... --trusted`: delivered to the tab's window while it is unfocused or covered; a tab that is not showing moves to its own background window and back | Fails with `the page received nothing`: nothing happened, `read` the page |
 | Read text / selection from another app | `interceptor macos text` against the target — no focus change | (no escalation needed) |
 | Move / resize a window in the background | `interceptor macos move/resize <ref> --app "X"` returns `{frame, requested, clamped, clampedTo}` | (no escalation needed; refs churn after geometry — refresh from `windows`) |
 

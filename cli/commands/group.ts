@@ -84,7 +84,16 @@ export async function runGroupAcrossContexts(action: Action, contextIds: string[
   return { success: false, error: `${first?.contextId}: ${first?.result.error ?? "group_close failed"}` }
 }
 
-export function parseGroupCommand(filtered: string[]): Action {
+/** Mark the caller's own group (session or explicit) in `group list`. */
+export function markOwnGroup(result: DaemonResult, ownLabel: string | undefined): DaemonResult {
+  if (!ownLabel || !Array.isArray(result.data)) return result
+  for (const row of result.data as Record<string, unknown>[]) {
+    if (row && row.label === ownLabel) row.own = true
+  }
+  return result
+}
+
+export function parseGroupCommand(filtered: string[], ownLabel?: string): Action {
   const sub = filtered[1]
 
   if (sub === "list" || sub === undefined) {
@@ -92,9 +101,11 @@ export function parseGroupCommand(filtered: string[]): Action {
   }
 
   if (sub === "close") {
-    const label = filtered[2]
+    // No label closes the caller's own group (its session group, or the
+    // explicit --group / INTERCEPTOR_GROUP it runs under).
+    const label = filtered[2] ?? ownLabel
     if (!label || !GROUP_LABEL_RE.test(label)) {
-      console.error("error: usage: interceptor group close <label>   (label: [A-Za-z0-9_-]{1,32})")
+      console.error("error: usage: interceptor group close <label>   (label: [A-Za-z0-9_-]{1,32}; with no label it closes your own session group, and this shell has none)")
       process.exit(1)
     }
     return { type: "group_close", label }

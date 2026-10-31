@@ -21,8 +21,8 @@ settings:
     SWIFT_VERSION: "5.0"
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "2.1.6"
-    CURRENT_PROJECT_VERSION: "2.1.6"
+    MARKETING_VERSION: "2.1.8"
+    CURRENT_PROJECT_VERSION: "2.1.8"
 
 targets:
   InterceptorCompanion:

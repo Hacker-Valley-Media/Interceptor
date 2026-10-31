@@ -1,5 +1,6 @@
 import { K_BEACON, K_BROADCAST, K_KEEPALIVE, K_NET, K_TT_POLICY, K_WS, TT_NET_POLICY_NAME, TT_POLICY_NAME } from "./inject-keys"
 import { installRenderKeepalive } from "./inject-keepalive"
+import { installTrustShim } from "./inject-trust"
 
 if ((window as any)[K_NET]) {
   // already patched — skip
@@ -18,16 +19,7 @@ if ((window as any)[K_NET]) {
   // symbol-keying the getter would silently break every external caller. Hiding
   // it from page listeners needs a per-session random namespace shared with the
   // eval tooling, tracked with the deferred CustomEvent-channel work (#178).
-  try {
-    const origIsTrusted = Object.getOwnPropertyDescriptor(Event.prototype, "isTrusted")
-    Object.defineProperty(Event.prototype, "isTrusted", {
-      configurable: true,
-      get(this: Event & { __interceptor_trust?: boolean }) {
-        if (this.__interceptor_trust === true) return true
-        return origIsTrusted && origIsTrusted.get ? origIsTrusted.get.call(this) : false
-      }
-    })
-  } catch {}
+  try { installTrustShim(EventTarget.prototype) } catch {}
 
   try {
     const ua = (navigator as Navigator & { userActivation?: { isActive: boolean; hasBeenActive: boolean } }).userActivation
@@ -126,8 +118,8 @@ if ((window as any)[K_NET]) {
   // fire a drop, but that drop is isTrusted:false — some dropzones reject it.
   // Here in MAIN we re-build the File from the blob: URL it handed us and fire
   // the drag sequence *inside our own realm*, tagged trusted, so the page's own
-  // drop listener sees isTrusted:true (the tag only works in the realm that owns
-  // the isTrusted getter override above). Ack back with {id, ok} so the content
+  // drop listener sees isTrusted:true (the tag only works in the realm that holds
+  // the listener shim above). Ack back with {id, ok} so the content
   // side knows whether to fall back to its own isolated dispatch.
   document.addEventListener("__interceptor_file_drop", ((e: CustomEvent) => {
     const target = e.target as (Element & { dispatchEvent: (ev: Event) => boolean }) | null

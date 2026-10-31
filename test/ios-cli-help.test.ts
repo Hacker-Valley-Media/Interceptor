@@ -53,7 +53,8 @@ describe("interceptor ios <sub> --help never dispatches", () => {
   })
 
   test("a subcommand without a curated help line still gets the full ios page", () => {
-    const r = runIosHelp("refresh", "--help")
+    // `refresh` gained its own help line; `enable` still has none.
+    const r = runIosHelp("enable", "--help")
     expect(r.exitCode, r.stderr).toBe(0)
     expect(r.stdout).toContain("refresh")
     expect(r.stdout).toContain("Setup:")

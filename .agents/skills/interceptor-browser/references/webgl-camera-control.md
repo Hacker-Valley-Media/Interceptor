@@ -182,7 +182,7 @@ The `mix-blend-mode: screen` over a `pointer-events:none` overlay means the user
 ## Stable hooks
 
 - `MouseEvent`, `WheelEvent`, `KeyboardEvent` constructors — universal Web API, present everywhere.
-- `event.__interceptor_trust = true` — the per-event marker that satisfies sites that gate on `isTrusted` via the prototype.
+- `event.__interceptor_trust = true` — the per-event marker that makes `addEventListener` listeners read `isTrusted: true`. It changes what page JS sees, not what the browser believes.
 - `getBoundingClientRect()` for canvas size; `clientX`/`clientY` for event coordinates relative to the viewport.
 - The pre-load `userActivation` override (in `extension/src/inject-net.ts`) that satisfies `navigator.userActivation.isActive` for sites that gate on transient activation.
 

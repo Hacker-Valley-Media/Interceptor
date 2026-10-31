@@ -20,7 +20,7 @@ function chromeThatRecoversOnReload(descriptor: unknown) {
     runtime: { lastError: undefined },
     tabs: {
       reload: async () => { reloaded = true },
-      sendMessage: (_id: number, _msg: unknown, _opts: unknown, cb: (r: unknown) => void) => { cb({ success: true, data: { stable: true } }) },
+      sendMessage: (_id: number, _msg: unknown, _opts: unknown, cb: (r: unknown) => void) => { cb({ success: true, data: { quietMs: 1000, mutations: 0 } }) },
       onUpdated: {
         addListener: (fn: (id: number, info: { status: string }) => void) => { queueMicrotask(() => fn(42, { status: "complete" })) },
         removeListener() {},

@@ -42,9 +42,11 @@ interceptor find "Submit" --elements-only          # Accessible controls + actio
 interceptor read --include-frames                   # Populate child-frame element refs
 interceptor find "privacy" --include-frames        # Frame IDs + framed refs such as e2_7
 
-interceptor act e7                                 # Click + read after
+interceptor act e7                                 # Click + read after; '--- changes ---' lists text and elements that changed
 interceptor act e9 "example user"                  # Type into field
-interceptor act e11 --keys "Enter"
+interceptor act e9 "turing award" --submit         # Type, then submit the field's form (a synthetic Enter never submits)
+interceptor act e11 --keys "Escape"                # Focus e11, then send the key
+interceptor act '[e7]'                             # A ref copied with its brackets works (quote it in zsh)
 interceptor act e15 --trusted                      # HID-sourced click; page sees isTrusted: true. ESCALATION ONLY. <!-- os:darwin -->
 interceptor act e20 --no-read
 # act takes the ref directly (act e5, never act click e5). A timeout or closed channel after dispatch
@@ -83,7 +85,7 @@ interceptor inspect --filter api
 Passive network (preferred over CDP):
 
 ```bash
-interceptor net log [--filter <p>] [--since 30s] [--limit 100]   # --since: 500ms|30s|5m|2h|1d back from now, or an epoch-ms timestamp
+interceptor net [log] [--filter <p>] [--since 30s] [--limit 100]   # --since: 500ms|30s|5m|2h|1d back from now, or an epoch-ms timestamp
 interceptor net log --format json|har|pcapng [--out <path>] [--redact-auth]   # file is 0600; headers kept unless --redact-auth
 interceptor net headers [--filter <p>]
 interceptor net clear
@@ -209,7 +211,7 @@ interceptor scroll down
 interceptor wait 1000
 interceptor wait-stable
 
-interceptor tabs
+interceptor tabs                                   # 'tab list' does the same
 interceptor tab new <url>             # Background tab in the interceptor group
 interceptor tab new <url> --activate  # Explicit foregrounding
 interceptor tab new <url> --reuse     # Navigate the group's most-recent tab instead of creating
@@ -224,8 +226,9 @@ interceptor open <url> --group <label>   # Open into a named per-agent group "<b
 interceptor read --group <label>         # Any command scopes to that group's tabs; env INTERCEPTOR_GROUP is the fallback.
                                          # No explicit scope: supported agent shells get a soft session group (s-<hash16>).
 interceptor open <url> --shared-group     # Suppress session scope; use the shared default Interceptor group.
-interceptor group list                   # All live tab groups: label, title, color, tab count
+interceptor group list                   # All live tab groups: label, title, color, tab count; "own": true marks yours
 interceptor group close <label>          # Atomically close every tab in a named group and delete the group (other groups untouched)
+interceptor group close                  # Close your own group. Leave other agents' s- groups alone; they close themselves when unused
 interceptor group prune [--dry-run]      # Delete every CLOSED saved group Interceptor left on the bookmarks bar (`<brand>` and `<brand>-<label>`).
                                          # Full install only: a closed saved group has no extension API, so prune opens each chip's menu
                                          # and presses "Delete group" through the native desktop provider, in the background. No age filter
@@ -234,7 +237,8 @@ interceptor group prune [--dry-run]      # Delete every CLOSED saved group Inter
 interceptor group prune <label>...       # Delete only `<brand>-<label>` for those labels. A delete syncs to every profile and cannot be undone.
 interceptor window list
 interceptor window new [url]                              # Background window (ordered below the user's); your tab group moves into it,
-                                                          # so its tab paints and takes trusted clicks without touching the user's view
+                                                          # so its tab paints without touching the user's view
+interceptor window new --tab <id>                         # The same, built around a tab you already have (page state stays)
 interceptor window new [url] --activate                   # Explicit focus move
 interceptor window focus <window-id>                      # Explicit focus move
 interceptor window resize <window-id> <width> <height>
@@ -291,6 +295,7 @@ interceptor raw '{"type":"any_action","key":"value"}'
 interceptor contexts                                # List IDs of all connected browser contexts
 interceptor contexts --verbose                      # Also kind, version, store/unpacked, extension ID, transports
 interceptor contexts rename <name> --context <id>   # Restore a context name after an extension ID change (the new ID starts empty)
+interceptor contexts default <name>                 # Saved default when several contexts are connected and none is named (--clear removes)
 export INTERCEPTOR_CONTEXT=<id>                     # Lane default when several profiles are connected (--context overrides)
 interceptor --context <id> read                     # Route command to a specific profile
 interceptor --context <id> open <url>

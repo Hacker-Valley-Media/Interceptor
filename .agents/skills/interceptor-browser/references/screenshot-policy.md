@@ -61,6 +61,7 @@ Use `--save` whenever you don't need to re-attach the image immediately.
 - `--format webp` — re-encode at the SW boundary via OffscreenCanvas. ~5–8× smaller than PNG at q=85 with no measurable VLM accuracy loss. Falls back to PNG for archive use cases.
 - `--quality <n>` — encoder quality. Defaults: WebP 85, PNG/JPEG 92.
 - `--save` — write bytes to disk and strip `dataUrl` from the result.
+- `--out <path>` — the same, to the file you name (`.png`, `.jpg`/`.jpeg` or `.webp` picks the format; the folder must exist).
 - `--selector <css>` — capture a single matching element. Off-screen elements supported.
 - `--element <ref>` — capture a refRegistry-tracked element (`e5`, `e2_7`).
 - `--region X,Y,W,H` — capture an arbitrary page rectangle.

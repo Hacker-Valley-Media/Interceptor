@@ -38,7 +38,7 @@ Invisible/score gates (v3, Turnstile managed-pass) have **no target to click** â
 
 ## The technique: find the control, click it in the background
 
-The gate tab must be the active tab of a window that is not minimized. If it is a hidden tab in a window the user is working in, do not switch to it there: run `interceptor window new` (it moves your tab group into its own background window), then `interceptor tab switch <id>` inside that window.
+On a full install `--trusted` handles a gate tab that is not showing: the tab gets a background window of its own for the click and goes back. Do not switch to it in a window the user is working in. When the gate needs the page showing while it finishes, run `interceptor window new --tab <id>` first.
 
 ### 1. Prefer the framed ref
 
@@ -119,7 +119,7 @@ interceptor screenshot --tab <id> --pixel --save            # when you need to s
 - **Bringing the browser forward.** Not needed, and it interrupts the person using the Mac. If you find yourself reaching for `app activate` or a bare `--os` click, go back to step 1.
 - **No `--window`.** The click lands on the app's front window at that point. Read the id from `macos windows` and pass it.
 - **Wrong window id after a tab change.** The window's title is its active tab's title. Re-read `macos windows` after any `tab switch`.
-- **Gate tab is not the active tab of its window.** A trusted click reaches only the tab that is showing. Move your group to its own window (`interceptor window new`) and switch there.
+- **Gate tab is not showing.** `--trusted` moves it to its own background window and back on a full install. If the gate has to keep running on screen, use `interceptor window new --tab <id>`.
 - **Browser zoom is not 100%.** `innerHeight` is then in zoomed CSS px and the point formula is off. Use the framed ref, or reset zoom on that tab.
 - **`warning: the page reports hidden`.** Chrome pauses a fully covered window. If nothing changed, part of the window has to be uncovered. Ask the user before moving anything.
 - **Slow solve expires.** The top cause of "I solved it correctly and it still failed." Compress to one batched action.

@@ -120,7 +120,8 @@ function getOrAssignRef(el) {
   return refId;
 }
 function resolveRef(refId) {
-  const ref = refRegistry.get(refId);
+  const bare = /^\[(e\d+)(?:\]|\|)/.exec(refId)?.[1] ?? refId;
+  const ref = refRegistry.get(bare);
   if (!ref)
     return null;
   const el = ref.deref();
@@ -177,7 +178,7 @@ function getRelevantAttrs(el) {
   if (tag === "a") {
     const href = el.getAttribute("href");
     if (href)
-      attrs.push(`href="${href.slice(0, 60)}"`);
+      attrs.push(`href="${href.length > TREE_HREF_CHARS ? `${href.slice(0, TREE_HREF_CHARS)}…` : href}"`);
   }
   if (tag === "input") {
     const type = el.getAttribute("type");
@@ -250,14 +251,14 @@ function getStyleBundle(el) {
 }
 function buildElementTree(elements) {
   return elements.map((e) => {
-    const role = getEffectiveRole(e.element);
-    const name = e.text ? ` "${e.text}"` : "";
+    const shown = displayRoleName(e.element, getEffectiveRole(e.element) || e.tag, e.text || "");
+    const name = shown.name ? ` "${shown.name}"` : "";
     const attrStr = e.attrs ? ` ${e.attrs}` : "";
-    return `[${e.refId}] ${role || e.tag}${name}${attrStr}`;
+    return `[${e.refId}] ${shown.role}${name}${attrStr}`;
   }).join(`
 `);
 }
-var STYLE_BUNDLE_PROPS;
+var TREE_HREF_CHARS = 300, STYLE_BUNDLE_PROPS;
 var init_element_tree = __esm(() => {
   init_sensitive();
   init_a11y_tree();
@@ -470,6 +471,19 @@ function getEffectiveRole(el, style) {
   }
   return "";
 }
+function lineName(name) {
+  return name.replace(/\s+/g, " ").trim();
+}
+function displayRoleName(el, role, name) {
+  if (el.tagName === "INPUT") {
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    if (BUTTON_INPUT_TYPES.has(type)) {
+      const fallback = type === "reset" ? "Reset" : type === "button" ? "" : "Submit";
+      return { role: "button", name: lineName(name || el.value || el.getAttribute("alt") || fallback) };
+    }
+  }
+  return { role, name: lineName(name) };
+}
 function getAccessibleName(el) {
   const ariaLabel = el.getAttribute("aria-label");
   if (ariaLabel && ariaLabel.trim())
@@ -537,8 +551,9 @@ function buildA11yTree(root, depth, maxDepth, filter, includeStyle = false, form
     const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES, style ?? undefined);
     const prefix = compact ? ">".repeat(d) : "  ".repeat(d);
     if (selfVisible && isLandmark && !isInteractiveEl) {
-      const name = getAccessibleName(el);
-      const hasName = !!name && name !== (el.textContent || "").trim().slice(0, 80);
+      const rawName = getAccessibleName(el);
+      const hasName = !!rawName && rawName !== (el.textContent || "").trim().slice(0, 80);
+      const name = lineName(rawName);
       if (compact) {
         lines.push(`${prefix}${role || tag}${hasName ? `|${name}` : ""}`);
       } else {
@@ -547,7 +562,7 @@ function buildA11yTree(root, depth, maxDepth, filter, includeStyle = false, form
       }
     }
     if (selfVisible && isHeading && filter === "all") {
-      const name = getAccessibleName(el);
+      const name = lineName(getAccessibleName(el));
       if (compact) {
         lines.push(`${prefix}heading|${name}`);
       } else {
@@ -556,7 +571,8 @@ function buildA11yTree(root, depth, maxDepth, filter, includeStyle = false, form
     }
     if (selfVisible && isInteractiveEl) {
       const refId = getOrAssignRef(el);
-      const name = getAccessibleName(el);
+      const shown = displayRoleName(el, role || tag, getAccessibleName(el));
+      const name = shown.name;
       const attrs = getRelevantAttrs(el);
       const styleBundle = includeStyle ? getStyleBundle(el) : "";
       const uploadable = isUploadTarget(el);
@@ -565,13 +581,13 @@ function buildA11yTree(root, depth, maxDepth, filter, includeStyle = false, form
         const attrClause = compactAttrClause(attrs);
         const styleClause = styleBundle ? `|style={${styleBundle}}` : "";
         const uploadClause = uploadable ? "|upload" : "";
-        lines.push(`${prefix}[${refId}|${role || tag}${nameClause}${attrClause}${styleClause}${uploadClause}]`);
+        lines.push(`${prefix}[${refId}|${shown.role}${nameClause}${attrClause}${styleClause}${uploadClause}]`);
       } else {
         const nameStr = name ? ` "${name}"` : "";
         const attrStr = attrs ? ` ${attrs}` : "";
         const styleStr = styleBundle ? ` style="${styleBundle}"` : "";
         const uploadStr = uploadable ? ` upload="interceptor upload ${refId} <path>"` : "";
-        lines.push(`${prefix}[${refId}] ${role || tag}${nameStr}${attrStr}${styleStr}${uploadStr}`);
+        lines.push(`${prefix}[${refId}] ${shown.role}${nameStr}${attrStr}${styleStr}${uploadStr}`);
       }
     }
     const shadow = getShadowRoot(el);
@@ -590,7 +606,7 @@ function buildA11yTree(root, depth, maxDepth, filter, includeStyle = false, form
   return lines.join(`
 `);
 }
-var LANDMARK_ROLES, LANDMARK_TAGS;
+var LANDMARK_ROLES, LANDMARK_TAGS, BUTTON_INPUT_TYPES;
 var init_a11y_tree = __esm(() => {
   init_sensitive();
   init_element_discovery();
@@ -598,15 +614,56 @@ var init_a11y_tree = __esm(() => {
   init_element_tree();
   LANDMARK_ROLES = new Set(["banner", "navigation", "main", "complementary", "contentinfo", "search", "form", "region"]);
   LANDMARK_TAGS = new Set(["NAV", "MAIN", "ASIDE", "HEADER", "FOOTER", "FORM", "SECTION"]);
+  BUTTON_INPUT_TYPES = new Set(["submit", "button", "reset", "image"]);
 });
 
 // extension/src/content/snapshot-diff.ts
 var exports_snapshot_diff = {};
 __export(exports_snapshot_diff, {
+  visibleTextLines: () => visibleTextLines,
+  lastTextLines: () => lastTextLines,
   lastSnapshot: () => lastSnapshot,
+  computeTextDiff: () => computeTextDiff,
   computeSnapshotDiff: () => computeSnapshotDiff,
   cacheSnapshot: () => cacheSnapshot
 });
+function visibleTextLines() {
+  if (!document.body)
+    return [];
+  const lines = [];
+  for (const raw of safeText(document.body, true).split(`
+`)) {
+    const line = raw.replace(/\s+/g, " ").trim();
+    if (!line)
+      continue;
+    lines.push(line.length > TEXT_LINE_CHARS ? `${line.slice(0, TEXT_LINE_CHARS)}…` : line);
+    if (lines.length >= TEXT_LINE_CAP)
+      break;
+  }
+  return lines;
+}
+function computeTextDiff() {
+  if (lastTextLines === null)
+    return null;
+  const current = visibleTextLines();
+  const count = new Map;
+  for (const line of lastTextLines)
+    count.set(line, (count.get(line) ?? 0) + 1);
+  const added = [];
+  for (const line of current) {
+    const n = count.get(line) ?? 0;
+    if (n > 0)
+      count.set(line, n - 1);
+    else
+      added.push(line);
+  }
+  const removed = [];
+  for (const [line, n] of count)
+    for (let i = 0;i < n; i++)
+      removed.push(line);
+  lastTextLines = current;
+  return { textAdded: added.slice(0, TEXT_DIFF_CAP), textRemoved: removed.slice(0, TEXT_DIFF_CAP), textAddedTotal: added.length, textRemovedTotal: removed.length };
+}
 function cacheSnapshot() {
   const entries = [];
   for (const [refId, weakRef] of refRegistry) {
@@ -622,6 +679,7 @@ function cacheSnapshot() {
     });
   }
   lastSnapshot = entries;
+  lastTextLines = visibleTextLines();
 }
 function computeSnapshotDiff() {
   if (lastSnapshot.length === 0) {
@@ -664,7 +722,7 @@ function computeSnapshotDiff() {
   return { success: true, data: changes.length ? changes.join(`
 `) : "no changes" };
 }
-var lastSnapshot;
+var lastSnapshot, lastTextLines = null, TEXT_LINE_CAP = 4000, TEXT_LINE_CHARS = 200, TEXT_DIFF_CAP = 200;
 var init_snapshot_diff = __esm(() => {
   init_sensitive();
   init_ref_registry();
@@ -2117,6 +2175,15 @@ async function handleInputText(action) {
     if (action.clear) {
       document.execCommand("selectAll", false);
       document.execCommand("delete", false);
+    } else {
+      const selection = window.getSelection();
+      if (selection) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
     }
     document.execCommand("insertText", false, text);
     el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -2139,6 +2206,28 @@ async function handleInputText(action) {
     return { success: true, data: { typed: true, elementType: `role=${role}`, method: "textContent" } };
   }
   return { success: false, error: `element is <${tag.toLowerCase()}${isContentEditable ? " contenteditable" : ""}> — unsupported input type` };
+}
+async function handleSubmitForm(action) {
+  const el = resolveElement(action.index, action.ref);
+  if (!el)
+    return staleElementError(action, "submitted");
+  const form = el.form ?? el.closest("form");
+  if (!form) {
+    return { success: false, error: "this element is not inside a form, so there is nothing to submit; click the page's search or submit button instead (or use --keys Enter --trusted)" };
+  }
+  if (!form.checkValidity()) {
+    const invalid = Array.from(form.elements).find((e) => e.validity && !e.validity.valid);
+    return { success: false, error: `the form did not pass its own validation${invalid ? `: ${invalid.validationMessage || "a field is invalid"}` : ""}` };
+  }
+  const submitter = Array.from(form.elements).find((e) => e instanceof HTMLButtonElement && e.type === "submit" || e instanceof HTMLInputElement && (e.type === "submit" || e.type === "image"));
+  const usable = submitter && !submitter.disabled ? submitter : undefined;
+  if (typeof form.requestSubmit === "function")
+    form.requestSubmit(usable);
+  else if (usable)
+    usable.click();
+  else
+    form.submit();
+  return { success: true, data: { submitted: true, action: form.getAttribute("action") ?? "", method: (form.getAttribute("method") || "get").toLowerCase(), submitter: usable ? (usable.value || usable.textContent || "").trim() : null } };
 }
 async function handleSelectOption(action) {
   const el = resolveElement(action.index, action.ref);
@@ -2251,6 +2340,67 @@ async function handleWaitStable(action) {
   const timeoutMs = action.timeout || 5000;
   const stableResult = await waitForDomStable(debounceMs, timeoutMs);
   return { success: true, data: stableResult };
+}
+var quietObserver = null;
+var lastMutation = 0;
+var mutations = 0;
+function handleDomQuiet(action) {
+  if (action.stop) {
+    quietObserver?.disconnect();
+    quietObserver = null;
+    return { success: true };
+  }
+  if (!quietObserver) {
+    mutations = 0;
+    lastMutation = performance.now();
+    quietObserver = new MutationObserver((records) => {
+      mutations += records.length;
+      lastMutation = performance.now();
+    });
+    quietObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+  }
+  return { success: true, data: { quietMs: performance.now() - lastMutation, mutations } };
+}
+
+// extension/src/content/actions/input-watch.ts
+var WATCHED = ["pointerdown", "mousedown", "mouseup", "click", "keydown", "beforeinput", "input"];
+var FRAME_TAGS = new Set(["IFRAME", "FRAME", "OBJECT", "EMBED"]);
+var seen = [];
+var disarm2 = null;
+function targetOf(x, y) {
+  const inRoot = (root) => x !== undefined && y !== undefined ? root.elementFromPoint(x, y) : root.activeElement;
+  let el = inRoot(document);
+  while (el?.shadowRoot) {
+    const inner = inRoot(el.shadowRoot);
+    if (!inner || inner === el)
+      break;
+    el = inner;
+  }
+  return el;
+}
+function handleInputWatch(action) {
+  disarm2?.();
+  const target = targetOf(action.x, action.y);
+  if (!target || FRAME_TAGS.has(target.tagName))
+    return { success: true, data: { armed: false } };
+  const events = seen = [];
+  const note = (e) => {
+    if (e.isTrusted)
+      events.push(e.type);
+  };
+  for (const type of WATCHED)
+    window.addEventListener(type, note, true);
+  const timer = setTimeout(() => disarm2?.(), 1e4);
+  disarm2 = () => {
+    clearTimeout(timer);
+    for (const type of WATCHED)
+      window.removeEventListener(type, note, true);
+    disarm2 = null;
+  };
+  return { success: true, data: { armed: true } };
+}
+function handleInputWatchRead() {
+  return { success: true, data: { ...disarm2 ? { events: [...seen] } : {}, hidden: document.visibilityState === "hidden" } };
 }
 
 // extension/src/content/actions/drag.ts
@@ -3663,7 +3813,7 @@ function discoverAdaptiveSceneObjects(opts) {
     return opts?.type ? cachedDiscovery.objects.filter((o) => o.type === opts.type) : cachedDiscovery.objects;
   }
   const out = [];
-  const seen = new Set;
+  const seen2 = new Set;
   walkWithShadow(document.body, (el) => {
     const candidate = maybeClassifyCandidate(el);
     if (!candidate)
@@ -3672,9 +3822,9 @@ function discoverAdaptiveSceneObjects(opts) {
       return;
     const rect = boundingBox(candidate.el);
     const key = `${candidate.type}:${candidate.strategy}:${normalizeRect(rect)}`;
-    if (seen.has(key))
+    if (seen2.has(key))
       return;
-    seen.add(key);
+    seen2.add(key);
     const id = getOrAssignSceneId(candidate.el, candidate.type, candidate.strategy);
     out.push({
       id,
@@ -5100,6 +5250,8 @@ async function executeAction(action) {
         return handleFileUploadChunk(action);
       case "input_text":
         return handleInputText(action);
+      case "submit_form":
+        return handleSubmitForm(action);
       case "select_option":
         return handleSelectOption(action);
       case "check":
@@ -5114,7 +5266,12 @@ async function executeAction(action) {
         return handleScrollTo(action);
       case "send_keys": {
         const keys = action.keys;
-        const target = document.activeElement || document.body;
+        const named = action.ref !== undefined || action.index !== undefined;
+        const el = named ? resolveElement(action.index, action.ref) : null;
+        if (named && !el)
+          return staleElementError(action, "sent keys to");
+        el?.focus();
+        const target = el || document.activeElement || document.body;
         dispatchKeySequence(target, keys);
         return { success: true };
       }
@@ -5194,8 +5351,9 @@ async function executeAction(action) {
         return { success: true, data: truncated };
       }
       case "diff": {
+        const textDiff = computeTextDiff() ?? {};
         if (!getDomDirty() && (await Promise.resolve().then(() => (init_snapshot_diff(), exports_snapshot_diff))).lastSnapshot.length > 0) {
-          return { success: true, data: { changes: 0, added: [], removed: [], changed: [] } };
+          return { success: true, data: { changes: 0, added: [], removed: [], changed: [], ...textDiff } };
         }
         const diffResult = computeSnapshotDiff();
         if (diffResult.success && typeof diffResult.data === "string") {
@@ -5204,7 +5362,7 @@ async function executeAction(action) {
           const added = lines.filter((l) => l.startsWith("+ "));
           const removed = lines.filter((l) => l.startsWith("- "));
           const changed = lines.filter((l) => l.startsWith("~ "));
-          return { success: true, data: { changes: lines.length, added, removed, changed, total: lines.length } };
+          return { success: true, data: { changes: lines.length, added, removed, changed, total: lines.length, ...textDiff } };
         }
         return diffResult;
       }
@@ -5252,6 +5410,12 @@ async function executeAction(action) {
         return await handleCanvasAction(action);
       case "wait_stable":
         return handleWaitStable(action);
+      case "dom_quiet":
+        return handleDomQuiet(action);
+      case "input_watch":
+        return handleInputWatch(action);
+      case "input_watch_read":
+        return handleInputWatchRead();
       case "batch": {
         const actions = action.actions;
         if (!actions || !Array.isArray(actions))
