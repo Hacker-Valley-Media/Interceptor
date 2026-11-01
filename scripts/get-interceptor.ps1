@@ -1,4 +1,4 @@
-# Install Interceptor from the latest GitHub release, end to end (Windows 11 24H2+).
+# Install Interceptor from the latest GitHub release (Browser-only x64: Win10 22H2+).
 #
 #   irm https://raw.githubusercontent.com/Hacker-Valley-Media/Interceptor/main/scripts/get-interceptor.ps1 | iex
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Hacker-Valley-Media/Interceptor/main/scripts/get-interceptor.ps1))) -Full -Mcp all
@@ -36,22 +36,43 @@ function Install-Interceptor {
     Write-Host "  -Mcp all     Register the MCP server, with every tool on, in every AI app found (or -Mcp claude,codex)"
     Write-Host "  -NoMcp       Do not register the MCP server"
     Write-Host "  -NoSkills    Do not add Interceptor's skills to your AI agents"
-    Write-Host "With no edition it keeps the installed one, asks in an interactive window, and installs Full otherwise."
+    Write-Host "With no edition it keeps the installed one, asks interactively, and installs Full otherwise."
+    Write-Host "Windows 10 22H2 x64 supports Full and Browser-only. Windows ARM64 still needs Windows 11 24H2+."
     Write-Host "With no MCP option it asks (default yes) for each AI app without the server, and registers it when it cannot ask."
     return
   }
   if ($Browser -and $Full) { throw "Pass -Browser or -Full, not both." }
   if ($Mcp -and $NoMcp) { throw "Pass -Mcp or -NoMcp, not both." }
 
-  $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+  # Windows PowerShell 5.1 may resolve RuntimeInformation to PSReadLine's
+  # type instead of the .NET runtime type. Qualify the assembly on 5.1;
+  # PowerShell 7 uses the modern runtime assembly instead of mscorlib.
+  $runtimeArch = if ($PSVersionTable.PSVersion.Major -le 5) {
+    [System.Runtime.InteropServices.RuntimeInformation, mscorlib]::OSArchitecture
+  } else {
+    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+  }
+  $arch = $runtimeArch.ToString()
   switch ($arch) { "Arm64" { $arch = "arm64" } "X64" { $arch = "x64" } default { throw "No Windows package for $arch." } }
+  $osBuild = [Environment]::OSVersion.Version.Build
+  # Full on Windows 10 22H2 x64 has a separate, lower OS minimum.
+  # Preserve Browser-only mode for the older Windows 11 builds as before.
+  $win10Full = $arch -eq "x64" -and $osBuild -ge 19045 -and $osBuild -lt 22000
+  $olderWin11BrowserOnly = $arch -eq "x64" -and $osBuild -ge 22000 -and $osBuild -lt 26100
+  if ($osBuild -lt 26100 -and -not ($win10Full -or $olderWin11BrowserOnly)) {
+    throw "This package requires Windows 11 24H2+ (except Windows 10 22H2 x64 Full/Browser-only)."
+  }
+  if ($olderWin11BrowserOnly -and $Full) {
+    throw "Full on this Windows 11 build is not qualified; use Browser-only or Windows 11 24H2+."
+  }
 
   $prior = ""
   if (Test-Path (Join-Path $installDir "interceptor-desktop.exe")) { $prior = "full" }
   elseif (Test-Path $cli) { $prior = "browser" }
   $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
 
-  $mode = if ($Full) { "full" } elseif ($Browser) { "browser" } else { "" }
+  $mode = if ($olderWin11BrowserOnly) { "browser" } elseif ($Full) { "full" } elseif ($Browser) { "browser" } else { "" }
+  if ($win10Full) { Write-Host "==> Windows 10 22H2 x64: Full and Browser-only are supported" }
   if (-not $mode -and $prior) {
     $mode = $prior
     Write-Host "==> Keeping your $mode install (pass -Browser or -Full to change it)"

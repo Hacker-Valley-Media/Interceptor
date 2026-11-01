@@ -125,8 +125,8 @@ Each link below always gets the newest release. Start with Browser for web tasks
 | macOS Browser | [Interceptor-Browser.pkg](https://updates.hackervalley.media/latest/Interceptor-Browser.pkg) | CLI, daemon, and browser extension files. |
 | macOS Full | [Interceptor-Full.pkg](https://updates.hackervalley.media/latest/Interceptor-Full.pkg) | Browser package plus the native Mac bridge and iPhone tooling. The bridge requires macOS 15+. |
 | macOS Safari add-on | [Interceptor-Safari.pkg](https://updates.hackervalley.media/latest/Interceptor-Safari.pkg) | Safari extension, installed after either core package. |
-| Windows Browser | [x64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-arm64.exe) | Browser automation on Windows 11 24H2+. [Windows guide](docs/windows-install.md). |
-| Windows Full | [x64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-arm64.exe) | Browser automation plus [native app control](#windows) with `interceptor desktop`. |
+| Windows Browser | [x64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-arm64.exe) | Browser automation on Windows 10 22H2+ or Windows 11 (x64); Windows 11 24H2+ (ARM64). [Windows guide](docs/windows-install.md). |
+| Windows Full | [x64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-arm64.exe) | Browser automation plus [native app control](#windows) with `interceptor desktop`. Windows 10 22H2 x64 or Windows 11 24H2+ (x64/ARM64). |
 | Linux Browser | [x64](https://updates.hackervalley.media/latest/Interceptor-Browser-linux-x64.tar.gz) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Browser-linux-arm64.tar.gz) | Browser automation and install scripts. |
 | Linux Full | [x64](https://updates.hackervalley.media/latest/Interceptor-Full-linux-x64.tar.gz) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Full-linux-arm64.tar.gz) | Browser automation plus [native app control](#linux) with `interceptor desktop`. |
 
@@ -260,7 +260,7 @@ interceptor desktop tree --app "Notepad"
 
 ### Windows
 
-Windows 11 24H2 or later, on x64 or ARM64. The Full installer is signed by Hacker Valley Media LLC and installs for your user only, with no administrator prompt. Commands run in your signed-in desktop session; one started over SSH is refused. OCR, face detection and speech recognition use the engines Windows ships. [Windows guide](docs/windows-install.md)
+Browser-only supports Windows 10 22H2+ and Windows 11 on x64; ARM64 requires Windows 11 24H2+. Full supports Windows 10 22H2 x64 or Windows 11 24H2+ (x64/ARM64); it does not support Windows 11 builds 22000–26099. The Full installer is signed by Hacker Valley Media LLC and installs for your user only, with no administrator prompt. Desktop commands run in your signed-in desktop session; one started over SSH is refused. OCR, face detection and speech recognition use the engines Windows ships. The signed Full install/upgrade/uninstall lifecycle has not yet been tested on Windows 10. [Windows guide](docs/windows-install.md)
 
 ### Linux
 
