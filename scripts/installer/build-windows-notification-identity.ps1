@@ -7,6 +7,9 @@ param(
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 if($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or @($Version.Split('.') | Where-Object {[long]$_ -gt 65535}).Count){throw 'Invalid notification identity version'}
+# Sparse external-location package identities work on Windows 10 build 19041+.
+# ARM64 keeps the existing Windows 11 24H2 requirement.
+$minVersion=if($Arch -eq 'x64'){'10.0.19041.0'}else{'10.0.26100.0'}
 $stage=(Resolve-Path -LiteralPath $StageDir).Path
 $sdk=(Resolve-Path -LiteralPath $SdkBin).Path
 $exe=Join-Path $stage 'desktop\interceptor-notification-badge.exe'
@@ -51,7 +54,7 @@ $manifest=@"
  <Identity Name="$name" Publisher="$publisher" Version="$Version.0" ProcessorArchitecture="neutral"/>
  <Properties><DisplayName>Interceptor</DisplayName><PublisherDisplayName>Hacker Valley Media LLC</PublisherDisplayName><Logo>Assets\logo.png</Logo><uap10:AllowExternalContent>true</uap10:AllowExternalContent></Properties>
  <Resources><Resource Language="en-us"/></Resources>
- <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" MaxVersionTested="10.0.26100.0"/></Dependencies>
+ <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="$minVersion" MaxVersionTested="10.0.26100.0"/></Dependencies>
  <Applications><Application Id="Desktop" Executable="interceptor-notification-badge.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
   <uap:VisualElements AppListEntry="none" DisplayName="Interceptor" Description="Interceptor native desktop provider" BackgroundColor="transparent" Square150x150Logo="Assets\logo.png" Square44x44Logo="Assets\logo.png"/>
  </Application><Application Id="Contacts" Executable="interceptor-contacts-native.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">

@@ -68,7 +68,7 @@ describe("Windows production release contract", () => {
       "AppId={{{#ProductGuid}}",
       "DefaultDirName={userpf}\\Interceptor",
       "PrivilegesRequired=lowest",
-      "MinVersion=10.0.26100",
+      "MinVersion={#MinimumWindowsVersion}",
       "SetupArchitecture=x64",
       "CloseApplications=no",
       "RestartApplications=no",
@@ -101,7 +101,7 @@ describe("Windows production release contract", () => {
       "RestartManager",
     ]) expect(source).not.toContain(forbidden)
     expect(source.match(/NativeMessagingHosts\\com\.interceptor\.host/g)?.length).toBeGreaterThanOrEqual(3)
-    expect(source.split("\n").length).toBeLessThan(900)
+    expect(source.split("\n").length).toBeLessThan(920)
   })
 
   test("replaces only an owned engine bundle on a Full upgrade", () => {
@@ -207,6 +207,7 @@ describe("Windows production release contract", () => {
     expect(installer).toContain("ManifestVersion: 1.12.0")
     expect(installer).toContain("InstallerType: inno")
     expect(installer).toContain("Scope: user")
+    expect(installer).toContain("MinimumOSVersion: 10.0.19045.0")
     expect(installer).toContain("MinimumOSVersion: 10.0.26100.0")
     expect(installer).toContain("Architecture: x64")
     expect(installer).toContain("Architecture: arm64")
