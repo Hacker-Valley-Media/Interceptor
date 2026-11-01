@@ -39,12 +39,26 @@ describe("Windows 10 x64 installer minimum", () => {
 
   test("bootstrap permits Win10 x64 Full without changing Windows 11 24H2 selection", () => {
     const source = readFileSync(resolve(root, "scripts/get-interceptor.ps1"), "utf8")
+    expect(source).toContain("[System.Runtime.InteropServices.RuntimeInformation, mscorlib]::OSArchitecture")
+    expect(source).toContain("$PSVersionTable.PSVersion.Major -le 5")
     expect(source).toContain('$win10Full = $arch -eq "x64" -and $osBuild -ge 19045 -and $osBuild -lt 22000')
     expect(source).toContain('$olderWin11BrowserOnly = $arch -eq "x64" -and $osBuild -ge 22000 -and $osBuild -lt 26100')
     expect(source).toContain('if ($osBuild -lt 26100 -and -not ($win10Full -or $olderWin11BrowserOnly))')
     expect(source).toContain('if ($olderWin11BrowserOnly -and $Full)')
     expect(source).toContain('$mode = if ($olderWin11BrowserOnly) { "browser" } elseif ($Full) { "full" }')
     expect(source).not.toContain('if ($win10Full -and $Full)')
+  })
+
+  test.skipIf(process.platform !== "win32" || process.arch !== "x64")("bootstrap resolves x64 architecture under PowerShell 5.1 with PSReadLine loaded", () => {
+    const source = readFileSync(resolve(root, "scripts/get-interceptor.ps1"), "utf8")
+    const fragment = source.match(/  \$runtimeArch = if \(\$PSVersionTable\.PSVersion\.Major -le 5\) \{[\s\S]*?  \$arch = \$runtimeArch\.ToString\(\)/)?.[0]
+    expect(fragment).toBeDefined()
+    const result = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+      "Import-Module PSReadLine -ErrorAction Stop; " + fragment + "; Write-Output $arch"], {
+      stdout: "pipe", stderr: "pipe", timeout: 10000,
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.toString().trim()).toBe("X64")
   })
 
 })

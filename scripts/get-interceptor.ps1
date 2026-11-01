@@ -44,7 +44,15 @@ function Install-Interceptor {
   if ($Browser -and $Full) { throw "Pass -Browser or -Full, not both." }
   if ($Mcp -and $NoMcp) { throw "Pass -Mcp or -NoMcp, not both." }
 
-  $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+  # Windows PowerShell 5.1 may resolve RuntimeInformation to PSReadLine's
+  # type instead of the .NET runtime type. Qualify the assembly on 5.1;
+  # PowerShell 7 uses the modern runtime assembly instead of mscorlib.
+  $runtimeArch = if ($PSVersionTable.PSVersion.Major -le 5) {
+    [System.Runtime.InteropServices.RuntimeInformation, mscorlib]::OSArchitecture
+  } else {
+    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+  }
+  $arch = $runtimeArch.ToString()
   switch ($arch) { "Arm64" { $arch = "arm64" } "X64" { $arch = "x64" } default { throw "No Windows package for $arch." } }
   $osBuild = [Environment]::OSVersion.Version.Build
   # Full on Windows 10 22H2 x64 has a separate, lower OS minimum.
