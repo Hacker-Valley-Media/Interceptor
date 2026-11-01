@@ -21,6 +21,15 @@ describe("Windows 10 x64 installer minimum", () => {
     expect(identity).toContain('MinVersion="$minVersion" MaxVersionTested="10.0.26100.0"')
   })
 
+  test("Full identity build allows only recognized Microsoft SDK signatures", () => {
+    const builder = readFileSync(resolve(root, "scripts/installer/build-windows-notification-identity.ps1"), "utf8")
+    expect(builder).toContain("$signature.Status -ne 'Valid'")
+    expect(builder).toContain("CN=Microsoft Windows Kits Publisher,*")
+    expect(builder).toContain("CN=Microsoft Windows Code Signing PCA 2024,*")
+    expect(builder).toContain("$subject -ceq 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'")
+    expect(builder).toContain("!($kitsPublisher -or $newerPublisher)")
+  })
+
   test("winget exposes matching minimums for each Browser-only architecture", () => {
     const manifest = renderManifests({
       version: "2.1.6",

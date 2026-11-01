@@ -33,7 +33,14 @@ try {
 }
 foreach($tool in @('mt.exe','makeappx.exe')){
   $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $sdk $tool)
-  if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike 'CN=Microsoft Windows Kits Publisher,*'){throw ('Invalid SDK signing identity: '+$tool)}
+  # Microsoft Windows SDK tools can carry either the older Windows Kits
+  # Publisher certificate or the newer Windows Code Signing PCA 2024 chain.
+  # Both paths still require a valid Authenticode signature.
+  $subject=[string]$signature.SignerCertificate.Subject
+  $issuer=[string]$signature.SignerCertificate.Issuer
+  $kitsPublisher=$subject -like 'CN=Microsoft Windows Kits Publisher,*'
+  $newerPublisher=$subject -ceq 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US' -and $issuer -like 'CN=Microsoft Windows Code Signing PCA 2024,*'
+  if($signature.Status -ne 'Valid' -or !($kitsPublisher -or $newerPublisher)){throw ('Invalid SDK signing identity: '+$tool)}
 }
 $name='HackerValleyMedia.Interceptor.Desktop'
 $publisher='CN=Hacker Valley Media LLC, O=Hacker Valley Media LLC, L=Austin, S=Texas, C=US'
