@@ -13,6 +13,7 @@ export async function runClang(raw: string[]): Promise<void> {
   for (const arg of raw) {
     if (arg === "/imsvc") args.push("-isystem")
     else if (arg.startsWith("/imsvc")) args.push("-isystem", arg.slice(6))
+    else if (arg.startsWith("/clang:")) args.push(arg.slice(7))
     else args.push(arg)
   }
   const child = Bun.spawn([process.env.INTERCEPTOR_CLANG!, ...args], {
@@ -27,9 +28,10 @@ if (import.meta.main) {
   if (!["x64", "arm64"].includes(architecture) || !["build", "check", "test"].includes(operation)) {
     throw Error("usage: bun scripts/build-desktop-windows.ts <x64|arm64> [build|check|test] [cargo options]")
   }
-  if (options.some(arg => arg.startsWith("--target") || arg.startsWith("--manifest-path"))) {
-    throw Error("The build script owns the Windows target and manifest")
+  if (options.some(arg => arg.startsWith("--target") || arg.startsWith("--manifest-path") || arg === "--config" || arg.startsWith("--config="))) {
+    throw Error("The build script owns the Windows target, manifest and configuration")
   }
+  if (process.env.CARGO_TARGET_DIR !== undefined) throw Error("The Windows release build requires the default Cargo target directory; unset CARGO_TARGET_DIR")
   const root = resolve(import.meta.dir, "..")
   const target = architecture === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc"
   const manifest = join(root, "interceptor-desktop", "Cargo.toml")
@@ -38,10 +40,15 @@ if (import.meta.main) {
   const versions: Record<string, string> = {}
   const output = (args: string[]) => {
     const result = captureSubprocessSync(args[0], args.slice(1), {
-      encoding: "utf8", timeout: 15000, maxBuffer: 1024 * 1024,
+      cwd: root, encoding: "utf8", timeout: 15000, maxBuffer: 1024 * 1024,
     })
     if (result.error || result.status !== 0) throw Error(result.error?.message ?? result.stderr)
     return result.stdout.trim()
+  }
+  // Packaging reads this exact directory; reject Cargo overrides and stale output.
+  const metadata = JSON.parse(output(["cargo", "metadata", "--locked", "--offline", "--no-deps", "--format-version", "1", "--manifest-path", manifest]))
+  if ([metadata.target_directory, metadata.build_directory].some(path => path !== join(root, "interceptor-desktop", "target"))) {
+    throw Error("The Windows release build requires the default Cargo target and build directories; remove Cargo directory overrides")
   }
   const sysroot = output(["rustc", "--print", "sysroot"])
   // Link the C runtime statically so the provider starts on Windows images without the
@@ -64,6 +71,10 @@ if (import.meta.main) {
         !versions.clang.startsWith("Apple clang version 17.0.0 ")) {
       throw Error("Mac Windows cross compiler differs from the qualified toolchain")
     }
+    // C assertion filenames can be UTF-16 and are not covered by Rust's remapping.
+    // xwin replaces the underscore key; cc-rs also reads this target-qualified key.
+    const cflagsKey = `CFLAGS_${target}`
+    env[cflagsKey] = [env[cflagsKey], ...remap.map(flag => flag.replace("--remap-path-prefix=", "/clang:-ffile-prefix-map="))].filter(Boolean).join(" ")
     const host = process.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin"
     const hostLinker = join(sysroot, "lib", "rustlib", host, "bin", "rust-lld")
     if (!statSync(hostLinker).isFile()) throw Error("The qualified Rust linker is missing")

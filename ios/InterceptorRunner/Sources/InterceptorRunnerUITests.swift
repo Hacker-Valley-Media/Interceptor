@@ -32,6 +32,7 @@
 
 import XCTest
 import Foundation
+import UIKit
 import CryptoKit
 import ObjectiveC.runtime
 import JavaScriptCore  // Lane D: on-device JSCore scripting brain
@@ -407,7 +408,8 @@ enum Runner {
     /// without `app activate`). Falls back to SpringBoard.
     private static func foregroundApp() -> XCUIApplication {
         if currentBundleId != springboard { return XCUIApplication(bundleIdentifier: currentBundleId) }
-        if let bid = ICActiveApplicationBundleID(), !bid.isEmpty {
+        // iPadOS Home can report this empty helper instead of SpringBoard's icons.
+        if let bid = ICActiveApplicationBundleID(), !bid.isEmpty, bid != "com.apple.DocumentManager.DockFolderViewService" {
             return XCUIApplication(bundleIdentifier: bid)
         }
         return XCUIApplication(bundleIdentifier: springboard)
@@ -515,6 +517,11 @@ enum Runner {
             if #available(iOS 27.0, *) {
                 // Physical iOS 27 acknowledged the public Home press without leaving the app.
                 if let error = ICPerformDeviceEvent(0x0C, 0x40, 0.1) { return err(error.localizedDescription) }
+            } else if #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .pad {
+                // iPadOS 26 acknowledged both Home button routes without leaving the app.
+                let screen = foregroundApp()
+                let edge = screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1)).withOffset(CGVector(dx: 0, dy: -1))
+                edge.press(forDuration: 0.05, thenDragTo: screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65)), withVelocity: XCUIGestureVelocity(2500), thenHoldForDuration: 0)
             } else { XCUIDevice.shared.press(.home) }
             #endif
             currentBundleId = springboard

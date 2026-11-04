@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { captureSubprocessSync as spawnSync } from "../shared/subprocess-sync"
-import { readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 
 const root = resolve(import.meta.dir, "..")
@@ -8,6 +9,43 @@ const readScript = (name: string) =>
   readFileSync(resolve(root, "scripts", name), "utf8")
 
 describe("release source-path sanitization", () => {
+  test("refuses an external Cargo target directory before compiling", () => {
+    const result = spawnSync(process.execPath, [resolve(root, "scripts/build-desktop-windows.ts"), "arm64"], {
+      encoding: "utf8", timeout: 15000,
+      env: { ...process.env, CARGO_TARGET_DIR: resolve(tmpdir(), "interceptor-external-target") },
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain("requires the default Cargo target directory")
+    for (const options of [["--target-dir", "external"], ["--target-dir=external"], ["--config", 'build.target-dir="external"'], ['--config=build.build-dir="external"']]) {
+      const override = spawnSync(process.execPath, [resolve(root, "scripts/build-desktop-windows.ts"), "arm64", "build", ...options], {
+        encoding: "utf8", timeout: 15000,
+      })
+      expect(override.status).not.toBe(0)
+      expect(override.stderr).toContain("owns the Windows target, manifest and configuration")
+    }
+  })
+
+  test.skipIf(process.platform !== "darwin")("remaps UTF-16 C filenames through the Windows GNU compiler wrapper", () => {
+    const scratch = mkdtempSync(resolve(tmpdir(), "interceptor-c-path-"))
+    try {
+      const source = resolve(scratch, "filename.c"), object = resolve(scratch, "filename.obj")
+      writeFileSync(source, '#define WIDE_(s) L##s\n#define WIDE(s) WIDE_(s)\nconst unsigned short *filename = WIDE(__FILE__);\n')
+      const clang = spawnSync("xcrun", ["--find", "clang"], { encoding: "utf8" })
+      expect(clang.status).toBe(0)
+      const args = ["--target=aarch64-pc-windows-msvc", "-c", source, "-o", object, `/clang:-ffile-prefix-map=${scratch}=/src/probe`]
+      const script = `import {runClang} from ${JSON.stringify(resolve(root, "scripts/build-desktop-windows.ts"))}; await runClang(${JSON.stringify(args)});`
+      const compiled = spawnSync(process.execPath, ["-e", script], {
+        encoding: "utf8", env: { ...process.env, INTERCEPTOR_CLANG: clang.stdout.trim() }, timeout: 15000,
+      })
+      expect(compiled.stderr).toBe("")
+      expect(compiled.status).toBe(0)
+      const bytes = readFileSync(object)
+      expect(bytes.includes(Buffer.from("\\src\\probe\\filename.c", "utf16le"))).toBe(true)
+      expect(bytes.includes(Buffer.from(scratch, "utf16le"))).toBe(false)
+      expect(bytes.includes(Buffer.from(scratch.replace(/\//g, "\\"), "utf16le"))).toBe(false)
+    } finally { rmSync(scratch, { recursive: true, force: true }) }
+  })
+
   test("maps SwiftPM dependency paths in the native bridge build", () => {
     const source = readScript("build-bridge.sh")
 
