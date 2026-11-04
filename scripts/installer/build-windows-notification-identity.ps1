@@ -7,6 +7,9 @@ param(
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 if($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or @($Version.Split('.') | Where-Object {[long]$_ -gt 65535}).Count){throw 'Invalid notification identity version'}
+# Sparse external-location package identities work on Windows 10 build 19041+.
+# ARM64 keeps the existing Windows 11 24H2 requirement.
+$minVersion=if($Arch -eq 'x64'){'10.0.19041.0'}else{'10.0.26100.0'}
 $stage=(Resolve-Path -LiteralPath $StageDir).Path
 $sdk=(Resolve-Path -LiteralPath $SdkBin).Path
 $exe=Join-Path $stage 'desktop\interceptor-notification-badge.exe'
@@ -30,7 +33,14 @@ try {
 }
 foreach($tool in @('mt.exe','makeappx.exe')){
   $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $sdk $tool)
-  if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike 'CN=Microsoft Windows Kits Publisher,*'){throw ('Invalid SDK signing identity: '+$tool)}
+  # Microsoft Windows SDK tools can carry either the older Windows Kits
+  # Publisher certificate or the newer Windows Code Signing PCA 2024 chain.
+  # Both paths still require a valid Authenticode signature.
+  $subject=[string]$signature.SignerCertificate.Subject
+  $issuer=[string]$signature.SignerCertificate.Issuer
+  $kitsPublisher=$subject -like 'CN=Microsoft Windows Kits Publisher,*'
+  $newerPublisher=$subject -ceq 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US' -and $issuer -like 'CN=Microsoft Windows Code Signing PCA 2024,*'
+  if($signature.Status -ne 'Valid' -or !($kitsPublisher -or $newerPublisher)){throw ('Invalid SDK signing identity: '+$tool)}
 }
 $name='HackerValleyMedia.Interceptor.Desktop'
 $publisher='CN=Hacker Valley Media LLC, O=Hacker Valley Media LLC, L=Austin, S=Texas, C=US'
@@ -51,7 +61,7 @@ $manifest=@"
  <Identity Name="$name" Publisher="$publisher" Version="$Version.0" ProcessorArchitecture="neutral"/>
  <Properties><DisplayName>Interceptor</DisplayName><PublisherDisplayName>Hacker Valley Media LLC</PublisherDisplayName><Logo>Assets\logo.png</Logo><uap10:AllowExternalContent>true</uap10:AllowExternalContent></Properties>
  <Resources><Resource Language="en-us"/></Resources>
- <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" MaxVersionTested="10.0.26100.0"/></Dependencies>
+ <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="$minVersion" MaxVersionTested="10.0.26100.0"/></Dependencies>
  <Applications><Application Id="Desktop" Executable="interceptor-notification-badge.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
   <uap:VisualElements AppListEntry="none" DisplayName="Interceptor" Description="Interceptor native desktop provider" BackgroundColor="transparent" Square150x150Logo="Assets\logo.png" Square44x44Logo="Assets\logo.png"/>
  </Application><Application Id="Contacts" Executable="interceptor-contacts-native.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">

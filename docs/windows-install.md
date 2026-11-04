@@ -1,6 +1,6 @@
 # Install Interceptor on Windows
 
-Interceptor for Windows comes in two signed installers: Browser-only (`Interceptor-Browser-X.Y.Z-windows-<arch>.exe`) and Full (`Interceptor-Full-X.Y.Z-windows-<arch>.exe`), which adds the native desktop provider for `interceptor desktop` and automatic updates. This guide covers both; the steps below use the Browser-only name, and the Full installer runs the same way. Both support Windows 11 24H2 or newer on x64 and ARM64, install for the current user without elevation, and support one active interactive user per machine.
+Interceptor for Windows comes in two signed installers: Browser-only (`Interceptor-Browser-X.Y.Z-windows-<arch>.exe`) and Full (`Interceptor-Full-X.Y.Z-windows-<arch>.exe`), which adds the native desktop provider for `interceptor desktop` and automatic updates. **Browser-only x64** supports Windows 10 22H2 (Build 19045) and Windows 11; **Full x64** supports Windows 10 22H2 or Windows 11 24H2 (Build 26100)+, but not Windows 11 builds 22000–26099. **ARM64** requires Windows 11 24H2+ for either edition. All install for the current user without elevation and support one active interactive user per machine. The Windows 10 x64 native provider and external-location MSIX identity mechanism were tested separately; the real publisher-signed Full installer lifecycle has **not** been validated.
 
 ## Install
 
@@ -12,7 +12,7 @@ irm https://raw.githubusercontent.com/Hacker-Valley-Media/Interceptor/main/scrip
 
 To do it by hand:
 
-1. Download the architecture-matched `Interceptor-Browser-X.Y.Z-windows-x64.exe` or `Interceptor-Browser-X.Y.Z-windows-arm64.exe` from the matching GitHub release.
+1. Download the architecture-matched `Interceptor-Full-X.Y.Z-windows-x64.exe` or `Interceptor-Browser-X.Y.Z-windows-x64.exe` (ARM64: matching `-arm64.exe`) from the matching GitHub release. Full includes native desktop actions; on Windows 11 x64 it requires 24H2 (Build 26100)+. On Windows 11 builds 22000–26099, select Browser-only instead.
 2. Verify that Windows reports the publisher as **Hacker Valley Media**. Do not continue with an unsigned or differently signed production artifact.
 3. Run Setup. New installs use `%LOCALAPPDATA%\Programs\Interceptor`; upgrades and repairs preserve the existing same-product directory.
 4. Install the Interceptor extension, either way. Both copies share one extension ID and work the same:
@@ -27,7 +27,7 @@ To do it by hand:
    interceptor status
    ```
 
-`status` reports `mode: browser-only`. The daemon starts only when a CLI or approved browser-extension request needs it.
+`status` reports `mode: full` or `mode: browser-only`, depending on the edition. The daemon starts only when a CLI or approved browser-extension request needs it.
 
 Optional AI skills are bundled but not linked automatically:
 
