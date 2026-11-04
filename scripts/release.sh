@@ -518,6 +518,8 @@ if [[ "${INTERCEPTOR_SKIP_RUNNER:-0}" != "1" ]]; then
     fi
     RUNNER_XCTESTRUN_REL="${RUNNER_XCTESTRUN#"$RUNNER_PRODUCTS"/}"
     RUNNER_APP_REL="${RUNNER_APP#"$RUNNER_PRODUCTS"/}"
+    # Prefix maps do not cover the linker's local object-file records.
+    run xcrun strip -S -x "$RUNNER_APP/PlugIns/InterceptorRunner.xctest/InterceptorRunner"
     # Ship only the runtime app and launch descriptor. Swift modules, dSYMs,
     # index data, and other compiler products are not needed on user machines.
     run tar --uid 0 --gid 0 --uname root --gname wheel --exclude='*.dSYM' \

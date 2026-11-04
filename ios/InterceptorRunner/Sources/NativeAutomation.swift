@@ -2,6 +2,8 @@ import XCTest
 import UIKit
 import CoreLocation
 
+// Swift's prefix maps omit file paths embedded by runtime isolation diagnostics.
+#sourceLocation(file: "InterceptorRunner/NativeAutomation.swift", line: 7)
 /// Native operations stay in the existing XCTest session and exception boundary.
 enum NativeAutomation {
     private static var supportsSiri: Bool {

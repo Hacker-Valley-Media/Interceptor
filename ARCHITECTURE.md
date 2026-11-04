@@ -672,7 +672,9 @@ signs it with the user's configured developer team during setup
 device because install, inventory, and launch must all address the signed identity.
 See `docs/ios/app-route.md`.
 
-**Native runner operations.** `cli/commands/ios.ts` builds an `ios_automation`
+**Native runner operations.** The native Swift module uses a source-relative
+diagnostic filename because Swift's prefix maps do not cover runtime isolation
+diagnostic strings. `cli/commands/ios.ts` builds an `ios_automation`
 action for `capabilities`, `element`, `key`, `device`, `audit`, `authorization`,
 and `voiceover`. `shared/ios-automation.ts` validates the arguments both in the
 CLI and again at the daemon boundary. `IosManager.verbAutomation` resolves
