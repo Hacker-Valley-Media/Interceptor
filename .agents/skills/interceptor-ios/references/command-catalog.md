@@ -104,11 +104,13 @@ they work even when the runner is idle or asleep. Routed before the runner fallb
 
 ## Notes
 
-- **Refs are short-lived element references.** They are re-minted on every `tree`
-  read. Current runner `click` and `type` resolve a unique current native element;
+- **Refs are short-lived element references.** Every `tree` or `find` rebuilds
+  the registry and can reuse ref names. Discard previous refs after either read.
+  Current runner `click` and `type` resolve a unique current native element;
   `drag` and `scroll` use the ref's snapshot frame center as a coordinate origin.
   Explicit coordinates, older runners, and WDA also use the coordinate route.
-  Re-read after navigation or a layout change.
+  Re-read after navigation or a layout change. Native matching can select a
+  replacement with the same type, identifier, and label; refs are not persistent handles.
 - **Unlocked + foreground.** A locked phone refuses app launches. Keep Auto-Lock off so
   the runner stays resident; while connected, `ios unlock --secret <name>` attempts
   passcode entry and requires an observed unlocked state for success. Disconnected unlock

@@ -31,7 +31,7 @@
     <time datetime="2026-11-04">November 4, 2026</time>
     <ul>
       <li>New iPhone native controls: <code>ios element</code> adjusts sliders and pickers, reveals offscreen elements, and performs double taps, two-finger taps, velocity swipes, pinch, and rotation.</li>
-      <li>Ref-based <code>ios click</code> and <code>ios type</code> resolve the current element instead of tapping an old frame center. Stale, ambiguous, disabled, and non-hittable targets refuse. Explicit coordinates and older runners retain their existing route.</li>
+      <li>Ref-based <code>ios click</code> and <code>ios type</code> resolve the current element instead of tapping an old frame center. Missing, ambiguous, disabled, and non-hittable targets refuse. Refresh refs after UI changes and every <code>tree</code> or <code>find</code>; matching can select a replacement with the same identity fields. Explicit coordinates and older runners retain their existing route.</li>
       <li><code>ios capabilities</code> reports the native operations and runtime restrictions. Trees include placeholder, selection, and focus state, while secure-field values stay redacted.</li>
       <li><code>ios key</code> sends individual keys. Command, Shift, Control, and Option shortcuts are enabled on physical iOS 27+ after editing checks; modifiers refuse on Simulator and physical iOS 26.</li>
       <li><code>ios device</code> opens URLs and deep links, changes appearance and orientation, and sets or clears runner GPS. Siri requests are capability-gated; physical iOS 27 refuses them before input because validation lost the command reply.</li>

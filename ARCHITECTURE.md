@@ -691,6 +691,9 @@ and let XCTest choose a hittable point. Missing, ambiguous, disabled, or covered
 targets refuse. Explicit coordinates retain their meaning. Older runners can
 use the coordinate route only after a definite unknown-operation refusal;
 timeouts and uncertain outcomes never trigger a second input.
+Every `tree` or `find` rebuilds the ref registry and can reuse names. Native
+matching can select a replacement with the same type, identifier, and label,
+so callers must refresh refs after UI changes and discard them after a new read.
 
 Native element operations cover slider/picker adjustment, reveal, multi-tap,
 velocity swipes, pinch, and rotation. `key` distinguishes physical keys from
@@ -703,7 +706,8 @@ these guards; selector-presence fields do not establish working recording or
 hardware acceleration. VoiceOver requires iOS 27; accessibility audits require
 iOS 17. Permission reset is an explicit app/resource operation with a
 destructive MCP family floor. VoiceOver status and speech are MCP reads;
-navigation and enable/disable are mutations. Home on physical iOS 27 uses a
+navigation and enable/disable are mutations. Audit and VoiceOver results carry
+the MCP untrusted-data fence for app-provided text. Home on physical iOS 27 uses a
 bounded HID event, while older devices and Simulator retain the public route.
 Home, Camera, Action, and URL transitions clear the selected-app override.
 

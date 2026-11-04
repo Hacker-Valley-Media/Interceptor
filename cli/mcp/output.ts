@@ -26,6 +26,8 @@ const FENCE_VERBS = new Set([
   "bookmarks", "history", "monitor", "act", "open",
   // macos
   "value", "log", "vision", "nlp", "files", "notifications",
+  // iOS accessibility results include app-controlled labels and speech.
+  "audit", "voiceover",
   // shared verb names used across surfaces (macos/ios tree/text/find/inspect/read
   // reuse these names) — a macos/ios call passes verb="tree" etc. too.
 ])
