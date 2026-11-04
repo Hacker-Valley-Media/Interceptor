@@ -13,6 +13,7 @@ export async function runClang(raw: string[]): Promise<void> {
   for (const arg of raw) {
     if (arg === "/imsvc") args.push("-isystem")
     else if (arg.startsWith("/imsvc")) args.push("-isystem", arg.slice(6))
+    else if (arg.startsWith("/clang:")) args.push(arg.slice(7))
     else args.push(arg)
   }
   const child = Bun.spawn([process.env.INTERCEPTOR_CLANG!, ...args], {
@@ -64,6 +65,9 @@ if (import.meta.main) {
         !versions.clang.startsWith("Apple clang version 17.0.0 ")) {
       throw Error("Mac Windows cross compiler differs from the qualified toolchain")
     }
+    // C assertion filenames can be UTF-16 and are not covered by Rust's remapping.
+    const cflagsKey = `CFLAGS_${target.replace(/-/g, "_")}`
+    env[cflagsKey] = [env[cflagsKey], ...remap.map(flag => flag.replace("--remap-path-prefix=", "/clang:-ffile-prefix-map="))].filter(Boolean).join(" ")
     const host = process.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin"
     const hostLinker = join(sysroot, "lib", "rustlib", host, "bin", "rust-lld")
     if (!statSync(hostLinker).isFile()) throw Error("The qualified Rust linker is missing")
