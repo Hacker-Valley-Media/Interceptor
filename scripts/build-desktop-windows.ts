@@ -66,7 +66,8 @@ if (import.meta.main) {
       throw Error("Mac Windows cross compiler differs from the qualified toolchain")
     }
     // C assertion filenames can be UTF-16 and are not covered by Rust's remapping.
-    const cflagsKey = `CFLAGS_${target.replace(/-/g, "_")}`
+    // xwin replaces the underscore key; cc-rs also reads this target-qualified key.
+    const cflagsKey = `CFLAGS_${target}`
     env[cflagsKey] = [env[cflagsKey], ...remap.map(flag => flag.replace("--remap-path-prefix=", "/clang:-ffile-prefix-map="))].filter(Boolean).join(" ")
     const host = process.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin"
     const hostLinker = join(sysroot, "lib", "rustlib", host, "bin", "rust-lld")
