@@ -31,6 +31,7 @@ if (import.meta.main) {
   if (options.some(arg => arg.startsWith("--target") || arg.startsWith("--manifest-path"))) {
     throw Error("The build script owns the Windows target and manifest")
   }
+  if (process.env.CARGO_TARGET_DIR !== undefined) throw Error("The Windows release build requires the default Cargo target directory; unset CARGO_TARGET_DIR")
   const root = resolve(import.meta.dir, "..")
   const target = architecture === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc"
   const manifest = join(root, "interceptor-desktop", "Cargo.toml")
@@ -39,10 +40,15 @@ if (import.meta.main) {
   const versions: Record<string, string> = {}
   const output = (args: string[]) => {
     const result = captureSubprocessSync(args[0], args.slice(1), {
-      encoding: "utf8", timeout: 15000, maxBuffer: 1024 * 1024,
+      cwd: root, encoding: "utf8", timeout: 15000, maxBuffer: 1024 * 1024,
     })
     if (result.error || result.status !== 0) throw Error(result.error?.message ?? result.stderr)
     return result.stdout.trim()
+  }
+  // Packaging reads this exact directory; reject Cargo overrides and stale output.
+  const metadata = JSON.parse(output(["cargo", "metadata", "--locked", "--offline", "--no-deps", "--format-version", "1", "--manifest-path", manifest]))
+  if ([metadata.target_directory, metadata.build_directory].some(path => path !== join(root, "interceptor-desktop", "target"))) {
+    throw Error("The Windows release build requires the default Cargo target and build directories; remove Cargo directory overrides")
   }
   const sysroot = output(["rustc", "--print", "sysroot"])
   // Link the C runtime statically so the provider starts on Windows images without the

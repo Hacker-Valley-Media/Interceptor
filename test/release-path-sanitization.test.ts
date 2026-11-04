@@ -9,6 +9,15 @@ const readScript = (name: string) =>
   readFileSync(resolve(root, "scripts", name), "utf8")
 
 describe("release source-path sanitization", () => {
+  test("refuses an external Cargo target directory before compiling", () => {
+    const result = spawnSync(process.execPath, [resolve(root, "scripts/build-desktop-windows.ts"), "arm64"], {
+      encoding: "utf8", timeout: 15000,
+      env: { ...process.env, CARGO_TARGET_DIR: resolve(tmpdir(), "interceptor-external-target") },
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain("requires the default Cargo target directory")
+  })
+
   test.skipIf(process.platform !== "darwin")("remaps UTF-16 C filenames through the Windows GNU compiler wrapper", () => {
     const scratch = mkdtempSync(resolve(tmpdir(), "interceptor-c-path-"))
     try {
