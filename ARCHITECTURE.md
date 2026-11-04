@@ -708,7 +708,11 @@ iOS 17. Permission reset is an explicit app/resource operation with a
 destructive MCP family floor. VoiceOver status and speech are MCP reads;
 navigation and enable/disable are mutations. Audit and VoiceOver results carry
 the MCP untrusted-data fence for app-provided text. Home on physical iOS 27 uses a
-bounded HID event, while older devices and Simulator retain the public route.
+bounded HID event. Physical iPadOS 26 uses a bottom-edge gesture with an explicit
+velocity and no endpoint hold, because both button routes acknowledged without
+leaving the app. Other older devices and Simulator retain the public route.
+Foreground lookup maps the observed `com.apple.DocumentManager.DockFolderViewService`
+Home helper to SpringBoard so snapshots include the Home icons.
 Home, Camera, Action, and URL transitions clear the selected-app override.
 
 Full-size streaming requests encoded JPEG bytes directly from XCTest when the
