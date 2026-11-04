@@ -618,8 +618,9 @@ HTTP path (`daemon/ios/wda-client.ts`, `usbmux-forward.ts` port-forward — pure
 Bun, no `go-ios`/`pymobiledevice3`) remains only as a deprecated escape hatch.
 
 The runner's element-tree snapshot is parsed into a ref-registered tree
-(`daemon/ios/tree.ts`) mirroring the macOS AX output; **refs carry frames so
-actuation is a deterministic coordinate tap** (robust against handle staleness).
+(`daemon/ios/tree.ts`) mirroring the macOS AX output. Refs carry snapshot frames
+for coordinate-based `drag` and `scroll`; current ref-based click and typing use
+the native-element route described below. Explicit coordinates retain their route.
 `drag` and `scroll` take the same screen points directly for apps with no usable
 tree. Each drag end resolves on its own (`x,y` is a point, anything else is a ref),
 and a drag between one point and itself with `--duration` is the long press: the

@@ -96,4 +96,4 @@ use-cases/deep-research-demo/
 
 # GitNexus skill copies (local code-intelligence tooling, not shipped)
 .agents/skills/gitnexus-*/
-finetune/
+/finetune/

@@ -25,8 +25,8 @@ phone is set up. Phones auto-connect on the first drive verb.
 | `interceptor ios tree [--filter interactive\|all\|full]` | Ref-tagged element tree of the foreground app. Re-read before acting. |
 | `interceptor ios find --label "Send" [--role button]` | Find elements by label and/or role; returns refs + frames. |
 | `interceptor ios inspect <ref>` | Element details (type, label, enabled, frame). |
-| `interceptor ios click <ref> \| --x N --y N` | Deterministic coordinate tap at the ref's frame center (or raw coordinates). |
-| `interceptor ios type <ref> "text"` | Focus the field at `<ref>`, then type. Most reliable text entry — focus is atomic. |
+| `interceptor ios click <ref> \| --x N --y N` | Resolve a unique current native element and let XCTest choose a hittable point. Explicit coordinates, older runners, and WDA use coordinate taps. |
+| `interceptor ios type <ref> "text"` | Resolve the unique current field, focus it, then type. Missing, ambiguous, disabled, or non-hittable native targets refuse. |
 | `interceptor ios keys "text"` / `ios keys Enter\|Return\|Tab` | Type into whatever is already focused (append); `Enter`, `Return`, or `Tab` as the whole argument presses that key (a real newline character does the same; the two characters `\n` are typed literally). |
 | `interceptor ios type <ref> --secret <name>` / `ios keys --secret <name>` | Type a vault secret (passcode) by name; the daemon resolves it and the runner falls back to SpringBoard when a system passcode sheet owns the keyboard. Register once: `interceptor macos secret register ios-passcode --target ios`. |
 | `interceptor ios unlock --secret <name>` / `ios unlock --probe` | Lock screen: wake, swipe up, type the passcode into SpringBoard's passcode field, wait for unlock. Needs the runner resident (it cannot start on a locked phone). `--probe` reports lock state + whether the passcode field appeared, without typing. |
@@ -104,9 +104,11 @@ they work even when the runner is idle or asleep. Routed before the runner fallb
 
 ## Notes
 
-- **Refs are coordinates, not handles.** They are re-minted on every `tree` read, so
-  they never go stale the way server-side element ids do — but they only reflect the
-  screen at read time. Re-read after any navigation.
+- **Refs are short-lived element references.** They are re-minted on every `tree`
+  read. Current runner `click` and `type` resolve a unique current native element;
+  `drag` and `scroll` use the ref's snapshot frame center as a coordinate origin.
+  Explicit coordinates, older runners, and WDA also use the coordinate route.
+  Re-read after navigation or a layout change.
 - **Unlocked + foreground.** A locked phone refuses app launches. Keep Auto-Lock off so
   the runner stays resident; while connected, `ios unlock --secret <name>` attempts
   passcode entry and requires an observed unlocked state for success. Disconnected unlock
