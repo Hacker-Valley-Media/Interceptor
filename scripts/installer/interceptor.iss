@@ -34,6 +34,14 @@
 #else
   #error ArtifactArch must be x64 or arm64
 #endif
+; Native Windows 10 x64 and sparse identity APIs have been exercised.
+; The signed Full installer lifecycle has not been tested.
+; Windows ARM64 remains restricted to Windows 11 24H2.
+#if ArtifactArch == "x64"
+  #define MinimumWindowsVersion "10.0.19045"
+#else
+  #define MinimumWindowsVersion "10.0.26100"
+#endif
 [Setup]
 AppId={{{#ProductGuid}}
 AppName=Interceptor
@@ -49,7 +57,7 @@ DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 UsePreviousAppDir=yes
-MinVersion=10.0.26100
+MinVersion={#MinimumWindowsVersion}
 SetupArchitecture=x64
 ArchitecturesAllowed={#AllowedArchitectures}
 ArchitecturesInstallIn64BitMode={#InstallArchitectures}
@@ -663,8 +671,21 @@ begin
 end;
 function InitializeSetup: Boolean;
 var SessionId: DWORD;
+#ifdef FullInstall
+  WindowsVersion: TWindowsVersion;
+#endif
 begin
   Result := False;
+#ifdef FullInstall
+#if ArtifactArch == "x64"
+  GetWindowsVersionEx(WindowsVersion);
+  if (WindowsVersion.Major = 10) and (WindowsVersion.Build >= 22000) and (WindowsVersion.Build < 26100) then
+  begin
+    SuppressibleMsgBox('Full requires Windows 11 24H2+ on Windows 11. Use Browser-only on this build.', mbCriticalError, MB_OK, IDOK);
+    Exit;
+  end;
+#endif
+#endif
   GuardPath := GuardFilePath;
   if not IsStableVersion('{#AppVersion}') then Exit;
   if not ResolveExistingInstall then

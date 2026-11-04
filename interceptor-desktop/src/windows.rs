@@ -420,8 +420,34 @@ fn window_json(w: &Window) -> Value {
     json!({"windowId":(w.handle.0 as usize).to_string(),"title":w.title,"pid":w.pid,"name":w.name,
         "frame":{"x":w.rect.left,"y":w.rect.top,"width":w.rect.right-w.rect.left,"height":w.rect.bottom-w.rect.top}})
 }
+fn windows_version() -> Option<(u32,u32)> {
+    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+    // GetVersionEx may report a compatibility version without a manifest.
+    #[link(name = "ntdll")]
+    unsafe extern "system" { fn RtlGetVersion(info: *mut OSVERSIONINFOW) -> i32; }
+    let mut info = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
+    (unsafe { RtlGetVersion(&mut info) } == 0).then_some((info.dwMajorVersion,info.dwBuildNumber))
+}
+fn win10_explorer_filter(action:&Value,version:Option<(u32,u32)>)->bool{
+    version == Some((10,19045))
+        && action["app"].as_str().is_some_and(|name|name.trim_end_matches(".exe").eq_ignore_ascii_case("explorer"))
+        && !action["window"].is_number()
+}
+fn regular_explorer_window(handle:isize,shell_handle:isize,title:&str,width:i32,height:i32)->bool{
+    handle!=shell_handle && !title.is_empty() && width>0 && height>0
+}
 pub fn capture_window(action:&Value)->Result<(HWND,u32),Value>{
     let mut windows=windows_for(action).map_err(|e|failure("provider_failed",e))?;
+    // On tested Windows 10 22H2, Explorer's desktop shell is larger than its
+    // file windows but is not a capturable app target. Keep the original
+    // selection algorithm on Windows 11 and on unrecognized OS versions.
+    if action["app"].is_string() && win10_explorer_filter(action,windows_version()){
+        let shell_handle=unsafe{GetShellWindow()}.0 as isize;
+        windows.retain(|w|regular_explorer_window(w.handle.0 as isize,shell_handle,&w.title,w.rect.right-w.rect.left,w.rect.bottom-w.rect.top));
+    }
     if action["type"]=="desktop_stream"&&action["app"].is_string()&&windows.len()>1{return Err(failure("target_ambiguous","stream application has multiple capturable windows; select one exact window"));}
     if action["window"].is_number()||action["app"].is_string(){
         windows.sort_by_key(|w|-((w.rect.right as i64-w.rect.left as i64).max(0)*(w.rect.bottom as i64-w.rect.top as i64).max(0)));
@@ -429,6 +455,33 @@ pub fn capture_window(action:&Value)->Result<(HWND,u32),Value>{
     }else{
         let front=unsafe{GetForegroundWindow()};
         windows.iter().find(|w|w.handle==front).map(|w|(w.handle,w.pid)).ok_or_else(||failure("unsupported_target","foreground window is not capturable; select a display explicitly"))
+    }
+}
+#[cfg(test)]
+mod win10_explorer_capture_tests{
+    use super::{win10_explorer_filter,regular_explorer_window};
+    use serde_json::json;
+    #[test]
+    fn windows_11_and_other_builds_preserve_original_selection(){
+        let app=json!({"app":"explorer"});
+        assert!(win10_explorer_filter(&app,Some((10,19045))));
+        assert!(win10_explorer_filter(&json!({"app":"explorer.exe"}),Some((10,19045))));
+        assert!(win10_explorer_filter(&json!({"app":"Explorer.exe","windowTitle":"Program Manager"}),Some((10,19045))));
+        for version in [None,Some((10,19044)),Some((10,22000)),Some((10,22631)),Some((10,26100))]{
+            assert!(!win10_explorer_filter(&app,version));
+            assert!(!win10_explorer_filter(&json!({"app":"explorer.exe"}),version));
+        }
+        assert!(!win10_explorer_filter(&json!({"app":"msedge"}),Some((10,19045))));
+        assert!(!win10_explorer_filter(&json!({"app":"explorer","window":123}),Some((10,19045))));
+    }
+    #[test]
+    fn windows_10_excludes_shell_only_windows(){
+        let shell=100;
+        assert!(!regular_explorer_window(shell,shell,"Program Manager",2940,1846));
+        assert!(!regular_explorer_window(200,shell,"",200,200));
+        assert!(!regular_explorer_window(201,shell,"Hidden",0,0));
+        assert!(regular_explorer_window(202,shell,"Downloads",1200,800));
+        assert!(regular_explorer_window(203,shell,"Program Manager",1200,800));
     }
 }
 struct ObservedWindow{generation:u64,kind:u32,hwnd:HWND,object:i32,child:i32,process:Rc<Process>}
