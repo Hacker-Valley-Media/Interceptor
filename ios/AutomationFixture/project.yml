@@ -1,0 +1,24 @@
+name: AutomationFixture
+options:
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  AutomationFixture:
+    type: application
+    platform: iOS
+    sources: [Fixture.swift]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.interceptor.AutomationFixture
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Native automation validation
+        INFOPLIST_KEY_NSCameraUsageDescription: Native automation validation
+        SWIFT_VERSION: "5.0"
+schemes:
+  AutomationFixture:
+    build:
+      targets:
+        AutomationFixture: all

@@ -8,6 +8,7 @@
 #import <objc/runtime.h>
 #import <notify.h>
 #import <stdatomic.h>
+#import <ImageIO/ImageIO.h>
 
 NSError * _Nullable ICRunCatching(void (^block)(void)) {
     @try {
@@ -41,6 +42,35 @@ static id ICSharedDevice(void) {
     Class devCls = NSClassFromString(@"XCUIDevice");
     if (!devCls) return nil;
     return ((id(*)(id, SEL))objc_msgSend)((id)devCls, NSSelectorFromString(@"sharedDevice"));
+}
+
+NSString * _Nullable ICApplicationBundleID(id application) {
+    id value = ICCall(application, @"bundleID");
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+NSError * _Nullable ICInvokeVoid(id object, NSString *selector) {
+    SEL sel = NSSelectorFromString(selector);
+    if (![object respondsToSelector:sel]) return [NSError errorWithDomain:@"InterceptorRunner" code:198 userInfo:@{NSLocalizedDescriptionKey: [@"unsupported XCTest selector: " stringByAppendingString:selector]}];
+    return ICRunCatching(^{ ((void(*)(id, SEL))objc_msgSend)(object, sel); });
+}
+
+NSDictionary * _Nullable ICVoiceOverAction(NSString *action, NSError **error) {
+    id service = ICCall(ICSharedDevice(), @"voiceOverService");
+    if (!service) { if (error) *error = [NSError errorWithDomain:@"InterceptorRunner" code:198 userInfo:@{NSLocalizedDescriptionKey: @"VoiceOver service unavailable"}]; return nil; }
+    SEL enabled = NSSelectorFromString(@"isEnabled");
+    if ([action isEqualToString:@"status"]) return @{@"enabled": @([service respondsToSelector:enabled] && ((BOOL(*)(id,SEL))objc_msgSend)(service, enabled))};
+    NSDictionary *names = @{@"enable": @"enableAndReturnError:", @"disable": @"disableAndReturnError:", @"next": @"moveForwardAndReturnError:", @"previous": @"moveBackwardAndReturnError:", @"in": @"moveInAndReturnError:", @"out": @"moveOutAndReturnError:", @"speech": @"currentSpeechAndReturnError:"};
+    NSString *name = names[action];
+    SEL sel = name ? NSSelectorFromString(name) : NULL;
+    if (!sel || ![service respondsToSelector:sel]) { if (error) *error = [NSError errorWithDomain:@"InterceptorRunner" code:198 userInfo:@{NSLocalizedDescriptionKey: @"unsupported VoiceOver action"}]; return nil; }
+    if ([action isEqualToString:@"enable"] || [action isEqualToString:@"disable"]) {
+        if (!((BOOL(*)(id,SEL,NSError **))objc_msgSend)(service, sel, error)) return nil;
+        return @{@"enabled": @(((BOOL(*)(id,SEL))objc_msgSend)(service, enabled))};
+    }
+    id output = ((id(*)(id,SEL,NSError **))objc_msgSend)(service, sel, error);
+    if (!output) return nil;
+    return @{@"utterance": ICCall(output, @"utterance") ?: @""};
 }
 
 /// Scan a collection of XCUIApplicationProcess for the foreground app's bundle id
@@ -255,6 +285,36 @@ NSError * _Nullable ICSynthesizeGesture(NSArray<NSArray<NSDictionary<NSString *,
 
 NSData * _Nullable ICCaptureScreenJPEG(double scale, double quality, CGSize * _Nullable outPixels, double * _Nullable captureMs, double * _Nullable encodeMs) {
     CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+    if (scale == 1.0) {
+        @try {
+            Class cls = NSClassFromString(@"XCTImageEncoding");
+            SEL make = NSSelectorFromString(@"initWithUniformTypeIdentifier:compressionQuality:");
+            SEL capture = NSSelectorFromString(@"screenshotWithPreferredEncoding:rect:error:");
+            id screen = XCUIScreen.mainScreen;
+            if ([cls instancesRespondToSelector:make] && [screen respondsToSelector:capture]) {
+                id encoding = ((id(*)(id,SEL,id,double))objc_msgSend)([cls alloc], make, @"public.jpeg", quality);
+                NSError *error = nil;
+                id shot = ((id(*)(id,SEL,id,CGRect,NSError **))objc_msgSend)(screen, capture, encoding, CGRectNull, &error);
+                // This private selector returns XCTImage, unlike public screenshot's XCUIScreenshot.
+                id data = ICCall(shot, @"data");
+                if (!error && [data isKindOfClass:NSData.class] && [data length] > 2 && ((const unsigned char *)[data bytes])[0] == 0xff && ((const unsigned char *)[data bytes])[1] == 0xd8) {
+                    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+                    NSDictionary *properties = source ? CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, NULL)) : nil;
+                    if (source) CFRelease(source);
+                    double width = [properties[(__bridge NSString *)kCGImagePropertyPixelWidth] doubleValue];
+                    double height = [properties[(__bridge NSString *)kCGImagePropertyPixelHeight] doubleValue];
+                    NSInteger orientation = [properties[(__bridge NSString *)kCGImagePropertyOrientation] integerValue];
+                    // The renderer normalizes rotated/mirrored pixels to the stream's reported dimensions.
+                    if (width > 0 && height > 0 && (orientation == 0 || orientation == 1)) {
+                        if (outPixels) *outPixels = CGSizeMake(width, height);
+                        if (captureMs) *captureMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000;
+                        if (encodeMs) *encodeMs = 0;
+                        return data;
+                    }
+                }
+            }
+        } @catch (NSException *exception) { /* A private capture failure uses the proven renderer below. */ }
+    }
     UIImage *image = [[XCUIScreen mainScreen] screenshot].image;
     CFAbsoluteTime t1 = CFAbsoluteTimeGetCurrent();
     if (!image) return nil;

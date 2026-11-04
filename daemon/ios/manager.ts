@@ -46,6 +46,7 @@ import { resolveRunnerDialBack, runnerDialHint, remoteDialBack, probeDialBack, s
 import net from "node:net"
 import { renameSync, writeFileSync } from "node:fs"
 import { isAbsolute } from "node:path"
+import { validateIosAutomation } from "../../shared/ios-automation"
 
 export type IosResult = { success: boolean; error?: string; data?: unknown }
 
@@ -574,6 +575,7 @@ export class IosManager {
     if (!ctx) return { success: false, error: "the device did not connect — is it unlocked and on this Mac's network?" }
     try {
       switch (action.type) {
+        case "ios_automation": return await this.verbAutomation(ctx, action)
         case "ios_tree": return await this.verbTree(ctx, action)
         case "ios_find": return await this.verbFind(ctx, action)
         case "ios_inspect": return this.verbInspect(ctx, action)
@@ -1230,8 +1232,8 @@ export class IosManager {
   private async verbClick(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
     const pt = this.resolvePoint(ctx, action)
     if ("error" in pt) return { success: false, error: `ios click ${pt.error}` }
-    await ctx.channel.tap(pt.x, pt.y)
-    return { success: true, data: { tapped: pt } }
+    const via = await this.tapTarget(ctx, action, pt)
+    return { success: true, data: via === "native-element" ? { via, ref: action.ref } : { via, tapped: pt } }
   }
 
   private async verbType(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
@@ -1240,7 +1242,7 @@ export class IosManager {
     if (action.ref !== undefined || (typeof action.x === "number" && typeof action.y === "number")) {
       const pt = this.resolvePoint(ctx, action)
       if ("error" in pt) return { success: false, error: `ios type ${pt.error}` }
-      await ctx.channel.tap(pt.x, pt.y)
+      await this.tapTarget(ctx, action, pt)
     }
     await ctx.channel.sendKeys(text, typeof action.bundleId === "string" ? action.bundleId : undefined)
     return { success: true, data: { typed: text.length } }
@@ -1251,6 +1253,30 @@ export class IosManager {
     if (!text) return { success: false, error: "ios keys requires text" }
     await ctx.channel.sendKeys(text, typeof action.bundleId === "string" ? action.bundleId : undefined)
     return { success: true, data: { sent: text.length } }
+  }
+
+  /** Only a definite old-runner refusal permits the legacy coordinate fallback. */
+  private async tapTarget(ctx: IosDeviceContext, action: { [k: string]: unknown }, pt: { x: number; y: number }): Promise<"native-element" | "coordinate"> {
+    const el = typeof action.ref === "string" ? ctx.registry.resolve(action.ref) : undefined
+    if (el?.target && ctx.channel instanceof RunnerChannel && action.x === undefined && action.y === undefined) {
+      try { await ctx.channel.rawOp("element", { action: "tap", target: el.target }); return "native-element" }
+      catch (error) { if (!String(error).includes("unknown op 'element'")) throw error }
+    }
+    await ctx.channel.tap(pt.x, pt.y)
+    return "coordinate"
+  }
+
+  private async verbAutomation(ctx: IosDeviceContext, action: { [k: string]: unknown }): Promise<IosResult> {
+    const error = validateIosAutomation(action)
+    if (error) return { success: false, error }
+    if (!(ctx.channel instanceof RunnerChannel)) return { success: false, error: "native automation requires InterceptorRunner; WDA remains available for the existing verbs" }
+    const { type: _type, op, ...args } = action
+    if (op === "element") {
+      const el = ctx.registry.resolve(String(action.ref))
+      if (!el?.target) return { success: false, error: "native element target unavailable or stale; refresh the runner and re-read ios tree" }
+      args.target = el.target
+    }
+    return { success: true, data: await ctx.channel.rawOp(String(op), args) }
   }
 
   /**
@@ -1316,6 +1342,7 @@ export class IosManager {
       "home": "home", "lock": "lock",
       "volume-up": "volumeUp", "volumeup": "volumeUp",
       "volume-down": "volumeDown", "volumedown": "volumeDown",
+      "action": "action", "camera": "camera",
     }
     const name = map[raw.toLowerCase()]
     if (!name) return { success: false, error: `unknown button '${raw}' (home|lock|volume-up|volume-down)` }

@@ -15,15 +15,15 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.1.8</string>
+	<string>2.1.10</string>
 	<key>CFBundleVersion</key>
-	<string>2.1.8</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>InterceptorRunner connects to the Interceptor daemon on this Mac to receive local automation commands.</string>
+	<string>2.1.10</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>InterceptorRunner connects to the Interceptor daemon on this Mac to receive local automation commands.</string>
 </dict>
 </plist>

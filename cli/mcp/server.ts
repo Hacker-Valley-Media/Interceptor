@@ -65,6 +65,10 @@ const MACOS_VERBS: { v: string; s: string }[] = [
   { v: "runtime", s: "in-process app runtime (exec)" }, { v: "cdp", s: "Electron/Chromium CDP" },
 ]
 const IOS_VERBS: { v: string; s: string }[] = [
+  { v: "capabilities", s: "runtime native iOS capabilities" }, { v: "element", s: "native element actions, sliders, pickers, velocity gestures" },
+  { v: "key", s: "hardware key and modifiers" }, { v: "device", s: "runner URL, appearance, orientation, GPS, Siri, presence" },
+  { v: "audit", s: "structured on-device accessibility issues" }, { v: "authorization", s: "reset an app permission (destructive)" },
+  { v: "voiceover", s: "iOS 27 VoiceOver navigation and speech" },
   { v: "setup", s: "build/sign/install runner (destructive)" }, { v: "refresh", s: "re-sign (destructive)" },
   { v: "login", s: "Apple-services sign-in" }, { v: "logout", s: "drop token" }, { v: "install", s: "push runner (destructive)" },
   { v: "devices", s: "list devices" }, { v: "name", s: "rename device" }, { v: "discover", s: "discover devices" },

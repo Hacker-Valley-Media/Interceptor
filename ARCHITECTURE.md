@@ -618,8 +618,9 @@ HTTP path (`daemon/ios/wda-client.ts`, `usbmux-forward.ts` port-forward — pure
 Bun, no `go-ios`/`pymobiledevice3`) remains only as a deprecated escape hatch.
 
 The runner's element-tree snapshot is parsed into a ref-registered tree
-(`daemon/ios/tree.ts`) mirroring the macOS AX output; **refs carry frames so
-actuation is a deterministic coordinate tap** (robust against handle staleness).
+(`daemon/ios/tree.ts`) mirroring the macOS AX output. Refs carry snapshot frames
+for coordinate-based `drag` and `scroll`; current ref-based click and typing use
+the native-element route described below. Explicit coordinates retain their route.
 `drag` and `scroll` take the same screen points directly for apps with no usable
 tree. Each drag end resolves on its own (`x,y` is a point, anything else is a ref),
 and a drag between one point and itself with `--duration` is the long press: the
@@ -670,6 +671,53 @@ signs it with the user's configured developer team during setup
 (`scripts/audit-capability-blind.sh` check #4). The actual bundle ID is stored per
 device because install, inventory, and launch must all address the signed identity.
 See `docs/ios/app-route.md`.
+
+**Native runner operations.** The native Swift module uses a source-relative
+diagnostic filename because Swift's prefix maps do not cover runtime isolation
+diagnostic strings. `cli/commands/ios.ts` builds an `ios_automation`
+action for `capabilities`, `element`, `key`, `device`, `audit`, `authorization`,
+and `voiceover`. `shared/ios-automation.ts` validates the arguments both in the
+CLI and again at the daemon boundary. `IosManager.verbAutomation` resolves
+element refs through the device registry and sends the existing RunnerChannel
+operation to `NativeAutomation.swift`, inside the runner's exception boundary.
+WDA keeps the existing verbs and refuses these native-only operations. No
+second signing path or remote-automation bootstrap is introduced.
+
+Snapshots carry the source bundle, element type, identifier, label, geometry,
+placeholder, and selection/focus state. Secure-field values are removed in both
+the Swift serializer and the daemon formatter. Ref-based click and typing
+resolve a unique current native element, check that its app is still foreground,
+and let XCTest choose a hittable point. Missing, ambiguous, disabled, or covered
+targets refuse. Explicit coordinates retain their meaning. Older runners can
+use the coordinate route only after a definite unknown-operation refusal;
+timeouts and uncertain outcomes never trigger a second input.
+Every `tree` or `find` rebuilds the ref registry and can reuse names. Native
+matching can select a replacement with the same type, identifier, and label,
+so callers must refresh refs after UI changes and discard them after a new read.
+
+Native element operations cover slider/picker adjustment, reveal, multi-tap,
+velocity swipes, pinch, and rotation. `key` distinguishes physical keys from
+literal `keys` text. Modifier shortcuts are enabled only on physical iOS 27+
+after editing validation; Simulator and physical iOS 26 refuse modifiers before
+input. Device operations open URLs, set appearance/orientation, set or clear
+runner GPS, and request Siri or user presence. Physical iOS 27 Siri is disabled
+because its validation lost the command reply. Runtime capabilities report
+these guards; selector-presence fields do not establish working recording or
+hardware acceleration. VoiceOver requires iOS 27; accessibility audits require
+iOS 17. Permission reset is an explicit app/resource operation with a
+destructive MCP family floor. VoiceOver status and speech are MCP reads;
+navigation and enable/disable are mutations. Audit and VoiceOver results carry
+the MCP untrusted-data fence for app-provided text. Home on physical iOS 27 uses a
+bounded HID event, while older devices and Simulator retain the public route.
+Home, Camera, Action, and URL transitions clear the selected-app override.
+
+Full-size streaming requests encoded JPEG bytes directly from XCTest when the
+private capture selector is available. `ICCaptureScreenJPEG` validates JPEG
+magic, dimensions, and upright orientation before returning the bytes. Rotated,
+mirrored, downscaled, or failed direct captures use the existing normalizing
+renderer, so reported dimensions match the delivered pixels. The screenshot
+operation retains its PNG wire contract. The runner deployment target remains
+iOS 15, with runtime guards for newer APIs.
 
 **Beyond the runner — sibling lanes on the same `ios:<udid>` context.** These route
 *before* the runner fallback (their action sets in `shared/ios-dev.ts` /
@@ -837,6 +885,8 @@ Relatedly on the daemon side, the WebSocket transport — the path `screenshot`/
 `cli/commands/macos.ts` forwards most flags into the bridge action as strings, but the Swift domains read typed fields — a field a domain casts with `as? Int` is **silently dropped** if the CLI forwards it as a string, because the cast fails and the handler falls through to its default path with no error. Photos `export --size` shipped in that state (#187): the resize+encode branch of [`PhotosDomain.swift`](interceptor-bridge/Sources/Domains/PhotosDomain.swift) was unreachable from the CLI, every export returned raw originals (HEIC on iPhone-sourced libraries), and `thumbnail --size` stayed pinned to its 256px default. The rule is: any flag whose Swift reader casts to a non-string type must go through `flagInt` (or an equivalently typed forward), never the generic string flag loop — [`test/macos-parser.test.ts`](test/macos-parser.test.ts) asserts the forwarded types for the photos flags, and `.agents/rules/macos-command-parser.md` binds parser, help, Swift handler, and test together. `export --format jpeg|png` composes with `--size` (#190): the resize branch encodes to the requested format and reports the true `uti`, and the no-size branch transcodes original bytes. Transcode paths do not rotate manually — `NSBitmapImageRep(data:)` applies EXIF/HEIF orientation at decode on supported macOS (verified empirically on sensor-native portrait HEIC), so encoded output is upright by construction.
 
 ### Windows installer and release lane
+
+Windows 10 support is limited to 22H2 x64 (build 19045 or later), for both Browser and Full installs. Windows 11 x64 Browser installs accept earlier Windows 11 builds; Full installs and both ARM64 editions require build 26100 or later. The generated WinGet manifests use the same per-architecture minimums. On Windows 10 build 19045, app-based window capture excludes Explorer's desktop shell using its `GetShellWindow` handle and requires a titled, positive-size window; an explicitly requested numeric window bypasses that selection filter. Windows 11 keeps its existing selection path. App-name matching accepts an optional `.exe` suffix.
 
 Windows payloads build per architecture — `--target=windows-x64` (Bun `x64-baseline`, no AVX2 requirement) and `--target=windows-arm64` — each staged under `dist/windows/<arch>/` with a static native-messaging manifest generated from `extension/store-identities.json` (production builds refuse unapproved store identities; `--development` allows the key-derived unpacked ID). `scripts/installer/interceptor.iss` produces a per-user, browser-only Inno Setup installer whose custom code is transactional: every PATH and native-host registry mutation is snapshotted to a registry journal before it happens, committed only after payload install succeeds, and compensated on failure, cancellation, or interrupted setup — foreign values, value types, and unrelated PATH tokens are preserved on both install and uninstall. During the replacement window Setup writes a current-user-ACL maintenance guard file that the CLI (`ensureDaemon`) and daemon check before spawn/bind, so a running browser cannot relaunch a half-replaced daemon. Upgrades stop the previous daemon through `interceptor daemon stop` — an authenticated local verb that presents the 256-bit token from the daemon's owner-only lock file over the local IPC transport, validates the acknowledgement against the locked process identity, and waits for both loopback ports to close; the WebSocket transport rejects shutdown outright. Uninstall removes only proven-owned state: journaled PATH tokens, native-host values it wrote (restoring priors), and skill links whose recorded target is inside the installed skill root (`skills unadopt --owned-root`). Production extension acquisition is store-only (Chrome Web Store / Edge Add-ons); the installer never edits browser profiles, never force-loads an unpacked extension, and never starts the daemon eagerly. It also stages `{app}\extension-legacy` (the old-key copy) and runs `interceptor.exe diagnose extension --prompt` after install and update, which only reads profiles and shows a Yes/No dialog when a profile cannot load Interceptor. `.github/workflows/windows-installer.yml` builds from exact `vX.Y.Z` tags only, against a pinned toolchain (`.bun-version`, `scripts/installer/windows-toolchain.lock.json`), signs payloads and installers, runs an install/repair/uninstall acceptance harness, attests, and uploads immutable release assets — `--clobber` is forbidden.
 

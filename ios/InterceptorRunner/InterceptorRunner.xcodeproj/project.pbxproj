@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2756A268523E929CDFEDDAB3 /* NativeAutomation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD4F186240BDD5CA2D69E931 /* NativeAutomation.swift */; };
 		65F239C4844BEE6806BEA214 /* InterceptorRunnerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5467E21A9B6E0AC4C05165 /* InterceptorRunnerUITests.swift */; };
 		7F2DFF3A3BB8C2CB3D1F0500 /* ObjCSupport.m in Sources */ = {isa = PBXBuildFile; fileRef = E3D2B3AFD7F75949FB3BF450 /* ObjCSupport.m */; };
 /* End PBXBuildFile section */
@@ -16,6 +17,7 @@
 		7C5467E21A9B6E0AC4C05165 /* InterceptorRunnerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterceptorRunnerUITests.swift; sourceTree = "<group>"; };
 		7DBE4ABCA549F90B43D75824 /* InterceptorRunner.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = InterceptorRunner.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		869492D30FBB94F752E2BACC /* ObjCSupport.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCSupport.h; sourceTree = "<group>"; };
+		DD4F186240BDD5CA2D69E931 /* NativeAutomation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAutomation.swift; sourceTree = "<group>"; };
 		E3D2B3AFD7F75949FB3BF450 /* ObjCSupport.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCSupport.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -33,6 +35,7 @@
 			children = (
 				0DB287E3841C52E1963493A0 /* InterceptorRunner-Bridging-Header.h */,
 				7C5467E21A9B6E0AC4C05165 /* InterceptorRunnerUITests.swift */,
+				DD4F186240BDD5CA2D69E931 /* NativeAutomation.swift */,
 				869492D30FBB94F752E2BACC /* ObjCSupport.h */,
 				E3D2B3AFD7F75949FB3BF450 /* ObjCSupport.m */,
 			);
@@ -106,6 +109,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				65F239C4844BEE6806BEA214 /* InterceptorRunnerUITests.swift in Sources */,
+				2756A268523E929CDFEDDAB3 /* NativeAutomation.swift in Sources */,
 				7F2DFF3A3BB8C2CB3D1F0500 /* ObjCSupport.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
