@@ -47,7 +47,7 @@ const READ_VERBS: Record<Surface, Set<string>> = {
     "discover", "diag", "crash", "profiles", "springboard", "proc", "ps", "top",
     "gpu", "shot", "axtree", "screen", "backup", "logs", "notify",
     // The newest frame the stream already delivered; nothing is sent to the phone.
-    "frame",
+    "frame", "capabilities", "audit",
   ]),
   local: new Set([
     "status", "manifest", "diagnose", "extensions", "contexts", "capabilities",
@@ -94,6 +94,7 @@ const DESTRUCTIVE_SUB: TierMap = {
   "macos:secret:rm": "destructive", "macos:authdialog:fill": "destructive",
   // iOS lifecycle / device-mutating
   "ios:app:terminate": "destructive",
+  "ios:authorization:reset": "destructive",
   // iOS fs push (write into app container)
   "ios:fs:push": "destructive",
   // iOS web mutating raw call
@@ -141,6 +142,7 @@ const FAMILY_FLOOR: Record<string, Tier> = {
   "ios:app": "destructive",
   "ios:web": "mutate",
   "ios:fs": "destructive",
+  "ios:authorization": "destructive",
 }
 
 /** First non-flag token after the verb (the sub-verb), else "". */
@@ -159,6 +161,9 @@ export type Classification = { tier: Tier; surface: Surface; verb: string; sub: 
  * of the surface command, e.g. "vm"); `args` are the remaining tokens.
  */
 export function classify(surface: Surface, verb: string, args: string[]): Classification {
+  if (surface === "ios" && verb === "voiceover") {
+    return { tier: args.length === 0 || ["status", "speech"].includes(args[0]) ? "read" : "mutate", surface, verb, sub: args[0] ?? "" }
+  }
   if (surface === "desktop") {
     if (["status", "capabilities", "providers"].includes(verb)) return { tier: "read", surface, verb, sub: subVerbOf(args) }
     return { ...classify("macos", verb, args), surface }

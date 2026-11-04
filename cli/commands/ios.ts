@@ -15,6 +15,7 @@ import { runIosWebCommand } from "./ios-web"
 import { runIosSvcCommand } from "./ios-svc"
 import { runIosDevCommand } from "./ios-dev"
 import { resolve } from "node:path"
+import { IOS_AUTOMATION_OPS, validateIosAutomation } from "../../shared/ios-automation"
 
 /** Device-service introspection subcommands, delegated to ios-svc.ts. */
 const IOS_SVC_SUBCOMMANDS = new Set(["diag", "logs", "fs", "crash", "profiles", "notify", "springboard"])
@@ -34,6 +35,43 @@ function flagValue(args: string[], flag: string): string | undefined {
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag)
+}
+
+/** Native runner verbs share one wire contract and the daemon's validation. */
+export function buildIosAutomationAction(args: string[]): Action {
+  const op = args[1]
+  const valueFlags = ["--on", "--context", "--app", "--velocity", "--modifiers"]
+  for (let i = 2; i < args.length; i++) {
+    if (!args[i].startsWith("--")) continue
+    if (!valueFlags.includes(args[i]) || !args[i + 1] || args[i + 1].startsWith("--")) throw new Error(`ios ${op}: unknown or incomplete flag '${args[i]}'`)
+    i++
+  }
+  const p = positionalsExcept(args, 2, valueFlags)
+  const action: Action = { type: "ios_automation", op }
+  const bundleId = flagValue(args, "--app")
+  if (bundleId !== undefined) action.bundleId = bundleId
+  if (op === "element") {
+    Object.assign(action, { ref: p[0], action: p[1], value: p[2] })
+    if (["pinch", "rotate", "slider"].includes(p[1])) action.value = p[2] === undefined ? undefined : Number(p[2])
+    if (["swipe", "pinch", "rotate"].includes(p[1])) action.velocity = hasFlag(args, "--velocity") ? Number(flagValue(args, "--velocity")) : p[1] === "swipe" ? 1000 : 2
+    if (p.length > 3) throw new Error("ios element: too many arguments")
+  } else if (op === "key") {
+    Object.assign(action, { key: p[0], modifiers: flagValue(args, "--modifiers")?.toLowerCase().split(",") ?? [] })
+    if (p.length > 1) throw new Error("ios key requires one key")
+  } else if (op === "device") {
+    Object.assign(action, { action: p[0], value: p[1] })
+    if (p[0] === "location" && p[1] !== "clear") { action.lat = p[1] === undefined ? undefined : Number(p[1]); action.lon = p[2] === undefined ? undefined : Number(p[2]) }
+    if (p.length > (p[0] === "location" && p[1] !== "clear" ? 3 : p[0] === "present" ? 1 : 2)) throw new Error("ios device: too many arguments (quote Siri text)")
+  } else if (op === "authorization") {
+    Object.assign(action, { action: p[0], bundleId: p[1], value: p[2] })
+    if (p.length !== 3) throw new Error("ios authorization reset <bundle> <resource>")
+  } else if (op === "voiceover") {
+    action.action = p[0] ?? "status"
+    if (p.length > 1) throw new Error("ios voiceover takes one action")
+  } else if (p.length) throw new Error(`ios ${op} takes no positional arguments`)
+  const error = validateIosAutomation(action)
+  if (error) throw new Error(`ios ${op}: ${error}`)
+  return action
 }
 
 /** Non-flag tokens from `start` on, skipping the operands of the listed value flags. */
@@ -218,6 +256,19 @@ Setup:
   name <device> <alias>                      rename a phone (use it with --on <alias>)
 
 Drive a phone (add --on <name>, or it uses your only phone):
+  capabilities                              runtime OS, native operations, and guarded private APIs
+  element <ref> tap|double-tap|two-finger-tap|reveal
+  element <ref> swipe up|down|left|right [--velocity pixels/sec]
+  element <ref> pinch <scale> | rotate <radians> [--velocity N]
+  element <ref> slider <0..1> | picker "<exact value>"
+  key <key> [--modifiers command,shift]      single key; modifiers on physical iOS 27+
+  device open <url> [--app <bundle>]         URL / deep link through the runner
+  device appearance light|dark|unspecified | orientation portrait|portrait-upside-down|landscape-left|landscape-right
+  device location <lat> <lon> | location clear | siri "<text>" | present
+                                             check capabilities for Siri availability
+  audit [--app <bundle>]                     structured accessibility issues (iOS 17+)
+  authorization reset <bundle> <resource>   explicit permission reset
+  voiceover status|enable|disable|next|previous|in|out|speech  (iOS 27+)
   tree    [--filter interactive|all|full]    on-screen elements (ref-tagged)
   find    --label "Send" [--role button]     find elements
   inspect <ref>                              element details
@@ -228,7 +279,7 @@ Drive a phone (add --on <name>, or it uses your only phone):
   scroll  [<ref> | --x N --y N] [--dir up|down|left|right]
                                              swipe from a ref, a point, or (bare) the screen center; --dir defaults to down
   drag    <from> <to> [--duration s]         each end is a ref or x,y (120,330); the same point twice is a long press
-  press   home|lock|volume-up|volume-down    hardware button
+  press   home|lock|volume-up|volume-down|action|camera    hardware button (checks device support)
   screenshot                                 capture the screen (one JPEG, VLM-budget resized)
   stream  start|stop|status [--fps N] [--scale S] [--quality Q] [--out <path>]
                                              the runner pushes JPEG frames continuously (default 10 fps, half size, quality 0.3);
@@ -338,6 +389,12 @@ export async function runIosCommand(
   // performed a full build/sign/install. `web` keeps its own help page.
   if (sub !== "web" && args.slice(2).some((a) => a === "--help" || a === "-h")) {
     console.log(helpForCommand("ios", sub) ?? FULL_HELP)
+    return
+  }
+
+  if (IOS_AUTOMATION_OPS.has(sub)) {
+    try { emitExit(await send(buildIosAutomationAction(args), contextId), jsonMode) }
+    catch (error) { console.error(`error: ${(error as Error).message}`); process.exit(1) }
     return
   }
 

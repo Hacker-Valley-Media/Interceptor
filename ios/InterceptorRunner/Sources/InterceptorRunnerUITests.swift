@@ -437,7 +437,13 @@ enum Runner {
         case "ping":
             return ok(["alive": true])
         case "source":
-            return ok(try serialize(foregroundApp().snapshot()))
+            let targetApp = foregroundApp()
+            return ok(try serialize(targetApp.snapshot(), bundleId: ICApplicationBundleID(targetApp) ?? ""))
+        case "capabilities", "element", "key", "device", "audit", "authorization", "voiceover":
+            let target = (args["bundleId"] as? String).map { XCUIApplication(bundleIdentifier: $0) } ?? foregroundApp()
+            let result = try NativeAutomation.run(op: op, args: args, app: target)
+            if op == "device", ["open", "siri"].contains(args["action"] as? String ?? "") { currentBundleId = springboard }
+            return result
         case "windowSize":
             let f = foregroundApp().frame
             return ok(["width": Double(f.width), "height": Double(f.height)])
@@ -502,7 +508,17 @@ enum Runner {
 
     private static func pressButton(_ name: String) -> [String: Any] {
         switch name {
-        case "home": XCUIDevice.shared.press(.home); return ok(nil)
+        case "home":
+            #if targetEnvironment(simulator)
+            XCUIDevice.shared.press(.home)
+            #else
+            if #available(iOS 27.0, *) {
+                // Physical iOS 27 acknowledged the public Home press without leaving the app.
+                if let error = ICPerformDeviceEvent(0x0C, 0x40, 0.1) { return err(error.localizedDescription) }
+            } else { XCUIDevice.shared.press(.home) }
+            #endif
+            currentBundleId = springboard
+            return ok(nil)
         case "volumeUp", "volumeDown":
             #if targetEnvironment(simulator)
             return err("volume buttons are unavailable in the Simulator")
@@ -510,6 +526,15 @@ enum Runner {
             XCUIDevice.shared.press(name == "volumeUp" ? .volumeUp : .volumeDown)
             return ok(nil)
             #endif
+        case "action", "camera":
+            if #available(iOS 16.0, *) {
+                let button: XCUIDevice.Button = name == "action" ? .action : .camera
+                guard XCUIDevice.shared.hasHardwareButton(button) else { return err("this device has no \(name) button") }
+                XCUIDevice.shared.press(button)
+                currentBundleId = springboard
+                return ok(["pressed": name])
+            }
+            return err("hardware availability checks require iOS 16 or later")
         case "lock":
             // iOS 27: pressLockButton no longer locks. Post the Power key
             // (consumer page 0x0C, usage 0x30, 0.5 s hold) like WebDriverAgent,
@@ -525,7 +550,7 @@ enum Runner {
             }
             return ok(["via": "iohid", "locked": waitForLockState(true, seconds: 4)])
         default:
-            return err("unknown button '\(name)' (home|lock|volumeUp|volumeDown)")
+            return err("unknown button '\(name)' (home|lock|volumeUp|volumeDown|action|camera)")
         }
     }
 
@@ -676,7 +701,7 @@ enum Runner {
 
     // MARK: snapshot → WdaSourceNode JSON (matches daemon/ios/tree.ts)
 
-    private static func serialize(_ s: XCUIElementSnapshot) -> [String: Any] {
+    private static func serialize(_ s: XCUIElementSnapshot, bundleId: String = "") -> [String: Any] {
         let f = s.frame
         var node: [String: Any] = [
             "type": typeName(s.elementType),
@@ -684,15 +709,19 @@ enum Runner {
             "name": s.identifier,
             "rawIdentifier": s.identifier,
             "isEnabled": s.isEnabled,
+            "isSelected": s.isSelected,
+            "hasFocus": s.hasFocus,
+            "placeholderValue": s.placeholderValue ?? "",
             "isVisible": f.width > 0 && f.height > 0,
             "rect": [
                 "x": Double(f.origin.x), "y": Double(f.origin.y),
                 "width": Double(f.size.width), "height": Double(f.size.height),
             ],
         ]
-        if let v = s.value { node["value"] = "\(v)" }
+        if s.elementType != .secureTextField, let v = s.value { node["value"] = "\(v)" }
+        if !bundleId.isEmpty { node["target"] = ["bundleId": bundleId, "type": s.elementType.rawValue, "identifier": s.identifier, "label": s.label, "rect": node["rect"]!] }
         let kids = s.children
-        if !kids.isEmpty { node["children"] = kids.map { serialize($0) } }
+        if !kids.isEmpty { node["children"] = kids.map { serialize($0, bundleId: bundleId) } }
         return node
     }
 

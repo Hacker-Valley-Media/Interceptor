@@ -867,6 +867,13 @@ const HELP_IOS = `  iOS — automate your iPhone (Xcode-signed device runner):
   interceptor ios frame [--out <path>]                              Save the newest streamed frame
   interceptor ios type <ref> --secret <name> | keys --secret <name> | unlock --secret <name>   Vault-backed passcode entry
   interceptor ios screenshot [--on <name>]                          One JPEG of the screen (VLM-budget resized)
+  interceptor ios capabilities [--on <name>]                        Native operations and OS availability
+  interceptor ios element <ref> tap|double-tap|two-finger-tap|reveal | swipe <direction> | pinch <scale> | rotate <radians> | slider <0..1> | picker <value> [--velocity N]
+  interceptor ios key <key> [--modifiers command,shift]             Single key; modifiers on physical iOS 27+
+  interceptor ios device open <url> [--app <bundle>] | appearance light|dark|unspecified | orientation portrait|portrait-upside-down|landscape-left|landscape-right | location <lat> <lon>|clear | siri "text" | present
+  interceptor ios audit [--app <bundle>]                            Structured accessibility issues (iOS 17+)
+  interceptor ios authorization reset <bundle> <resource>           Reset one permission (destructive)
+  interceptor ios voiceover status|enable|disable|next|previous|in|out|speech  iOS 27+ only
   interceptor ios apps [--on <name>]                                Installed apps
   interceptor ios app launch|activate|terminate <bundle-id> [--on <name>]   App lifecycle
   interceptor ios status                                            Live device contexts and the runner's dial-back address (dialBack, dialBackVia, dialBackReachable)

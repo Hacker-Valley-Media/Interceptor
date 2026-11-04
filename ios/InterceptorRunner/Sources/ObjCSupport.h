@@ -19,6 +19,9 @@ NSError * _Nullable ICRunCatching(void (^block)(void));
 /// client (so `tree`/`find` work without an explicit `app activate`). nil if it
 /// can't be determined (caller falls back to SpringBoard).
 NSString * _Nullable ICActiveApplicationBundleID(void);
+NSString * _Nullable ICApplicationBundleID(id application);
+NSError * _Nullable ICInvokeVoid(id object, NSString *selector);
+NSDictionary * _Nullable ICVoiceOverAction(NSString *action, NSError * _Nullable * _Nullable error);
 
 /// Diagnostic: describe the active-application elements (class + accessors) so the
 /// right bundle-id accessor can be confirmed on-device.

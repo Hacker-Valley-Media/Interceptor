@@ -8,6 +8,7 @@ node_modules/
 /bun-windows-*-v*
 .claude/worktrees/
 dist/
+/dist
 extension/dist/
 extension/dist-safari/
 daemon/interceptor-daemon
@@ -78,6 +79,9 @@ extension-trust.json
 native-managed-copy/
 **/native-managed-copy/
 reports/
+/research/
+/.tmp-*
+/default.profraw
 use-cases/deep-research-demo/
 # Local browser-privacy research artifacts (ad-hoc page-injection snippets +
 # their verification doc) — not part of the shipped product or the iOS surface.
@@ -92,3 +96,4 @@ use-cases/deep-research-demo/
 
 # GitNexus skill copies (local code-intelligence tooling, not shipped)
 .agents/skills/gitnexus-*/
+finetune/

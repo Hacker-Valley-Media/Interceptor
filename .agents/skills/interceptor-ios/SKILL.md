@@ -7,7 +7,7 @@ metadata:
 
 # Interceptor iOS
 
-Agent-operator skill for the iOS surface of Interceptor. Use the `interceptor ios *` CLI to drive **any installed app on an owned, unlocked, Developer-Mode iPhone**: ref-tagged accessibility trees, deterministic coordinate taps, reliable text entry, scroll/drag, hardware buttons, screenshots, and app lifecycle.
+Agent-operator skill for the iOS surface of Interceptor. Use the `interceptor ios *` CLI to drive **any installed app on an owned, unlocked, Developer-Mode iPhone**: ref-tagged accessibility trees, native element actions, coordinate taps, reliable text entry, scroll/drag, hardware buttons, screenshots, and app lifecycle.
 
 The phone runs Interceptor's own on-device **XCUITest runner** (InterceptorRunner — *not* WebDriverAgent). The runner **dials into the daemon** over a WebSocket, exactly like the browser extension; the daemon drives it from there. Once the phone is paired over WiFi, no cable is needed. For content inside a browser tab load `interceptor-browser`; for a macOS app load `interceptor-macos`.
 
@@ -20,14 +20,16 @@ interceptor ios devices                        # 1. Phones with the agent instal
 interceptor ios status                          # 2. Per-phone connection state
 interceptor ios tree --on phone                 # 3. Auto-connects, returns the ref-tagged element tree
 interceptor ios find --label "Slack" --on phone # 4. Locate an element by label/role
-interceptor ios click e29 --on phone            # 5. Deterministic coordinate tap at the ref's frame center
+interceptor ios click e29 --on phone            # 5. Native element tap (current runner), coordinate fallback for older runners
 interceptor ios type e243 "hello" --on phone    # 6. Focus the field, then type
 interceptor ios screenshot --on phone           # 7. Capture the screen (VLM-budget resized)
 ```
 
 Omit `--on <name>` when only one phone is set up — it's used by default. Set an alias once with `interceptor ios name <udid> phone`, then always use `--on phone`.
 
-Treat `eN` refs as short-lived. The UI changes between calls; **re-read with `interceptor ios tree` before acting**. Refs carry frames and resolve to coordinates, so a tap is deterministic even if the underlying element handle went stale.
+Treat `eN` refs as short-lived. The UI changes between calls; **re-read with `interceptor ios tree` before acting**. Current runners resolve a ref to a unique current element and let XCTest choose a hittable point. Missing, ambiguous, disabled, and non-hittable targets refuse. Explicit coordinates, older runners, and WDA keep the coordinate route. `ios capabilities` reports the runner's native operations. Refresh the runner after installing an update to get new operations.
+
+Use `ios element <ref> slider 0.5`, `picker "Value"`, `swipe up --velocity 1000`, `pinch 2`, or `rotate 1.57` for native control and gestures. `ios key Delete` sends one key; `ios keys` types literal text. Modified keys such as `ios key a --modifiers command` require physical iOS 27+ in this runner. Check `keyboardShortcuts` in capabilities; unverified runtimes refuse modifiers before input. `ios device` controls URLs, appearance, orientation, runner GPS, and Siri. Check `siri` in capabilities: physical iOS 27 currently refuses recognition requests because validation lost the reply and reconnected the runner. `ios audit` returns structured accessibility issues. `ios authorization reset` explicitly resets a named app permission. `ios voiceover` requires iOS 27; unmodified keys and the other admitted native operations support iOS 26. Device controls can change the phone's visible UI.
 
 Apps with no usable tree (games, canvases): `click`, `drag`, and `scroll` also take screen points, `drag X,Y X,Y --duration 2` is a long press, and `interceptor macos vision text --image <screenshot>` reads the screen. For a loop that needs a fresh look every few hundred milliseconds, `ios stream start --out <path>` has the runner push JPEG frames over Wi-Fi and rewrite that one file, and `ios gesture` presses with several fingers at once (a held pedal plus a tapped arrow). The recipes and the box-to-point conversion are in the [command catalog](references/command-catalog.md).
 

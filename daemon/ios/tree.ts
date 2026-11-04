@@ -12,6 +12,8 @@
  * Pure (no I/O) so it is unit tested directly against fixture snapshots.
  */
 
+import type { IosNativeTarget } from "../../shared/ios-automation"
+
 export type IosRect = { x: number; y: number; width: number; height: number }
 
 /** What a ref resolves to: enough to actuate and to `inspect`. */
@@ -23,6 +25,10 @@ export type IosElementRef = {
   value?: string
   enabled: boolean
   frame: IosRect
+  target?: IosNativeTarget
+  placeholder?: string
+  selected?: boolean
+  focused?: boolean
 }
 
 /** A WDA `/source?format=json` node (XCUIElement snapshot serialization). */
@@ -131,7 +137,7 @@ export function formatWdaTree(
     const type = bareType(node.type)
     const label = asStr(node.label ?? "")
     const name = asStr(node.name ?? node.rawIdentifier ?? "")
-    const value = asStr(node.value ?? "")
+    const value = type === "SecureTextField" ? "" : asStr(node.value ?? "")
     const enabled = node.isEnabled === undefined ? true : asBool(node.isEnabled)
     const frame = normalizeRect(node.rect)
 
@@ -152,6 +158,10 @@ export function formatWdaTree(
         value: value || undefined,
         enabled,
         frame,
+        target: node.target as IosNativeTarget | undefined,
+        placeholder: asStr(node.placeholderValue) || undefined,
+        selected: node.isSelected === true,
+        focused: node.hasFocus === true,
       })
       const indent = "  ".repeat(Math.max(0, depth))
       let line = `${indent}[${entry.ref}] ${displayRole(node.type)}`
@@ -159,6 +169,9 @@ export function formatWdaTree(
       if (shown) line += ` "${shown}"`
       if (value && value !== shown) line += ` value="${value}"`
       if (!enabled) line += " (disabled)"
+      if (node.isSelected === true) line += " (selected)"
+      if (node.hasFocus === true) line += " (focused)"
+      if (node.placeholderValue) line += ` placeholder=${JSON.stringify(asStr(node.placeholderValue))}`
       out += line + "\n"
     }
 

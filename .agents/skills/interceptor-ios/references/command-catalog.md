@@ -33,7 +33,7 @@ phone is set up. Phones auto-connect on the first drive verb.
 | `interceptor ios scroll [<ref> \| --x N --y N] [--dir up\|down\|left\|right]` | Swipe 250 points from the ref's center, from a screen point, or (bare) from the screen center. `--dir` defaults to `down`. A ref that no longer resolves, or `--x` without `--y`, is an error: no gesture is sent. |
 | `interceptor ios drag <from> <to> [--duration s]` | Drag between two ends; each is a ref (frame center) or a screen point written `x,y` (`120,330`), and the two kinds can be mixed. `--duration` is the press time in seconds before the move (default 0.6, fractions allowed, at most 55: the gesture deadline is 60 s). |
 | `interceptor ios drag 200,400 200,400 --duration 2` | Long press: the same point twice. Use it for context menus and press-and-hold controls. It returns once the press has played, whether or not the surface settles (the Home Screen's icon menu, a browser's animating new-tab page). Run `interceptor ios refresh` after upgrading to 1.0.19 so the phone gets the expanded idle-wait patch; `ios fgdebug` lists the patched methods. |
-| `interceptor ios press home\|lock\|volume-up\|volume-down` | Hardware button. `lock` locks the phone (avoid mid-flow — it blocks launches). |
+| `interceptor ios press home\|lock\|volume-up\|volume-down\|action\|camera` | Hardware button; Action/Camera check device support first. `lock` locks the phone (avoid mid-flow, it blocks launches). |
 | `interceptor ios screenshot` | Capture the screen; saved as a VLM-budget-resized JPG. |
 | `interceptor ios stream start\|stop\|status [--fps N] [--scale S] [--quality Q] [--out <path>]` | Continuous frames without a cable: the runner captures, downscales (default half size), JPEG-encodes (default quality 0.3), and pushes each frame over its own Wi-Fi socket at up to `--fps` (default 10, max 30). The daemon keeps the newest frame and, with `--out`, rewrites that file atomically for every frame, so a perception loop reads one path whenever it wants a look. `status` reports frames received, `ageMs` of the newest, `receivedFps`, frame `width`/`height` in pixels, and the runner's `lastCaptureMs`/`lastEncodeMs`. Runs alongside `click`, `gesture`, and `tree`. Not the Instruments `ios screen` poll. |
 | `interceptor ios frame [--out <path>]` | Save the newest streamed frame (default `interceptor-ios-frame-<seq>.jpg` in the working directory) and print its seq, age, and size. No device round trip; an error when no stream has delivered a frame. |
@@ -122,3 +122,44 @@ they work even when the runner is idle or asleep. Routed before the runner fallb
 - **Runner never registers (`did not register within 120s`).** The error names the address the runner was handed and the rung that chose it (`ios status` → `dialBack` / `dialBackVia`). Before launching, the daemon checks that this Mac answers on a LAN or VPN dial-back address and refuses with `this Mac does not answer on ws://…` when it does not; `ios status` reports the same check as `dialBackReachable`. The usual cause is an address that no longer belongs to this Mac, or a runner listener that could not bind (an `ios runner listener` line in the daemon log). A local-network address (rungs `interface`, `subnet`, `default-route`, `first`) is silently denied while the runner's Local Network privilege is still undetermined: XCTest backgrounds the runner before it dials, and iOS denies a backgrounded app's local-network connection without showing the alert (TN3179). Once Settings › Privacy & Security › Local Network shows InterceptorRunner-Runner switched on, LAN dial-back registers in about 10 s. Fixes: grant that switch, or put the phone and Mac on the same VPN (Tailscale), which the daemon prefers automatically (`dialBackVia: vpn`). `INTERCEPTOR_WS_URL` overrides the ladder.
 - **Away from home (cellular or another Wi-Fi).** The Mac cannot launch the runner: launching needs the phone on its network or USB, and on cellular the phone refuses lockdown (62078) and RemotePairing (49152) over the VPN. Open InterceptorRunner on the phone instead (tap its icon). Every launch from the Mac saves the device secret and the Mac's Tailscale URL in the runner, so the phone-started runner dials back, registers with a proof of that secret (`ios status` → `launchedBy: device`), and runner verbs work as usual. Requirements: a runner built by `ios setup` / `ios refresh` on 2.1.5 or later; `ios status` → `deviceStartReady: true` (a launch from this Mac saved the connection on a runner that keeps it); Tailscale on the phone and the Mac (no forward: the daemon answers the runner on its Tailscale and LAN addresses through a runner-only listener); `ios status` → `remoteReachable: true` (false means this Mac does not answer on that address; if an older setup added `tailscale serve --tcp=<port>` for this, remove it with `tailscale serve --tcp=<port> off`, because it forwards the whole daemon port); one verb at home after `ios setup`/`ios refresh`; no phone reboot since then, because a reboot unmounts the developer disk image and only the Mac (or Xcode) mounts it again. It re-dials on its own (1 s back-off up to 30 s) and stops on `ios disable`. If it closes at once without registering, XCTest could not start it (error 10300, "Failed to background test runner within 30.0s"), which a system alert covering the screen causes: dismiss the alert, then open InterceptorRunner again. Runner-free lanes (`proc`, `shot`, `logs`, `web`) still need the phone on the Mac's network.
 - Add `--json` to any command for machine-readable output.
+
+## Native automation
+
+Run `interceptor ios capabilities --on phone` after refreshing the runner. Native controls support iOS 26; VoiceOver requires iOS 27. Missing private APIs return an error. Capability fields ending in `Selector` or `Selectors` describe symbol presence, not a successful operation or hardware performance.
+
+```bash
+interceptor ios element e12 tap --on phone
+interceptor ios element e12 double-tap --on phone
+interceptor ios element e12 two-finger-tap --on phone
+interceptor ios element e12 reveal --on phone
+interceptor ios element e12 swipe up --velocity 1000 --on phone
+interceptor ios element e12 pinch 0.5 --velocity 2 --on phone
+interceptor ios element e12 rotate 1.57 --velocity 2 --on phone
+interceptor ios element e12 slider 0.5 --on phone
+interceptor ios element e12 picker "June" --on phone
+interceptor ios key Delete --on phone
+interceptor ios key Escape --on phone
+interceptor ios key a --modifiers command --on phone
+interceptor ios key Left --modifiers shift --on phone
+interceptor ios device open 'https://example.com' --on phone
+interceptor ios device appearance dark --on phone
+interceptor ios device orientation landscape-left --on phone
+interceptor ios device location 12.5 -45.25 --on phone
+interceptor ios device location clear --on phone
+interceptor ios device siri "What time is it?" --on phone  # only when capabilities reports siri:true
+interceptor ios device present --on phone
+interceptor ios audit --app com.example.app --on phone
+interceptor ios authorization reset com.example.app camera --on phone
+interceptor ios voiceover status --on phone
+interceptor ios voiceover next --on phone
+interceptor ios press action --on phone
+interceptor ios press camera --on phone
+```
+
+Swipe directions are finger directions, velocity is pixels/second. Pinch uses a positive scale (0 to 10, excluding 0) and speed magnitude in scale/second; rotation uses signed radians (-4pi to 4pi) and a positive speed magnitude in radians/second. Sliders use 0..1; pickers require an exact value. Read a fresh tree after a UI change. Named ref actions refuse if the app changed or the target no longer resolves uniquely. Explicit coordinates remain available for unnamed canvas content. Permission reset is destructive in MCP; it cannot grant a permission. VoiceOver enable/disable and navigation change the phone's accessibility state, so restore it after a test. `present` requests user presence once; it does not promise to disable Auto-Lock. Action and Camera presses refuse on unsupported hardware.
+
+Modified keys accept `command,shift,control,option` and require a physical iOS 27+ device in this runner. Six editing checks passed on the iPhone, including selection, deletion, and cursor movement. Simulator checks dropped shortcuts, so Simulator and physical iOS 26 report `keyboardShortcuts:false` and refuse modifiers before input until their editing behavior is verified. Literal `keys` and unmodified named keys remain available on iOS 26.
+
+Check the `siri` capability before recognition requests. Physical iOS 27 currently refuses before input: the assistant displayed the answer during validation, but the command timed out and the runner reconnected. Do not replay an uncertain Siri request. Other system controls remain available.
+
+At stream scale 1 the runner tries direct JPEG bytes and validates JPEG format, dimensions, and upright orientation. Rotated/mirrored frames and downscaled streaming use the existing renderer so the frame pixels agree with the reported dimensions. Unavailable or failed direct capture also falls back to that renderer. The screenshot PNG wire contract is unchanged.

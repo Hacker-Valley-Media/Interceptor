@@ -83,6 +83,7 @@ export const IOS_VERB_TYPES = new Set<string>([
   "ios_scroll", "ios_drag", "ios_press", "ios_screenshot", "ios_apps", "ios_app",
   "ios_fgdebug", "ios_eval", "ios_unlock",
   "ios_gesture", "ios_stream", "ios_frame",
+  "ios_automation",
 ])
 
 /**

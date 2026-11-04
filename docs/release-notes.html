@@ -26,6 +26,23 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.10">
+    <h2>Interceptor 2.1.10</h2>
+    <time datetime="2026-11-04">November 4, 2026</time>
+    <ul>
+      <li>New iPhone native controls: <code>ios element</code> adjusts sliders and pickers, reveals offscreen elements, and performs double taps, two-finger taps, velocity swipes, pinch, and rotation.</li>
+      <li>Ref-based <code>ios click</code> and <code>ios type</code> resolve the current element instead of tapping an old frame center. Stale, ambiguous, disabled, and non-hittable targets refuse. Explicit coordinates and older runners retain their existing route.</li>
+      <li><code>ios capabilities</code> reports the native operations and runtime restrictions. Trees include placeholder, selection, and focus state, while secure-field values stay redacted.</li>
+      <li><code>ios key</code> sends individual keys. Command, Shift, Control, and Option shortcuts are enabled on physical iOS 27+ after editing checks; modifiers refuse on Simulator and physical iOS 26.</li>
+      <li><code>ios device</code> opens URLs and deep links, changes appearance and orientation, and sets or clears runner GPS. Siri requests are capability-gated; physical iOS 27 refuses them before input because validation lost the command reply.</li>
+      <li><code>ios audit</code> returns structured accessibility issues. <code>ios authorization reset</code> resets a named app permission and is destructive in MCP. <code>ios voiceover</code> adds status, navigation, and speech on iOS 27+.</li>
+      <li><code>ios press</code> adds Action and Camera buttons with hardware checks. Home now leaves the foreground app correctly on physical iOS 27, and app-changing buttons clear the previous app target.</li>
+      <li>Full-size iPhone streams can use validated JPEG bytes directly from XCTest. Landscape and downscaled frames use the existing renderer so their pixels match the reported dimensions.</li>
+      <li>Windows 10 22H2 x64 installation support from #324, including both editions, PowerShell 5.1 architecture detection, and an Explorer capture correction scoped to that Windows build. ARM64 still requires Windows 11 24H2+; Full on Windows 11 still requires 24H2+. Windows 10's publisher-signed Full installer lifecycle has not been validated.</li>
+      <li>The CLI, daemon, browser extensions, macOS bridge, Safari add-on, iPhone runner, and Windows/Linux release metadata share version 2.1.10. Version 2.1.9 was used for local iOS validation and was not published.</li>
+    </ul>
+    <p>Refresh the iPhone runner after updating to receive the native operations. iOS 26.1 Simulator and physical iOS 27.2 validation are recorded separately; physical iOS 26 runtime validation remains incomplete. Complete app-scheme discovery, runner-free UI automation, native MP4, and HID replay are not shipped features.</p>
+  </section>
   <section data-sparkle-version="2.1.8">
     <h2>Interceptor 2.1.8</h2>
     <time datetime="2026-10-31">October 31, 2026</time>
