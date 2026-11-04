@@ -28,8 +28,8 @@ if (import.meta.main) {
   if (!["x64", "arm64"].includes(architecture) || !["build", "check", "test"].includes(operation)) {
     throw Error("usage: bun scripts/build-desktop-windows.ts <x64|arm64> [build|check|test] [cargo options]")
   }
-  if (options.some(arg => arg.startsWith("--target") || arg.startsWith("--manifest-path"))) {
-    throw Error("The build script owns the Windows target and manifest")
+  if (options.some(arg => arg.startsWith("--target") || arg.startsWith("--manifest-path") || arg === "--config" || arg.startsWith("--config="))) {
+    throw Error("The build script owns the Windows target, manifest and configuration")
   }
   if (process.env.CARGO_TARGET_DIR !== undefined) throw Error("The Windows release build requires the default Cargo target directory; unset CARGO_TARGET_DIR")
   const root = resolve(import.meta.dir, "..")

@@ -16,6 +16,13 @@ describe("release source-path sanitization", () => {
     })
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain("requires the default Cargo target directory")
+    for (const options of [["--target-dir", "external"], ["--target-dir=external"], ["--config", 'build.target-dir="external"'], ['--config=build.build-dir="external"']]) {
+      const override = spawnSync(process.execPath, [resolve(root, "scripts/build-desktop-windows.ts"), "arm64", "build", ...options], {
+        encoding: "utf8", timeout: 15000,
+      })
+      expect(override.status).not.toBe(0)
+      expect(override.stderr).toContain("owns the Windows target, manifest and configuration")
+    }
   })
 
   test.skipIf(process.platform !== "darwin")("remaps UTF-16 C filenames through the Windows GNU compiler wrapper", () => {
