@@ -15,6 +15,14 @@ const OUT_FORMATS: Record<string, string> = { ".png": "png", ".jpg": "jpeg", ".j
  * in the CLI (cli/index.ts strips `out` before sending); the format follows
  * the file extension, and a missing folder is an error before any capture.
  */
+/**
+ * `--element` value: "capture element by ref", so a ref such as e12 is a ref and only a bare
+ * number is the legacy index. parseInt turned e12 into NaN, which matched nothing.
+ */
+export function elementTarget(value: string | undefined): { element: number } | { ref: string } {
+  return /^\d+$/.test(value ?? "") ? { element: Number(value) } : { ref: normalizeRefArg(value ?? "") }
+}
+
 export function screenshotOut(filtered: string[], format: string | undefined): { out: string; format: string } | undefined {
   const idx = filtered.indexOf("--out")
   if (idx === -1) return undefined
@@ -74,7 +82,7 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
         const clipParts = filtered[filtered.indexOf("--clip") + 1].split(",").map(Number)
         ssAction.clip = { x: clipParts[0], y: clipParts[1], width: clipParts[2], height: clipParts[3] }
       }
-      if (filtered.includes("--element")) ssAction.element = parseInt(filtered[filtered.indexOf("--element") + 1])
+      if (filtered.includes("--element")) Object.assign(ssAction, elementTarget(filtered[filtered.indexOf("--element") + 1]))
       if (filtered.includes("--ref")) ssAction.ref = normalizeRefArg(filtered[filtered.indexOf("--ref") + 1])
       if (filtered.includes("--target-max-long-edge")) {
         const raw = filtered[filtered.indexOf("--target-max-long-edge") + 1]
@@ -97,7 +105,7 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
       }
       if (filtered.includes("--selector")) a.selector = filtered[filtered.indexOf("--selector") + 1]
       if (filtered.includes("--ref")) a.ref = normalizeRefArg(filtered[filtered.indexOf("--ref") + 1])
-      if (filtered.includes("--element")) a.element = parseInt(filtered[filtered.indexOf("--element") + 1])
+      if (filtered.includes("--element")) Object.assign(a, elementTarget(filtered[filtered.indexOf("--element") + 1]))
       if (filtered.includes("--region")) {
         const rp = filtered[filtered.indexOf("--region") + 1].split(",").map(Number)
         a.region = { x: rp[0], y: rp[1], width: rp[2], height: rp[3] }

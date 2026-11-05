@@ -440,6 +440,19 @@ async function handlePixelScreenshot(
     ? (action.target_max_long_edge as number)
     : undefined
 
+  // Targets the pixel path cannot honor fail here; ignoring them returned an
+  // uncropped image that looked like the requested one.
+  const namesElement = action.element !== undefined || typeof action.ref === "string" || typeof action.selector === "string"
+  if (action.region !== undefined) {
+    return { success: false, error: "--pixel cannot crop to --region; drop --pixel (the default screenshot crops regions)" }
+  }
+  if (namesElement && action.full) {
+    return { success: false, error: "--pixel --full cannot crop to an element; drop --full to crop the element's on-screen part, or drop --pixel" }
+  }
+  if (namesElement && action.frameId !== undefined) {
+    return { success: false, error: "--pixel cannot crop to an element inside a frame" }
+  }
+
   if (action.full) {
     const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" }) as {
       success: boolean
@@ -554,6 +567,43 @@ async function handlePixelScreenshot(
     }
   }
 
+  let clip = action.clip as { x: number; y: number; width: number; height: number } | undefined
+  // Set for an element crop: the clip is then in CSS pixels, and the crop
+  // scales it by the image's own size against this viewport.
+  let viewport: { width: number; height: number } | undefined
+  // The element extends past the visible viewport; the image is its visible part.
+  let partialElement = false
+  // Same element targets as the DOM-render path (a ref, a legacy index, or a
+  // selector), looked up before the capture borrows the user's tab, so a
+  // missing element costs no tab switch or capture quota.
+  if (!clip && (action.element !== undefined || typeof action.ref === "string" || typeof action.selector === "string")) {
+    const elemResult = await sendToContentScript(tabId, {
+      type: "rect", index: action.element, ref: action.ref, selector: action.selector
+    }) as { success: boolean; error?: string; data?: { left: number; top: number; width: number; height: number } }
+    // A named element that cannot be found fails; capturing the whole viewport instead looked like a crop.
+    if (!elemResult.success || !elemResult.data) {
+      return { success: false, error: `element not found for the pixel crop: ${elemResult.error ?? "no rect"}` }
+    }
+    const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" }) as { success: boolean; data?: { viewportWidth?: number; viewportHeight?: number } }
+    if (!dims.success || !dims.data?.viewportWidth || !dims.data.viewportHeight) {
+      return { success: false, error: "could not read the page's viewport size for the pixel crop" }
+    }
+    // `rect` answers with left/top in CSS pixels; passing it through gave
+    // the crop undefined x/y and a blank image. The pixel path holds only what
+    // is on screen, so crop to the element's visible part.
+    const r = elemResult.data
+    const vw = dims.data.viewportWidth, vh = dims.data.viewportHeight
+    const left = Math.max(0, r.left), top = Math.max(0, r.top)
+    const right = Math.min(vw, r.left + r.width), bottom = Math.min(vh, r.top + r.height)
+    // Less than a pixel on screen (off screen, or a zero-size element) cannot be cropped.
+    if (right - left < 1 || bottom - top < 1) {
+      return { success: false, error: "the element has no visible area on screen, and --pixel captures only what is on screen; scroll it into view first, or drop --pixel (the default screenshot captures off-screen elements)" }
+    }
+    clip = { x: left, y: top, width: right - left, height: bottom - top }
+    partialElement = right - left < r.width || bottom - top < r.height
+    viewport = { width: vw, height: vh }
+  }
+
   let dataUrl: string
   // Read while the target is still the borrowed active tab; after the borrow
   // restores the user's tab, a background target always reads "hidden".
@@ -605,25 +655,6 @@ async function handlePixelScreenshot(
   const done = (data: Record<string, unknown>): ActionResult =>
     ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data })
 
-  let clip = action.clip as { x: number; y: number; width: number; height: number } | undefined
-  // Set for an element crop: the clip is then in CSS pixels, and the crop
-  // scales it by the image's own size against this viewport.
-  let viewport: { width: number; height: number } | undefined
-  if (!clip && action.element !== undefined) {
-    const elemResult = await sendToContentScript(tabId, {
-      type: "rect", index: action.element
-    }) as { success: boolean; data?: { left: number; top: number; width: number; height: number } }
-    const dims = elemResult.success && elemResult.data
-      ? await sendToContentScript(tabId, { type: "get_page_dimensions" }) as { success: boolean; data?: { viewportWidth?: number; viewportHeight?: number } }
-      : undefined
-    if (elemResult.data && dims?.success && dims.data?.viewportWidth && dims.data.viewportHeight) {
-      // `rect` answers with left/top in CSS pixels; passing it through gave
-      // the crop undefined x/y and a blank image.
-      const r = elemResult.data
-      clip = { x: r.left, y: r.top, width: r.width, height: r.height }
-      viewport = { width: dims.data.viewportWidth, height: dims.data.viewportHeight }
-    }
-  }
 
   if (clip) {
     const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip, viewport }) as {
@@ -641,11 +672,11 @@ async function handlePixelScreenshot(
   const finalSize = Math.round((finalUrl.length - finalUrl.indexOf(",") - 1) * 0.75)
 
   if (action.save) {
-    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true })
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true, ...(partialElement ? { partial: true } : {}) })
   }
 
   if (clip) {
-    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip })
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip, ...(partialElement ? { partial: true } : {}) })
   }
 
   if (requestedFormat === "png" && finalSize > 800 * 1024) {
