@@ -141,6 +141,37 @@ describe("macos parser", () => {
     expect(errors[0]).toContain("--window takes a numeric window id")
   })
 
+  test("screenshot --window takes only a numeric window id (issue #318)", () => {
+    // `--window e864` used to parse to nothing, and the bridge then captured the
+    // app's largest window and reported success.
+    expect(parseMacosCommand(["macos", "screenshot", "--app", "Brave Browser", "--window", "2198", "--save"]))
+      .toMatchObject({ type: "macos_screenshot", app: "Brave Browser", window: 2198, save: true })
+    expect((parseMacosCommand(["macos", "screenshot", "--app", "Brave Browser"]) as Record<string, unknown>).window).toBeUndefined()
+    const realExit = process.exit
+    const realError = console.error
+    const errors: string[] = []
+    process.exit = ((code?: number) => { throw new Error(`__exit_${code}`) }) as never
+    console.error = (...args: unknown[]) => { errors.push(args.join(" ")) }
+    try {
+      for (const bad of ["e864", "2198abc", "0", "-3"]) {
+        expect(() => parseMacosCommand(["macos", "screenshot", "--app", "Brave Browser", "--window", bad, "--save"])).toThrow("__exit_1")
+      }
+      expect(() => parseMacosCommand(["macos", "screenshot", "--window"])).toThrow("__exit_1")
+    } finally {
+      process.exit = realExit
+      console.error = realError
+    }
+    expect(errors).toHaveLength(5)
+    expect(errors[0]).toContain("got 'e864'")
+    // The desktop (Windows/Linux) parse is unchanged: strict, and it throws.
+    expect(parseMacosCommand(["macos", "screenshot", "--window", "77"], undefined, true)).toMatchObject({ window: 77 })
+    expect(() => parseMacosCommand(["macos", "screenshot", "--window", "e864"], undefined, true)).toThrow("safe integer")
+  })
+
+  test("screenshot --region refuses instead of capturing the frontmost window (issue #318)", () => {
+    expect(() => parseMacosCommand(["macos", "screenshot", "--region", "0,0,100,100", "--save"])).toThrow("has no --region")
+  })
+
   test("type --app carries the app target through to the bridge", () => {
     const action = parseMacosCommand(["macos", "type", "hello", "--app", "TextEdit"]) as Record<string, unknown>
     expect(action.type).toBe("macos_type")

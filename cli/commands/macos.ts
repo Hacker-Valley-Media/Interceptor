@@ -813,7 +813,9 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         type: "macos_screenshot",
         app: flagVal(filtered, "--app"),
         display: flagInt(filtered, "--display", desktop),
-        window: flagInt(filtered, "--window", desktop),
+        // macOS goes through withWindow below: a loose parseInt dropped an AX ref
+        // like e864 and the bridge captured the app's largest window (issue #318).
+        window: desktop ? flagInt(filtered, "--window", true) : undefined,
         save: filtered.includes("--save"),
         format: flagVal(filtered, "--format") || "jpeg",
         quality: desktop ? (flagInt(filtered, "--quality", true) ?? 80) : flagInt(filtered, "--quality") || 80,
@@ -822,6 +824,10 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       }
       if (desktop) for (const flag of ["--app", "--format", "--element", "--mode"]) {
         if (filtered.includes(flag) && (!flagVal(filtered, flag) || flagVal(filtered, flag)!.startsWith("--"))) throw new Error(`${flag} requires a value`)
+      }
+      if (!desktop) {
+        if (filtered.includes("--region")) throw new Error("macos screenshot has no --region; capture one window with --window <windowId> (from 'interceptor macos windows') or a display with --display <id> --mode display")
+        withWindow(action, filtered)
       }
       const mode = flagVal(filtered, "--mode")
       if (mode) action.mode = mode

@@ -689,6 +689,7 @@ macOS Bridge (full install only):
 
   Capture (works on occluded / minimized / cross-Space windows):
   interceptor macos screenshot [--app <name>] [--display N] [--save] [--format jpeg|png|webp]
+  interceptor macos screenshot --window <windowId>        One window: the numeric windowId from 'macos windows', not its ref
   interceptor macos screenshot --target-max-long-edge 1568   Resize at capture
   interceptor macos screenshot --mode display              Full-screen
   interceptor macos screenshot --save                      Result payload key is "filePath" (not "path")

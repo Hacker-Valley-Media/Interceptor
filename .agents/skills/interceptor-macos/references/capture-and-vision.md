@@ -5,6 +5,7 @@
 ```bash
 interceptor macos screenshot                       # Frontmost window
 interceptor macos screenshot --app "Brave Browser" # Specific app — works occluded / minimized / cross-Space
+interceptor macos screenshot --app "Brave Browser" --window 58189   # One window: --app alone takes the app's largest window; --window takes the numeric windowId from `macos windows`, never its ref
 interceptor macos screenshot --save                # Save to disk; result has filePath, no inline data
 interceptor macos screenshot --save --target-max-long-edge 1568   # Clamp long edge for upload-friendly size
 interceptor macos capture start                    # Start continuous 30 fps capture

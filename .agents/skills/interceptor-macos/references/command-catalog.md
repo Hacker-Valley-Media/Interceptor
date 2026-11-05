@@ -111,8 +111,7 @@ Rules: `--secret` and literal text are mutually exclusive. Never ask the user to
 
 ```bash
 interceptor macos screenshot --app "X" --save --target-max-long-edge 1568
-interceptor macos screenshot --window <ref>
-interceptor macos screenshot --region X,Y,W,H
+interceptor macos screenshot --window <windowId>   # numeric windowId from `macos windows`, not its ref; a ref fails
 interceptor macos capture start | status | frame | stop
 interceptor macos camera list | start [--device <id|name>] [--fps N] [--prompt] | frame [--out <path>] [--max-long-edge N] | status | stop
 interceptor macos stream start | list | frame | stop
