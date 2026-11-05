@@ -91,6 +91,23 @@ describe("closed-tab pruning", () => {
     expect(rules.map(rule => rule.id)).toEqual([910_104])
   })
 
+  test("the sweep leaves a screenshot CORS rule installed while it runs, for a tab newer than its tab read", async () => {
+    rules = [legacyCsp(301)]
+    openTabs = []
+    g.chrome = fakeChrome({
+      tabs: {
+        async query() {
+          // A new tab's screenshot installs its CORS rule during the sweep (that path does not use the queue).
+          rules.push(cors(999))
+          return openTabs.map(id => ({ id }))
+        },
+        onRemoved: { addListener() {} },
+      },
+    })
+    await pruneSessionRulesForClosedTabs()
+    expect(rules.map(rule => rule.id)).toEqual([920_999])
+  })
+
   test("registration wires tab close and runs the sweep", async () => {
     rules = [legacyCsp(201), legacyCsp(202)]
     openTabs = [202]

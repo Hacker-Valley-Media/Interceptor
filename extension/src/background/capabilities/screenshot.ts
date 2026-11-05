@@ -32,18 +32,50 @@ function withCaptureTimeout<T>(operation: string, p: Promise<T>, ms = CAPTURE_TI
 // Chrome allows MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND (2) captureVisibleTab
 // calls per second per extension and refuses the rest with "This request
 // exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota." (issue #329:
-// four concurrent --pixel calls lost two or three). Each call reserves the next
-// slot at least this far after the previous one, across every window. Callers
-// wait right before the call, inside the focus borrow, so the spacing is
-// between the real calls.
-export const CAPTURE_VISIBLE_TAB_INTERVAL_MS = 510
-let nextCaptureSlot = 0
+// four concurrent --pixel calls lost two or three). Real calls start at least
+// this far apart across every window, through one chain. Chrome counts the
+// quota where it receives the call, so one that still lands inside the window
+// gets one more turn; a capture is a read, so repeating it is safe.
+export const CAPTURE_VISIBLE_TAB_INTERVAL_MS = 550
+// A single capture borrows its tab only this long before its turn, so a queue
+// of captures does not hold the user's window on the target while it waits.
+const BORROW_LEAD_MS = 150
+const QUOTA_ERROR = /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/
+let nextCaptureTurn = 0
+let lastCaptureCall = Number.NEGATIVE_INFINITY
+let captureCallChain: Promise<unknown> = Promise.resolve()
 
-export async function waitForCaptureSlot(): Promise<void> {
-  const now = Date.now()
-  const slot = Math.max(now, nextCaptureSlot)
-  nextCaptureSlot = slot + CAPTURE_VISIBLE_TAB_INTERVAL_MS
-  if (slot > now) await new Promise(resolve => setTimeout(resolve, slot - now))
+function sleepUntil(time: number): Promise<void> {
+  const ms = time - performance.now()
+  return ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve()
+}
+
+/** Wait until this caller's expected turn, less the borrow lead. A scheduling hint only; spacing is enforced at the call. */
+export function waitForCaptureTurn(): Promise<void> {
+  const turn = Math.max(performance.now(), nextCaptureTurn)
+  nextCaptureTurn = turn + CAPTURE_VISIBLE_TAB_INTERVAL_MS
+  return sleepUntil(turn - BORROW_LEAD_MS)
+}
+
+/** Start captureVisibleTab calls one at a time, at least the interval apart. */
+export function paceCaptureCall(): Promise<void> {
+  const turn = captureCallChain.then(async () => {
+    await sleepUntil(lastCaptureCall + CAPTURE_VISIBLE_TAB_INTERVAL_MS)
+    lastCaptureCall = performance.now()
+  })
+  captureCallChain = turn
+  return turn
+}
+
+async function captureVisibleTabPaced(windowId: number, options: chrome.extensionTypes.ImageDetails, operation: string): Promise<string> {
+  await paceCaptureCall()
+  try {
+    return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options))
+  } catch (err) {
+    if (!QUOTA_ERROR.test((err as Error)?.message ?? "")) throw err
+    await paceCaptureCall()
+    return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options))
+  }
 }
 
 /** The tab's document.visibilityState for error reports; undefined when it cannot be read within a second. */
@@ -426,10 +458,10 @@ async function handlePixelScreenshot(
         await new Promise(r => setTimeout(r, 150))
         let stripUrl: string
         try {
-          await waitForCaptureSlot()
-          stripUrl = await withCaptureTimeout(
-            `captureVisibleTab(strip ${i + 1}/${stripCount})`,
-            chrome.tabs.captureVisibleTab(fullTab.windowId, { format: captureFormat, quality })
+          stripUrl = await captureVisibleTabPaced(
+            fullTab.windowId,
+            { format: captureFormat, quality },
+            `captureVisibleTab(strip ${i + 1}/${stripCount})`
           )
         } catch (err) {
           await sendToContentScript(tabId, { type: "scroll_absolute", y: origScrollY }).catch(() => undefined)
@@ -508,22 +540,28 @@ async function handlePixelScreenshot(
   }
 
   let dataUrl: string
+  // Read while the target is still the borrowed active tab; after the borrow
+  // restores the user's tab, a background target always reads "hidden".
+  let visibilityState: string | undefined
   try {
     // Same borrow-and-restore as the strip path. One brief flash for a single
-    // capture is the cost of background-first defaults.
+    // capture is the cost of background-first defaults. Waiting for the turn
+    // first keeps queued captures from holding the window while they wait.
+    await waitForCaptureTurn()
     dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
-      await waitForCaptureSlot()
-      return withCaptureTimeout(
-        "captureVisibleTab",
-        chrome.tabs.captureVisibleTab(targetTab.windowId, { format: captureFormat, quality })
-      )
+      try {
+        return await captureVisibleTabPaced(targetTab.windowId, { format: captureFormat, quality }, "captureVisibleTab")
+      } catch (err) {
+        visibilityState = await tabVisibilityState(tabId)
+        throw err
+      }
     })
   } catch (err) {
     if (err instanceof CaptureTimeoutError) {
       return {
         success: false,
         error: `captureVisibleTab timed out after ${err.timeoutMs}ms`,
-        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation, visibilityState: await tabVisibilityState(tabId) }
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation, visibilityState }
       }
     }
     const captureError = (err as Error)?.message || String(err)
@@ -542,7 +580,7 @@ async function handlePixelScreenshot(
     return {
       success: false,
       error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
-      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState: await tabVisibilityState(tabId), fallbackError }
+      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState, fallbackError }
     }
   }
 

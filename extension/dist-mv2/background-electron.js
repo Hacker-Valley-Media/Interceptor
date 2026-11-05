@@ -1394,14 +1394,39 @@ function withCaptureTimeout(operation, p, ms = CAPTURE_TIMEOUT_MS) {
     });
   });
 }
-var CAPTURE_VISIBLE_TAB_INTERVAL_MS = 510;
-var nextCaptureSlot = 0;
-async function waitForCaptureSlot() {
-  const now = Date.now();
-  const slot = Math.max(now, nextCaptureSlot);
-  nextCaptureSlot = slot + CAPTURE_VISIBLE_TAB_INTERVAL_MS;
-  if (slot > now)
-    await new Promise((resolve) => setTimeout(resolve, slot - now));
+var CAPTURE_VISIBLE_TAB_INTERVAL_MS = 550;
+var BORROW_LEAD_MS = 150;
+var QUOTA_ERROR = /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/;
+var nextCaptureTurn = 0;
+var lastCaptureCall = Number.NEGATIVE_INFINITY;
+var captureCallChain = Promise.resolve();
+function sleepUntil(time) {
+  const ms = time - performance.now();
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+function waitForCaptureTurn() {
+  const turn = Math.max(performance.now(), nextCaptureTurn);
+  nextCaptureTurn = turn + CAPTURE_VISIBLE_TAB_INTERVAL_MS;
+  return sleepUntil(turn - BORROW_LEAD_MS);
+}
+function paceCaptureCall() {
+  const turn = captureCallChain.then(async () => {
+    await sleepUntil(lastCaptureCall + CAPTURE_VISIBLE_TAB_INTERVAL_MS);
+    lastCaptureCall = performance.now();
+  });
+  captureCallChain = turn;
+  return turn;
+}
+async function captureVisibleTabPaced(windowId, options, operation) {
+  await paceCaptureCall();
+  try {
+    return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options));
+  } catch (err) {
+    if (!QUOTA_ERROR.test(err?.message ?? ""))
+      throw err;
+    await paceCaptureCall();
+    return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options));
+  }
 }
 async function tabVisibilityState(tabId) {
   try {
@@ -1669,8 +1694,7 @@ async function handlePixelScreenshot(action, tabId) {
         await new Promise((r) => setTimeout(r, 150));
         let stripUrl;
         try {
-          await waitForCaptureSlot();
-          stripUrl = await withCaptureTimeout(`captureVisibleTab(strip ${i + 1}/${stripCount})`, chrome.tabs.captureVisibleTab(fullTab.windowId, { format: captureFormat, quality }));
+          stripUrl = await captureVisibleTabPaced(fullTab.windowId, { format: captureFormat, quality }, `captureVisibleTab(strip ${i + 1}/${stripCount})`);
         } catch (err) {
           await sendToContentScript(tabId, { type: "scroll_absolute", y: origScrollY }).catch(() => {
             return;
@@ -1732,17 +1756,23 @@ async function handlePixelScreenshot(action, tabId) {
     };
   }
   let dataUrl;
+  let visibilityState;
   try {
+    await waitForCaptureTurn();
     dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
-      await waitForCaptureSlot();
-      return withCaptureTimeout("captureVisibleTab", chrome.tabs.captureVisibleTab(targetTab.windowId, { format: captureFormat, quality }));
+      try {
+        return await captureVisibleTabPaced(targetTab.windowId, { format: captureFormat, quality }, "captureVisibleTab");
+      } catch (err) {
+        visibilityState = await tabVisibilityState(tabId);
+        throw err;
+      }
     });
   } catch (err) {
     if (err instanceof CaptureTimeoutError) {
       return {
         success: false,
         error: `captureVisibleTab timed out after ${err.timeoutMs}ms`,
-        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation, visibilityState: await tabVisibilityState(tabId) }
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation, visibilityState }
       };
     }
     const captureError = err?.message || String(err);
@@ -1755,7 +1785,7 @@ async function handlePixelScreenshot(action, tabId) {
     return {
       success: false,
       error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
-      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState: await tabVisibilityState(tabId), fallbackError }
+      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState, fallbackError }
     };
   }
   let clip = action.clip;
@@ -3348,18 +3378,19 @@ function planSessionRulePrune(rules, isOpen) {
   }
   return { removeRuleIds, addRules };
 }
-async function prune(isOpen) {
-  const plan = planSessionRulePrune(await chrome.declarativeNetRequest.getSessionRules(), isOpen);
+async function applyPrune(rules, isOpen) {
+  const plan = planSessionRulePrune(rules, isOpen);
   if (plan.removeRuleIds.length)
     await chrome.declarativeNetRequest.updateSessionRules(plan);
 }
 function pruneClosedTab(tabId) {
-  return withSessionRules(() => prune((id) => id !== tabId));
+  return withSessionRules(async () => applyPrune(await chrome.declarativeNetRequest.getSessionRules(), (id) => id !== tabId));
 }
 function pruneSessionRulesForClosedTabs() {
   return withSessionRules(async () => {
+    const rules = await chrome.declarativeNetRequest.getSessionRules();
     const open = new Set((await chrome.tabs.query({})).map((tab) => tab.id));
-    await prune((id) => open.has(id));
+    await applyPrune(rules, (id) => open.has(id));
   });
 }
 function registerSessionRuleCleanup() {

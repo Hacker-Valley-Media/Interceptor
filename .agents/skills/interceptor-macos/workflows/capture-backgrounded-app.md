@@ -33,8 +33,7 @@ If the `before` and `after` frontmost differ, something foregrounded the target.
 
 ## When to override the default
 
-- `--window <ref>` — a specific window ref from `interceptor macos windows --app "X"`. Use when an app has multiple windows and you want a specific one.
-- `--region X,Y,W,H` — a sub-region of the captured window.
+- `--window <windowId>` — the numeric `windowId` from `interceptor macos windows --app "X"`, not its ref (a ref fails). Use when an app has multiple windows: `--app` alone captures the largest one.
 - `--format png` — archival fidelity; webp is the agent default.
 - `--target-max-long-edge 2576` — Opus consumer.
 

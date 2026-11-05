@@ -116,7 +116,8 @@ fi
 # and refuse to package a bridge whose @rpath dylibs are not in the bundle.
 APP_BINARY="$APP_DIR/Contents/MacOS/interceptor-bridge"
 xcrun swift-stdlib-tool --copy --scan-executable "$APP_BINARY" --platform macosx --destination "$APP_DIR/Contents/Frameworks"
-otool -l "$APP_BINARY" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; print $2 }' | while read -r rpath; do
+# otool prints "path <rpath> (offset N)"; keep the whole path, spaces included.
+otool -l "$APP_BINARY" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print }' | while IFS= read -r rpath; do
   case "$rpath" in
     @*|/usr/lib/*) ;;
     *) if install_name_tool -delete_rpath "$rpath" "$APP_BINARY" 2>/dev/null; then echo "==> Removed build-machine rpath $rpath"; fi ;;

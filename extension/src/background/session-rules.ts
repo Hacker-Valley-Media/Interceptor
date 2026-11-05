@@ -32,20 +32,25 @@ export function planSessionRulePrune(rules: Rule[], isOpen: (tabId: number) => b
   return { removeRuleIds, addRules }
 }
 
-async function prune(isOpen: (tabId: number) => boolean): Promise<void> {
-  const plan = planSessionRulePrune(await chrome.declarativeNetRequest.getSessionRules(), isOpen)
+async function applyPrune(rules: Rule[], isOpen: (tabId: number) => boolean): Promise<void> {
+  const plan = planSessionRulePrune(rules, isOpen)
   if (plan.removeRuleIds.length) await chrome.declarativeNetRequest.updateSessionRules(plan)
 }
 
 export function pruneClosedTab(tabId: number): Promise<void> {
-  return withSessionRules(() => prune(id => id !== tabId))
+  return withSessionRules(async () => applyPrune(await chrome.declarativeNetRequest.getSessionRules(), id => id !== tabId))
 }
 
-/** The open-tab read happens inside the queue, so a tab that gets a rule meanwhile is already open when it is checked. */
+/**
+ * Rules are read before tabs. A rule in that read names a tab that existed
+ * then, so a missing tab really closed; a rule added after it (a screenshot's
+ * CORS rule, which does not go through this queue) is not in the plan at all.
+ */
 export function pruneSessionRulesForClosedTabs(): Promise<void> {
   return withSessionRules(async () => {
+    const rules = await chrome.declarativeNetRequest.getSessionRules()
     const open = new Set((await chrome.tabs.query({})).map(tab => tab.id))
-    await prune(id => open.has(id))
+    await applyPrune(rules, id => open.has(id))
   })
 }
 
