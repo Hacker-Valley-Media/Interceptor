@@ -543,6 +543,9 @@ async function handlePixelScreenshot(
   // Read while the target is still the borrowed active tab; after the borrow
   // restores the user's tab, a background target always reads "hidden".
   let visibilityState: string | undefined
+  // Set when tabCapture supplied the image; it then goes through the same clip,
+  // downsample and format steps as a captureVisibleTab image.
+  let fallbackNote: string | undefined
   try {
     // Same borrow-and-restore as the strip path. One brief flash for a single
     // capture is the cost of background-first defaults. Waiting for the turn
@@ -569,20 +572,23 @@ async function handlePixelScreenshot(
       { type: "screenshot_background", format: action.format, quality: action.quality },
       tabId
     )
-    if (fallback.success && fallback.data) {
-      (fallback.data as Record<string, unknown>).fallback = "tabCapture (captureVisibleTab failed)"
-      return fallback
+    const fallbackUrl = (fallback.data as { dataUrl?: string } | undefined)?.dataUrl
+    if (!fallback.success || !fallbackUrl) {
+      // tabCapture needs an activeTab grant only a person can give, so from the
+      // daemon it almost always fails. Lead with the error that explains the
+      // failure; returning only the fallback's hid it (issue #329).
+      const fallbackError = (fallback.error ?? "unknown error").replace(/^tabCapture failed: /, "")
+      return {
+        success: false,
+        error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState, fallbackError }
+      }
     }
-    // tabCapture needs an activeTab grant only a person can give, so from the
-    // daemon it almost always fails. Lead with the error that explains the
-    // failure; returning only the fallback's hid it (issue #329).
-    const fallbackError = (fallback.error ?? "unknown error").replace(/^tabCapture failed: /, "")
-    return {
-      success: false,
-      error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
-      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState, fallbackError }
-    }
+    dataUrl = fallbackUrl
+    fallbackNote = "tabCapture (captureVisibleTab failed)"
   }
+  const done = (data: Record<string, unknown>): ActionResult =>
+    ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data })
 
   let clip = action.clip as { x: number; y: number; width: number; height: number } | undefined
   if (!clip && action.element !== undefined) {
@@ -608,20 +614,17 @@ async function handlePixelScreenshot(
   const finalSize = Math.round((finalUrl.length - finalUrl.indexOf(",") - 1) * 0.75)
 
   if (action.save) {
-    return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true } }
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true })
   }
 
   if (clip) {
-    return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip } }
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip })
   }
 
   if (requestedFormat === "png" && finalSize > 800 * 1024) {
-    return {
-      success: true,
-      data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, warning: "PNG exceeds 800KB — consider using JPEG or WebP for smaller responses" }
-    }
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, warning: "PNG exceeds 800KB — consider using JPEG or WebP for smaller responses" })
   }
-  return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize } }
+  return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize })
 }
 
 // Post-capture transform for the pixel path. Applies downsample

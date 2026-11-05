@@ -169,7 +169,9 @@ describe("macos parser", () => {
   })
 
   test("screenshot --region refuses instead of capturing the frontmost window (issue #318)", () => {
-    expect(() => parseMacosCommand(["macos", "screenshot", "--region", "0,0,100,100", "--save"])).toThrow("has no --region")
+    expect(() => parseMacosCommand(["macos", "screenshot", "--region", "0,0,100,100", "--save"])).toThrow("macos screenshot has no --region")
+    // The desktop (Windows/Linux) action has no region field either; it refuses too.
+    expect(() => parseMacosCommand(["macos", "screenshot", "--region", "0,0,100,100"], undefined, true)).toThrow("desktop screenshot has no --region")
   })
 
   test("type --app carries the app target through to the bridge", () => {

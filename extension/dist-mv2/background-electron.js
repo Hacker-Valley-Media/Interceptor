@@ -1757,6 +1757,7 @@ async function handlePixelScreenshot(action, tabId) {
   }
   let dataUrl;
   let visibilityState;
+  let fallbackNote;
   try {
     await waitForCaptureTurn();
     dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
@@ -1777,17 +1778,19 @@ async function handlePixelScreenshot(action, tabId) {
     }
     const captureError = err?.message || String(err);
     const fallback = await handleScreenshotBackground({ type: "screenshot_background", format: action.format, quality: action.quality }, tabId);
-    if (fallback.success && fallback.data) {
-      fallback.data.fallback = "tabCapture (captureVisibleTab failed)";
-      return fallback;
+    const fallbackUrl = fallback.data?.dataUrl;
+    if (!fallback.success || !fallbackUrl) {
+      const fallbackError = (fallback.error ?? "unknown error").replace(/^tabCapture failed: /, "");
+      return {
+        success: false,
+        error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState, fallbackError }
+      };
     }
-    const fallbackError = (fallback.error ?? "unknown error").replace(/^tabCapture failed: /, "");
-    return {
-      success: false,
-      error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
-      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState, fallbackError }
-    };
+    dataUrl = fallbackUrl;
+    fallbackNote = "tabCapture (captureVisibleTab failed)";
   }
+  const done = (data) => ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data });
   let clip = action.clip;
   if (!clip && action.element !== undefined) {
     const elemResult = await sendToContentScript(tabId, {
@@ -1809,18 +1812,15 @@ async function handlePixelScreenshot(action, tabId) {
   const finalUrl = transformed.dataUrl;
   const finalSize = Math.round((finalUrl.length - finalUrl.indexOf(",") - 1) * 0.75);
   if (action.save) {
-    return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true } };
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true });
   }
   if (clip) {
-    return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip } };
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip });
   }
   if (requestedFormat === "png" && finalSize > 800 * 1024) {
-    return {
-      success: true,
-      data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, warning: "PNG exceeds 800KB — consider using JPEG or WebP for smaller responses" }
-    };
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, warning: "PNG exceeds 800KB — consider using JPEG or WebP for smaller responses" });
   }
-  return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize } };
+  return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize });
 }
 async function transformPixelDataUrl(dataUrl, requestedFormat, quality, targetMaxLongEdge) {
   const currentMime = dataUrl.startsWith("data:image/webp") ? "webp" : dataUrl.startsWith("data:image/png") ? "png" : "jpeg";

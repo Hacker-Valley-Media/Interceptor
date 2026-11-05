@@ -825,10 +825,12 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       if (desktop) for (const flag of ["--app", "--format", "--element", "--mode"]) {
         if (filtered.includes(flag) && (!flagVal(filtered, flag) || flagVal(filtered, flag)!.startsWith("--"))) throw new Error(`${flag} requires a value`)
       }
-      if (!desktop) {
-        if (filtered.includes("--region")) throw new Error("macos screenshot has no --region; capture one window with --window <windowId> (from 'interceptor macos windows') or a display with --display <id> --mode display")
-        withWindow(action, filtered)
+      // Neither surface has region capture; a dropped --region captured a whole window instead.
+      if (filtered.includes("--region")) {
+        const surface = desktop ? "desktop" : "macos"
+        throw new Error(`${surface} screenshot has no --region; capture one window with --window <windowId> (from 'interceptor ${surface} windows') or a display with --display <id> --mode display`)
       }
+      if (!desktop) withWindow(action, filtered)
       const mode = flagVal(filtered, "--mode")
       if (mode) action.mode = mode
       // --full-screen is a friendlier alias for --mode display

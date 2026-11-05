@@ -100,6 +100,31 @@ describe("--pixel keeps the captureVisibleTab error (issue #329)", () => {
     expect(result.data).toMatchObject({ method: "tabCapture", fallback: "tabCapture (captureVisibleTab failed)" })
   })
 
+  test("a fallback image goes through the same format and save steps as a captureVisibleTab image", async () => {
+    captureErrors = [new Error("Failed to capture tab: image readback failed")]
+    streamIdError = null
+    // The pixel transform re-encodes in the service worker; stub the two canvas APIs Bun lacks.
+    const w = globalThis as unknown as Record<string, unknown>
+    const savedBitmap = w.createImageBitmap, savedCanvas = w.OffscreenCanvas
+    const encoded: string[] = []
+    w.createImageBitmap = async () => ({ width: 40, height: 20, close() {} })
+    w.OffscreenCanvas = class {
+      constructor(public width: number, public height: number) {}
+      getContext() { return { drawImage() {} } }
+      async convertToBlob({ type }: { type: string }) { encoded.push(type); return new Blob([new Uint8Array([1, 2, 3])], { type }) }
+    }
+    try {
+      const result = await handleScreenshotActions({ type: "screenshot", pixel: true, format: "webp", save: true }, 7) as { success: boolean; data: Record<string, unknown> }
+      expect(result.success).toBe(true)
+      expect(result.data).toMatchObject({ format: "webp", save: true, method: "tabCapture", fallback: "tabCapture (captureVisibleTab failed)" })
+      expect(String(result.data.dataUrl)).toStartWith("data:image/webp;base64,")
+      expect(encoded).toEqual(["image/webp"])
+    } finally {
+      w.createImageBitmap = savedBitmap
+      w.OffscreenCanvas = savedCanvas
+    }
+  })
+
   test("a quota refusal gets one more paced turn instead of failing", async () => {
     captureErrors = [new Error(QUOTA), null]
     const result = await handleScreenshotActions({ type: "screenshot", pixel: true }, 9) as { success: boolean }
