@@ -125,6 +125,29 @@ describe("--pixel keeps the captureVisibleTab error (issue #329)", () => {
     }
   })
 
+  test("--element crops the element's rect, converted to x/y in device pixels", async () => {
+    captureErrors = [null]
+    const chrome = g.chrome as Record<string, any>
+    chrome.runtime.lastError = undefined
+    chrome.tabs.sendMessage = (_tab: number, msg: { action: { type: string } }, _opts: unknown, reply: (r: unknown) => void) => {
+      const type = msg.action.type
+      reply(type === "rect"
+        ? { success: true, data: { left: 10, top: 20, width: 30, height: 40, bottom: 60, right: 40 } }
+        : { success: true, data: { devicePixelRatio: 2, viewportWidth: 800, viewportHeight: 600 } })
+    }
+    const crops: Array<Record<string, number>> = []
+    chrome.runtime.sendMessage = (message: { type?: string; clip?: Record<string, number> }, reply?: (value: unknown) => void) => {
+      if (message.type === "crop") crops.push(message.clip!)
+      const answer = { success: true, data: "data:image/jpeg;base64,DDDD" }
+      reply?.(answer)
+      return Promise.resolve(answer)
+    }
+    const result = await handleScreenshotActions({ type: "screenshot", pixel: true, element: 3 }, 7) as { success: boolean; data: Record<string, unknown> }
+    expect(result.success).toBe(true)
+    expect(crops).toEqual([{ x: 20, y: 40, width: 60, height: 80 }])
+    expect(result.data.clip).toEqual({ x: 20, y: 40, width: 60, height: 80 })
+  })
+
   test("a quota refusal gets one more paced turn instead of failing", async () => {
     captureErrors = [new Error(QUOTA), null]
     const result = await handleScreenshotActions({ type: "screenshot", pixel: true }, 9) as { success: boolean }

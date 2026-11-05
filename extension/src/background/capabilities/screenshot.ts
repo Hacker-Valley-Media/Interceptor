@@ -594,8 +594,16 @@ async function handlePixelScreenshot(
   if (!clip && action.element !== undefined) {
     const elemResult = await sendToContentScript(tabId, {
       type: "rect", index: action.element
-    }) as { success: boolean; data?: { x: number; y: number; width: number; height: number } }
-    if (elemResult.success && elemResult.data) clip = elemResult.data
+    }) as { success: boolean; data?: { left: number; top: number; width: number; height: number } }
+    if (elemResult.success && elemResult.data) {
+      // `rect` answers in CSS pixels with left/top; the crop reads x/y in the
+      // captured image's device pixels. Passing the rect through gave the crop
+      // undefined x/y and a blank image.
+      const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" }) as { success: boolean; data?: { devicePixelRatio?: number } }
+      const scale = (dims.success && dims.data?.devicePixelRatio) || 1
+      const r = elemResult.data
+      clip = { x: Math.round(r.left * scale), y: Math.round(r.top * scale), width: Math.round(r.width * scale), height: Math.round(r.height * scale) }
+    }
   }
 
   if (clip) {

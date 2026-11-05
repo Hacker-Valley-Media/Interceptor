@@ -1797,8 +1797,12 @@ async function handlePixelScreenshot(action, tabId) {
       type: "rect",
       index: action.element
     });
-    if (elemResult.success && elemResult.data)
-      clip = elemResult.data;
+    if (elemResult.success && elemResult.data) {
+      const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" });
+      const scale = dims.success && dims.data?.devicePixelRatio || 1;
+      const r = elemResult.data;
+      clip = { x: Math.round(r.left * scale), y: Math.round(r.top * scale), width: Math.round(r.width * scale), height: Math.round(r.height * scale) };
+    }
   }
   if (clip) {
     const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip });
