@@ -26,6 +26,7 @@ import { handleCdpNetworkActions } from "./capabilities/cdp-network-actions"
 import { handleMonitorActions, registerMonitorListeners } from "./capabilities/monitor"
 import { handlePowerIdleActions } from "./keepawake"
 import { registerKeepaliveListeners } from "./tab-keepalive"
+import { registerSessionRuleCleanup } from "./session-rules"
 
 // Keep this module import-safe. `transport.ts` imports the message dispatcher,
 // which imports this router, so any top-level browser API call here runs before
@@ -37,6 +38,7 @@ export function initializeActionRouter(): void {
   registerMonitorListeners()
   restorePageCommCaptureConfig()
   registerKeepaliveListeners()
+  registerSessionRuleCleanup()
 }
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number; warning?: string }

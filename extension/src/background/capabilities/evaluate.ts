@@ -1,9 +1,14 @@
 import { IK_TT_POLICY, TT_POLICY_NAME } from "../../inject-keys"
 import { waitForTabLoad } from "../content-bridge"
+import { withSessionRules } from "../session-rules"
 
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; tabId?: number }
 
-const CSP_BYPASS_RULE_ID_BASE = 910_000
+// One session rule lists every tab that needs the bypass (issue #317): a rule
+// per tab reached the 5,000 session-rule limit, and `910_000 + tabId` shared ids
+// with the screenshot CORS rules (`920_000 + tabId`) for tabs 10,000 apart.
+// session-rules.ts drops closed tabs from it.
+export const CSP_BYPASS_RULE_ID = 910_000
 
 export function isTrustedTypesError(error: string | undefined): boolean {
   if (!error) return false
@@ -22,9 +27,9 @@ export function isCspEvalError(error: string | undefined): boolean {
   return isTrustedTypesError(error) || isCspUnsafeEvalError(error)
 }
 
-export function buildCspBypassRule(tabId: number): chrome.declarativeNetRequest.Rule {
+export function buildCspBypassRule(tabIds: number[]): chrome.declarativeNetRequest.Rule {
   return {
-    id: CSP_BYPASS_RULE_ID_BASE + tabId,
+    id: CSP_BYPASS_RULE_ID,
     priority: 10,
     action: {
       type: "modifyHeaders",
@@ -34,7 +39,7 @@ export function buildCspBypassRule(tabId: number): chrome.declarativeNetRequest.
       ]
     },
     condition: {
-      tabIds: [tabId],
+      tabIds,
       resourceTypes: ["main_frame", "sub_frame"]
     }
   }
@@ -187,11 +192,19 @@ async function executeEval(
   return (first?.result as ActionResult) ?? { success: false, error: `no result for frame ${frameId ?? 0}` }
 }
 
-async function installCspBypassForTab(tabId: number): Promise<void> {
-  const rule = buildCspBypassRule(tabId)
-  await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: [rule.id],
-    addRules: [rule]
+export function installCspBypassForTab(tabId: number): Promise<void> {
+  return withSessionRules(async () => {
+    // Chrome has had getSessionRules since 90. A runtime without it gets a rule
+    // for this tab alone, which is all this eval needs.
+    const dnr = chrome.declarativeNetRequest
+    const rules = typeof dnr.getSessionRules === "function" ? await dnr.getSessionRules() : []
+    const tabIds = rules.find(rule => rule.id === CSP_BYPASS_RULE_ID)?.condition?.tabIds ?? []
+    if (tabIds.includes(tabId)) return
+    const rule = buildCspBypassRule([...tabIds, tabId])
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [rule.id],
+      addRules: [rule]
+    })
   })
 }
 

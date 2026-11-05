@@ -29,6 +29,80 @@ function withCaptureTimeout<T>(operation: string, p: Promise<T>, ms = CAPTURE_TI
   })
 }
 
+// Chrome allows MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND (2) captureVisibleTab
+// calls per second per extension and refuses the rest with "This request
+// exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota." (issue #329:
+// four concurrent --pixel calls lost two or three). Real calls start at least
+// this far apart across every window, through one chain. Chrome counts the
+// quota where it receives the call, so one that still lands inside the window
+// gets one more turn; a capture is a read, so repeating it is safe.
+export const CAPTURE_VISIBLE_TAB_INTERVAL_MS = 550
+// A single capture borrows its tab only this long before its turn, so a queue
+// of captures does not hold the user's window on the target while it waits.
+const BORROW_LEAD_MS = 150
+const QUOTA_ERROR = /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/
+let nextCaptureTurn = 0
+let lastCaptureCall = Number.NEGATIVE_INFINITY
+let captureCallChain: Promise<unknown> = Promise.resolve()
+
+function sleepUntil(time: number): Promise<void> {
+  const ms = time - performance.now()
+  return ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve()
+}
+
+/** Wait until this caller's expected turn, less the borrow lead. A scheduling hint only; spacing is enforced at the call. */
+export function waitForCaptureTurn(): Promise<void> {
+  const turn = Math.max(performance.now(), nextCaptureTurn)
+  nextCaptureTurn = turn + CAPTURE_VISIBLE_TAB_INTERVAL_MS
+  return sleepUntil(turn - BORROW_LEAD_MS)
+}
+
+/**
+ * Start captureVisibleTab calls one at a time, at least the interval apart.
+ * `beforeCall` runs inside the turn, after the wait; the turn counts only when
+ * it passes, so a refused call does not delay the next one.
+ */
+export function paceCaptureCall(beforeCall?: () => Promise<void>): Promise<void> {
+  const turn = captureCallChain.then(async () => {
+    await sleepUntil(lastCaptureCall + CAPTURE_VISIBLE_TAB_INTERVAL_MS)
+    await beforeCall?.()
+    lastCaptureCall = performance.now()
+  })
+  captureCallChain = turn.catch(() => undefined)
+  return turn
+}
+
+/** captureVisibleTab reads the window's active tab; refuse when the target stopped being it during the wait. */
+async function assertTargetActive(tabId: number, windowId: number): Promise<void> {
+  const [active] = await chrome.tabs.query({ active: true, windowId })
+  if (active?.id !== tabId) {
+    throw new Error(`tab ${tabId} is no longer the active tab of window ${windowId} (active is ${active?.id ?? "none"}); refusing to capture a different page.`)
+  }
+}
+
+async function captureVisibleTabPaced(tabId: number, windowId: number, options: chrome.extensionTypes.ImageDetails, operation: string): Promise<string> {
+  const check = () => assertTargetActive(tabId, windowId)
+  await paceCaptureCall(check)
+  try {
+    return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options))
+  } catch (err) {
+    if (!QUOTA_ERROR.test((err as Error)?.message ?? "")) throw err
+    await paceCaptureCall(check)
+    return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options))
+  }
+}
+
+/** The tab's document.visibilityState for error reports; undefined when it cannot be read within a second. */
+async function tabVisibilityState(tabId: number): Promise<string | undefined> {
+  try {
+    const read = chrome.scripting.executeScript({ target: { tabId }, func: () => document.visibilityState })
+      .then(results => results?.[0]?.result as string | undefined, () => undefined)
+    return await Promise.race([read, new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 1000))])
+  } catch {
+    return undefined
+  }
+}
+
 function mimeTypeForFormat(format: string): string {
   if (format === "webp") return "image/webp"
   if (format === "png") return "image/png"
@@ -398,9 +472,11 @@ async function handlePixelScreenshot(
         await new Promise(r => setTimeout(r, 150))
         let stripUrl: string
         try {
-          stripUrl = await withCaptureTimeout(
-            `captureVisibleTab(strip ${i + 1}/${stripCount})`,
-            chrome.tabs.captureVisibleTab(fullTab.windowId, { format: captureFormat, quality })
+          stripUrl = await captureVisibleTabPaced(
+            tabId,
+            fullTab.windowId,
+            { format: captureFormat, quality },
+            `captureVisibleTab(strip ${i + 1}/${stripCount})`
           )
         } catch (err) {
           await sendToContentScript(tabId, { type: "scroll_absolute", y: origScrollY }).catch(() => undefined)
@@ -479,43 +555,78 @@ async function handlePixelScreenshot(
   }
 
   let dataUrl: string
+  // Read while the target is still the borrowed active tab; after the borrow
+  // restores the user's tab, a background target always reads "hidden".
+  let visibilityState: string | undefined
+  // Set when tabCapture supplied the image; it then goes through the same clip,
+  // downsample and format steps as a captureVisibleTab image.
+  let fallbackNote: string | undefined
   try {
     // Same borrow-and-restore as the strip path. One brief flash for a single
-    // capture is the cost of background-first defaults.
-    dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, () =>
-      withCaptureTimeout(
-        "captureVisibleTab",
-        chrome.tabs.captureVisibleTab(targetTab.windowId, { format: captureFormat, quality })
-      )
-    )
+    // capture is the cost of background-first defaults. Waiting for the turn
+    // first keeps queued captures from holding the window while they wait.
+    await waitForCaptureTurn()
+    dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
+      try {
+        return await captureVisibleTabPaced(tabId, targetTab.windowId, { format: captureFormat, quality }, "captureVisibleTab")
+      } catch (err) {
+        visibilityState = await tabVisibilityState(tabId)
+        throw err
+      }
+    })
   } catch (err) {
     if (err instanceof CaptureTimeoutError) {
       return {
         success: false,
         error: `captureVisibleTab timed out after ${err.timeoutMs}ms`,
-        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation }
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation, visibilityState }
       }
     }
+    const captureError = (err as Error)?.message || String(err)
     const fallback = await handleScreenshotBackground(
       { type: "screenshot_background", format: action.format, quality: action.quality },
       tabId
     )
-    if (fallback.success && fallback.data) {
-      (fallback.data as Record<string, unknown>).fallback = "tabCapture (captureVisibleTab failed)"
+    const fallbackUrl = (fallback.data as { dataUrl?: string } | undefined)?.dataUrl
+    if (!fallback.success || !fallbackUrl) {
+      // tabCapture needs an activeTab grant only a person can give, so from the
+      // daemon it almost always fails. Lead with the error that explains the
+      // failure; returning only the fallback's hid it (issue #329).
+      const fallbackError = (fallback.error ?? "unknown error").replace(/^tabCapture failed: /, "")
+      return {
+        success: false,
+        error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState, fallbackError }
+      }
     }
-    return fallback
+    dataUrl = fallbackUrl
+    fallbackNote = "tabCapture (captureVisibleTab failed)"
   }
+  const done = (data: Record<string, unknown>): ActionResult =>
+    ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data })
 
   let clip = action.clip as { x: number; y: number; width: number; height: number } | undefined
+  // Set for an element crop: the clip is then in CSS pixels, and the crop
+  // scales it by the image's own size against this viewport.
+  let viewport: { width: number; height: number } | undefined
   if (!clip && action.element !== undefined) {
     const elemResult = await sendToContentScript(tabId, {
       type: "rect", index: action.element
-    }) as { success: boolean; data?: { x: number; y: number; width: number; height: number } }
-    if (elemResult.success && elemResult.data) clip = elemResult.data
+    }) as { success: boolean; data?: { left: number; top: number; width: number; height: number } }
+    const dims = elemResult.success && elemResult.data
+      ? await sendToContentScript(tabId, { type: "get_page_dimensions" }) as { success: boolean; data?: { viewportWidth?: number; viewportHeight?: number } }
+      : undefined
+    if (elemResult.data && dims?.success && dims.data?.viewportWidth && dims.data.viewportHeight) {
+      // `rect` answers with left/top in CSS pixels; passing it through gave
+      // the crop undefined x/y and a blank image.
+      const r = elemResult.data
+      clip = { x: r.left, y: r.top, width: r.width, height: r.height }
+      viewport = { width: dims.data.viewportWidth, height: dims.data.viewportHeight }
+    }
   }
 
   if (clip) {
-    const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip }) as {
+    const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip, viewport }) as {
       success: boolean; data?: string; error?: string
     }
     if (!cropResult.success) return { success: false, error: cropResult.error }
@@ -530,20 +641,17 @@ async function handlePixelScreenshot(
   const finalSize = Math.round((finalUrl.length - finalUrl.indexOf(",") - 1) * 0.75)
 
   if (action.save) {
-    return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true } }
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true })
   }
 
   if (clip) {
-    return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip } }
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip })
   }
 
   if (requestedFormat === "png" && finalSize > 800 * 1024) {
-    return {
-      success: true,
-      data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize, warning: "PNG exceeds 800KB — consider using JPEG or WebP for smaller responses" }
-    }
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, warning: "PNG exceeds 800KB — consider using JPEG or WebP for smaller responses" })
   }
-  return { success: true, data: { dataUrl: finalUrl, format: requestedFormat, size: finalSize } }
+  return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize })
 }
 
 // Post-capture transform for the pixel path. Applies downsample

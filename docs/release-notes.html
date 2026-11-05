@@ -26,6 +26,16 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.11">
+    <h2>Interceptor 2.1.11</h2>
+    <time datetime="2026-11-04">November 4, 2026</time>
+    <ul>
+      <li>The macOS bridge starts on macOS 15 again (#328). Since 2.1.5 it crashed at launch there because a Swift library it uses ships only with macOS 26 and later. The bridge now carries its own copy, and macOS 26 and later keep using the system one.</li>
+      <li><code>macos screenshot --window</code> takes the numeric <code>windowId</code> from <code>macos windows</code> and refuses anything else, such as the window's ref (#318). Before, a ref was ignored and the app's largest window was captured and reported as a success. Two <code>--save</code> captures in the same second no longer overwrite each other, and <code>--region</code>, which this command never supported, now says so instead of capturing another window.</li>
+      <li><code>eval --main</code> on pages with a strict content security policy no longer leaves a browser rule behind for every tab (#317). After about 5,000 tabs those rules made every such eval fail until the browser restarted. Interceptor now keeps one rule, removes closed tabs from it, and clears rules left by older versions when the extension starts.</li>
+      <li><code>screenshot --pixel</code> reports the error that actually stopped the capture instead of an unrelated <code>activeTab</code> message, along with whether the tab was visible (#329). Several pixel screenshots at once now wait their turn under Chrome's limit of two captures per second instead of failing, and <code>screenshot --pixel --element</code> crops the element again instead of returning a blank image.</li>
+    </ul>
+  </section>
   <section data-sparkle-version="2.1.10">
     <h2>Interceptor 2.1.10</h2>
     <time datetime="2026-11-04">November 4, 2026</time>

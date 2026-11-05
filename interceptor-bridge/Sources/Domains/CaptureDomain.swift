@@ -285,8 +285,7 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
 
                 if save {
                     let filename = "interceptor-macos-screenshot-\(Int(Date().timeIntervalSince1970)).\(ext)"
-                    let fileURL = resolveSaveURL(filename: filename, requestedCwd: requestedCwd)
-                    try data.write(to: fileURL)
+                    let fileURL = try Self.writeWithoutOverwriting(data, to: resolveSaveURL(filename: filename, requestedCwd: requestedCwd))
                     // when save:true, strip dataUrl from the response so
                     // downstream agents don't re-pay for the bytes inline. The filePath is
                     // sufficient — the agent can re-read the file when needed.
@@ -375,6 +374,26 @@ final class CaptureDomain: DomainHandler, @unchecked Sendable {
         CGImageDestinationAddImage(dest, cgImage, opts as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return mutableData as Data
+    }
+
+    /// Two saves in the same second used to share one name and the second replaced
+    /// the first (issue #318). The first name is unchanged; a taken name gets -2,
+    /// -3, ... before the extension. `.withoutOverwriting` makes the check and the
+    /// write one step, so concurrent saves cannot both claim a name.
+    static func writeWithoutOverwriting(_ data: Data, to url: URL) throws -> URL {
+        let dir = url.deletingLastPathComponent()
+        let base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        var candidate = url
+        for n in 2...1000 {
+            do {
+                try data.write(to: candidate, options: .withoutOverwriting)
+                return candidate
+            } catch let error as CocoaError where error.code == .fileWriteFileExists {
+                candidate = dir.appendingPathComponent(ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)", isDirectory: false)
+            }
+        }
+        throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: url.path])
     }
 
     private func resolveSaveURL(filename: String, requestedCwd: String?) -> URL {

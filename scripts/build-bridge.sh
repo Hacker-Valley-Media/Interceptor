@@ -107,6 +107,33 @@ else
   echo "WARN: Sparkle.framework not found at $SPARKLE_FRAMEWORK — auto-update will fail" >&2
 fi
 
+# issue #328: Swift 6.2+ toolchains link @rpath/libswiftCompatibilitySpan.dylib,
+# a back-deployment library that macOS 26+ ships in /usr/lib/swift and macOS 15
+# does not. Xcode embeds these in app bundles; SwiftPM does not, so 2.1.5+
+# bridges died at launch on macOS 15 (OS_REASON_DYLD). Embed what the binary
+# needs with Xcode's own tool, drop the toolchain rpaths SwiftPM recorded from
+# this build Mac so dyld resolves to /usr/lib/swift or Contents/Frameworks only,
+# and refuse to package a bridge whose @rpath dylibs are not in the bundle.
+APP_BINARY="$APP_DIR/Contents/MacOS/interceptor-bridge"
+xcrun swift-stdlib-tool --copy --scan-executable "$APP_BINARY" --platform macosx --destination "$APP_DIR/Contents/Frameworks"
+# otool prints "path <rpath> (offset N)"; keep the whole path, spaces included.
+otool -l "$APP_BINARY" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print }' | while IFS= read -r rpath; do
+  case "$rpath" in
+    @*|/usr/lib/*) ;;
+    *) if install_name_tool -delete_rpath "$rpath" "$APP_BINARY" 2>/dev/null; then echo "==> Removed build-machine rpath $rpath"; fi ;;
+  esac
+done
+# install_name_tool invalidated the linker signature; keep the binary launchable
+# even in INTERCEPTOR_SKIP_SIGNING builds (the real signature replaces this below).
+codesign --force --sign - "$APP_BINARY" 2>/dev/null || true
+for dep in $(otool -L "$APP_BINARY" | awk '$1 ~ /^@rpath\/.*\.dylib$/ { print $1 }'); do
+  if [ ! -f "$APP_DIR/Contents/Frameworks/${dep#@rpath/}" ]; then
+    echo "ERROR: interceptor-bridge loads $dep but it is not embedded in Contents/Frameworks; it would not launch on macOS 15" >&2
+    exit 1
+  fi
+  echo "==> Embedded $(basename "$dep")"
+done
+
 # Copy bundled Core ML models into the .app's Resources directory.
 # We put them under Contents/Resources/ (rather than letting SwiftPM
 # generate a nested resource bundle) because nested SwiftPM bundles lack
@@ -318,6 +345,15 @@ else
         "$SPARKLE_BUNDLE"
     fi
 
+    # Embedded back-deployment dylibs (issue #328) ship Apple-signed; library
+    # validation and notarization need our signature on them, before the binary.
+    for lib in "$APP_DIR"/Contents/Frameworks/*.dylib; do
+      [ -e "$lib" ] || continue
+      codesign --force --options runtime --timestamp \
+        --sign "$INTERCEPTOR_SIGNING_IDENTITY" \
+        "$lib"
+    done
+
     # Sign the inner binary first, then the bundle, with the same entitlements.
     codesign --force --options runtime --timestamp \
       --sign "$INTERCEPTOR_SIGNING_IDENTITY" \
@@ -340,6 +376,9 @@ else
     if [ -d "$APP_DIR/Contents/Frameworks/Sparkle.framework" ]; then
       codesign --force --deep --sign - "$APP_DIR/Contents/Frameworks/Sparkle.framework" 2>/dev/null || true
     fi
+    for lib in "$APP_DIR"/Contents/Frameworks/*.dylib; do
+      [ -e "$lib" ] && { codesign --force --sign - "$lib" 2>/dev/null || true; }
+    done
     codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_DIR/Contents/MacOS/interceptor-bridge" 2>/dev/null || true
     codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_DIR" 2>/dev/null || true
   fi
