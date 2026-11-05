@@ -74,7 +74,13 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
         const clipParts = filtered[filtered.indexOf("--clip") + 1].split(",").map(Number)
         ssAction.clip = { x: clipParts[0], y: clipParts[1], width: clipParts[2], height: clipParts[3] }
       }
-      if (filtered.includes("--element")) ssAction.element = parseInt(filtered[filtered.indexOf("--element") + 1])
+      if (filtered.includes("--element")) {
+        // "Capture element by ref": a ref such as e12 is a ref; only a bare number is the legacy index.
+        // parseInt turned e12 into NaN, which matched nothing.
+        const value = filtered[filtered.indexOf("--element") + 1] ?? ""
+        if (/^\d+$/.test(value)) ssAction.element = Number(value)
+        else ssAction.ref = normalizeRefArg(value)
+      }
       if (filtered.includes("--ref")) ssAction.ref = normalizeRefArg(filtered[filtered.indexOf("--ref") + 1])
       if (filtered.includes("--target-max-long-edge")) {
         const raw = filtered[filtered.indexOf("--target-max-long-edge") + 1]

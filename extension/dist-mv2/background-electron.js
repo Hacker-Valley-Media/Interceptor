@@ -1803,17 +1803,31 @@ async function handlePixelScreenshot(action, tabId) {
   const done = (data) => ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data });
   let clip = action.clip;
   let viewport;
-  if (!clip && action.element !== undefined) {
+  let partialElement = false;
+  if (!clip && (action.element !== undefined || typeof action.ref === "string" || typeof action.selector === "string")) {
     const elemResult = await sendToContentScript(tabId, {
       type: "rect",
-      index: action.element
+      index: action.element,
+      ref: action.ref,
+      selector: action.selector
     });
-    const dims = elemResult.success && elemResult.data ? await sendToContentScript(tabId, { type: "get_page_dimensions" }) : undefined;
-    if (elemResult.data && dims?.success && dims.data?.viewportWidth && dims.data.viewportHeight) {
-      const r = elemResult.data;
-      clip = { x: r.left, y: r.top, width: r.width, height: r.height };
-      viewport = { width: dims.data.viewportWidth, height: dims.data.viewportHeight };
+    if (!elemResult.success || !elemResult.data) {
+      return { success: false, error: `element not found for the pixel crop: ${elemResult.error ?? "no rect"}` };
     }
+    const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" });
+    if (!dims.success || !dims.data?.viewportWidth || !dims.data.viewportHeight) {
+      return { success: false, error: "could not read the page's viewport size for the pixel crop" };
+    }
+    const r = elemResult.data;
+    const vw = dims.data.viewportWidth, vh = dims.data.viewportHeight;
+    const left = Math.max(0, r.left), top = Math.max(0, r.top);
+    const right = Math.min(vw, r.left + r.width), bottom = Math.min(vh, r.top + r.height);
+    if (right <= left || bottom <= top) {
+      return { success: false, error: "the element is outside the visible viewport, and --pixel captures only what is on screen; scroll it into view first, or drop --pixel (the default screenshot captures off-screen elements)" };
+    }
+    clip = { x: left, y: top, width: right - left, height: bottom - top };
+    partialElement = right - left < r.width || bottom - top < r.height;
+    viewport = { width: vw, height: vh };
   }
   if (clip) {
     const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip, viewport });
@@ -1827,10 +1841,10 @@ async function handlePixelScreenshot(action, tabId) {
   const finalUrl = transformed.dataUrl;
   const finalSize = Math.round((finalUrl.length - finalUrl.indexOf(",") - 1) * 0.75);
   if (action.save) {
-    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true });
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, save: true, ...partialElement ? { partial: true } : {} });
   }
   if (clip) {
-    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip });
+    return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, clip, ...partialElement ? { partial: true } : {} });
   }
   if (requestedFormat === "png" && finalSize > 800 * 1024) {
     return done({ dataUrl: finalUrl, format: requestedFormat, size: finalSize, warning: "PNG exceeds 800KB — consider using JPEG or WebP for smaller responses" });

@@ -72,6 +72,13 @@ describe("screenshot CLI flag parsing", () => {
       .toThrow("pass the file with --out <path>")
   })
 
+  test("--element takes a ref (or a bare number as the legacy index); e12 used to parse to NaN", () => {
+    expect(parseScreenshotCommand(["screenshot", "--element", "e12"])).toMatchObject({ type: "screenshot", ref: "e12" })
+    expect((parseScreenshotCommand(["screenshot", "--element", "e12"]) as Record<string, unknown>).element).toBeUndefined()
+    expect(parseScreenshotCommand(["screenshot", "--element", "[e5]"])).toMatchObject({ ref: "e5" })
+    expect(parseScreenshotCommand(["screenshot", "--element", "3"])).toMatchObject({ element: 3 })
+  })
+
   test("positional rejection exits before creating a screenshot file", () => {
     const dir = mkdtempSync(join(tmpdir(), "interceptor-screenshot-arg-"))
     try {

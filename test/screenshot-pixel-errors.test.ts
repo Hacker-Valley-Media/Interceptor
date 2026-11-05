@@ -148,6 +148,47 @@ describe("--pixel keeps the captureVisibleTab error (issue #329)", () => {
     expect(result.data.clip).toEqual({ x: 10, y: 20, width: 30, height: 40 })
   })
 
+  test("--pixel --ref looks the element up by ref and fails when it is not found instead of returning the whole viewport", async () => {
+    captureErrors = [null]
+    const chrome = g.chrome as Record<string, any>
+    chrome.runtime.lastError = undefined
+    const rectRequests: unknown[] = []
+    let found = true
+    chrome.tabs.sendMessage = (_tab: number, msg: { action: Record<string, unknown> }, _opts: unknown, reply: (r: unknown) => void) => {
+      if (msg.action.type === "rect") {
+        rectRequests.push({ ref: msg.action.ref, selector: msg.action.selector })
+        reply(found ? { success: true, data: { left: 1, top: 2, width: 3, height: 4 } } : { success: false, error: "element not found" })
+      } else reply({ success: true, data: { viewportWidth: 100, viewportHeight: 50 } })
+    }
+    chrome.runtime.sendMessage = (_m: unknown, reply?: (v: unknown) => void) => { const r = { success: true, data: "data:image/jpeg;base64,EEEE" }; reply?.(r); return Promise.resolve(r) }
+    const ok = await handleScreenshotActions({ type: "screenshot", pixel: true, ref: "e12" }, 7) as { success: boolean; data: Record<string, unknown> }
+    expect(ok.success).toBe(true)
+    expect(ok.data.clip).toEqual({ x: 1, y: 2, width: 3, height: 4 })
+    found = false
+    const missing = await handleScreenshotActions({ type: "screenshot", pixel: true, selector: "#nope" }, 8) as { success: boolean; error: string }
+    expect(missing.success).toBe(false)
+    expect(missing.error).toContain("element not found for the pixel crop")
+    expect(rectRequests).toEqual([{ ref: "e12", selector: undefined }, { ref: undefined, selector: "#nope" }])
+  })
+
+  test("--pixel element crops keep to the visible viewport: partial when cut, refused when off screen", async () => {
+    captureErrors = [null]
+    const chrome = g.chrome as Record<string, any>
+    chrome.runtime.lastError = undefined
+    let rect = { left: 90, top: 40, width: 30, height: 20 }
+    chrome.tabs.sendMessage = (_tab: number, msg: { action: Record<string, unknown> }, _opts: unknown, reply: (r: unknown) => void) => {
+      reply(msg.action.type === "rect" ? { success: true, data: rect } : { success: true, data: { viewportWidth: 100, viewportHeight: 50 } })
+    }
+    chrome.runtime.sendMessage = (_m: unknown, reply?: (v: unknown) => void) => { const r = { success: true, data: "data:image/jpeg;base64,FFFF" }; reply?.(r); return Promise.resolve(r) }
+    const cut = await handleScreenshotActions({ type: "screenshot", pixel: true, ref: "e1" }, 7) as { success: boolean; data: Record<string, unknown> }
+    expect(cut.success).toBe(true)
+    expect(cut.data).toMatchObject({ clip: { x: 90, y: 40, width: 10, height: 10 }, partial: true })
+    rect = { left: 10, top: 80, width: 30, height: 20 }
+    const below = await handleScreenshotActions({ type: "screenshot", pixel: true, ref: "e1" }, 8) as { success: boolean; error: string }
+    expect(below.success).toBe(false)
+    expect(below.error).toContain("outside the visible viewport")
+  })
+
   test("a tab switch during the pacing wait refuses instead of capturing another page", async () => {
     captureErrors = [null]
     const chrome = g.chrome as Record<string, any>
