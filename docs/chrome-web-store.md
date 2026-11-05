@@ -151,7 +151,7 @@ How the two copies reach the daemon: both open the localhost WebSocket at startu
 ## 6. Review risks to expect
 
 - Twenty-seven permissions plus `<all_urls>` and MAIN-world content scripts on every frame. The table above answers each one; keep it current.
-- CSP and CORS header removal through declarativeNetRequest reads as circumventing site security. The justification is that it is scoped to one tab the user's own agent is instrumenting, applied only after a command fails, and removed with the session rule.
+- CSP and CORS header removal through declarativeNetRequest reads as circumventing site security. The justification is that it is scoped to the tabs the user's own agent is instrumenting, applied only after a command fails, and a tab leaves the session rule when it closes.
 - `(0, eval)` in the injected function is the fallback when userScripts is off. Expect a question; the answer is the userScripts-first order in `capabilities/evaluate.ts`.
 - Reviews of a Manifest V3 extension normally complete within three days. Escalate through developer support after two weeks.
 

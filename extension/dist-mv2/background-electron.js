@@ -1394,6 +1394,25 @@ function withCaptureTimeout(operation, p, ms = CAPTURE_TIMEOUT_MS) {
     });
   });
 }
+var CAPTURE_VISIBLE_TAB_INTERVAL_MS = 510;
+var nextCaptureSlot = 0;
+async function waitForCaptureSlot() {
+  const now = Date.now();
+  const slot = Math.max(now, nextCaptureSlot);
+  nextCaptureSlot = slot + CAPTURE_VISIBLE_TAB_INTERVAL_MS;
+  if (slot > now)
+    await new Promise((resolve) => setTimeout(resolve, slot - now));
+}
+async function tabVisibilityState(tabId) {
+  try {
+    const read = chrome.scripting.executeScript({ target: { tabId }, func: () => document.visibilityState }).then((results) => results?.[0]?.result, () => {
+      return;
+    });
+    return await Promise.race([read, new Promise((resolve) => setTimeout(() => resolve(undefined), 1000))]);
+  } catch {
+    return;
+  }
+}
 function mimeTypeForFormat(format) {
   if (format === "webp")
     return "image/webp";
@@ -1650,6 +1669,7 @@ async function handlePixelScreenshot(action, tabId) {
         await new Promise((r) => setTimeout(r, 150));
         let stripUrl;
         try {
+          await waitForCaptureSlot();
           stripUrl = await withCaptureTimeout(`captureVisibleTab(strip ${i + 1}/${stripCount})`, chrome.tabs.captureVisibleTab(fullTab.windowId, { format: captureFormat, quality }));
         } catch (err) {
           await sendToContentScript(tabId, { type: "scroll_absolute", y: origScrollY }).catch(() => {
@@ -1713,20 +1733,30 @@ async function handlePixelScreenshot(action, tabId) {
   }
   let dataUrl;
   try {
-    dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, () => withCaptureTimeout("captureVisibleTab", chrome.tabs.captureVisibleTab(targetTab.windowId, { format: captureFormat, quality })));
+    dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
+      await waitForCaptureSlot();
+      return withCaptureTimeout("captureVisibleTab", chrome.tabs.captureVisibleTab(targetTab.windowId, { format: captureFormat, quality }));
+    });
   } catch (err) {
     if (err instanceof CaptureTimeoutError) {
       return {
         success: false,
         error: `captureVisibleTab timed out after ${err.timeoutMs}ms`,
-        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation }
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation, visibilityState: await tabVisibilityState(tabId) }
       };
     }
+    const captureError = err?.message || String(err);
     const fallback = await handleScreenshotBackground({ type: "screenshot_background", format: action.format, quality: action.quality }, tabId);
     if (fallback.success && fallback.data) {
       fallback.data.fallback = "tabCapture (captureVisibleTab failed)";
+      return fallback;
     }
-    return fallback;
+    const fallbackError = (fallback.error ?? "unknown error").replace(/^tabCapture failed: /, "");
+    return {
+      success: false,
+      error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
+      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState: await tabVisibilityState(tabId), fallbackError }
+    };
   }
   let clip = action.clip;
   if (!clip && action.element !== undefined) {
@@ -3293,8 +3323,60 @@ async function handleHeaderActions(action, _tabId) {
   return { success: true };
 }
 
+// extension/src/background/session-rules.ts
+var queue = Promise.resolve();
+function withSessionRules(fn) {
+  const run = queue.then(fn);
+  queue = run.catch(() => {
+    return;
+  });
+  return run;
+}
+function planSessionRulePrune(rules, isOpen) {
+  const removeRuleIds = [];
+  const addRules = [];
+  for (const rule of rules) {
+    const tabIds = rule.condition?.tabIds;
+    if (!tabIds?.length)
+      continue;
+    const keep = tabIds.filter((id) => id < 0 || isOpen(id));
+    if (keep.length === tabIds.length)
+      continue;
+    removeRuleIds.push(rule.id);
+    if (keep.length)
+      addRules.push({ ...rule, condition: { ...rule.condition, tabIds: keep } });
+  }
+  return { removeRuleIds, addRules };
+}
+async function prune(isOpen) {
+  const plan = planSessionRulePrune(await chrome.declarativeNetRequest.getSessionRules(), isOpen);
+  if (plan.removeRuleIds.length)
+    await chrome.declarativeNetRequest.updateSessionRules(plan);
+}
+function pruneClosedTab(tabId) {
+  return withSessionRules(() => prune((id) => id !== tabId));
+}
+function pruneSessionRulesForClosedTabs() {
+  return withSessionRules(async () => {
+    const open = new Set((await chrome.tabs.query({})).map((tab) => tab.id));
+    await prune((id) => open.has(id));
+  });
+}
+function registerSessionRuleCleanup() {
+  try {
+    chrome.tabs?.onRemoved?.addListener((tabId) => {
+      pruneClosedTab(tabId).catch(() => {
+        return;
+      });
+    });
+    pruneSessionRulesForClosedTabs().catch(() => {
+      return;
+    });
+  } catch {}
+}
+
 // extension/src/background/capabilities/evaluate.ts
-var CSP_BYPASS_RULE_ID_BASE = 910000;
+var CSP_BYPASS_RULE_ID = 910000;
 function isTrustedTypesError(error) {
   if (!error)
     return false;
@@ -3312,9 +3394,9 @@ function isCspEvalError(error) {
     return false;
   return isTrustedTypesError(error) || isCspUnsafeEvalError(error);
 }
-function buildCspBypassRule(tabId) {
+function buildCspBypassRule(tabIds) {
   return {
-    id: CSP_BYPASS_RULE_ID_BASE + tabId,
+    id: CSP_BYPASS_RULE_ID,
     priority: 10,
     action: {
       type: "modifyHeaders",
@@ -3324,7 +3406,7 @@ function buildCspBypassRule(tabId) {
       ]
     },
     condition: {
-      tabIds: [tabId],
+      tabIds,
       resourceTypes: ["main_frame", "sub_frame"]
     }
   };
@@ -3465,11 +3547,18 @@ async function executeEval(tabId, world, code, frameId) {
   const first = frameId === undefined ? results[0] : results.find((r) => r.frameId === frameId) ?? (results.length === 1 && results[0]?.frameId === undefined ? results[0] : undefined);
   return first?.result ?? { success: false, error: `no result for frame ${frameId ?? 0}` };
 }
-async function installCspBypassForTab(tabId) {
-  const rule = buildCspBypassRule(tabId);
-  await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: [rule.id],
-    addRules: [rule]
+function installCspBypassForTab(tabId) {
+  return withSessionRules(async () => {
+    const dnr = chrome.declarativeNetRequest;
+    const rules = typeof dnr.getSessionRules === "function" ? await dnr.getSessionRules() : [];
+    const tabIds = rules.find((rule2) => rule2.id === CSP_BYPASS_RULE_ID)?.condition?.tabIds ?? [];
+    if (tabIds.includes(tabId))
+      return;
+    const rule = buildCspBypassRule([...tabIds, tabId]);
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [rule.id],
+      addRules: [rule]
+    });
   });
 }
 async function reloadTabForCspRetry(tabId) {
@@ -5445,6 +5534,7 @@ function initializeActionRouter() {
   registerMonitorListeners();
   restorePageCommCaptureConfig();
   registerKeepaliveListeners();
+  registerSessionRuleCleanup();
 }
 var OS_INPUT_ACTIONS = new Set(["os_click", "os_key", "os_type", "os_move", "os_receipt", "os_detach", "os_return"]);
 var SCREENSHOT_ACTIONS = new Set(["screenshot", "screenshot_background", "page_capture", "ocr"]);
