@@ -77,6 +77,7 @@ describe("screenshot CLI flag parsing", () => {
     expect((parseScreenshotCommand(["screenshot", "--element", "e12"]) as Record<string, unknown>).element).toBeUndefined()
     expect(parseScreenshotCommand(["screenshot", "--element", "[e5]"])).toMatchObject({ ref: "e5" })
     expect(parseScreenshotCommand(["screenshot", "--element", "3"])).toMatchObject({ element: 3 })
+    expect(parseScreenshotCommand(["ocr", "--element", "e12"])).toMatchObject({ type: "ocr", ref: "e12" })
   })
 
   test("positional rejection exits before creating a screenshot file", () => {

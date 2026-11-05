@@ -1679,6 +1679,16 @@ async function handlePixelScreenshot(action, tabId) {
   const captureFormat = requestedFormat === "webp" ? "png" : requestedFormat;
   const quality = action.quality || 50;
   const targetMaxLongEdge = typeof action.target_max_long_edge === "number" ? action.target_max_long_edge : undefined;
+  const namesElement = action.element !== undefined || typeof action.ref === "string" || typeof action.selector === "string";
+  if (action.region !== undefined) {
+    return { success: false, error: "--pixel cannot crop to --region; drop --pixel (the default screenshot crops regions)" };
+  }
+  if (namesElement && action.full) {
+    return { success: false, error: "--pixel --full cannot crop to an element; drop --full to crop the element's on-screen part, or drop --pixel" };
+  }
+  if (namesElement && action.frameId !== undefined) {
+    return { success: false, error: "--pixel cannot crop to an element inside a frame" };
+  }
   if (action.full) {
     const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" });
     if (!dims.success || !dims.data)
@@ -1765,6 +1775,34 @@ async function handlePixelScreenshot(action, tabId) {
       data: { hint: VISIBILITY_HINT, layer: "preflight", windowState: targetWindow.state }
     };
   }
+  let clip = action.clip;
+  let viewport;
+  let partialElement = false;
+  if (!clip && (action.element !== undefined || typeof action.ref === "string" || typeof action.selector === "string")) {
+    const elemResult = await sendToContentScript(tabId, {
+      type: "rect",
+      index: action.element,
+      ref: action.ref,
+      selector: action.selector
+    });
+    if (!elemResult.success || !elemResult.data) {
+      return { success: false, error: `element not found for the pixel crop: ${elemResult.error ?? "no rect"}` };
+    }
+    const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" });
+    if (!dims.success || !dims.data?.viewportWidth || !dims.data.viewportHeight) {
+      return { success: false, error: "could not read the page's viewport size for the pixel crop" };
+    }
+    const r = elemResult.data;
+    const vw = dims.data.viewportWidth, vh = dims.data.viewportHeight;
+    const left = Math.max(0, r.left), top = Math.max(0, r.top);
+    const right = Math.min(vw, r.left + r.width), bottom = Math.min(vh, r.top + r.height);
+    if (right - left < 1 || bottom - top < 1) {
+      return { success: false, error: "the element has no visible area on screen, and --pixel captures only what is on screen; scroll it into view first, or drop --pixel (the default screenshot captures off-screen elements)" };
+    }
+    clip = { x: left, y: top, width: right - left, height: bottom - top };
+    partialElement = right - left < r.width || bottom - top < r.height;
+    viewport = { width: vw, height: vh };
+  }
   let dataUrl;
   let visibilityState;
   let fallbackNote;
@@ -1801,34 +1839,6 @@ async function handlePixelScreenshot(action, tabId) {
     fallbackNote = "tabCapture (captureVisibleTab failed)";
   }
   const done = (data) => ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data });
-  let clip = action.clip;
-  let viewport;
-  let partialElement = false;
-  if (!clip && (action.element !== undefined || typeof action.ref === "string" || typeof action.selector === "string")) {
-    const elemResult = await sendToContentScript(tabId, {
-      type: "rect",
-      index: action.element,
-      ref: action.ref,
-      selector: action.selector
-    });
-    if (!elemResult.success || !elemResult.data) {
-      return { success: false, error: `element not found for the pixel crop: ${elemResult.error ?? "no rect"}` };
-    }
-    const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" });
-    if (!dims.success || !dims.data?.viewportWidth || !dims.data.viewportHeight) {
-      return { success: false, error: "could not read the page's viewport size for the pixel crop" };
-    }
-    const r = elemResult.data;
-    const vw = dims.data.viewportWidth, vh = dims.data.viewportHeight;
-    const left = Math.max(0, r.left), top = Math.max(0, r.top);
-    const right = Math.min(vw, r.left + r.width), bottom = Math.min(vh, r.top + r.height);
-    if (right <= left || bottom <= top) {
-      return { success: false, error: "the element is outside the visible viewport, and --pixel captures only what is on screen; scroll it into view first, or drop --pixel (the default screenshot captures off-screen elements)" };
-    }
-    clip = { x: left, y: top, width: right - left, height: bottom - top };
-    partialElement = right - left < r.width || bottom - top < r.height;
-    viewport = { width: vw, height: vh };
-  }
   if (clip) {
     const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip, viewport });
     if (!cropResult.success)

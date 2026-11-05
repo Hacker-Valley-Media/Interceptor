@@ -186,7 +186,44 @@ describe("--pixel keeps the captureVisibleTab error (issue #329)", () => {
     rect = { left: 10, top: 80, width: 30, height: 20 }
     const below = await handleScreenshotActions({ type: "screenshot", pixel: true, ref: "e1" }, 8) as { success: boolean; error: string }
     expect(below.success).toBe(false)
-    expect(below.error).toContain("outside the visible viewport")
+    expect(below.error).toContain("no visible area on screen")
+  })
+
+  test("targets --pixel cannot honor refuse up front, before any capture or tab switch", async () => {
+    captureErrors = [null]
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ region: { x: 0, y: 0, width: 10, height: 10 } }, "cannot crop to --region"],
+      [{ ref: "e3", full: true }, "--full cannot crop to an element"],
+      [{ selector: "p", frameId: 2 }, "inside a frame"],
+    ]
+    for (const [extra, message] of cases) {
+      const result = await handleScreenshotActions({ type: "screenshot", pixel: true, ...extra }, 7) as { success: boolean; error: string }
+      expect(result.success).toBe(false)
+      expect(result.error).toContain(message)
+    }
+    expect(captureCalls).toHaveLength(0)
+    expect(events.filter(e => e.startsWith("activate"))).toEqual([])
+  })
+
+  test("a missing or zero-size element refuses before the capture borrows the tab", async () => {
+    captureErrors = [null]
+    windowOf = () => 1
+    activeByWindow.set(1, 100)
+    const chrome = g.chrome as Record<string, any>
+    chrome.runtime.lastError = undefined
+    let rect: unknown = null
+    chrome.tabs.sendMessage = (_tab: number, msg: { action: Record<string, unknown> }, _opts: unknown, reply: (r: unknown) => void) => {
+      if (msg.action.type === "rect") reply(rect ? { success: true, data: rect } : { success: false, error: "element not found" })
+      else reply({ success: true, data: { viewportWidth: 100, viewportHeight: 50 } })
+    }
+    const missing = await handleScreenshotActions({ type: "screenshot", pixel: true, ref: "e9" }, 200) as { success: boolean; error: string }
+    expect(missing.error).toContain("element not found for the pixel crop")
+    rect = { left: 10, top: 10, width: 0, height: 0 }
+    const empty = await handleScreenshotActions({ type: "screenshot", pixel: true, ref: "e9" }, 200) as { success: boolean; error: string }
+    expect(empty.error).toContain("no visible area on screen")
+    expect(captureCalls).toHaveLength(0)
+    expect(events.filter(e => e.startsWith("activate"))).toEqual([])
+    expect(activeByWindow.get(1)).toBe(100)
   })
 
   test("a tab switch during the pacing wait refuses instead of capturing another page", async () => {
