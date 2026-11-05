@@ -10,15 +10,15 @@ describe("evaluate CSP fallback helpers", () => {
     expect(isCspEvalError("ReferenceError: foo is not defined")).toBe(false)
   })
 
-  test("builds a tab-scoped session rule that strips CSP response headers", () => {
-    const rule = buildCspBypassRule(321)
-    expect(rule.id).toBe(910321)
+  test("builds one shared session rule that strips CSP response headers for the listed tabs", () => {
+    const rule = buildCspBypassRule([321, 654])
+    expect(rule.id).toBe(910000)
     expect(rule.action.type).toBe("modifyHeaders")
     expect(rule.action.responseHeaders).toEqual([
       { header: "content-security-policy", operation: "remove" },
       { header: "content-security-policy-report-only", operation: "remove" }
     ])
-    expect(rule.condition.tabIds).toEqual([321])
+    expect(rule.condition.tabIds).toEqual([321, 654])
     expect(rule.condition.resourceTypes).toEqual(["main_frame", "sub_frame"])
   })
 })
