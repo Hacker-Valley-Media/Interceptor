@@ -29,6 +29,34 @@ function withCaptureTimeout<T>(operation: string, p: Promise<T>, ms = CAPTURE_TI
   })
 }
 
+// Chrome allows MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND (2) captureVisibleTab
+// calls per second per extension and refuses the rest with "This request
+// exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota." (issue #329:
+// four concurrent --pixel calls lost two or three). Each call reserves the next
+// slot at least this far after the previous one, across every window. Callers
+// wait right before the call, inside the focus borrow, so the spacing is
+// between the real calls.
+export const CAPTURE_VISIBLE_TAB_INTERVAL_MS = 510
+let nextCaptureSlot = 0
+
+export async function waitForCaptureSlot(): Promise<void> {
+  const now = Date.now()
+  const slot = Math.max(now, nextCaptureSlot)
+  nextCaptureSlot = slot + CAPTURE_VISIBLE_TAB_INTERVAL_MS
+  if (slot > now) await new Promise(resolve => setTimeout(resolve, slot - now))
+}
+
+/** The tab's document.visibilityState for error reports; undefined when it cannot be read within a second. */
+async function tabVisibilityState(tabId: number): Promise<string | undefined> {
+  try {
+    const read = chrome.scripting.executeScript({ target: { tabId }, func: () => document.visibilityState })
+      .then(results => results?.[0]?.result as string | undefined, () => undefined)
+    return await Promise.race([read, new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 1000))])
+  } catch {
+    return undefined
+  }
+}
+
 function mimeTypeForFormat(format: string): string {
   if (format === "webp") return "image/webp"
   if (format === "png") return "image/png"
@@ -398,6 +426,7 @@ async function handlePixelScreenshot(
         await new Promise(r => setTimeout(r, 150))
         let stripUrl: string
         try {
+          await waitForCaptureSlot()
           stripUrl = await withCaptureTimeout(
             `captureVisibleTab(strip ${i + 1}/${stripCount})`,
             chrome.tabs.captureVisibleTab(fullTab.windowId, { format: captureFormat, quality })
@@ -482,28 +511,39 @@ async function handlePixelScreenshot(
   try {
     // Same borrow-and-restore as the strip path. One brief flash for a single
     // capture is the cost of background-first defaults.
-    dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, () =>
-      withCaptureTimeout(
+    dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
+      await waitForCaptureSlot()
+      return withCaptureTimeout(
         "captureVisibleTab",
         chrome.tabs.captureVisibleTab(targetTab.windowId, { format: captureFormat, quality })
       )
-    )
+    })
   } catch (err) {
     if (err instanceof CaptureTimeoutError) {
       return {
         success: false,
         error: `captureVisibleTab timed out after ${err.timeoutMs}ms`,
-        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation }
+        data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", timedOutAt: err.operation, visibilityState: await tabVisibilityState(tabId) }
       }
     }
+    const captureError = (err as Error)?.message || String(err)
     const fallback = await handleScreenshotBackground(
       { type: "screenshot_background", format: action.format, quality: action.quality },
       tabId
     )
     if (fallback.success && fallback.data) {
       (fallback.data as Record<string, unknown>).fallback = "tabCapture (captureVisibleTab failed)"
+      return fallback
     }
-    return fallback
+    // tabCapture needs an activeTab grant only a person can give, so from the
+    // daemon it almost always fails. Lead with the error that explains the
+    // failure; returning only the fallback's hid it (issue #329).
+    const fallbackError = (fallback.error ?? "unknown error").replace(/^tabCapture failed: /, "")
+    return {
+      success: false,
+      error: `captureVisibleTab failed: ${captureError} (the tabCapture fallback also failed: ${fallbackError})`,
+      data: { hint: VISIBILITY_HINT, layer: "captureVisibleTab", visibilityState: await tabVisibilityState(tabId), fallbackError }
+    }
   }
 
   let clip = action.clip as { x: number; y: number; width: number; height: number } | undefined
