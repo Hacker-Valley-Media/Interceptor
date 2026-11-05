@@ -1409,22 +1409,32 @@ function waitForCaptureTurn() {
   nextCaptureTurn = turn + CAPTURE_VISIBLE_TAB_INTERVAL_MS;
   return sleepUntil(turn - BORROW_LEAD_MS);
 }
-function paceCaptureCall() {
+function paceCaptureCall(beforeCall) {
   const turn = captureCallChain.then(async () => {
     await sleepUntil(lastCaptureCall + CAPTURE_VISIBLE_TAB_INTERVAL_MS);
+    await beforeCall?.();
     lastCaptureCall = performance.now();
   });
-  captureCallChain = turn;
+  captureCallChain = turn.catch(() => {
+    return;
+  });
   return turn;
 }
-async function captureVisibleTabPaced(windowId, options, operation) {
-  await paceCaptureCall();
+async function assertTargetActive(tabId, windowId) {
+  const [active] = await chrome.tabs.query({ active: true, windowId });
+  if (active?.id !== tabId) {
+    throw new Error(`tab ${tabId} is no longer the active tab of window ${windowId} (active is ${active?.id ?? "none"}); refusing to capture a different page.`);
+  }
+}
+async function captureVisibleTabPaced(tabId, windowId, options, operation) {
+  const check = () => assertTargetActive(tabId, windowId);
+  await paceCaptureCall(check);
   try {
     return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options));
   } catch (err) {
     if (!QUOTA_ERROR.test(err?.message ?? ""))
       throw err;
-    await paceCaptureCall();
+    await paceCaptureCall(check);
     return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options));
   }
 }
@@ -1694,7 +1704,7 @@ async function handlePixelScreenshot(action, tabId) {
         await new Promise((r) => setTimeout(r, 150));
         let stripUrl;
         try {
-          stripUrl = await captureVisibleTabPaced(fullTab.windowId, { format: captureFormat, quality }, `captureVisibleTab(strip ${i + 1}/${stripCount})`);
+          stripUrl = await captureVisibleTabPaced(tabId, fullTab.windowId, { format: captureFormat, quality }, `captureVisibleTab(strip ${i + 1}/${stripCount})`);
         } catch (err) {
           await sendToContentScript(tabId, { type: "scroll_absolute", y: origScrollY }).catch(() => {
             return;
@@ -1762,7 +1772,7 @@ async function handlePixelScreenshot(action, tabId) {
     await waitForCaptureTurn();
     dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
       try {
-        return await captureVisibleTabPaced(targetTab.windowId, { format: captureFormat, quality }, "captureVisibleTab");
+        return await captureVisibleTabPaced(tabId, targetTab.windowId, { format: captureFormat, quality }, "captureVisibleTab");
       } catch (err) {
         visibilityState = await tabVisibilityState(tabId);
         throw err;
@@ -1792,20 +1802,21 @@ async function handlePixelScreenshot(action, tabId) {
   }
   const done = (data) => ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data });
   let clip = action.clip;
+  let viewport;
   if (!clip && action.element !== undefined) {
     const elemResult = await sendToContentScript(tabId, {
       type: "rect",
       index: action.element
     });
-    if (elemResult.success && elemResult.data) {
-      const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" });
-      const scale = dims.success && dims.data?.devicePixelRatio || 1;
+    const dims = elemResult.success && elemResult.data ? await sendToContentScript(tabId, { type: "get_page_dimensions" }) : undefined;
+    if (elemResult.data && dims?.success && dims.data?.viewportWidth && dims.data.viewportHeight) {
       const r = elemResult.data;
-      clip = { x: Math.round(r.left * scale), y: Math.round(r.top * scale), width: Math.round(r.width * scale), height: Math.round(r.height * scale) };
+      clip = { x: r.left, y: r.top, width: r.width, height: r.height };
+      viewport = { width: dims.data.viewportWidth, height: dims.data.viewportHeight };
     }
   }
   if (clip) {
-    const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip });
+    const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip, viewport });
     if (!cropResult.success)
       return { success: false, error: cropResult.error };
     dataUrl = cropResult.data;

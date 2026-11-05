@@ -125,7 +125,7 @@ describe("--pixel keeps the captureVisibleTab error (issue #329)", () => {
     }
   })
 
-  test("--element crops the element's rect, converted to x/y in device pixels", async () => {
+  test("--element crops the element's rect: x/y in CSS pixels plus the viewport the crop scales against", async () => {
     captureErrors = [null]
     const chrome = g.chrome as Record<string, any>
     chrome.runtime.lastError = undefined
@@ -135,17 +135,30 @@ describe("--pixel keeps the captureVisibleTab error (issue #329)", () => {
         ? { success: true, data: { left: 10, top: 20, width: 30, height: 40, bottom: 60, right: 40 } }
         : { success: true, data: { devicePixelRatio: 2, viewportWidth: 800, viewportHeight: 600 } })
     }
-    const crops: Array<Record<string, number>> = []
-    chrome.runtime.sendMessage = (message: { type?: string; clip?: Record<string, number> }, reply?: (value: unknown) => void) => {
-      if (message.type === "crop") crops.push(message.clip!)
+    const crops: unknown[] = []
+    chrome.runtime.sendMessage = (message: { type?: string; clip?: Record<string, number>; viewport?: Record<string, number> }, reply?: (value: unknown) => void) => {
+      if (message.type === "crop") crops.push({ clip: message.clip, viewport: message.viewport })
       const answer = { success: true, data: "data:image/jpeg;base64,DDDD" }
       reply?.(answer)
       return Promise.resolve(answer)
     }
     const result = await handleScreenshotActions({ type: "screenshot", pixel: true, element: 3 }, 7) as { success: boolean; data: Record<string, unknown> }
     expect(result.success).toBe(true)
-    expect(crops).toEqual([{ x: 20, y: 40, width: 60, height: 80 }])
-    expect(result.data.clip).toEqual({ x: 20, y: 40, width: 60, height: 80 })
+    expect(crops).toEqual([{ clip: { x: 10, y: 20, width: 30, height: 40 }, viewport: { width: 800, height: 600 } }])
+    expect(result.data.clip).toEqual({ x: 10, y: 20, width: 30, height: 40 })
+  })
+
+  test("a tab switch during the pacing wait refuses instead of capturing another page", async () => {
+    captureErrors = [null]
+    const chrome = g.chrome as Record<string, any>
+    const query = chrome.tabs.query
+    let calls = 0
+    // The target is already active, so the borrow checks once; by the in-turn check the user has switched to tab 555.
+    chrome.tabs.query = async (q: { windowId?: number }) => (++calls <= 1 ? query(q) : [{ id: 555, windowId: q.windowId, active: true }])
+    const result = await handleScreenshotActions({ type: "screenshot", pixel: true }, 7) as { success: boolean; error: string }
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("no longer the active tab")
+    expect(captureCalls).toHaveLength(0)
   })
 
   test("a quota refusal gets one more paced turn instead of failing", async () => {

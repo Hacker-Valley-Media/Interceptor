@@ -57,23 +57,37 @@ export function waitForCaptureTurn(): Promise<void> {
   return sleepUntil(turn - BORROW_LEAD_MS)
 }
 
-/** Start captureVisibleTab calls one at a time, at least the interval apart. */
-export function paceCaptureCall(): Promise<void> {
+/**
+ * Start captureVisibleTab calls one at a time, at least the interval apart.
+ * `beforeCall` runs inside the turn, after the wait; the turn counts only when
+ * it passes, so a refused call does not delay the next one.
+ */
+export function paceCaptureCall(beforeCall?: () => Promise<void>): Promise<void> {
   const turn = captureCallChain.then(async () => {
     await sleepUntil(lastCaptureCall + CAPTURE_VISIBLE_TAB_INTERVAL_MS)
+    await beforeCall?.()
     lastCaptureCall = performance.now()
   })
-  captureCallChain = turn
+  captureCallChain = turn.catch(() => undefined)
   return turn
 }
 
-async function captureVisibleTabPaced(windowId: number, options: chrome.extensionTypes.ImageDetails, operation: string): Promise<string> {
-  await paceCaptureCall()
+/** captureVisibleTab reads the window's active tab; refuse when the target stopped being it during the wait. */
+async function assertTargetActive(tabId: number, windowId: number): Promise<void> {
+  const [active] = await chrome.tabs.query({ active: true, windowId })
+  if (active?.id !== tabId) {
+    throw new Error(`tab ${tabId} is no longer the active tab of window ${windowId} (active is ${active?.id ?? "none"}); refusing to capture a different page.`)
+  }
+}
+
+async function captureVisibleTabPaced(tabId: number, windowId: number, options: chrome.extensionTypes.ImageDetails, operation: string): Promise<string> {
+  const check = () => assertTargetActive(tabId, windowId)
+  await paceCaptureCall(check)
   try {
     return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options))
   } catch (err) {
     if (!QUOTA_ERROR.test((err as Error)?.message ?? "")) throw err
-    await paceCaptureCall()
+    await paceCaptureCall(check)
     return await withCaptureTimeout(operation, chrome.tabs.captureVisibleTab(windowId, options))
   }
 }
@@ -459,6 +473,7 @@ async function handlePixelScreenshot(
         let stripUrl: string
         try {
           stripUrl = await captureVisibleTabPaced(
+            tabId,
             fullTab.windowId,
             { format: captureFormat, quality },
             `captureVisibleTab(strip ${i + 1}/${stripCount})`
@@ -553,7 +568,7 @@ async function handlePixelScreenshot(
     await waitForCaptureTurn()
     dataUrl = await withCaptureVisibleTabFocus(tabId, targetTab.windowId, async () => {
       try {
-        return await captureVisibleTabPaced(targetTab.windowId, { format: captureFormat, quality }, "captureVisibleTab")
+        return await captureVisibleTabPaced(tabId, targetTab.windowId, { format: captureFormat, quality }, "captureVisibleTab")
       } catch (err) {
         visibilityState = await tabVisibilityState(tabId)
         throw err
@@ -591,23 +606,27 @@ async function handlePixelScreenshot(
     ({ success: true, data: fallbackNote ? { ...data, method: "tabCapture", fallback: fallbackNote } : data })
 
   let clip = action.clip as { x: number; y: number; width: number; height: number } | undefined
+  // Set for an element crop: the clip is then in CSS pixels, and the crop
+  // scales it by the image's own size against this viewport.
+  let viewport: { width: number; height: number } | undefined
   if (!clip && action.element !== undefined) {
     const elemResult = await sendToContentScript(tabId, {
       type: "rect", index: action.element
     }) as { success: boolean; data?: { left: number; top: number; width: number; height: number } }
-    if (elemResult.success && elemResult.data) {
-      // `rect` answers in CSS pixels with left/top; the crop reads x/y in the
-      // captured image's device pixels. Passing the rect through gave the crop
-      // undefined x/y and a blank image.
-      const dims = await sendToContentScript(tabId, { type: "get_page_dimensions" }) as { success: boolean; data?: { devicePixelRatio?: number } }
-      const scale = (dims.success && dims.data?.devicePixelRatio) || 1
+    const dims = elemResult.success && elemResult.data
+      ? await sendToContentScript(tabId, { type: "get_page_dimensions" }) as { success: boolean; data?: { viewportWidth?: number; viewportHeight?: number } }
+      : undefined
+    if (elemResult.data && dims?.success && dims.data?.viewportWidth && dims.data.viewportHeight) {
+      // `rect` answers with left/top in CSS pixels; passing it through gave
+      // the crop undefined x/y and a blank image.
       const r = elemResult.data
-      clip = { x: Math.round(r.left * scale), y: Math.round(r.top * scale), width: Math.round(r.width * scale), height: Math.round(r.height * scale) }
+      clip = { x: r.left, y: r.top, width: r.width, height: r.height }
+      viewport = { width: dims.data.viewportWidth, height: dims.data.viewportHeight }
     }
   }
 
   if (clip) {
-    const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip }) as {
+    const cropResult = await sendToOffscreen({ type: "crop", dataUrl, clip, viewport }) as {
       success: boolean; data?: string; error?: string
     }
     if (!cropResult.success) return { success: false, error: cropResult.error }

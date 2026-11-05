@@ -48,7 +48,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   switch (msg.type) {
     case "crop":
-      cropImage(msg.dataUrl, msg.clip).then(sendResponse)
+      cropImage(msg.dataUrl, msg.clip, msg.viewport).then(sendResponse)
       return true
 
     case "ocr":
@@ -87,9 +87,16 @@ async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   })
 }
 
-async function cropImage(dataUrl: string, clip: { x: number; y: number; width: number; height: number }) {
+// With `viewport`, `clip` is in the page's CSS pixels and is scaled by the
+// image's own size against that viewport: captureVisibleTab images are
+// devicePixelRatio larger, and a tabCapture frame has its own size. Without
+// it, `clip` is already in image pixels (screenshot --region).
+async function cropImage(dataUrl: string, cssClip: { x: number; y: number; width: number; height: number }, viewport?: { width: number; height: number }) {
   try {
     const img = await loadImage(dataUrl)
+    const sx = viewport?.width ? img.naturalWidth / viewport.width : 1
+    const sy = viewport?.height ? img.naturalHeight / viewport.height : 1
+    const clip = { x: Math.round(cssClip.x * sx), y: Math.round(cssClip.y * sy), width: Math.round(cssClip.width * sx), height: Math.round(cssClip.height * sy) }
     const canvas = document.createElement("canvas")
     canvas.width = clip.width
     canvas.height = clip.height
