@@ -335,10 +335,8 @@ export async function handleDaemonMessage(msg: {
     let refusal: string | null = null
     if (action.type === "group_close") {
       const label = typeof action.label === "string" ? action.label : null
-      if (label) {
-        try { if (await ensureNamedGroup(label) !== -1) refusal = foreignSessionCloseError("group", label, groupLabel!, label) }
-        catch (error) { fail(error instanceof Error ? error.message : String(error)); return }
-      }
+      try { if (label && await ensureNamedGroup(label) !== -1) refusal = foreignSessionCloseError("group", label, groupLabel!, label) }
+      catch (error) { fail(error instanceof Error ? error.message : String(error)); return }
     } else {
       const closeId = moveTabId ?? ((action.tabId as number) || tabId)
       try {
