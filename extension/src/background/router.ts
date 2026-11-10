@@ -1,5 +1,5 @@
 import { sendToContentScript, waitStable } from "./content-bridge"
-import { osInputSupport } from "../../../shared/browser-os-input"
+import { extensionOsInputSupport } from "./os-input-support"
 import { handleOsInputActions } from "./capabilities/os-input"
 import { handleScreenshotActions } from "./capabilities/screenshot"
 import { handleCaptureStreamActions } from "./capabilities/capture-stream"
@@ -153,7 +153,7 @@ export async function routeAction(
     contentResult.warning?.includes("no DOM change")
 
   if (shouldClickEscalate || shouldSceneEscalate) {
-    const click = osInputSupport(action.osInput).click
+    const click = (await extensionOsInputSupport(action.osInput)).click
     if (!click.available) {
       if (action.os === true) return { success: false, error: click.reason, delivered: false } as typeof contentResult
       return { ...contentResult, warning: `${contentResult.warning}; OS-level escalation skipped: ${click.reason}`, tabId }

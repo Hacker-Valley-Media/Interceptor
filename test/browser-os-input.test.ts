@@ -19,7 +19,7 @@ function provider(host = "win32", backend = "Windows.UIAutomation+Win32"): Deskt
 function chromeFixture() {
   const sent: string[] = []
   globalThis.chrome = {
-    runtime: { getManifest: () => ({ permissions: [] }) },
+    runtime: { getManifest: () => ({ permissions: [] }), getPlatformInfo: async () => ({ os: "mac" }) },
     windows: { get: async () => ({ id: 3, focused: true, state: "normal", type: "normal", ...bounds }) },
     tabs: {
       onUpdated: { addListener() {}, removeListener() {} },
@@ -69,6 +69,19 @@ test("macOS browser-only keeps permission-qualified foreground input and no back
   expect(darwinOsInputSupport(true, false)).toMatchObject({ click: { available: true, background: false }, move: { available: true, background: false } })
   expect(darwinOsInputSupport(false, false).click.available).toBe(false)
   expect(darwinOsInputSupport(false, true)).toMatchObject({ click: { available: true, foreground: false, background: true }, move: { available: false } })
+  expect(darwinOsInputSupport(true, true)).toMatchObject({ click: { available: true, foreground: true, background: true }, move: { available: true, foreground: true, background: false } })
+})
+
+for (const os of ["mac", "win", "linux"]) test(`new extension with older daemon on ${os} preserves legacy dispatch and reports host support`, async () => {
+  chromeFixture()
+  chrome.runtime.getPlatformInfo = (async () => ({ os })) as typeof chrome.runtime.getPlatformInfo
+  const capabilities = await handleMetaActions({ type: "capabilities" }, 7)
+  expect(capabilities.data).toMatchObject({ layers: { os_input: os === "mac" } })
+  const trusted = await handleOsInputActions({ type: "os_click", ref: "e1" }, 7)
+  expect(trusted.data).toMatchObject({ method: "os_event" })
+  const auto = await routeAction({ type: "click", ref: "e1" }, 7)
+  if (os === "mac") expect(auto.data).toMatchObject({ method: "os_event", escalated: { to: "os_click" } })
+  else expect(auto.warning).toContain("predates native browser input")
 })
 
 test("malformed and contradictory older-peer capability fields never qualify", () => {

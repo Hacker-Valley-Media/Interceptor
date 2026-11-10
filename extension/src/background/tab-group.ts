@@ -53,6 +53,7 @@ export const GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/
 const SESSION_NAMED_GROUPS_KEY = "namedTabGroups"
 
 export const namedGroups = new Map<string, number>()
+const transferringGroups = new Set<string>()
 let namedGroupsHydrated = false
 
 function sessionArea(): chrome.storage.StorageArea | undefined {
@@ -117,6 +118,7 @@ async function purgeNamedGroupEntry(label: string): Promise<void> {
  * create an empty group).
  */
 export async function ensureNamedGroup(label: string): Promise<number> {
+  if (transferringGroups.has(label)) throw new Error(`group '${label}' transfer in progress; retry after it completes`)
   if (!hasTabGroupApi()) return -1
   await hydrateNamedGroups()
   const known = namedGroups.get(label)
@@ -216,8 +218,9 @@ export async function moveNamedGroupToWindow(label: string, windowId: number): P
     if (groupId === -1) return -1
     let ids: number[] = []
     let replacement = groupId
+    let group: chrome.tabGroups.TabGroup | undefined
     try {
-      const group = await chrome.tabGroups.get(groupId)
+      group = await chrome.tabGroups.get(groupId)
       if (group.windowId === windowId) return groupId
       const destination = await chrome.windows.get(windowId)
       if (destination.type !== "normal") throw new Error("the destination must be a normal window")
@@ -226,6 +229,7 @@ export async function moveNamedGroupToWindow(label: string, windowId: number): P
       if (ids.length === 0) return groupId
       // Native group moves leave Chromium state that can crash on close (#336).
       // Drop the old id before ungrouping so onRemoved cannot purge its auto-target.
+      transferringGroups.add(label)
       namedGroups.delete(label)
       await chrome.tabs.ungroup(ids as [number, ...number[]])
       await chrome.tabs.move(ids, { windowId, index: -1 })
@@ -235,14 +239,32 @@ export async function moveNamedGroupToWindow(label: string, windowId: number): P
       await persistNamedGroups()
       return replacement
     } catch (err) {
-      // Keep surviving tabs and their observed placement, including partial moves.
-      if (await chrome.tabGroups.get(replacement).catch(() => null)) namedGroups.set(label, replacement)
+      const recovered: string[] = []
+      if (await chrome.tabGroups.get(replacement).catch(() => null)) {
+        namedGroups.set(label, replacement)
+        if (group) await chrome.tabGroups.update(replacement, { title: group.title, color: group.color, collapsed: group.collapsed }).catch(() => {})
+      }
+      else if (group && ids.length) {
+        const survivors = (await Promise.all(ids.map(id => chrome.tabs.get(id).catch(() => null)))).filter((tab): tab is chrome.tabs.Tab => !!tab)
+        const host = survivors.some(tab => tab.windowId === windowId) ? windowId : group.windowId
+        try {
+          const members = survivors.map(tab => tab.id!)
+          if (members.length) {
+            const id = await chrome.tabs.group({ tabIds: members as [number, ...number[]], createProperties: { windowId: host } })
+            namedGroups.set(label, id)
+            await chrome.tabGroups.update(id, { title: group.title, color: group.color, collapsed: group.collapsed })
+            recovered.push(`${label}:window ${host}`)
+          }
+        } catch (recoveryError) { recovered.push(`regroup failed: ${String(recoveryError)}`) }
+      }
       await persistNamedGroups()
       const placement = await Promise.all(ids.map(async id => {
         const tab = await chrome.tabs.get(id).catch(() => null)
-        return tab ? `${id}:window ${tab.windowId}` : `${id}:unavailable`
+        return tab ? `${id}:window ${tab.windowId}, group ${tab.groupId}` : `${id}:unavailable`
       }))
-      throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${placement.length ? placement.join(", ") : "read window list for current placement"}`)
+      throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${recovered.join("; ")}; ${placement.length ? placement.join(", ") : "read window list for current placement"}`)
+    } finally {
+      transferringGroups.delete(label)
     }
   })
 }

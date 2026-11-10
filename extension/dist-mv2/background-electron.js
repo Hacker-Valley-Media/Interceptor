@@ -199,6 +199,7 @@ async function createGroupInTabWindow(tabId) {
 var GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/;
 var SESSION_NAMED_GROUPS_KEY = "namedTabGroups";
 var namedGroups = new Map;
+var transferringGroups = new Set;
 var namedGroupsHydrated = false;
 function sessionArea2() {
   const storage = chrome.storage;
@@ -249,6 +250,8 @@ async function purgeNamedGroupEntry(label) {
   } catch {}
 }
 async function ensureNamedGroup(label) {
+  if (transferringGroups.has(label))
+    throw new Error(`group '${label}' transfer in progress; retry after it completes`);
   if (!hasTabGroupApi())
     return -1;
   await hydrateNamedGroups();
@@ -323,8 +326,9 @@ async function moveNamedGroupToWindow(label, windowId) {
       return -1;
     let ids = [];
     let replacement = groupId;
+    let group;
     try {
-      const group = await chrome.tabGroups.get(groupId);
+      group = await chrome.tabGroups.get(groupId);
       if (group.windowId === windowId)
         return groupId;
       const destination = await chrome.windows.get(windowId);
@@ -333,6 +337,7 @@ async function moveNamedGroupToWindow(label, windowId) {
       ids = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index).map((tab) => tab.id).filter((id) => typeof id === "number");
       if (ids.length === 0)
         return groupId;
+      transferringGroups.add(label);
       namedGroups.delete(label);
       await chrome.tabs.ungroup(ids);
       await chrome.tabs.move(ids, { windowId, index: -1 });
@@ -342,14 +347,34 @@ async function moveNamedGroupToWindow(label, windowId) {
       await persistNamedGroups();
       return replacement;
     } catch (err) {
-      if (await chrome.tabGroups.get(replacement).catch(() => null))
+      const recovered = [];
+      if (await chrome.tabGroups.get(replacement).catch(() => null)) {
         namedGroups.set(label, replacement);
+        if (group)
+          await chrome.tabGroups.update(replacement, { title: group.title, color: group.color, collapsed: group.collapsed }).catch(() => {});
+      } else if (group && ids.length) {
+        const survivors = (await Promise.all(ids.map((id) => chrome.tabs.get(id).catch(() => null)))).filter((tab) => !!tab);
+        const host = survivors.some((tab) => tab.windowId === windowId) ? windowId : group.windowId;
+        try {
+          const members = survivors.map((tab) => tab.id);
+          if (members.length) {
+            const id = await chrome.tabs.group({ tabIds: members, createProperties: { windowId: host } });
+            namedGroups.set(label, id);
+            await chrome.tabGroups.update(id, { title: group.title, color: group.color, collapsed: group.collapsed });
+            recovered.push(`${label}:window ${host}`);
+          }
+        } catch (recoveryError) {
+          recovered.push(`regroup failed: ${String(recoveryError)}`);
+        }
+      }
       await persistNamedGroups();
       const placement = await Promise.all(ids.map(async (id) => {
         const tab = await chrome.tabs.get(id).catch(() => null);
-        return tab ? `${id}:window ${tab.windowId}` : `${id}:unavailable`;
+        return tab ? `${id}:window ${tab.windowId}, group ${tab.groupId}` : `${id}:unavailable`;
       }));
-      throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${placement.length ? placement.join(", ") : "read window list for current placement"}`);
+      throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${recovered.join("; ")}; ${placement.length ? placement.join(", ") : "read window list for current placement"}`);
+    } finally {
+      transferringGroups.delete(label);
     }
   });
 }
@@ -822,10 +847,35 @@ function osInputSupport(value) {
   for (const key of ["click", "key", "type", "move"]) {
     const op = value[key];
     if (op && typeof op.available === "boolean" && typeof op.foreground === "boolean" && typeof op.background === "boolean") {
-      result[key] = op.available && (op.foreground || op.background) ? { available: true, foreground: op.foreground, background: op.background } : { available: false, foreground: false, background: false, reason: op.reason || "No qualified input route" };
+      result[key] = op.available && (op.foreground || op.background) ? { available: true, foreground: op.foreground, background: op.background } : { available: false, foreground: false, background: false, reason: typeof op.reason === "string" && op.reason ? op.reason : "No qualified input route" };
     }
   }
   return result;
+}
+function darwinOsInputSupport(foreground, background) {
+  const result = unavailableOsInput("OS input permission is unavailable; check macos trust without prompting");
+  for (const key of ["click", "key", "type"]) {
+    if (foreground || background)
+      result[key] = { available: true, foreground, background };
+  }
+  if (foreground)
+    result.move = { available: true, foreground: true, background: false };
+  return result;
+}
+
+// extension/src/background/os-input-support.ts
+async function extensionOsInputSupport(value) {
+  if (value !== undefined)
+    return osInputSupport(value);
+  const platform = await chrome.runtime.getPlatformInfo?.().catch(() => {
+    return;
+  });
+  if (platform?.os !== "mac")
+    return unavailableOsInput("The installed daemon predates native browser input; install the matching current Full package");
+  const support = darwinOsInputSupport(true, false);
+  for (const operation of Object.values(support))
+    operation.reason = "Legacy macOS daemon; per-operation support was not reported";
+  return support;
 }
 
 // extension/src/background/network-capture.ts
@@ -1199,7 +1249,7 @@ async function frameOrigin(tabId, frameId) {
 }
 async function handleOsInputActions(action, tabId) {
   const backgroundOk = action.backgroundOk === true;
-  if (["os_click", "os_key", "os_type", "os_move"].includes(action.type)) {
+  if (action.osInput !== undefined && ["os_click", "os_key", "os_type", "os_move"].includes(action.type)) {
     const op = osInputSupport(action.osInput)[action.type.slice(3)];
     if (!op.available)
       return { success: false, delivered: false, error: op.reason, data: { hint: "Read capabilities for the current host's qualified input operations" } };
@@ -4515,7 +4565,7 @@ async function handleMetaActions(action, tabId) {
     }
     case "capabilities": {
       const daemonConnected = activeTransport !== "none";
-      const osInput = osInputSupport(action.osInput);
+      const osInput = await extensionOsInputSupport(action.osInput);
       const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false;
       const hasUserScriptsPermission = chrome.runtime.getManifest().permissions?.includes("userScripts") ?? false;
       const debuggerActive = debuggerAttached.size > 0;
@@ -5835,7 +5885,7 @@ async function routeAction(action, tabId) {
   const shouldSceneEscalate = action.type === "scene_click" && contentResult.success && (action.os === true || contentResult.warning?.includes("no DOM change"));
   const shouldClickEscalate = (action.type === "click" || action.type === "click_selector") && contentResult.success && contentResult.warning?.includes("no DOM change");
   if (shouldClickEscalate || shouldSceneEscalate) {
-    const click = osInputSupport(action.osInput).click;
+    const click = (await extensionOsInputSupport(action.osInput)).click;
     if (!click.available) {
       if (action.os === true)
         return { success: false, error: click.reason, delivered: false };

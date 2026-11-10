@@ -152,7 +152,7 @@ export async function handleOsInputActions(
   tabId: number
 ): Promise<ActionResult> {
   const backgroundOk = action.backgroundOk === true
-  if (["os_click", "os_key", "os_type", "os_move"].includes(action.type)) {
+  if (action.osInput !== undefined && ["os_click", "os_key", "os_type", "os_move"].includes(action.type)) {
     const op = osInputSupport(action.osInput)[action.type.slice(3) as "click" | "key" | "type" | "move"]
     if (!op.available) return { success: false, delivered: false, error: op.reason, data: { hint: "Read capabilities for the current host's qualified input operations" } }
   }

@@ -59,6 +59,10 @@ import { assertNoInstallMaintenance } from "../shared/install-maintenance"
  * One request per connection retains unknown-outcome semantics and does not
  * reconnect/replay a mutation. The provider authenticates its SID/uid/session.
  */
+let inputProviderPid: number | undefined
+let onDesktopProviderReconnect: (() => void) | undefined
+export function watchDesktopProviderReconnect(callback: () => void): void { onDesktopProviderReconnect = callback }
+
 export async function callDesktopProvider(action: Record<string, unknown>, timeoutMs = 15_000): Promise<DesktopResult> {
     let canonical: Record<string, unknown>
     const windowInput=/^(?:macos|desktop)_bginput_(click|type|keys|scroll|drag)$/.exec(String(action.type))
@@ -161,6 +165,8 @@ export async function callDesktopProvider(action: Record<string, unknown>, timeo
           if (!Number.isSafeInteger(hello.pid) || hello.pid <= 0 || hello.pid > 0xffffffff || !hello.provider || !hello.version || !hello.session) {
             invalidReply("invalid native provider identity fields"); return
           }
+          if (inputProviderPid !== undefined && inputProviderPid !== hello.pid) onDesktopProviderReconnect?.()
+          inputProviderPid = hello.pid
           negotiated = true
           if (canonical.type === 'desktop_notifications' && !hello.capabilities.some(c => c.operation === 'notifications' && c.versions.contract === '1')) {
             finish({success:false,code:'version_mismatch',error:'native provider lacks notification contract 1; install the matching current package before retrying'}); return

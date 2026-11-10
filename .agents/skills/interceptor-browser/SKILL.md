@@ -35,7 +35,9 @@ Assume the person is using this browser and this computer while you work. Never 
 
 ## Core Rules
 
-- Before choosing `--trusted` (or `--os`), read `interceptor capabilities`. `data.osInput` reports availability, foreground/background support and refusal reasons for click, key, type and move. The legacy `layers.os_input` flag requires click, key and type; it can be true while move is unavailable. Missing metadata from an older daemon is unavailable.
+- Before choosing `--trusted` (or `--os`), read `interceptor capabilities`. `data.osInput` reports availability, foreground/background support and refusal reasons for click, key, type and move. The legacy `layers.os_input` flag requires click, key and type; it can be true while move is unavailable.
+- With an older daemon, preserve legacy trusted dispatch and report that per-operation support was not provided. <!-- os:darwin -->
+- With an older daemon, native browser input reports unavailable until the matching current Full package is installed. <!-- os:win32,linux -->
 - Trusted browser input uses the Full native provider in a qualified graphical session. Unsupported backends and missing providers refuse before delivery. Covered windows retain the exact title/frame and page receipt gates; hidden or minimized tabs may temporarily use their own background window. Read the page after delivery and before any retry. <!-- os:win32,linux -->
 - New window new group transfers avoid the browser crash. Groups already moved between windows by 2.1.11, or moved by dragging the whole group, can still crash when closed. Save your work and record the URLs, restart the browser, then restore the session or reopen the URLs in a fresh named group. Use window new --group for later moves. Updating the extension alone does not clear the old browser state.
 - Use compound commands (`open`, `websearch`, `read`, `act`, `inspect`) before low-level verbs.

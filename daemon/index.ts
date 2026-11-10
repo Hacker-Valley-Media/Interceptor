@@ -25,9 +25,11 @@ import { bridgePidPath, bridgeSocketPath } from "../shared/bridge-paths"
 import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecoveryActions, getBridgeRecoveryLayout } from "./bridge-recovery"
 import { consoleUser, currentUserName, probeGuiSession, type BridgeLaunchOpts } from "../shared/gui-session"
 import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
-import { callDesktopProvider } from "./desktop-provider"
+import { callDesktopProvider, watchDesktopProviderReconnect } from "./desktop-provider"
 import { desktopProviderBinary } from "../shared/desktop-provider"
 import { browserOsInputSupport } from "./browser-os-input"
+import { createBrowserOsInputCache } from "./browser-os-input-cache"
+import { claimOsInputPlan } from "./os-input-plan"
 import {desktopContainerActionError,desktopContainerDeadline} from "../shared/desktop-container-validation"
 import {callNativeRegistration} from './native-registration'
 import {bindNativeSecretTarget,bindMacAuthDialogTarget,bindNativeAuthDialogTarget} from './native-secret-delivery'
@@ -205,6 +207,7 @@ async function connectBridge(): Promise<boolean> {
       socket: {
         open(socket) {
           log("bridge connected")
+          browserInputCache.invalidate()
           bridgeSocket = socket as any
           bridgeBuffer = Buffer.alloc(0)
           bridgeConnecting = false
@@ -223,6 +226,7 @@ async function connectBridge(): Promise<boolean> {
           log(`bridge disconnected${failed ? ` (failed ${failed} in-flight request(s))` : ""}`)
           releaseSocketQueue(socket as any)
           bridgeSocket = null as any
+          browserInputCache.invalidate()
           bridgeConnecting = false
           // Schedule reconnect
           setTimeout(() => connectBridge(), BRIDGE_RECONNECT_MS)
@@ -490,15 +494,26 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
   void sendBrowserRequest(id, request.action as Record<string, unknown>, request.tabId, request.contextId)
 }
 
+const browserInputCache = createBrowserOsInputCache(() => {
+  const full = process.platform === "darwin" ? readBridgeRecoveryLayout().mode !== "browser-only" : !!desktopProviderBinary()
+  return browserOsInputSupport(full, action => bridgeCall(action, 1000))
+})
+watchDesktopProviderReconnect(() => browserInputCache.invalidate())
+
 /** IPC, WebSocket and internal retries use the same host qualification. */
 async function sendBrowserRequest(id: string, original: Record<string, unknown>, tabId?: number, contextId?: string): Promise<void> {
   try {
     let action = original
     const type = String(action.type)
     if (["capabilities", "os_click", "os_key", "os_type", "os_move", "click", "click_selector", "scene_click"].includes(type)) {
-      const full = process.platform === "darwin" ? readBridgeRecoveryLayout().mode !== "browser-only" : !!desktopProviderBinary()
-      const osInput = await browserOsInputSupport(full, bridgeCall)
+      const synthetic = ["click", "click_selector", "scene_click"].includes(type)
+      const osInput = synthetic ? browserInputCache.peek() : await browserInputCache.get()
       const op = osInput[(type.startsWith("os_") ? type.slice(3) : "click") as "click" | "key" | "type" | "move"]
+      if (type.startsWith("os_") && !op.available) {
+        browserInputCache.invalidate()
+        handleNativeMessage({ id, result: { success: false, delivered: false, error: op.reason } })
+        return
+      }
       action = { ...action, osInput, backgroundOk: type !== "os_move" && op.background,
         nativeInput: process.platform !== "darwin" || !op.foreground ? process.platform : undefined }
       const pending = pendingRequests.get(id)
@@ -1294,6 +1309,7 @@ type PendingRequest = {
   // round trip, and is dropped with the entry.
   sensitiveText?: string
   osRoute?: OsRoute
+  osDelivering?: boolean
   socket: { write: (data: Buffer | string) => number; readonly remoteAddress: string }
   startTime: number
   actionType: string
@@ -1397,10 +1413,9 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
 
       if (success && result?.data) {
         const data = result.data as Record<string, unknown>
-        const autoClick = ["click", "click_selector", "scene_click"].includes(pending.actionType)
-          && (data.escalated as { to?: string } | undefined)?.to === "os_click"
-        const inputType = autoClick ? "os_click" : pending.actionType
-        if (data.method === "os_event" && (autoClick || inputType.startsWith("os_"))) {
+        if (pending.osDelivering) return
+        const inputType = claimOsInputPlan(pending, data)
+        if (inputType) {
           const enrichedAction: Record<string, unknown> = { type: inputType }
           if (data.windowBounds) {
             Object.assign(enrichedAction, data.screenTarget as Record<string, unknown> || {})
@@ -1426,12 +1441,14 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
           }
           log(`[${requestId.slice(0, 8)}] posting OS event for ${pending.actionType}`)
           handleOsAction(requestId, enrichedAction, pending.osRoute).then((osResult) => {
+            if (!osResult?.success) browserInputCache.invalidate()
             settleOsAction(requestId, pending, osResult || { success: false, error: "os action failed" })
           })
           return
         }
       }
 
+      if (!success && (pending.actionType.startsWith("os_") || pending.osRoute)) browserInputCache.invalidate()
       // A tab that is not showing: the gate refused and named the tab to move.
       if (!success && moveTargetOf(pending, result as DaemonResult) !== undefined) {
         settleOsAction(requestId, pending, result as DaemonResult)

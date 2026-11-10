@@ -7,7 +7,7 @@ export function unavailableOsInput(reason: string): OsInputSupport {
   return Object.fromEntries(["click", "key", "type", "move"].map(key => [key, { available: false, foreground: false, background: false, reason }])) as OsInputSupport
 }
 
-/** Missing metadata from an older daemon never admits input. */
+/** Validate explicit metadata; the extension handles older-daemon compatibility. */
 export function osInputSupport(value: unknown): OsInputSupport {
   const result = unavailableOsInput("The daemon did not report qualified OS input support; install the matching current package")
   if (!value || typeof value !== "object") return result

@@ -10,7 +10,7 @@ const cg = process.platform === "darwin" ? dlopen("/System/Library/Frameworks/Co
 export async function browserOsInputSupport(full: boolean, bridge: (action: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown }>): Promise<OsInputSupport> {
   if (process.platform !== "darwin") {
     if (!full) return unavailableOsInput("Trusted browser input requires a Full install and its native provider")
-    const result = await callDesktopProvider({ type: "desktop_capabilities" }, 3000)
+    const result = await callDesktopProvider({ type: "desktop_capabilities" }, 1000)
     return nativeOsInputSupport(process.platform, result.success ? result.data as DesktopHello : undefined, result.error)
   }
   const foreground = cg?.symbols.CGPreflightPostEventAccess() === true
