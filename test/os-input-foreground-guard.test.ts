@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 
 import { afterEach, describe, expect, test } from "bun:test"
+import { QUALIFIED_OS_INPUT } from "./fixtures/browser-os-input"
 
 // Foreground guard for trusted OS input (issue #166).
 //
@@ -70,7 +71,7 @@ const FOCUSED_WINDOW: FakeWindow = { id: 5, focused: true, state: "normal", left
 
 async function osInput() {
   const mod = await import("../extension/src/background/capabilities/os-input")
-  return mod.handleOsInputActions
+  return (action: Parameters<typeof mod.handleOsInputActions>[0], tabId: number) => mod.handleOsInputActions({ osInput: QUALIFIED_OS_INPUT, ...action }, tabId)
 }
 
 describe("trusted OS input — foreground guard (issue #166)", () => {

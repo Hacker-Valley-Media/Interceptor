@@ -210,15 +210,41 @@ async function addTabToNamedGroupSerialized(
  * group's window. No-op when the group does not exist or is already there.
  */
 export async function moveNamedGroupToWindow(label: string, windowId: number): Promise<void> {
-  if (!hasTabGroupApi() || typeof chrome.tabGroups.move !== "function") return
-  const groupId = await ensureNamedGroup(label)
-  if (groupId === -1) return
-  try {
-    const group = await chrome.tabGroups.get(groupId)
-    if (group.windowId !== windowId) await chrome.tabGroups.move(groupId, { windowId, index: -1 })
-  } catch (err) {
-    console.warn(`moveNamedGroupToWindow: group '${label}' stayed where it was:`, err)
-  }
+  if (!hasTabGroupApi() || ![chrome.tabs.ungroup, chrome.tabs.move, chrome.tabs.group].every(fn => typeof fn === "function")) return
+  await serializeGroupAdd(label, async () => {
+    const groupId = await ensureNamedGroup(label)
+    if (groupId === -1) return -1
+    let ids: number[] = []
+    let replacement = groupId
+    try {
+      const group = await chrome.tabGroups.get(groupId)
+      if (group.windowId === windowId) return groupId
+      const destination = await chrome.windows.get(windowId)
+      if (destination.type !== "normal") throw new Error("the destination must be a normal window")
+      ids = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index)
+        .map(tab => tab.id).filter((id): id is number => typeof id === "number")
+      if (ids.length === 0) return groupId
+      // Native group moves leave Chromium state that can crash on close (#336).
+      // Drop the old id before ungrouping so onRemoved cannot purge its auto-target.
+      namedGroups.delete(label)
+      await chrome.tabs.ungroup(ids as [number, ...number[]])
+      await chrome.tabs.move(ids, { windowId, index: -1 })
+      replacement = await chrome.tabs.group({ tabIds: ids as [number, ...number[]], createProperties: { windowId } })
+      namedGroups.set(label, replacement)
+      await chrome.tabGroups.update(replacement, { title: group.title, color: group.color, collapsed: group.collapsed })
+      await persistNamedGroups()
+      return replacement
+    } catch (err) {
+      // Keep surviving tabs and their observed placement, including partial moves.
+      if (await chrome.tabGroups.get(replacement).catch(() => null)) namedGroups.set(label, replacement)
+      await persistNamedGroups()
+      const placement = await Promise.all(ids.map(async id => {
+        const tab = await chrome.tabs.get(id).catch(() => null)
+        return tab ? `${id}:window ${tab.windowId}` : `${id}:unavailable`
+      }))
+      throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${placement.length ? placement.join(", ") : "read window list for current placement"}`)
+    }
+  })
 }
 
 export async function isTabInNamedGroup(tabId: number, label: string): Promise<boolean> {

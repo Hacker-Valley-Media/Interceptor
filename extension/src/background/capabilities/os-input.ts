@@ -2,6 +2,7 @@ import { sendToContentScript } from "../content-bridge"
 import { debuggerAttached } from "../cdp"
 import { hasTabGroupApi } from "../tab-group"
 import { detachTab, returnTab, type TabHome } from "./windows"
+import { osInputSupport } from "../../../../shared/browser-os-input"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number; delivered?: boolean }
 
@@ -9,7 +10,7 @@ type WindowBounds = { left: number; top: number; width: number; height: number }
 
 // What the daemon needs to deliver to a window that is not OS-focused, and
 // what to answer when it cannot.
-type BackgroundTarget = { title: string; error: string; hint: string; tabId: number }
+type BackgroundTarget = { title: string; error: string; hint: string; tabId: number; foreground?: boolean }
 
 // Leads with the background-safe paths on purpose: agents follow the first
 // suggestion in a hint literally. A `tab switch` in a window the user is
@@ -43,7 +44,7 @@ const FOREGROUND_HINT =
 // that can do it to give the tab a window of its own and send the action again.
 // An older daemon passes this refusal on unchanged. Safari has no tab groups and
 // may ignore `focused: false`, so it keeps the refusal.
-async function requireForegroundTab(tabId: number, backgroundOk = false): Promise<
+async function requireForegroundTab(tabId: number, backgroundOk = false, nativeInput?: unknown): Promise<
   { ok: true; windowBounds: WindowBounds; background?: BackgroundTarget } | { ok: false; result: ActionResult }
 > {
   const tab = await chrome.tabs.get(tabId).catch(() => null)
@@ -82,7 +83,10 @@ async function requireForegroundTab(tabId: number, backgroundOk = false): Promis
     }
     return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT, tabId } }
   }
-  return { ok: true, windowBounds }
+  return { ok: true, windowBounds, ...(nativeInput ? { background: {
+    title: tab.title || "", error: "native browser input target unavailable", hint: FOREGROUND_HINT,
+    tabId, foreground: nativeInput === "win32",
+  } } : {}) }
 }
 
 // Height of the browser's own UI above the page. The page's real viewport
@@ -148,6 +152,10 @@ export async function handleOsInputActions(
   tabId: number
 ): Promise<ActionResult> {
   const backgroundOk = action.backgroundOk === true
+  if (["os_click", "os_key", "os_type", "os_move"].includes(action.type)) {
+    const op = osInputSupport(action.osInput)[action.type.slice(3) as "click" | "key" | "type" | "move"]
+    if (!op.available) return { success: false, delivered: false, error: op.reason, data: { hint: "Read capabilities for the current host's qualified input operations" } }
+  }
   switch (action.type) {
     case "os_receipt":
       return sendToContentScript(tabId, { type: "input_watch_read" }, action.frameId as number | undefined) as Promise<ActionResult>
@@ -161,7 +169,7 @@ export async function handleOsInputActions(
       catch (err) { return { success: false, error: (err as Error).message } }
 
     case "os_click": {
-      const fg = await requireForegroundTab(tabId, backgroundOk)
+      const fg = await requireForegroundTab(tabId, backgroundOk, action.nativeInput)
       if (!fg.ok) return fg.result
       const windowBounds = fg.windowBounds
       let pageX = action.x as number | undefined
@@ -227,7 +235,7 @@ export async function handleOsInputActions(
       // Keyboard CGEvents go to the focused app's key window; if the target
       // tab isn't foreground the combo leaks into another app (issue #166)
       // unless the bridge addresses the window.
-      const fg = await requireForegroundTab(tabId, backgroundOk)
+      const fg = await requireForegroundTab(tabId, backgroundOk, action.nativeInput)
       if (!fg.ok) return fg.result
       // The browser keeps its own shortcuts (⌘T, ⌘W) from the page, so silence
       // proves nothing for a chord.
@@ -240,7 +248,7 @@ export async function handleOsInputActions(
     }
 
     case "os_type": {
-      const fg = await requireForegroundTab(tabId, backgroundOk)
+      const fg = await requireForegroundTab(tabId, backgroundOk, action.nativeInput)
       if (!fg.ok) return fg.result
       // A framed target lives in its own frame; the top frame has a different
       // element under the same ref or index.

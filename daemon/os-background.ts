@@ -17,6 +17,7 @@ import { translateCoords } from "./os-input-loader"
 export type BackgroundTarget = {
   title: string; error: string; hint: string; pageHidden?: boolean
   tabId?: number; frameId?: number; watching?: boolean
+  foreground?: boolean
 }
 
 type OsAction = { type?: string; [key: string]: unknown }
@@ -102,7 +103,7 @@ export function bridgeActionFor(action: OsAction, platform: string = "darwin"): 
       ![windowBounds.left,windowBounds.top,windowBounds.width,windowBounds.height].every(x=>typeof x==='number'&&Number.isFinite(x)&&Math.abs(x)<=2147483647) || windowBounds.width<=0 || windowBounds.height<=0) return null
   if (!["darwin","linux","win32"].includes(platform)) return null
   const portable=platform!=="darwin"
-  const window = { windowTitle: target.title, windowBounds, ...(portable?{backgroundOnly:true}:{}) }
+  const window = { windowTitle: target.title, windowBounds, ...(portable?{backgroundOnly:target.foreground !== true}:{}) }
   const operation=(verb:string)=>portable?"desktop_"+verb:"macos_bginput_"+verb
   switch (action.type) {
     case "os_click": {
@@ -148,7 +149,8 @@ export async function deliverInBackground(
   if (!result.success) return {...result,...refuse(result.error),data:{hint:target?.hint,...(result.data===undefined?{}:{nativeData:result.data})}}
   if(platform!=="darwin"){
     const receipt=result.data as Record<string,unknown>|undefined
-    if(!receipt||typeof receipt!=='object'||Array.isArray(receipt)||receipt.background!==true||receipt.foregroundUsed!==false||typeof receipt.method!=='string'||!receipt.method||!Number.isSafeInteger(receipt.targetPid)||Number(receipt.targetPid)<=0||receipt.effectRequiresObservation!==true){
+    const foreground = target?.foreground === true && receipt?.method === "Win32.SendInput" && receipt?.background === false && receipt?.focusUnchanged === true
+    if(!receipt||typeof receipt!=='object'||Array.isArray(receipt)||(!foreground && (receipt.background!==true||receipt.foregroundUsed!==false||receipt.effectRequiresObservation!==true))||typeof receipt.method!=='string'||!receipt.method||!Number.isSafeInteger(receipt.targetPid)||Number(receipt.targetPid)<=0){
       return {...refuse("provider acknowledgment omitted the required background receipt; read the target before another action"),code:'timeout_unknown_outcome',data:{hint:target?.hint,nativeData:result.data},details:{dispatched:true,verified:false,effectRequiresObservation:true}}
     }
     return {success:true,data:receipt,...(target?.pageHidden?{warning:HIDDEN_PAGE_WARNING}:{})}

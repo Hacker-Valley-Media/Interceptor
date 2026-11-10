@@ -35,7 +35,9 @@ const TAB: FakeTab = { id: 42, windowId: 5, active: true, title: "Flow project" 
 const UNFOCUSED: FakeWindow = { id: 5, focused: false, state: "normal", left: 0, top: 30, width: 1728, height: 1011 }
 
 async function osInput() {
-  return (await import("../extension/src/background/capabilities/os-input")).handleOsInputActions
+  const { handleOsInputActions } = await import("../extension/src/background/capabilities/os-input")
+  const { QUALIFIED_OS_INPUT } = await import("./fixtures/browser-os-input")
+  return (action: Parameters<typeof handleOsInputActions>[0], tabId: number) => handleOsInputActions({ osInput: QUALIFIED_OS_INPUT, ...action }, tabId)
 }
 
 type BackgroundData = {

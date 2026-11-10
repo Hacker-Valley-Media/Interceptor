@@ -157,7 +157,7 @@ describe("wiring", () => {
   test("act prints a refusal's hint and treats a refusal as nothing sent", () => {
     const act = read("cli/commands/compound.ts")
     expect(act).toContain("data: actionResult!.data,")
-    expect(gate.match(/delivered: false/g)!.length).toBe(3)
+    expect(gate.match(/delivered: false/g)!.length).toBe(4)
   })
 
   test("wait_stable keeps its clock in the background, and batch still reaches it", () => {

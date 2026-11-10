@@ -53,8 +53,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: BNDL
-        CFBundleShortVersionString: "2.1.11"
-        CFBundleVersion: "2.1.11"
+        CFBundleShortVersionString: "2.1.12"
+        CFBundleVersion: "2.1.12"
         NSLocalNetworkUsageDescription: "InterceptorRunner connects to the Interceptor daemon on this Mac to receive local automation commands."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

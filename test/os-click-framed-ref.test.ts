@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { handleOsInputActions } from "../extension/src/background/capabilities/os-input"
+import { handleOsInputActions as rawOsInput } from "../extension/src/background/capabilities/os-input"
+import { QUALIFIED_OS_INPUT } from "./fixtures/browser-os-input"
+const handleOsInputActions: typeof rawOsInput = (action, tabId) => rawOsInput({ osInput: QUALIFIED_OS_INPUT, ...action }, tabId)
 
 // A framed ref (`e<frame>_<n>`) names element n of an iframe. The trusted click
 // used to ask the TOP frame for "e<n>", got a different element with the same

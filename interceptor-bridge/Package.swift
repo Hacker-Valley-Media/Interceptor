@@ -19,7 +19,7 @@ let package = Package(
         // Sparkle for in-app auto-update. The bridge polls the appcast,
         // prompts the user when a new pkg is available, and hands the
         // download off to the macOS installer.
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.2"),
         // : Containerization (Linux guest runtime). Pinned exact
         // to the version Apple's container project uses.
         .package(url: "https://github.com/apple/containerization.git", exact: Version(stringLiteral: "0.31.0")),

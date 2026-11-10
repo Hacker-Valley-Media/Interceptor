@@ -74,7 +74,14 @@ describe("window_create — the caller's group follows it into the new window", 
       },
       tabs: {
         get: async (id: number) => ({ id, windowId: tabWindow }),
-        group: async (args: { groupId?: number }) => {
+        query: async () => [{ id: 55, windowId: 1, index: 0 }],
+        ungroup: async () => {
+          if (moveFails) throw new Error("Tabs cannot be edited right now")
+          groups.splice(0, groups.length)
+        },
+        move: async (ids: number[], to: { windowId: number }) => { moves.push([ids, to]) },
+        group: async (args: { groupId?: number; createProperties?: { windowId: number } }) => {
+          if (args.createProperties) groups.push({ id: 900, title: "", windowId: args.createProperties.windowId })
           const target = groups.find(x => x.id === args.groupId)
           if (target) tabWindow = target.windowId
           return args.groupId ?? 900
@@ -83,11 +90,8 @@ describe("window_create — the caller's group follows it into the new window", 
       tabGroups: {
         query: async () => groups,
         get: async (id: number) => { const x = groups.find(y => y.id === id); if (!x) throw new Error("no group"); return x },
-        move: async (id: number, to: { windowId: number }) => {
-          if (moveFails) throw new Error("Tabs cannot be edited right now")
-          moves.push([id, to]); groups.find(x => x.id === id)!.windowId = to.windowId
-        },
-        update: async () => {},
+        move: async () => { throw new Error("native group move must not run") },
+        update: async (id: number, value: object) => { Object.assign(groups.find(g => g.id === id)!, value) },
       },
       storage: {},
     }
@@ -103,7 +107,7 @@ describe("window_create — the caller's group follows it into the new window", 
 
   test("a named group in another window moves to the new window, so the tab stays there", async () => {
     const r = await create({ group: "mine" }, [{ id: 40, title: "interceptor-mine", windowId: 1 }])
-    expect(r.moves).toEqual([[40, { windowId: 11, index: -1 }]])
+    expect(r.moves).toEqual([[[55], { windowId: 11, index: -1 }]])
     expect(r.tabWindow).toBe(11)
     expect(r.data.groupWarning).toBeUndefined()
   })

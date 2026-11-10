@@ -48,12 +48,15 @@ interceptor act e9 "turing award" --submit         # Type, then submit the field
 interceptor act e11 --keys "Escape"                # Focus e11, then send the key
 interceptor act '[e7]'                             # A ref copied with its brackets works (quote it in zsh)
 interceptor act e15 --trusted                      # HID-sourced click; page sees isTrusted: true. ESCALATION ONLY. <!-- os:darwin -->
+interceptor act e15 --trusted --no-read --json --ws # Qualified Full native input; inspect capabilities.data.osInput first <!-- os:win32,linux -->
 interceptor act e20 --no-read
 # act takes the ref directly (act e5, never act click e5). A timeout or closed channel after dispatch
 # is reported as unverified delivery: read the target before retrying so you do not click twice.
 ```
 
 **After `act --trusted` reports success, read the page once and commit.** Do not re-execute the same click via a different surface (`interceptor macos click ...`, manual coordinates, etc.) to "verify" — the page's own state is the verification, and the trusted event is the same trusted event regardless of which surface posted it. Escalating to a different surface to redo a successful browser action is the most common way to blow the command budget. `interceptor macos` remains the right surface for native-app tasks; this rule only constrains within-task redo behavior on the browser. <!-- os:darwin -->
+
+`capabilities.data.osInput` lists click, key, type and move with `available`, `foreground`, `background` and an unavailable `reason`. The legacy `layers.os_input` flag requires click, key and type; move is independent. `--os` aliases `--trusted`. Unsupported operations refuse before dispatch. After any possibly delivered input, read the target before another attempt.
 
 Unqualified `find` returns two typed current-page sections: literal case-insensitive matches from the complete `document.body.innerText` snapshot, and semantic accessible-element matches. It does not navigate, scroll, focus, or highlight. `--limit` caps returned matches per category while preserving total counts. Low-level actions when `act` is not enough:
 

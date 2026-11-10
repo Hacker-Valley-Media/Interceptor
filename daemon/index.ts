@@ -26,6 +26,8 @@ import { failPendingBridgeRequests, formatBridgeUnavailableError, getBridgeRecov
 import { consoleUser, currentUserName, probeGuiSession, type BridgeLaunchOpts } from "../shared/gui-session"
 import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-write"
 import { callDesktopProvider } from "./desktop-provider"
+import { desktopProviderBinary } from "../shared/desktop-provider"
+import { browserOsInputSupport } from "./browser-os-input"
 import {desktopContainerActionError,desktopContainerDeadline} from "../shared/desktop-container-validation"
 import {callNativeRegistration} from './native-registration'
 import {bindNativeSecretTarget,bindMacAuthDialogTarget,bindNativeAuthDialogTarget} from './native-secret-delivery'
@@ -444,7 +446,7 @@ function extensionCall(action: Record<string, unknown>, contextId?: string, tabI
       sensitiveText: osRoute?.sensitiveText,
       osRoute,
     })
-    sendNativeMessage({ id, action, tabId }, contextId)
+    void sendBrowserRequest(id, action, tabId, contextId)
   })
 }
 
@@ -485,18 +487,29 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
     sensitiveText,
   })
 
-  // Trusted input for an unfocused browser window goes through the bridge,
-  // which addresses the window by id. The extension only relaxes its
-  // foreground gate when told a bridge is here to do that.
-  if (process.platform === "darwin" && BACKGROUND_OS_ACTIONS.has(actionType)
-      && request.action && typeof request.action === "object"
-      && readBridgeRecoveryLayout().mode !== "browser-only") {
-    const action = request.action as Record<string, unknown>
-    action.backgroundOk = true
-    pendingRequests.get(id)!.osRoute = { action, contextId: request.contextId, sensitiveText }
-  }
+  void sendBrowserRequest(id, request.action as Record<string, unknown>, request.tabId, request.contextId)
+}
 
-  sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
+/** IPC, WebSocket and internal retries use the same host qualification. */
+async function sendBrowserRequest(id: string, original: Record<string, unknown>, tabId?: number, contextId?: string): Promise<void> {
+  try {
+    let action = original
+    const type = String(action.type)
+    if (["capabilities", "os_click", "os_key", "os_type", "os_move", "click", "click_selector", "scene_click"].includes(type)) {
+      const full = process.platform === "darwin" ? readBridgeRecoveryLayout().mode !== "browser-only" : !!desktopProviderBinary()
+      const osInput = await browserOsInputSupport(full, bridgeCall)
+      const op = osInput[(type.startsWith("os_") ? type.slice(3) : "click") as "click" | "key" | "type" | "move"]
+      action = { ...action, osInput, backgroundOk: type !== "os_move" && op.background,
+        nativeInput: process.platform !== "darwin" || !op.foreground ? process.platform : undefined }
+      const pending = pendingRequests.get(id)
+      if (pending && type !== "capabilities" && type !== "os_move" && op.available) {
+        pending.osRoute = { action, contextId, sensitiveText: pending.sensitiveText, ...pending.osRoute }
+      }
+    }
+    if (pendingRequests.has(id)) sendNativeMessage({ id, action, tabId }, contextId)
+  } catch (error) {
+    handleNativeMessage({ id, result: { success: false, error: `OS input qualification failed before delivery: ${String(error)}` } })
+  }
 }
 
 const SECRET_DELIVERY_TYPES = new Set(["desktop_type", "macos_type", "macos_authdialog", "desktop_authdialog", "input_text", "find_and_type", "os_type", "ios_type", "ios_keys", "ios_unlock", "macos_sudo"])
@@ -1382,29 +1395,32 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
       const result = (msg as { result?: { success?: boolean; data?: Record<string, unknown> } }).result
       const success = result?.success ?? true
 
-      if (success && pending.actionType.startsWith("os_") && result?.data) {
+      if (success && result?.data) {
         const data = result.data as Record<string, unknown>
-        if (data.method === "os_event") {
-          const enrichedAction: Record<string, unknown> = { type: pending.actionType }
+        const autoClick = ["click", "click_selector", "scene_click"].includes(pending.actionType)
+          && (data.escalated as { to?: string } | undefined)?.to === "os_click"
+        const inputType = autoClick ? "os_click" : pending.actionType
+        if (data.method === "os_event" && (autoClick || inputType.startsWith("os_"))) {
+          const enrichedAction: Record<string, unknown> = { type: inputType }
           if (data.windowBounds) {
             Object.assign(enrichedAction, data.screenTarget as Record<string, unknown> || {})
             enrichedAction.windowBounds = data.windowBounds
             enrichedAction.chromeUiHeight = data.chromeUiHeight
           }
           if (data.background) enrichedAction.background = data.background
-          if (pending.actionType === "os_click") {
+          if (inputType === "os_click") {
             enrichedAction.button = data.button || "left"
             enrichedAction.clickCount = data.clickCount || 1
           }
-          if (pending.actionType === "os_key") {
+          if (inputType === "os_key") {
             enrichedAction.key = data.key
             enrichedAction.modifiers = data.modifiers
           }
-          if (pending.actionType === "os_type") {
+          if (inputType === "os_type") {
             enrichedAction.text = pending.sensitiveText ?? data.text
             if (pending.sensitiveText !== undefined) enrichedAction.sensitive = true
           }
-          if (pending.actionType === "os_move") {
+          if (inputType === "os_move") {
             enrichedAction.path = data.path
             enrichedAction.duration = data.duration
           }
@@ -1933,6 +1949,13 @@ async function handleOsAction(
 ): Promise<DaemonResult | null> {
   if (!action) return null
   const startTime = Date.now()
+
+  if (process.platform !== "darwin" && action.type === "os_move") {
+    return { success: false, delivered: false, error: "No safe pointer-path route in the native browser input provider" }
+  }
+  if (process.platform !== "darwin" && BACKGROUND_OS_ACTIONS.has(String(action.type)) && !action.background) {
+    return { success: false, delivered: false, error: "Native browser input requires the resolved browser window target" }
+  }
 
   // The tab is visible in a window that is not OS-focused: the HID tap below
   // would hit whatever is frontmost, so the bridge delivers to that window.
@@ -2649,7 +2672,7 @@ function startWsServer(): ReturnType<typeof Bun.serve> {
           actionType
         })
 
-        sendNativeMessage({ id, action: request.action, tabId: request.tabId }, request.contextId)
+        void sendBrowserRequest(id, request.action as Record<string, unknown>, request.tabId, request.contextId)
       },
       close: handleWsClose,
     }

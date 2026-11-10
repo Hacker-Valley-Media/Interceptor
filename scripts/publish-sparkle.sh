@@ -17,7 +17,7 @@
 #   5. optionally deploy the host and tag the release
 #
 # Env overrides (same defaults as release.sh):
-#   INTERCEPTOR_SPARKLE_VERSION       Sparkle tool version (default 2.9.1)
+#   INTERCEPTOR_SPARKLE_VERSION       Sparkle tool version (default 2.9.2)
 #   INTERCEPTOR_SPARKLE_TOOLS_DIR     cached sign_update install
 #   INTERCEPTOR_SPARKLE_HOST_DIR      checkout of Interceptor-Updates-Sparkle
 #   INTERCEPTOR_DOWNLOAD_URL_PREFIX   base URL the appcast embeds (default
@@ -36,7 +36,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-SPARKLE_VERSION="${INTERCEPTOR_SPARKLE_VERSION:-2.9.1}"
+SPARKLE_VERSION="${INTERCEPTOR_SPARKLE_VERSION:-2.9.2}"
 SPARKLE_TOOLS_DIR="${INTERCEPTOR_SPARKLE_TOOLS_DIR:-$HOME/.cache/interceptor-sparkle/$SPARKLE_VERSION}"
 SPARKLE_HOST_DIR="${INTERCEPTOR_SPARKLE_HOST_DIR:-$REPO_ROOT/../Interceptor-Updates-Sparkle}"
 DOWNLOAD_URL_PREFIX="${INTERCEPTOR_DOWNLOAD_URL_PREFIX:-https://updates.hackervalley.media/}"

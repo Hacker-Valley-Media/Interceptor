@@ -32,8 +32,8 @@ const SKILL_OSES: Record<string, Os[]> = {
 /** Text no copy for that OS may contain once its lines are selected. */
 const FORBIDDEN: Record<Os, RegExp[]> = {
   darwin: [/interceptor-desktop\b/],
-  win32: [/interceptor[- ](macos|ios)\b/, /\bSafari\b/, /--trusted\b/, /--browser-login\b/, /Library\/Application Support/, /\bLinux\b/, /Hyprland|AT-SPI|Wayland/],
-  linux: [/interceptor[- ](macos|ios)\b/, /\bSafari\b/, /--trusted\b/, /--browser-login\b/, /Library\/Application Support/, /\bWindows\b/, /UI Automation/],
+  win32: [/interceptor[- ](macos|ios)\b/, /\bSafari\b/, /--browser-login\b/, /Library\/Application Support/, /\bLinux\b/, /Hyprland|AT-SPI|Wayland/],
+  linux: [/interceptor[- ](macos|ios)\b/, /\bSafari\b/, /--browser-login\b/, /Library\/Application Support/, /\bWindows\b/, /UI Automation/],
 }
 
 const tagFor = (spec: string): Os[] => {

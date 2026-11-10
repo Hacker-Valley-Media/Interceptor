@@ -1,5 +1,5 @@
 import { sendToContentScript, waitStable } from "./content-bridge"
-import { activeTransport } from "./transport"
+import { osInputSupport } from "../../../shared/browser-os-input"
 import { handleOsInputActions } from "./capabilities/os-input"
 import { handleScreenshotActions } from "./capabilities/screenshot"
 import { handleCaptureStreamActions } from "./capabilities/capture-stream"
@@ -142,8 +142,7 @@ export async function routeAction(
   const shouldSceneEscalate =
     action.type === "scene_click" &&
     contentResult.success &&
-    ((action.os === true) || contentResult.warning?.includes("no DOM change")) &&
-    activeTransport !== "none"
+    ((action.os === true) || contentResult.warning?.includes("no DOM change"))
 
   // click_selector escalates through the same path: the content handler
   // reports the clicked element's refId, which os_click resolves to screen
@@ -151,10 +150,14 @@ export async function routeAction(
   const shouldClickEscalate =
     (action.type === "click" || action.type === "click_selector") &&
     contentResult.success &&
-    contentResult.warning?.includes("no DOM change") &&
-    activeTransport !== "none"
+    contentResult.warning?.includes("no DOM change")
 
   if (shouldClickEscalate || shouldSceneEscalate) {
+    const click = osInputSupport(action.osInput).click
+    if (!click.available) {
+      if (action.os === true) return { success: false, error: click.reason, delivered: false } as typeof contentResult
+      return { ...contentResult, warning: `${contentResult.warning}; OS-level escalation skipped: ${click.reason}`, tabId }
+    }
     const resolvedAt = typeof contentResult.data === "object" && contentResult.data
       ? (contentResult.data as { at?: { x?: number; y?: number } }).at
       : undefined

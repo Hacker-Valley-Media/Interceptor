@@ -281,9 +281,9 @@ Compound (agent-optimized):
   interceptor act <ref> "value"              Type into field + wait + return updated tree + what changed
   interceptor act <ref> "value" --submit     Type, then submit the field's form (what Enter would do); 'act <ref> --submit' submits only
   interceptor act '[e5]'                     A ref copied with its brackets works too (quote it: zsh treats [..] as a pattern)
-  interceptor act <ref> --trusted            HID-sourced trusted input (isTrusted: true). On a full install a window that
-                                             is not OS-focused is reached in the background, and a tab that is not showing
-                                             gets a background window of its own and goes back; never moves focus
+  interceptor act <ref> --trusted            Native OS input; inspect capabilities.data.osInput for click/key/type/move support
+                                             ${process.platform === "darwin" ? "A full install reaches covered and hidden tabs without moving focus. Browser-only keeps permission-qualified foreground input." : "Requires the Full native provider and a qualified graphical session. Covered/hidden targets use the native window route without moving focus."}
+                                             --os is an alias. Unsupported operations refuse before delivery; read the page before retrying
   interceptor act <ref> --keys "Enter"       Focus the ref, then send a keyboard shortcut (synthetic Enter never submits a form: use --submit)
   interceptor act <ref> --no-read            Skip post-action tree read
   interceptor inspect                        Tree + text + network log + headers
