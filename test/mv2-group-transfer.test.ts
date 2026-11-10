@@ -27,4 +27,11 @@ test("the shipped MV2 entrypoint creates an ungrouped window without group APIs"
   expect(result).toMatchObject({ success: true, data: { windowId: 3 } })
   expect(result.data.groupWarning).toBeUndefined()
   await runInContext('moveNamedGroupToWindow("mv2test",3)', context)
+  context.captured = []
+  runInContext('activeTransport="native"; sendToHost=message=>captured.push(message); chrome.tabGroups={query:async()=>[]}; transferringGroups.add("transfer")', context)
+  await runInContext('handleDaemonMessage({id:"read-transfer",action:{type:"click",group:"transfer"}})', context)
+  await runInContext('handleDaemonMessage({id:"close-transfer",action:{type:"group_close",label:"transfer",group:"other",groupSoft:true}})', context)
+  expect(context.captured).toHaveLength(2)
+  for (const response of context.captured) expect(response.result).toMatchObject({ success: false, error: "group 'transfer' transfer in progress; retry after it completes" })
+  expect(runInContext('pendingRequests.size', context)).toBe(0)
 })

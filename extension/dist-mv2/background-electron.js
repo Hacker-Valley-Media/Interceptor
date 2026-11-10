@@ -284,7 +284,7 @@ async function readoptNamedGroups(live) {
     if (typeof g.title !== "string" || !g.title.startsWith(prefix))
       continue;
     const label = g.title.slice(prefix.length);
-    if (GROUP_LABEL_RE.test(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
+    if (GROUP_LABEL_RE.test(label) && !transferringGroups.has(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
       await ensureNamedGroup(label);
     }
   }
@@ -6238,7 +6238,13 @@ async function handleDaemonMessage(msg) {
     }
   }
   if (!tabId && needsTab(action.type) && groupLabel) {
-    const groupId = await ensureNamedGroup(groupLabel);
+    let groupId;
+    try {
+      groupId = await ensureNamedGroup(groupLabel);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
     if (groupId !== -1) {
       const groupTabs = await chrome.tabs.query({ groupId });
       const candidate = groupTabs.filter((t) => typeof t.id === "number").sort((a, b) => b.id - a.id)[0];
@@ -6292,8 +6298,15 @@ async function handleDaemonMessage(msg) {
     let refusal = null;
     if (action.type === "group_close") {
       const label = typeof action.label === "string" ? action.label : null;
-      if (label && await ensureNamedGroup(label) !== -1)
-        refusal = foreignSessionCloseError("group", label, groupLabel, label);
+      if (label) {
+        try {
+          if (await ensureNamedGroup(label) !== -1)
+            refusal = foreignSessionCloseError("group", label, groupLabel, label);
+        } catch (error) {
+          fail(error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
     } else {
       const closeId = moveTabId ?? (action.tabId || tabId);
       try {

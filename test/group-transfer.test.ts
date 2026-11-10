@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { addTabToNamedGroup, ensureNamedGroup, moveNamedGroupToWindow, namedGroups, registerTabGroupListeners } from "../extension/src/background/tab-group"
+import { addTabToNamedGroup, ensureNamedGroup, moveNamedGroupToWindow, namedGroups, readoptNamedGroups, registerTabGroupListeners } from "../extension/src/background/tab-group"
 
 const saved = globalThis.chrome
 afterEach(() => { globalThis.chrome = saved; namedGroups.clear() })
@@ -131,6 +131,25 @@ test("a failed recovery reports ungrouped survivors without losing the auto-targ
   expect(f.tabs.get(1)!.groupId).toBe(-1)
   expect(f.stored["activeTabId:transfer"]).toBe(2)
   expect(namedGroups.has("transfer")).toBe(false)
+})
+
+test("readoption skips an in-progress transfer and still registers an unrelated label", async () => {
+  const f = fixture()
+  let release!: () => void
+  let started!: () => void
+  const entered = new Promise<void>(resolve => { started = resolve })
+  const wait = new Promise<void>(resolve => { release = resolve })
+  const ungroup = chrome.tabs.ungroup
+  chrome.tabs.ungroup = (async (...args: any[]) => { started(); await wait; return (ungroup as any)(...args) }) as typeof ungroup
+  const transfer = moveNamedGroupToWindow("transfer", 3)
+  await entered
+  f.groups.set(99, { id: 99, title: "interceptor-other", windowId: 3 })
+  try {
+    await readoptNamedGroups()
+    expect(namedGroups.get("other")).toBe(99)
+    expect(namedGroups.has("transfer")).toBe(false)
+  } finally { release(); await transfer }
+  expect(namedGroups.get("transfer")).toBe(100)
 })
 
 for (const absent of ["tabGroups", "query", "uncallable-query", "ungroup", "move", "group"]) test(`missing ${absent} is a no-op`, async () => {

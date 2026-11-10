@@ -250,7 +250,9 @@ export async function handleDaemonMessage(msg: {
     // Grouped requests resolve ONLY within their group — never the browser-active
     // tab, which is frequently another agent's (the cross-agent bleed this feature
     // exists to prevent).
-    const groupId = await ensureNamedGroup(groupLabel)
+    let groupId: number
+    try { groupId = await ensureNamedGroup(groupLabel) }
+    catch (error) { fail(error instanceof Error ? error.message : String(error)); return }
     if (groupId !== -1) {
       const groupTabs = await chrome.tabs.query({ groupId })
       const candidate = groupTabs
@@ -333,7 +335,10 @@ export async function handleDaemonMessage(msg: {
     let refusal: string | null = null
     if (action.type === "group_close") {
       const label = typeof action.label === "string" ? action.label : null
-      if (label && await ensureNamedGroup(label) !== -1) refusal = foreignSessionCloseError("group", label, groupLabel!, label)
+      if (label) {
+        try { if (await ensureNamedGroup(label) !== -1) refusal = foreignSessionCloseError("group", label, groupLabel!, label) }
+        catch (error) { fail(error instanceof Error ? error.message : String(error)); return }
+      }
     } else {
       const closeId = moveTabId ?? ((action.tabId as number) || tabId)
       try {

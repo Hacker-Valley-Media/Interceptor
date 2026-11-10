@@ -160,7 +160,7 @@ export async function readoptNamedGroups(live?: chrome.tabGroups.TabGroup[]): Pr
   for (const g of groups) {
     if (typeof g.title !== "string" || !g.title.startsWith(prefix)) continue
     const label = g.title.slice(prefix.length)
-    if (GROUP_LABEL_RE.test(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
+    if (GROUP_LABEL_RE.test(label) && !transferringGroups.has(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
       await ensureNamedGroup(label)
     }
   }
