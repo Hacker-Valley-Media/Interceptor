@@ -28,7 +28,7 @@ import { socketWriteAll, drainSocketQueue, releaseSocketQueue } from "./socket-w
 import { callDesktopProvider, watchDesktopProviderReconnect } from "./desktop-provider"
 import { desktopProviderBinary } from "../shared/desktop-provider"
 import { browserOsInputSupport } from "./browser-os-input"
-import { createBrowserOsInputCache } from "./browser-os-input-cache"
+import { createBrowserOsInputCache, needsBrowserOsInput } from "./browser-os-input-cache"
 import { claimOsInputPlan } from "./os-input-plan"
 import {desktopContainerActionError,desktopContainerDeadline} from "../shared/desktop-container-validation"
 import {callNativeRegistration} from './native-registration'
@@ -496,7 +496,7 @@ function dispatchToExtension(id: string, request: CliRequest, socket: Bun.Socket
 
 const browserInputCache = createBrowserOsInputCache(() => {
   const full = process.platform === "darwin" ? readBridgeRecoveryLayout().mode !== "browser-only" : !!desktopProviderBinary()
-  return browserOsInputSupport(full, action => bridgeCall(action, 1000))
+  return browserOsInputSupport(full, action => bridgeCall(action, 600))
 })
 watchDesktopProviderReconnect(() => browserInputCache.invalidate())
 
@@ -505,18 +505,17 @@ async function sendBrowserRequest(id: string, original: Record<string, unknown>,
   try {
     let action = original
     const type = String(action.type)
-    if (["capabilities", "os_click", "os_key", "os_type", "os_move", "click", "click_selector", "scene_click"].includes(type)) {
-      const synthetic = ["click", "click_selector", "scene_click"].includes(type)
-      const osInput = synthetic ? browserInputCache.peek() : await browserInputCache.get()
+    if (needsBrowserOsInput(action)) {
+      const osInput = await browserInputCache.get()
       const op = osInput[(type.startsWith("os_") ? type.slice(3) : "click") as "click" | "key" | "type" | "move"]
       if (type.startsWith("os_") && !op.available) {
-        browserInputCache.invalidate()
         handleNativeMessage({ id, result: { success: false, delivered: false, error: op.reason } })
         return
       }
       action = { ...action, osInput, backgroundOk: type !== "os_move" && op.background,
         nativeInput: process.platform !== "darwin" || !op.foreground ? process.platform : undefined }
       const pending = pendingRequests.get(id)
+      if (pending) pending.osRequested = type === "scene_click" && action.os === true
       if (pending && type !== "capabilities" && type !== "os_move" && op.available) {
         pending.osRoute = { action, contextId, sensitiveText: pending.sensitiveText, ...pending.osRoute }
       }
@@ -1310,6 +1309,7 @@ type PendingRequest = {
   sensitiveText?: string
   osRoute?: OsRoute
   osDelivering?: boolean
+  osRequested?: boolean
   socket: { write: (data: Buffer | string) => number; readonly remoteAddress: string }
   startTime: number
   actionType: string
@@ -1448,7 +1448,6 @@ function handleNativeMessage(msg: { id?: string; type?: string; [key: string]: u
         }
       }
 
-      if (!success && (pending.actionType.startsWith("os_") || pending.osRoute)) browserInputCache.invalidate()
       // A tab that is not showing: the gate refused and named the tab to move.
       if (!success && moveTargetOf(pending, result as DaemonResult) !== undefined) {
         settleOsAction(requestId, pending, result as DaemonResult)

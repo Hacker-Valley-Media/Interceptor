@@ -80,8 +80,8 @@ for (const os of ["mac", "win", "linux"]) test(`new extension with older daemon 
   const trusted = await handleOsInputActions({ type: "os_click", ref: "e1" }, 7)
   expect(trusted.data).toMatchObject({ method: "os_event" })
   const auto = await routeAction({ type: "click", ref: "e1" }, 7)
-  if (os === "mac") expect(auto.data).toMatchObject({ method: "os_event", escalated: { to: "os_click" } })
-  else expect(auto.warning).toContain("predates native browser input")
+  expect(auto.warning).toContain("no trusted click was sent")
+  expect(auto.data).toBeUndefined()
 })
 
 test("malformed and contradictory older-peer capability fields never qualify", () => {
@@ -91,14 +91,17 @@ test("malformed and contradictory older-peer capability fields never qualify", (
   }
 })
 
-for (const type of ["click", "click_selector", "scene_click"]) test(`${type} uses click support for automatic escalation`, async () => {
-  chromeFixture()
+for (const type of ["click", "click_selector", "scene_click"]) test(`${type} reports no mutation without delivering another click`, async () => {
+  const sent = chromeFixture()
   const skipped = await routeAction({ type, ref: "e1", osInput: unavailableOsInput("provider absent") }, 7)
   expect(skipped.success).toBe(true)
-  expect(skipped.warning).toContain("OS-level escalation skipped: provider absent")
+  expect(skipped.warning).toContain("no trusted click was sent; --trusted sends one")
+  expect(sent).toEqual([type])
   const explicit = await routeAction({ type: "scene_click", os: true, osInput: unavailableOsInput("provider absent") }, 7)
   expect(explicit.success).toBe(false)
-  const escalated = await routeAction({ type, ref: "e1", osInput: nativeOsInputSupport("win32", provider()), nativeInput: "win32" }, 7)
+  const implicit = await routeAction({ type, ref: "e1", osInput: nativeOsInputSupport("win32", provider()), nativeInput: "win32" }, 7)
+  expect(implicit.data).toBeUndefined()
+  const escalated = await routeAction({ type: "scene_click", os: true, ref: "e1", osInput: nativeOsInputSupport("win32", provider()), nativeInput: "win32" }, 7)
   expect(escalated.data).toMatchObject({ method: "os_event", escalated: { to: "os_click" } })
 })
 

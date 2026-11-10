@@ -139,29 +139,19 @@ export async function routeAction(
     tabId, action, action.frameId as number | undefined
   ) as { success: boolean; error?: string; data?: unknown; warning?: string; refId?: string }
 
-  const shouldSceneEscalate =
-    action.type === "scene_click" &&
-    contentResult.success &&
-    ((action.os === true) || contentResult.warning?.includes("no DOM change"))
+  const explicitScene = action.type === "scene_click" && action.os === true
+  if (!explicitScene && ["click", "click_selector", "scene_click"].includes(action.type) && contentResult.success && contentResult.warning?.includes("no DOM change")) {
+    return { ...contentResult, warning: `${contentResult.warning}; no trusted click was sent; --trusted sends one`, tabId }
+  }
 
-  // click_selector escalates through the same path: the content handler
-  // reports the clicked element's refId, which os_click resolves to screen
-  // coordinates exactly like a ref-targeted click.
-  const shouldClickEscalate =
-    (action.type === "click" || action.type === "click_selector") &&
-    contentResult.success &&
-    contentResult.warning?.includes("no DOM change")
-
-  if (shouldClickEscalate || shouldSceneEscalate) {
+  if (explicitScene && contentResult.success) {
     const click = (await extensionOsInputSupport(action.osInput)).click
     if (!click.available) {
-      if (action.os === true) return { success: false, error: click.reason, delivered: false } as typeof contentResult
-      return { ...contentResult, warning: `${contentResult.warning}; OS-level escalation skipped: ${click.reason}`, tabId }
+      return { success: false, error: click.reason, delivered: false } as typeof contentResult
     }
     const resolvedAt = typeof contentResult.data === "object" && contentResult.data
       ? (contentResult.data as { at?: { x?: number; y?: number } }).at
       : undefined
-    console.log(`auto-escalating ${action.type} to OS-level input`)
     const osResult = await handleOsInputActions({
       ...action,
       type: "os_click",
@@ -175,35 +165,21 @@ export async function routeAction(
         data: {
           ...((typeof osResult.data === "object" && osResult.data) || {}),
           escalated: {
-            from: action.os === true ? "explicit" : "synthetic",
+            from: "explicit",
             to: "os_click",
-            reason: action.os === true ? "scene click requested trusted input" : "no DOM mutation after synthetic click"
+            reason: "scene click requested trusted input"
           }
         },
         tabId
       }
     }
-    const guardRefused = action.os !== true
-      && !!(typeof osResult.data === "object" && osResult.data && (osResult.data as { hint?: string }).hint)
-    if (guardRefused) {
-      // Only the synthetic layer ran: the foreground guard (issue #166) refused
-      // to fire an OS event at a backgrounded tab. That is a skipped escalation,
-      // not a failed click, so report the synthetic delivery and say so.
-      return {
-        ...contentResult,
-        warning: `${contentResult.warning}; OS-level escalation skipped: ${osResult.error}`,
-        tabId
-      }
-    }
     return {
       success: false,
-      error: "click failed at all layers",
+      error: "trusted scene click failed",
       data: {
         diagnostics: {
-          layers_tried: ["synthetic", "os_click"],
-          reason: action.os === true
-            ? "trusted scene click failed"
-            : "synthetic produced no DOM change, os_click failed",
+          layers_tried: ["os_click"],
+          reason: "trusted scene click failed",
           os_error: osResult.error,
           suggestion: (typeof osResult.data === "object" && osResult.data &&
             (osResult.data as { hint?: string }).hint) ||

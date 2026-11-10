@@ -5882,17 +5882,16 @@ async function routeAction(action, tabId) {
   if (POWER_IDLE_ACTIONS.has(action.type))
     return handlePowerIdleActions(action);
   const contentResult = await sendToContentScript(tabId, action, action.frameId);
-  const shouldSceneEscalate = action.type === "scene_click" && contentResult.success && (action.os === true || contentResult.warning?.includes("no DOM change"));
-  const shouldClickEscalate = (action.type === "click" || action.type === "click_selector") && contentResult.success && contentResult.warning?.includes("no DOM change");
-  if (shouldClickEscalate || shouldSceneEscalate) {
+  const explicitScene = action.type === "scene_click" && action.os === true;
+  if (!explicitScene && ["click", "click_selector", "scene_click"].includes(action.type) && contentResult.success && contentResult.warning?.includes("no DOM change")) {
+    return { ...contentResult, warning: `${contentResult.warning}; no trusted click was sent; --trusted sends one`, tabId };
+  }
+  if (explicitScene && contentResult.success) {
     const click = (await extensionOsInputSupport(action.osInput)).click;
     if (!click.available) {
-      if (action.os === true)
-        return { success: false, error: click.reason, delivered: false };
-      return { ...contentResult, warning: `${contentResult.warning}; OS-level escalation skipped: ${click.reason}`, tabId };
+      return { success: false, error: click.reason, delivered: false };
     }
     const resolvedAt = typeof contentResult.data === "object" && contentResult.data ? contentResult.data.at : undefined;
-    console.log(`auto-escalating ${action.type} to OS-level input`);
     const osResult = await handleOsInputActions({
       ...action,
       type: "os_click",
@@ -5906,29 +5905,21 @@ async function routeAction(action, tabId) {
         data: {
           ...typeof osResult.data === "object" && osResult.data || {},
           escalated: {
-            from: action.os === true ? "explicit" : "synthetic",
+            from: "explicit",
             to: "os_click",
-            reason: action.os === true ? "scene click requested trusted input" : "no DOM mutation after synthetic click"
+            reason: "scene click requested trusted input"
           }
         },
         tabId
       };
     }
-    const guardRefused = action.os !== true && !!(typeof osResult.data === "object" && osResult.data && osResult.data.hint);
-    if (guardRefused) {
-      return {
-        ...contentResult,
-        warning: `${contentResult.warning}; OS-level escalation skipped: ${osResult.error}`,
-        tabId
-      };
-    }
     return {
       success: false,
-      error: "click failed at all layers",
+      error: "trusted scene click failed",
       data: {
         diagnostics: {
-          layers_tried: ["synthetic", "os_click"],
-          reason: action.os === true ? "trusted scene click failed" : "synthetic produced no DOM change, os_click failed",
+          layers_tried: ["os_click"],
+          reason: "trusted scene click failed",
           os_error: osResult.error,
           suggestion: typeof osResult.data === "object" && osResult.data && osResult.data.hint || "verify element is interactive and Chrome window is visible"
         }
