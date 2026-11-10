@@ -54,6 +54,11 @@ const SESSION_NAMED_GROUPS_KEY = "namedTabGroups"
 
 export const namedGroups = new Map<string, number>()
 const transferringGroups = new Set<string>()
+const transferringTabs = new Map<number, string>()
+
+export function transferringTabOwner(tabId: number): string | undefined {
+  return transferringTabs.get(tabId)
+}
 let namedGroupsHydrated = false
 
 function sessionArea(): chrome.storage.StorageArea | undefined {
@@ -230,6 +235,7 @@ export async function moveNamedGroupToWindow(label: string, windowId: number): P
       // Native group moves leave Chromium state that can crash on close (#336).
       // Drop the old id before ungrouping so onRemoved cannot purge its auto-target.
       transferringGroups.add(label)
+      for (const id of ids) transferringTabs.set(id, label)
       namedGroups.delete(label)
       await chrome.tabs.ungroup(ids as [number, ...number[]])
       await chrome.tabs.move(ids, { windowId, index: -1 })
@@ -265,6 +271,7 @@ export async function moveNamedGroupToWindow(label: string, windowId: number): P
       throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${recovered.join("; ")}; ${placement.length ? placement.join(", ") : "read window list for current placement"}`)
     } finally {
       transferringGroups.delete(label)
+      for (const id of ids) transferringTabs.delete(id)
     }
   })
 }
@@ -292,7 +299,7 @@ export async function isTabInAnyManagedGroup(tabId: number): Promise<boolean> {
 
 /** True when at least one managed group (default or named) is known to exist. */
 export function anyManagedGroupKnown(): boolean {
-  return interceptorGroupId !== null || namedGroups.size > 0
+  return interceptorGroupId !== null || namedGroups.size > 0 || transferringGroups.size > 0
 }
 
 /**

@@ -1,7 +1,7 @@
 import { sendToHost, activeTransport, connectToHost, connectWsChannel } from "./transport"
 import {
   SENSITIVE_ACTIONS, verifyTabUrl, hasTabGroupApi, hydrateNamedGroups, readoptNamedGroups, labelForGroupId,
-  GROUP_LABEL_RE, ensureNamedGroup, isTabInNamedGroup, isTabInAnyManagedGroup, anyManagedGroupKnown
+  GROUP_LABEL_RE, ensureNamedGroup, isTabInNamedGroup, isTabInAnyManagedGroup, anyManagedGroupKnown, transferringTabOwner
 } from "./tab-group"
 import { routeAction } from "./router"
 import { needsTab } from "./no-tab-actions"
@@ -49,6 +49,8 @@ export async function managedTabGateError(
   groupHard: boolean
 ): Promise<string | null> {
   try {
+    const owner = transferringTabOwner(tabId)
+    if (owner) return `group '${owner}' transfer in progress; retry after it completes`
     if (groupHard) {
       const inNamed = await isTabInNamedGroup(tabId, groupLabel!)
       return inNamed
@@ -343,7 +345,7 @@ export async function handleDaemonMessage(msg: {
         const tab = await chrome.tabs.get(closeId!)
         // A restart empties the session registry; titles still name the group.
         await readoptNamedGroups()
-        refusal = foreignSessionCloseError("tab", labelForGroupId(tab.groupId), groupLabel!, closeId!)
+        refusal = foreignSessionCloseError("tab", transferringTabOwner(closeId!) ?? labelForGroupId(tab.groupId), groupLabel!, closeId!)
       } catch {}
     }
     if (refusal) {

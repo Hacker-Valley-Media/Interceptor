@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
-import { addTabToNamedGroup, ensureNamedGroup, moveNamedGroupToWindow, namedGroups, readoptNamedGroups, registerTabGroupListeners } from "../extension/src/background/tab-group"
+import { addTabToNamedGroup, anyManagedGroupKnown, ensureNamedGroup, moveNamedGroupToWindow, namedGroups, readoptNamedGroups, registerTabGroupListeners, transferringTabOwner } from "../extension/src/background/tab-group"
+import { managedTabGateError } from "../extension/src/background/message-dispatch"
 
 const saved = globalThis.chrome
 afterEach(() => { globalThis.chrome = saved; namedGroups.clear() })
@@ -102,12 +103,18 @@ test("same-label adds wait for transfer; unrelated labels do not wait", async ()
   await entered
   await expect(ensureNamedGroup("transfer")).rejects.toThrow("transfer in progress; retry")
   expect(f.groups.size).toBe(0)
+  expect(anyManagedGroupKnown()).toBe(true)
+  expect(transferringTabOwner(1)).toBe("transfer")
+  for (const label of [undefined, "other", "transfer"]) expect(await managedTabGateError(1, label, label === "transfer")).toContain("transfer in progress; retry")
+  expect(await managedTabGateError(9, undefined, false)).toContain("not in the interceptor group")
   f.groups.set(99, { id: 99, title: "interceptor-other", windowId: 3 })
   namedGroups.set("other", 99)
   await addTabToNamedGroup(9, "other")
   expect(f.tabs.get(9)!.groupId).toBe(99)
   release()
   await Promise.all([transfer, add])
+  expect(transferringTabOwner(1)).toBeUndefined()
+  expect(await managedTabGateError(1, "transfer", true)).toBeNull()
   expect(f.tabs.get(77)!.groupId).toBe(namedGroups.get("transfer")!)
   expect(f.calls.indexOf("update")).toBeLessThan(f.calls.lastIndexOf("group"))
 })

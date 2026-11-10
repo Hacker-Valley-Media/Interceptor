@@ -109,13 +109,15 @@ test("foreground Windows browser delivery uses native input and confirms the pag
   const calls: any[] = []
   const action = { type: "os_click", pageX: 10, pageY: 20, chromeUiHeight: 88, windowBounds: bounds,
     background: { title: "fixture", error: "refused", hint: "read", foreground: true, watching: true } }
+  const window = { title: "fixture - Brave", pid: 100, windowId: "84", frame: { x: 0, y: 0, width: 800, height: 600 } }
   const result = await deliverInBackground(action, async a => {
     calls.push(a)
+    if (a.type === "desktop_windows") return { success: true, data: [window] }
     return { success: true, data: { method: "Win32.SendInput", background: false, focusUnchanged: true, targetPid: 100 } }
   }, "win32")
-  expect(calls).toHaveLength(1)
-  expect(calls[0]).toMatchObject({ type: "desktop_click", backgroundOnly: false, windowTitle: "fixture" })
+  expect(calls).toHaveLength(2)
+  expect(calls[1]).toMatchObject({ type: "desktop_click", backgroundOnly: false, windowTitle: window.title, window: 84, pid: 100 })
   expect((await confirmDelivery(result, action.background, async () => ({ success: true, data: { events: ["click"] } }), async () => {})).received).toBe(true)
-  const unknown = await deliverInBackground(action, async () => ({ success: true, data: {} }), "win32")
+  const unknown = await deliverInBackground(action, async a => ({ success: true, data: a.type === "desktop_windows" ? [window] : {} }), "win32")
   expect(unknown).toMatchObject({ success: false, code: "timeout_unknown_outcome" })
 })

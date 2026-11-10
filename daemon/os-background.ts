@@ -145,6 +145,20 @@ export async function deliverInBackground(
   })
   const bridgeAction = bridgeActionFor(action,platform)
   if (!bridgeAction) return refuse()
+  if (platform !== "darwin") {
+    // Portable providers require the complete native title, including the browser's suffix.
+    const inventory = await bridgeCall({ type: "desktop_windows" })
+    if (!inventory.success) return { ...inventory, ...refuse(inventory.error), delivered: false }
+    const bounds = action.windowBounds as WindowBounds
+    const sameFrame = Array.isArray(inventory.data) ? inventory.data.filter(w =>
+      typeof w?.title === "string" && w.title && !w.title.includes("\0") && Buffer.byteLength(w.title) <= 4096 &&
+      Number.isSafeInteger(w.pid) && w.pid > 0 && /^(?:[1-9]\d*)$/.test(String(w.windowId)) && Number.isSafeInteger(Number(w.windowId)) &&
+      w.frame?.x === bounds.left && w.frame?.y === bounds.top && w.frame?.width === bounds.width && w.frame?.height === bounds.height) : []
+    const exact = sameFrame.filter(w => w.title === target!.title)
+    const matches = exact.length ? exact : sameFrame.filter(w => w.title.startsWith(`${target!.title} - `))
+    if (matches.length !== 1) return { ...refuse("no unique native window matches the tab title and exact frame; read the target before retrying"), delivered: false }
+    Object.assign(bridgeAction, { windowTitle: matches[0].title, window: Number(matches[0].windowId), pid: matches[0].pid })
+  }
   const result = await bridgeCall(bridgeAction)
   if (!result.success) return {...result,...refuse(result.error),data:{hint:target?.hint,...(result.data===undefined?{}:{nativeData:result.data})}}
   if(platform!=="darwin"){

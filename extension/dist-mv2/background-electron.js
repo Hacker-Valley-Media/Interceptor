@@ -200,6 +200,10 @@ var GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/;
 var SESSION_NAMED_GROUPS_KEY = "namedTabGroups";
 var namedGroups = new Map;
 var transferringGroups = new Set;
+var transferringTabs = new Map;
+function transferringTabOwner(tabId) {
+  return transferringTabs.get(tabId);
+}
 var namedGroupsHydrated = false;
 function sessionArea2() {
   const storage = chrome.storage;
@@ -338,6 +342,8 @@ async function moveNamedGroupToWindow(label, windowId) {
       if (ids.length === 0)
         return groupId;
       transferringGroups.add(label);
+      for (const id of ids)
+        transferringTabs.set(id, label);
       namedGroups.delete(label);
       await chrome.tabs.ungroup(ids);
       await chrome.tabs.move(ids, { windowId, index: -1 });
@@ -375,6 +381,8 @@ async function moveNamedGroupToWindow(label, windowId) {
       throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${recovered.join("; ")}; ${placement.length ? placement.join(", ") : "read window list for current placement"}`);
     } finally {
       transferringGroups.delete(label);
+      for (const id of ids)
+        transferringTabs.delete(id);
     }
   });
 }
@@ -403,7 +411,7 @@ async function isTabInAnyManagedGroup(tabId) {
   return false;
 }
 function anyManagedGroupKnown() {
-  return interceptorGroupId !== null || namedGroups.size > 0;
+  return interceptorGroupId !== null || namedGroups.size > 0 || transferringGroups.size > 0;
 }
 async function managedGroupWindows(label) {
   const hosting = new Map;
@@ -6105,6 +6113,9 @@ function resolveGroupDispatchScope(action) {
 }
 async function managedTabGateError(tabId, groupLabel, groupHard) {
   try {
+    const owner = transferringTabOwner(tabId);
+    if (owner)
+      return `group '${owner}' transfer in progress; retry after it completes`;
     if (groupHard) {
       const inNamed = await isTabInNamedGroup(tabId, groupLabel);
       return inNamed ? null : `tab ${tabId} is not in group '${groupLabel}' — pass the owning group, or --any-tab to bypass`;
@@ -6310,7 +6321,7 @@ async function handleDaemonMessage(msg) {
       try {
         const tab = await chrome.tabs.get(closeId);
         await readoptNamedGroups();
-        refusal = foreignSessionCloseError("tab", labelForGroupId(tab.groupId), groupLabel, closeId);
+        refusal = foreignSessionCloseError("tab", transferringTabOwner(closeId) ?? labelForGroupId(tab.groupId), groupLabel, closeId);
       } catch {}
     }
     if (refusal) {
