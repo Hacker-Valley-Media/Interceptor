@@ -119,9 +119,9 @@ test("malformed and contradictory older-peer capability fields never qualify", (
 
 for (const type of ["click", "click_selector", "scene_click"]) test(`${type} reports no mutation without delivering another click`, async () => {
   const sent = chromeFixture()
-  const skipped = await routeAction({ type, ref: "e1", osInput: unavailableOsInput("provider absent") }, 7)
+  const skipped = await routeAction({ type, ref: "e1", id: "scene1", osInput: unavailableOsInput("provider absent") }, 7)
   expect(skipped.success).toBe(true)
-  expect(skipped.warning).toContain("no trusted click was sent; --trusted sends one")
+  expect(skipped.warning).toBe(`no DOM change after click; no trusted click was sent. If the site needs trusted events: ${type === "scene_click" ? "interceptor scene click --trusted scene1" : "interceptor click --trusted e1"}`)
   expect(sent).toEqual([type])
   const explicit = await routeAction({ type: "scene_click", os: true, osInput: unavailableOsInput("provider absent") }, 7)
   expect(explicit.success).toBe(false)

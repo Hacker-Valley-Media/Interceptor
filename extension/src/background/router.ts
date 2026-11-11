@@ -141,7 +141,10 @@ export async function routeAction(
 
   const explicitScene = action.type === "scene_click" && action.os === true
   if (!explicitScene && ["click", "click_selector", "scene_click"].includes(action.type) && contentResult.success && contentResult.warning?.includes("no DOM change")) {
-    return { ...contentResult, warning: `${contentResult.warning}; no trusted click was sent; --trusted sends one`, tabId }
+    const next = action.type === "scene_click"
+      ? `interceptor scene click --trusted ${action.id ?? "<id>"}`
+      : `interceptor click --trusted ${contentResult.refId ?? action.ref ?? action.index ?? "<ref>"}`
+    return { ...contentResult, warning: `no DOM change after click; no trusted click was sent. If the site needs trusted events: ${next}`, tabId }
   }
 
   if (explicitScene && contentResult.success) {

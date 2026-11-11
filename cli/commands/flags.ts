@@ -11,6 +11,12 @@
 
 export const TRUSTED_FLAG_VALUES: ReadonlyArray<string> = ["--trusted", "--os"]
 
+export function trustedSelectorError(command: string, flags: ReadonlyArray<string>): string | undefined {
+  if (command === "click" && flags.includes("--selector") && TRUSTED_FLAG_VALUES.some(flag => flags.includes(flag))) {
+    return 'error: --selector does not support --trusted or --os. Run interceptor query "<css>" to get an e-ref, then interceptor click <ref> --trusted.'
+  }
+}
+
 let warnedDeprecatedOs = false
 
 export function hasTrustedFlag(filtered: ReadonlyArray<string>): boolean {

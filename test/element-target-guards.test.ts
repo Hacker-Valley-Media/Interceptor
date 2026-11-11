@@ -61,6 +61,14 @@ describe("bare element-target verbs exit with usage, not a TypeError", () => {
 })
 
 describe("click --selector argument validation", () => {
+  for (const flag of ["--trusted", "--os"]) {
+    test(`click --selector ${flag} refuses before returning an action`, () => {
+      const { code, stderr } = runParse(["click", "--selector", "button", flag])
+      expect(code).toBe(1)
+      expect(stderr).toContain('interceptor query "<css>"')
+      expect(stderr).toContain("interceptor click <ref> --trusted")
+    })
+  }
   test("--selector with no value errors instead of becoming a bogus ref", () => {
     const { code, stderr } = runParse(["click", "--selector"])
     expect(code).toBe(1)

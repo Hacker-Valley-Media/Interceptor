@@ -65,6 +65,8 @@ Unqualified `find` returns two typed current-page sections: literal case-insensi
 ```bash
 interceptor click e7
 interceptor click --selector "button span" --nth 4   # CSS-selector click; 0-based --nth matches query output; quote selectors with spaces
+interceptor query "button span"                    # Returns e-refs; use interceptor click <ref> --trusted for native input
+# --selector with --trusted/--os refuses before sending input. act/type/keys also reject that combination.
 interceptor type e9 "..."
 interceptor keys "Meta+K"               # Events carry legacy keyCode/which/charCode; Enter is 13, Shift+a arrives as A
 interceptor select e12 "Option label"   # native select: exact value first, then one exact label
