@@ -11,6 +11,7 @@ function fixture(fail?: string, removal: "during" | "after" = "during") {
   const tabs = new Map([1, 2, 9, 77].map(id => [id, { id, groupId: id < 3 ? 40 : -1, windowId: id < 3 ? 1 : 3, index: id === 1 ? 1 : 0 }]))
   const groups = new Map<number, any>([[40, { id: 40, title: "interceptor-transfer", color: "purple", collapsed: true, windowId: 1 }]])
   let onRemoved: (group: any) => Promise<void> = async () => {}
+  let tabRemoved: (id: number) => Promise<void> = async () => {}
   const step = (name: string) => { calls.push(name); if (fail === name) { fail = undefined; throw Error(`injected ${name}`) } }
   globalThis.chrome = {
     storage: { session: {
@@ -27,7 +28,7 @@ function fixture(fail?: string, removal: "during" | "after" = "during") {
       onRemoved: { addListener: (fn: typeof onRemoved) => { onRemoved = fn } },
     },
     tabs: {
-      onRemoved: { addListener() {} },
+      onRemoved: { addListener: (fn: typeof tabRemoved) => { tabRemoved = fn } },
       query: async ({ groupId }: { groupId: number }) => { step("query"); return [...tabs.values()].filter(t => t.groupId === groupId) },
       get: async (id: number) => tabs.get(id),
       ungroup: async (ids: number[]) => {
@@ -51,7 +52,7 @@ function fixture(fail?: string, removal: "during" | "after" = "during") {
   } as unknown as typeof chrome
   namedGroups.set("transfer", 40)
   registerTabGroupListeners()
-  return { calls, stored, tabs, groups, removed: (id: number) => onRemoved({ id }) }
+  return { calls, stored, tabs, groups, removed: (id: number) => onRemoved({ id }), tabRemoved: (id: number) => tabRemoved(id) }
 }
 
 for (const removal of ["during", "after"] as const) test(`transfer preserves order, metadata and auto-target with ${removal} removal`, async () => {
@@ -138,6 +139,17 @@ test("a failed recovery reports ungrouped survivors without losing the auto-targ
   expect(f.tabs.get(1)!.groupId).toBe(-1)
   expect(f.stored["activeTabId:transfer"]).toBe(2)
   expect(namedGroups.has("transfer")).toBe(false)
+  try {
+    expect(transferringTabOwner(1)).toBe("transfer")
+    for (const label of [undefined, "s-0123456789abcdef"]) {
+      expect(await managedTabGateError(1, label, false)).toContain("transfer in progress; retry")
+    }
+    expect(anyManagedGroupKnown()).toBe(true)
+  } finally {
+    await f.tabRemoved(1)
+    await f.tabRemoved(2)
+  }
+  expect(transferringTabOwner(1)).toBeUndefined()
 })
 
 test("readoption skips an in-progress transfer and still registers an unrelated label", async () => {

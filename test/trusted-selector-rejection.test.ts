@@ -6,6 +6,7 @@ import {captureSubprocessSync} from '../shared/subprocess-sync'
 
 for(const flag of ['--trusted','--os'])for(const args of [
   ['click','--selector','button'],
+  ['click','--selector=button'],
   ['act','e1','--selector','button'],
   ['act','--selector','button'],
   ['type','e1','hello','--selector','button'],

@@ -381,8 +381,11 @@ async function moveNamedGroupToWindow(label, windowId) {
       throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${recovered.join("; ")}; ${placement.length ? placement.join(", ") : "read window list for current placement"}`);
     } finally {
       transferringGroups.delete(label);
-      for (const id of ids)
-        transferringTabs.delete(id);
+      for (const id of ids) {
+        const tab = await chrome.tabs.get(id).catch(() => null);
+        if (!tab || tab.groupId === namedGroups.get(label))
+          transferringTabs.delete(id);
+      }
     }
   });
 }
@@ -411,7 +414,7 @@ async function isTabInAnyManagedGroup(tabId) {
   return false;
 }
 function anyManagedGroupKnown() {
-  return interceptorGroupId !== null || namedGroups.size > 0 || transferringGroups.size > 0;
+  return interceptorGroupId !== null || namedGroups.size > 0 || transferringGroups.size > 0 || transferringTabs.size > 0;
 }
 async function managedGroupWindows(label) {
   const hosting = new Map;

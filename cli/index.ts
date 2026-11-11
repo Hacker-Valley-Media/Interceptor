@@ -244,7 +244,7 @@ async function main() {
     return
   }
 
-  const selectorError = trustedSelectorError(cmd, commandOptions)
+  const selectorError = trustedSelectorError(cmd, filtered.slice(normalized.positionalCount + 1))
   if (selectorError) { console.error(selectorError); process.exit(1) }
 
   if (!ALL_KNOWN_CMDS.has(cmd)) {

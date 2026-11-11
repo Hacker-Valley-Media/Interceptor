@@ -271,7 +271,11 @@ export async function moveNamedGroupToWindow(label: string, windowId: number): P
       throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${recovered.join("; ")}; ${placement.length ? placement.join(", ") : "read window list for current placement"}`)
     } finally {
       transferringGroups.delete(label)
-      for (const id of ids) transferringTabs.delete(id)
+      for (const id of ids) {
+        const tab = await chrome.tabs.get(id).catch(() => null)
+        // Failed regrouping must not release surviving tabs to another session.
+        if (!tab || tab.groupId === namedGroups.get(label)) transferringTabs.delete(id)
+      }
     }
   })
 }
@@ -299,7 +303,7 @@ export async function isTabInAnyManagedGroup(tabId: number): Promise<boolean> {
 
 /** True when at least one managed group (default or named) is known to exist. */
 export function anyManagedGroupKnown(): boolean {
-  return interceptorGroupId !== null || namedGroups.size > 0 || transferringGroups.size > 0
+  return interceptorGroupId !== null || namedGroups.size > 0 || transferringGroups.size > 0 || transferringTabs.size > 0
 }
 
 /**
@@ -497,6 +501,7 @@ export async function verifyTabUrl(tabId: number, expectedUrl?: string): Promise
 export function registerTabGroupListeners(): void {
   if (!hasTabGroupApi()) return
   chrome.tabs.onRemoved.addListener(async (_removedTabId) => {
+    transferringTabs.delete(_removedTabId)
     if (interceptorGroupId === null) return
     try {
       const tabs = await chrome.tabs.query({ groupId: interceptorGroupId })

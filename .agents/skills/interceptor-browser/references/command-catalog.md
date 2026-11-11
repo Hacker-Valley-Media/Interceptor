@@ -50,7 +50,7 @@ interceptor act '[e7]'                             # A ref copied with its brack
 interceptor act e15 --trusted                      # HID-sourced click; page sees isTrusted: true. ESCALATION ONLY. <!-- os:darwin -->
 interceptor act e15 --trusted --no-read --json --ws # Full native foreground input; inspect capabilities.data.osInput first <!-- os:win32 -->
 interceptor capabilities # Browser OS input is unavailable in 2.1.12; trusted operations refuse before delivery. Use synthetic input. <!-- os:linux -->
-interceptor capabilities # Windows trusted click/key/type require a visible foreground tab; covered/hidden/minimized targets refuse before input <!-- os:win32 -->
+interceptor capabilities # Windows trusted click/key/type require an active tab in a visible foreground window; clicks check the input point, key/type do not check occlusion <!-- os:win32 -->
 interceptor act e20 --no-read
 # act takes the ref directly (act e5, never act click e5). A timeout or closed channel after dispatch
 # is reported as unverified delivery: read the target before retrying so you do not click twice.
