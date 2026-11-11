@@ -43,4 +43,16 @@ test("the shipped MV2 entrypoint creates an ungrouped window without group APIs"
   expect(context.captured.at(-1).result.success).toBe(false)
   expect(context.captured.at(-1).result.error).toContain("belongs to another agent session's group 's-1111111111111111'")
   expect(runInContext('pendingRequests.size', context)).toBe(0)
+  const restoredChrome = {...chrome, tabs:{...chrome.tabs,query:answer([]),get:answer({id:77,windowId:3,active:true,groupId:-1})},
+    storage:{...chrome.storage, session:{
+      get:async()=>({failedTransferTabs:{77:"s-1111111111111111",bad:"invalid label"}}),set:async()=>{},
+    }},
+  }
+  const restarted = createContext({ chrome:restoredChrome, console: { log() {}, warn() {}, error() {} }, URL, crypto, TextEncoder, TextDecoder,
+    navigator: { userAgent: "fixture" }, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0,
+    WebSocket: class { static OPEN = 1; readyState = 0; close() {}; send() {} },
+  })
+  runInContext(bundle,restarted,{timeout:3000})
+  await runInContext('hydrateNamedGroups()',restarted)
+  expect(await runInContext('managedTabGateError(77,"s-2222222222222222",false)',restarted)).toContain("transfer in progress; retry")
 })

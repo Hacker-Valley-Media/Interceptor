@@ -141,6 +141,7 @@ test("a failed recovery reports ungrouped survivors without losing the auto-targ
   expect(namedGroups.has("transfer")).toBe(false)
   try {
     expect(transferringTabOwner(1)).toBe("transfer")
+    expect(f.stored.failedTransferTabs).toEqual({1:"transfer",2:"transfer"})
     for (const label of [undefined, "s-0123456789abcdef"]) {
       expect(await managedTabGateError(1, label, false)).toContain("transfer in progress; retry")
     }
@@ -150,6 +151,7 @@ test("a failed recovery reports ungrouped survivors without losing the auto-targ
     await f.tabRemoved(2)
   }
   expect(transferringTabOwner(1)).toBeUndefined()
+  expect(f.stored.failedTransferTabs).toEqual({})
 })
 
 test("readoption skips an in-progress transfer and still registers an unrelated label", async () => {

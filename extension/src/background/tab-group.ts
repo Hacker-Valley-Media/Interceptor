@@ -51,6 +51,7 @@ async function createGroupInTabWindow(tabId: number): Promise<number> {
 
 export const GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/
 const SESSION_NAMED_GROUPS_KEY = "namedTabGroups"
+const SESSION_RETAINED_TABS_KEY = "failedTransferTabs"
 
 export const namedGroups = new Map<string, number>()
 const transferringGroups = new Set<string>()
@@ -72,11 +73,19 @@ export async function hydrateNamedGroups(): Promise<void> {
   try {
     const area = sessionArea()
     if (!area) return
-    const stored = (await area.get(SESSION_NAMED_GROUPS_KEY)) as Record<string, unknown>
+    const stored = (await area.get([SESSION_NAMED_GROUPS_KEY, SESSION_RETAINED_TABS_KEY])) as Record<string, unknown>
     const raw = stored?.[SESSION_NAMED_GROUPS_KEY]
     if (raw && typeof raw === "object") {
       for (const [label, gid] of Object.entries(raw as Record<string, unknown>)) {
         if (GROUP_LABEL_RE.test(label) && typeof gid === "number") namedGroups.set(label, gid)
+      }
+    }
+    const retained = stored?.[SESSION_RETAINED_TABS_KEY]
+    if (retained && typeof retained === "object") {
+      for (const [id, label] of Object.entries(retained)) {
+        if (!/^[0-9]+$/.test(id) || typeof label !== "string" || !GROUP_LABEL_RE.test(label)) continue
+        const tab = await chrome.tabs.get(Number(id)).catch(() => null)
+        if (tab?.groupId === -1) transferringTabs.set(Number(id), label)
       }
     }
   } catch {}
@@ -86,7 +95,7 @@ async function persistNamedGroups(): Promise<void> {
   try {
     const area = sessionArea()
     if (!area) return
-    await area.set({ [SESSION_NAMED_GROUPS_KEY]: Object.fromEntries(namedGroups) })
+    await area.set({ [SESSION_NAMED_GROUPS_KEY]: Object.fromEntries(namedGroups), [SESSION_RETAINED_TABS_KEY]: Object.fromEntries(transferringTabs) })
   } catch {}
 }
 
@@ -276,6 +285,7 @@ export async function moveNamedGroupToWindow(label: string, windowId: number): P
         // Failed regrouping must not release surviving tabs to another session.
         if (!tab || tab.groupId === namedGroups.get(label)) transferringTabs.delete(id)
       }
+      await persistNamedGroups()
     }
   })
 }
@@ -501,7 +511,7 @@ export async function verifyTabUrl(tabId: number, expectedUrl?: string): Promise
 export function registerTabGroupListeners(): void {
   if (!hasTabGroupApi()) return
   chrome.tabs.onRemoved.addListener(async (_removedTabId) => {
-    transferringTabs.delete(_removedTabId)
+    if (transferringTabs.delete(_removedTabId)) await persistNamedGroups()
     if (interceptorGroupId === null) return
     try {
       const tabs = await chrome.tabs.query({ groupId: interceptorGroupId })

@@ -198,6 +198,7 @@ async function createGroupInTabWindow(tabId) {
 }
 var GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/;
 var SESSION_NAMED_GROUPS_KEY = "namedTabGroups";
+var SESSION_RETAINED_TABS_KEY = "failedTransferTabs";
 var namedGroups = new Map;
 var transferringGroups = new Set;
 var transferringTabs = new Map;
@@ -217,12 +218,22 @@ async function hydrateNamedGroups() {
     const area = sessionArea2();
     if (!area)
       return;
-    const stored = await area.get(SESSION_NAMED_GROUPS_KEY);
+    const stored = await area.get([SESSION_NAMED_GROUPS_KEY, SESSION_RETAINED_TABS_KEY]);
     const raw = stored?.[SESSION_NAMED_GROUPS_KEY];
     if (raw && typeof raw === "object") {
       for (const [label, gid] of Object.entries(raw)) {
         if (GROUP_LABEL_RE.test(label) && typeof gid === "number")
           namedGroups.set(label, gid);
+      }
+    }
+    const retained = stored?.[SESSION_RETAINED_TABS_KEY];
+    if (retained && typeof retained === "object") {
+      for (const [id, label] of Object.entries(retained)) {
+        if (!/^[0-9]+$/.test(id) || typeof label !== "string" || !GROUP_LABEL_RE.test(label))
+          continue;
+        const tab = await chrome.tabs.get(Number(id)).catch(() => null);
+        if (tab?.groupId === -1)
+          transferringTabs.set(Number(id), label);
       }
     }
   } catch {}
@@ -232,7 +243,7 @@ async function persistNamedGroups() {
     const area = sessionArea2();
     if (!area)
       return;
-    await area.set({ [SESSION_NAMED_GROUPS_KEY]: Object.fromEntries(namedGroups) });
+    await area.set({ [SESSION_NAMED_GROUPS_KEY]: Object.fromEntries(namedGroups), [SESSION_RETAINED_TABS_KEY]: Object.fromEntries(transferringTabs) });
   } catch {}
 }
 function groupTitleFor(label) {
@@ -386,6 +397,7 @@ async function moveNamedGroupToWindow(label, windowId) {
         if (!tab || tab.groupId === namedGroups.get(label))
           transferringTabs.delete(id);
       }
+      await persistNamedGroups();
     }
   });
 }
