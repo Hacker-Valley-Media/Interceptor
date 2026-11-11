@@ -855,7 +855,7 @@ function osInputSupport(value) {
   for (const key of ["click", "key", "type", "move"]) {
     const op = value[key];
     if (op && typeof op.available === "boolean" && typeof op.foreground === "boolean" && typeof op.background === "boolean") {
-      result[key] = op.available && (op.foreground || op.background) ? { available: true, foreground: op.foreground, background: op.background } : { available: false, foreground: false, background: false, reason: typeof op.reason === "string" && op.reason ? op.reason : "No qualified input route" };
+      result[key] = op.available && (op.foreground || op.background) ? { available: true, foreground: op.foreground, background: op.background, ...typeof op.reason === "string" && op.reason ? { reason: op.reason } : {} } : { available: false, foreground: false, background: false, reason: typeof op.reason === "string" && op.reason ? op.reason : "No qualified input route" };
     }
   }
   return result;
@@ -1166,6 +1166,7 @@ async function handleWindowActions(action, _tabId) {
 // extension/src/background/capabilities/os-input.ts
 var FOREGROUND_HINT = "trusted OS input reaches a tab only when it is the active tab of a window that is not minimized. " + "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " + "If the page really needs an OS click, run `interceptor window new --tab <id>`: it gives the tab its own background window, and a full install then delivers the click there without changing the frontmost app. " + "`tab switch` belongs only in that window. Never switch tabs in a window the user is working in.";
 async function requireForegroundTab(tabId, backgroundOk = false, nativeInput) {
+  const hint = nativeInput === "win32" ? "Windows browser trusted input requires the target tab visible in the foreground window of that desktop session. Bring that browser window to the foreground in the session, or use synthetic input." : FOREGROUND_HINT;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) {
     return { ok: false, result: { success: false, error: `tab ${tabId} not found` } };
@@ -1180,7 +1181,7 @@ async function requireForegroundTab(tabId, backgroundOk = false, nativeInput) {
       success: false,
       delivered: false,
       error: `window ${tab.windowId} is minimized — trusted OS input needs on-screen pixels to hit`,
-      data: { hint: FOREGROUND_HINT, windowState: win.state, ...moveTarget }
+      data: { hint, windowState: win.state, ...moveTarget }
     } };
   }
   if (!tab.active) {
@@ -1188,7 +1189,7 @@ async function requireForegroundTab(tabId, backgroundOk = false, nativeInput) {
       success: false,
       delivered: false,
       error: `tab ${tabId} is not the active tab of window ${tab.windowId} — a trusted OS event would hit the window's visible tab instead`,
-      data: { hint: FOREGROUND_HINT, ...moveTarget }
+      data: { hint, ...moveTarget }
     } };
   }
   const windowBounds = {
@@ -1200,14 +1201,14 @@ async function requireForegroundTab(tabId, backgroundOk = false, nativeInput) {
   if (!win.focused) {
     const error = `window ${tab.windowId} is not the OS-focused window — trusted OS events are routed by the OS to whatever is frontmost, not to the target tab`;
     if (!backgroundOk) {
-      return { ok: false, result: { success: false, delivered: false, error, data: { hint: FOREGROUND_HINT } } };
+      return { ok: false, result: { success: false, delivered: false, error, data: { hint } } };
     }
-    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT, tabId } };
+    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint, tabId } };
   }
   return { ok: true, windowBounds, ...nativeInput ? { background: {
     title: tab.title || "",
     error: "native browser input target unavailable",
-    hint: FOREGROUND_HINT,
+    hint,
     tabId,
     foreground: nativeInput === "win32"
   } } : {} };

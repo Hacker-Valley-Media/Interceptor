@@ -32,7 +32,7 @@
     <ul>
       <li>Repeated <code>window new --group my-group</code> calls move the tabs without Chromium's native group-transfer operation, preventing the crash on later group close (#336). The label, color, collapsed state, order and per-group target are preserved.</li>
       <li>New transfers made with <code>window new --group my-group</code> avoid the browser crash. Groups already moved between windows by 2.1.11, or moved by dragging the whole group, can still crash when closed. Save your work and record the URLs, restart the browser, then restore the session or reopen the URLs in a fresh named group. Use <code>window new --group my-group</code> for later moves. Updating the extension alone does not clear the old browser state.</li>
-      <li>Trusted browser click, key and text requests use the Full native provider on supported desktop sessions (#335). Capabilities report each operation's foreground and background support and an unavailable reason. Unsupported pointer paths refuse before delivery.</li>
+      <li>Windows Full installs support trusted browser click, key and text input on the visible foreground tab (#335). Covered, hidden and minimized targets refuse before delivery. Linux browser OS input is unavailable in this version because native window identity was not qualified; use synthetic input. Capabilities report each operation's support and limits. Unsupported pointer paths refuse before delivery.</li>
       <li>Updated the MCP SDK and its dependency graph, the DOM test packages, rustls, Sparkle and the Swift NIO packages to address dependency advisories. The MCP stdio patch that preserves large compiled stdout responses remains applied.</li>
     </ul>
   </section>

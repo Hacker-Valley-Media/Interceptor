@@ -97,6 +97,9 @@ pub(super) fn activate(hwnd:HWND)->bool {
 }
 
 pub fn deliver(hwnd: HWND, pid: u32, action: &Value, verb: &str, start: Option<POINT>, end: Option<POINT>, element:Option<&windows::Win32::UI::Accessibility::IUIAutomationElement>, api:&windows::Win32::UI::Accessibility::IUIAutomation) -> Value {
+    if action["backgroundOnly"]==false && action["windowTitle"].is_string() && action["windowBounds"].is_object() && unsafe{GetForegroundWindow()}!=hwnd {
+        return failure("foreground_required","Windows browser input requires the target window already in the foreground; use synthetic input or bring it forward in that desktop session");
+    }
     // Background first: input never activates a window. SendInput is used only
     // when the target already is the foreground window, so focus cannot move; the cursor is restored.
     if action["backgroundOnly"]==true || unsafe{GetForegroundWindow()}!=hwnd { return background::deliver(hwnd,pid,action,verb,start,end); }

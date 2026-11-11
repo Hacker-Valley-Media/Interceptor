@@ -15,7 +15,7 @@ export function osInputSupport(value: unknown): OsInputSupport {
     const op = (value as OsInputSupport)[key]
     if (op && typeof op.available === "boolean" && typeof op.foreground === "boolean" && typeof op.background === "boolean") {
       result[key] = op.available && (op.foreground || op.background)
-        ? { available: true, foreground: op.foreground, background: op.background }
+        ? { available: true, foreground: op.foreground, background: op.background, ...(typeof op.reason === "string" && op.reason ? { reason: op.reason } : {}) }
         : { available: false, foreground: false, background: false, reason: typeof op.reason === "string" && op.reason ? op.reason : "No qualified input route" }
     }
   }
@@ -24,18 +24,15 @@ export function osInputSupport(value: unknown): OsInputSupport {
 
 export function nativeOsInputSupport(platform: string, hello?: DesktopHello, failure?: string): OsInputSupport {
   const result = unavailableOsInput(failure || "The Full native input provider is unavailable")
+  if (platform === "linux") return unavailableOsInput("Linux browser OS input is unavailable in 2.1.12: native window identity was not qualified in the tested desktop session; use synthetic input")
   if (!hello || hello.host !== platform || !hello.session || ["0", "none"].includes(hello.session)) return result
   const capability = (name: string) => hello.capabilities.find(c => c.operation === name)
-  const keys = capability("keys")
-  const pointer = capability("scroll")
-  const x11 = platform === "linux" && keys?.effective && pointer?.effective && keys.provider.startsWith("X11.")
-  const hyprland = platform === "linux" && keys?.effective && pointer?.effective && keys.provider.startsWith("Hyprland.") && pointer.provider.startsWith("Hyprland/")
   for (const [op, native] of [["click", "click"], ["key", "keys"], ["type", "type"]] as const) {
     const cap = capability(native)
-    const qualified = platform === "win32" || x11 || hyprland
+    const qualified = platform === "win32"
     if (qualified && cap?.compiled && cap.present && cap.effective && ["granted", "not_applicable"].includes(cap.permission)) {
-      result[op] = { available: true, foreground: true, background: true }
-    } else result[op].reason = !qualified ? pointer?.reason || "No qualified native input backend for this session" : cap?.reason || result[op].reason
+      result[op] = { available: true, foreground: true, background: false, reason: "Windows browser input is qualified only in the foreground; covered-window messages produced no page events" }
+    } else result[op].reason = !qualified ? "No qualified native input backend for this session" : cap?.reason || result[op].reason
   }
   result.move.reason = "No safe pointer-path route in the native browser input provider"
   return result

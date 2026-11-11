@@ -52,7 +52,7 @@ export async function confirmDelivery(
     if (!receipt.success || !Array.isArray(data?.events)) return result
     if (data.events.length > 0) {
       const { warning: _unneeded, ...received } = result
-      return { ...received, data: `${result.data}; the page received it`, received: true }
+      return { ...received, data: `${typeof result.data === "object" ? JSON.stringify(result.data) : result.data}; the page received it`, received: true }
     }
     hidden = data.hidden === true
   }

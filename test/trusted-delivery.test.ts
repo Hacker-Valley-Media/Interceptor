@@ -19,6 +19,12 @@ const receipts = (...answers: unknown[]) => {
 }
 
 describe("confirmDelivery", () => {
+  test("portable native receipt fields survive page confirmation", async () => {
+    const native = { method: "Win32.SendInput", targetPid: 42, focusUnchanged: true }
+    const result = await confirmDelivery({ success: true, data: native }, target, receipts({ events: ["input"] }), noWait)
+    expect(result.received).toBe(true)
+    expect(result.data).toBe(JSON.stringify(native) + "; the page received it")
+  })
   test("events reaching the page confirm it and drop the hidden warning", async () => {
     const result = await confirmDelivery(delivered, target, receipts({ events: ["mousedown"], hidden: true }), noWait)
     expect(result.success).toBe(true)
