@@ -152,16 +152,20 @@ export async function handleWindowActions(
           // elsewhere pulls the tab there and leaves the new window empty. A
           // named group is the caller's own, so it moves here with its tabs.
           // The shared default group stays put, and the result says so.
-          if (group && typeof win.id === "number") await moveNamedGroupToWindow(group, win.id)
+          if (group && typeof win.id === "number") {
+            try { await moveNamedGroupToWindow(group, win.id) }
+            catch (error) { groupWarning = String(error) }
+          }
           groupId = group
             ? await addTabToNamedGroup(firstTab.id, group, action.groupColor)
             : await addTabToInterceptorGroup(firstTab.id)
           try {
             const landed = await chrome.tabs.get(firstTab.id)
             if (landed.windowId !== win.id) {
-              groupWarning = group
+              const placementWarning = group
                 ? `group '${group}' could not be moved, so the tab joined it in window ${landed.windowId} and has no window of its own`
                 : `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`
+              groupWarning = [groupWarning, placementWarning].filter(Boolean).join("; ")
             }
           } catch {}
         }

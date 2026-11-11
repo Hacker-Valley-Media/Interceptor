@@ -281,9 +281,8 @@ Compound (agent-optimized):
   interceptor act <ref> "value"              Type into field + wait + return updated tree + what changed
   interceptor act <ref> "value" --submit     Type, then submit the field's form (what Enter would do); 'act <ref> --submit' submits only
   interceptor act '[e5]'                     A ref copied with its brackets works too (quote it: zsh treats [..] as a pattern)
-  interceptor act <ref> --trusted            HID-sourced trusted input (isTrusted: true). On a full install a window that
-                                             is not OS-focused is reached in the background, and a tab that is not showing
-                                             gets a background window of its own and goes back; never moves focus
+  interceptor act <ref> --trusted            Native OS input; inspect capabilities.data.osInput for click/key/type/move support. ${process.platform === "darwin" ? "Full reaches covered and hidden Chromium tabs without moving focus. Safari requires a showing tab in a non-minimized window. Browser-only keeps permission-qualified foreground input." : process.platform === "win32" ? "Requires Full and an active tab in a visible foreground window. Clicks also check the input point; key and type do not check occlusion. Hidden and minimized targets refuse before delivery." : "Browser OS input is unavailable in 2.1.12 because native browser window identity was not qualified. Use synthetic input; trusted requests refuse before delivery."}
+                                             --os is an alias. Unsupported operations refuse before delivery; read the page before retrying
   interceptor act <ref> --keys "Enter"       Focus the ref, then send a keyboard shortcut (synthetic Enter never submits a form: use --submit)
   interceptor act <ref> --no-read            Skip post-action tree read
   interceptor inspect                        Tree + text + network log + headers
@@ -359,6 +358,8 @@ Page meta and data (one call each):
 Actions:
   interceptor click <index|ref>              Click element (e.g. interceptor click e5)
   interceptor click --selector "<css>" [--nth N]  Click by CSS selector (0-based --nth matches query output; quote selectors with spaces)
+  --selector with --trusted/--os refuses before input. Run interceptor query "<css>" for e-refs, then interceptor click <ref> --trusted.
+  A click with no DOM change returns a warning. No trusted click follows automatically; --trusted sends one.
   interceptor click <index> --at X,Y        Click at coordinates on element
   interceptor dblclick <index> --at X,Y     Double-click at coordinates
   interceptor rightclick <index> --at X,Y   Right-click at coordinates

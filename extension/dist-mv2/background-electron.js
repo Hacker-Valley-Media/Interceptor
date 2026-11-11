@@ -198,7 +198,13 @@ async function createGroupInTabWindow(tabId) {
 }
 var GROUP_LABEL_RE = /^[A-Za-z0-9_-]{1,32}$/;
 var SESSION_NAMED_GROUPS_KEY = "namedTabGroups";
+var SESSION_RETAINED_TABS_KEY = "failedTransferTabs";
 var namedGroups = new Map;
+var transferringGroups = new Set;
+var transferringTabs = new Map;
+function transferringTabOwner(tabId) {
+  return transferringTabs.get(tabId);
+}
 var namedGroupsHydrated = false;
 function sessionArea2() {
   const storage = chrome.storage;
@@ -212,12 +218,22 @@ async function hydrateNamedGroups() {
     const area = sessionArea2();
     if (!area)
       return;
-    const stored = await area.get(SESSION_NAMED_GROUPS_KEY);
+    const stored = await area.get([SESSION_NAMED_GROUPS_KEY, SESSION_RETAINED_TABS_KEY]);
     const raw = stored?.[SESSION_NAMED_GROUPS_KEY];
     if (raw && typeof raw === "object") {
       for (const [label, gid] of Object.entries(raw)) {
         if (GROUP_LABEL_RE.test(label) && typeof gid === "number")
           namedGroups.set(label, gid);
+      }
+    }
+    const retained = stored?.[SESSION_RETAINED_TABS_KEY];
+    if (retained && typeof retained === "object") {
+      for (const [id, label] of Object.entries(retained)) {
+        if (!/^[0-9]+$/.test(id) || typeof label !== "string" || !GROUP_LABEL_RE.test(label))
+          continue;
+        const tab = await chrome.tabs.get(Number(id)).catch(() => null);
+        if (tab?.groupId === -1)
+          transferringTabs.set(Number(id), label);
       }
     }
   } catch {}
@@ -227,7 +243,7 @@ async function persistNamedGroups() {
     const area = sessionArea2();
     if (!area)
       return;
-    await area.set({ [SESSION_NAMED_GROUPS_KEY]: Object.fromEntries(namedGroups) });
+    await area.set({ [SESSION_NAMED_GROUPS_KEY]: Object.fromEntries(namedGroups), [SESSION_RETAINED_TABS_KEY]: Object.fromEntries(transferringTabs) });
   } catch {}
 }
 function groupTitleFor(label) {
@@ -249,6 +265,8 @@ async function purgeNamedGroupEntry(label) {
   } catch {}
 }
 async function ensureNamedGroup(label) {
+  if (transferringGroups.has(label))
+    throw new Error(`group '${label}' transfer in progress; retry after it completes`);
   if (!hasTabGroupApi())
     return -1;
   await hydrateNamedGroups();
@@ -281,7 +299,7 @@ async function readoptNamedGroups(live) {
     if (typeof g.title !== "string" || !g.title.startsWith(prefix))
       continue;
     const label = g.title.slice(prefix.length);
-    if (GROUP_LABEL_RE.test(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
+    if (GROUP_LABEL_RE.test(label) && !transferringGroups.has(label) && labelForGroupId(g.id) === null && g.id !== interceptorGroupId) {
       await ensureNamedGroup(label);
     }
   }
@@ -315,18 +333,73 @@ async function addTabToNamedGroupSerialized(tabId, label, colorOverride) {
   return groupId;
 }
 async function moveNamedGroupToWindow(label, windowId) {
-  if (!hasTabGroupApi() || typeof chrome.tabGroups.move !== "function")
+  if (!hasTabGroupApi() || ![chrome.tabs.ungroup, chrome.tabs.move, chrome.tabs.group].every((fn) => typeof fn === "function"))
     return;
-  const groupId = await ensureNamedGroup(label);
-  if (groupId === -1)
-    return;
-  try {
-    const group = await chrome.tabGroups.get(groupId);
-    if (group.windowId !== windowId)
-      await chrome.tabGroups.move(groupId, { windowId, index: -1 });
-  } catch (err) {
-    console.warn(`moveNamedGroupToWindow: group '${label}' stayed where it was:`, err);
-  }
+  await serializeGroupAdd(label, async () => {
+    const groupId = await ensureNamedGroup(label);
+    if (groupId === -1)
+      return -1;
+    let ids = [];
+    let replacement = groupId;
+    let group;
+    try {
+      group = await chrome.tabGroups.get(groupId);
+      if (group.windowId === windowId)
+        return groupId;
+      const destination = await chrome.windows.get(windowId);
+      if (destination.type !== "normal")
+        throw new Error("the destination must be a normal window");
+      ids = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index).map((tab) => tab.id).filter((id) => typeof id === "number");
+      if (ids.length === 0)
+        return groupId;
+      transferringGroups.add(label);
+      for (const id of ids)
+        transferringTabs.set(id, label);
+      namedGroups.delete(label);
+      await chrome.tabs.ungroup(ids);
+      await chrome.tabs.move(ids, { windowId, index: -1 });
+      replacement = await chrome.tabs.group({ tabIds: ids, createProperties: { windowId } });
+      namedGroups.set(label, replacement);
+      await chrome.tabGroups.update(replacement, { title: group.title, color: group.color, collapsed: group.collapsed });
+      await persistNamedGroups();
+      return replacement;
+    } catch (err) {
+      const recovered = [];
+      if (await chrome.tabGroups.get(replacement).catch(() => null)) {
+        namedGroups.set(label, replacement);
+        if (group)
+          await chrome.tabGroups.update(replacement, { title: group.title, color: group.color, collapsed: group.collapsed }).catch(() => {});
+      } else if (group && ids.length) {
+        const survivors = (await Promise.all(ids.map((id) => chrome.tabs.get(id).catch(() => null)))).filter((tab) => !!tab);
+        const host = survivors.some((tab) => tab.windowId === windowId) ? windowId : group.windowId;
+        try {
+          const members = survivors.map((tab) => tab.id);
+          if (members.length) {
+            const id = await chrome.tabs.group({ tabIds: members, createProperties: { windowId: host } });
+            namedGroups.set(label, id);
+            await chrome.tabGroups.update(id, { title: group.title, color: group.color, collapsed: group.collapsed });
+            recovered.push(`${label}:window ${host}`);
+          }
+        } catch (recoveryError) {
+          recovered.push(`regroup failed: ${String(recoveryError)}`);
+        }
+      }
+      await persistNamedGroups();
+      const placement = await Promise.all(ids.map(async (id) => {
+        const tab = await chrome.tabs.get(id).catch(() => null);
+        return tab ? `${id}:window ${tab.windowId}, group ${tab.groupId}` : `${id}:unavailable`;
+      }));
+      throw new Error(`group '${label}' transfer to window ${windowId} failed: ${String(err)}; no tabs were closed; ${recovered.join("; ")}; ${placement.length ? placement.join(", ") : "read window list for current placement"}`);
+    } finally {
+      transferringGroups.delete(label);
+      for (const id of ids) {
+        const tab = await chrome.tabs.get(id).catch(() => null);
+        if (!tab || tab.groupId === namedGroups.get(label))
+          transferringTabs.delete(id);
+      }
+      await persistNamedGroups();
+    }
+  });
 }
 async function isTabInNamedGroup(tabId, label) {
   if (!hasTabGroupApi())
@@ -353,7 +426,7 @@ async function isTabInAnyManagedGroup(tabId) {
   return false;
 }
 function anyManagedGroupKnown() {
-  return interceptorGroupId !== null || namedGroups.size > 0;
+  return interceptorGroupId !== null || namedGroups.size > 0 || transferringGroups.size > 0 || transferringTabs.size > 0;
 }
 async function managedGroupWindows(label) {
   const hosting = new Map;
@@ -786,6 +859,48 @@ async function probeContentReady(tabId, timeoutMs) {
   }
 }
 
+// shared/browser-os-input.ts
+function unavailableOsInput(reason) {
+  return Object.fromEntries(["click", "key", "type", "move"].map((key) => [key, { available: false, foreground: false, background: false, reason }]));
+}
+function osInputSupport(value) {
+  const result = unavailableOsInput("The daemon did not report qualified OS input support; install the matching current package");
+  if (!value || typeof value !== "object")
+    return result;
+  for (const key of ["click", "key", "type", "move"]) {
+    const op = value[key];
+    if (op && typeof op.available === "boolean" && typeof op.foreground === "boolean" && typeof op.background === "boolean") {
+      result[key] = op.available && (op.foreground || op.background) ? { available: true, foreground: op.foreground, background: op.background, ...typeof op.reason === "string" && op.reason ? { reason: op.reason } : {} } : { available: false, foreground: false, background: false, reason: typeof op.reason === "string" && op.reason ? op.reason : "No qualified input route" };
+    }
+  }
+  return result;
+}
+function darwinOsInputSupport(foreground, background) {
+  const result = unavailableOsInput("OS input permission is unavailable; check macos trust without prompting");
+  for (const key of ["click", "key", "type"]) {
+    if (foreground || background)
+      result[key] = { available: true, foreground, background };
+  }
+  if (foreground)
+    result.move = { available: true, foreground: true, background: false };
+  return result;
+}
+
+// extension/src/background/os-input-support.ts
+async function extensionOsInputSupport(value) {
+  if (value !== undefined)
+    return osInputSupport(value);
+  const platform = await chrome.runtime.getPlatformInfo?.().catch(() => {
+    return;
+  });
+  if (platform?.os !== "mac")
+    return unavailableOsInput("The installed daemon predates native browser input; install the matching current Full package");
+  const support = darwinOsInputSupport(true, false);
+  for (const operation of Object.values(support))
+    operation.reason = "Legacy macOS daemon; per-operation support was not reported";
+  return support;
+}
+
 // extension/src/background/network-capture.ts
 var networkCaptureConfigs = new Map;
 var networkCaptureLogs = new Map;
@@ -986,13 +1101,19 @@ async function handleWindowActions(action, _tabId) {
         let groupWarning;
         if (firstTab?.id && !action.incognito && adopts) {
           const group = typeof action.group === "string" && GROUP_LABEL_RE.test(action.group) ? action.group : undefined;
-          if (group && typeof win.id === "number")
-            await moveNamedGroupToWindow(group, win.id);
+          if (group && typeof win.id === "number") {
+            try {
+              await moveNamedGroupToWindow(group, win.id);
+            } catch (error) {
+              groupWarning = String(error);
+            }
+          }
           groupId = group ? await addTabToNamedGroup(firstTab.id, group, action.groupColor) : await addTabToInterceptorGroup(firstTab.id);
           try {
             const landed = await chrome.tabs.get(firstTab.id);
             if (landed.windowId !== win.id) {
-              groupWarning = group ? `group '${group}' could not be moved, so the tab joined it in window ${landed.windowId} and has no window of its own` : `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`;
+              const placementWarning = group ? `group '${group}' could not be moved, so the tab joined it in window ${landed.windowId} and has no window of its own` : `the tab joined the shared default group in window ${landed.windowId}, so it has no window of its own; pass --group <label> to get one`;
+              groupWarning = [groupWarning, placementWarning].filter(Boolean).join("; ");
             }
           } catch {}
         }
@@ -1059,7 +1180,8 @@ async function handleWindowActions(action, _tabId) {
 
 // extension/src/background/capabilities/os-input.ts
 var FOREGROUND_HINT = "trusted OS input reaches a tab only when it is the active tab of a window that is not minimized. " + "Try synthetic input first (drop --trusted; dispatched events carry the trust marker most sites check). " + "If the page really needs an OS click, run `interceptor window new --tab <id>`: it gives the tab its own background window, and a full install then delivers the click there without changing the frontmost app. " + "`tab switch` belongs only in that window. Never switch tabs in a window the user is working in.";
-async function requireForegroundTab(tabId, backgroundOk = false) {
+async function requireForegroundTab(tabId, backgroundOk = false, nativeInput) {
+  const hint = nativeInput === "win32" ? "Windows browser trusted input requires the target tab visible in the foreground window of that desktop session. Bring that browser window to the foreground in the session, or use synthetic input." : FOREGROUND_HINT;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) {
     return { ok: false, result: { success: false, error: `tab ${tabId} not found` } };
@@ -1074,7 +1196,7 @@ async function requireForegroundTab(tabId, backgroundOk = false) {
       success: false,
       delivered: false,
       error: `window ${tab.windowId} is minimized — trusted OS input needs on-screen pixels to hit`,
-      data: { hint: FOREGROUND_HINT, windowState: win.state, ...moveTarget }
+      data: { hint, windowState: win.state, ...moveTarget }
     } };
   }
   if (!tab.active) {
@@ -1082,7 +1204,7 @@ async function requireForegroundTab(tabId, backgroundOk = false) {
       success: false,
       delivered: false,
       error: `tab ${tabId} is not the active tab of window ${tab.windowId} — a trusted OS event would hit the window's visible tab instead`,
-      data: { hint: FOREGROUND_HINT, ...moveTarget }
+      data: { hint, ...moveTarget }
     } };
   }
   const windowBounds = {
@@ -1094,11 +1216,17 @@ async function requireForegroundTab(tabId, backgroundOk = false) {
   if (!win.focused) {
     const error = `window ${tab.windowId} is not the OS-focused window — trusted OS events are routed by the OS to whatever is frontmost, not to the target tab`;
     if (!backgroundOk) {
-      return { ok: false, result: { success: false, delivered: false, error, data: { hint: FOREGROUND_HINT } } };
+      return { ok: false, result: { success: false, delivered: false, error, data: { hint } } };
     }
-    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint: FOREGROUND_HINT, tabId } };
+    return { ok: true, windowBounds, background: { title: tab.title || "", error, hint, tabId } };
   }
-  return { ok: true, windowBounds };
+  return { ok: true, windowBounds, ...nativeInput ? { background: {
+    title: tab.title || "",
+    error: "native browser input target unavailable",
+    hint,
+    tabId,
+    foreground: nativeInput === "win32"
+  } } : {} };
 }
 async function chromeUiHeightFor(tabId, windowHeight, viewportHeight) {
   const fallback = 88 + (debuggerAttached.has(tabId) ? 35 : 0);
@@ -1145,6 +1273,11 @@ async function frameOrigin(tabId, frameId) {
 }
 async function handleOsInputActions(action, tabId) {
   const backgroundOk = action.backgroundOk === true;
+  if (action.osInput !== undefined && ["os_click", "os_key", "os_type", "os_move"].includes(action.type)) {
+    const op = osInputSupport(action.osInput)[action.type.slice(3)];
+    if (!op.available)
+      return { success: false, delivered: false, error: op.reason, data: { hint: "Read capabilities for the current host's qualified input operations" } };
+  }
   switch (action.type) {
     case "os_receipt":
       return sendToContentScript(tabId, { type: "input_watch_read" }, action.frameId);
@@ -1162,7 +1295,7 @@ async function handleOsInputActions(action, tabId) {
         return { success: false, error: err.message };
       }
     case "os_click": {
-      const fg = await requireForegroundTab(tabId, backgroundOk);
+      const fg = await requireForegroundTab(tabId, backgroundOk, action.nativeInput);
       if (!fg.ok)
         return fg.result;
       const windowBounds = fg.windowBounds;
@@ -1213,7 +1346,7 @@ async function handleOsInputActions(action, tabId) {
       };
     }
     case "os_key": {
-      const fg = await requireForegroundTab(tabId, backgroundOk);
+      const fg = await requireForegroundTab(tabId, backgroundOk, action.nativeInput);
       if (!fg.ok)
         return fg.result;
       const chord = (action.modifiers ?? []).some((m) => /^(cmd|command|meta|win|super|ctrl|control)$/i.test(m));
@@ -1226,7 +1359,7 @@ async function handleOsInputActions(action, tabId) {
       } };
     }
     case "os_type": {
-      const fg = await requireForegroundTab(tabId, backgroundOk);
+      const fg = await requireForegroundTab(tabId, backgroundOk, action.nativeInput);
       if (!fg.ok)
         return fg.result;
       const frameId = (action.ref || action.index !== undefined) && typeof action.frameId === "number" ? action.frameId : undefined;
@@ -4456,6 +4589,7 @@ async function handleMetaActions(action, tabId) {
     }
     case "capabilities": {
       const daemonConnected = activeTransport !== "none";
+      const osInput = await extensionOsInputSupport(action.osInput);
       const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false;
       const hasUserScriptsPermission = chrome.runtime.getManifest().permissions?.includes("userScripts") ?? false;
       const debuggerActive = debuggerAttached.size > 0;
@@ -4475,11 +4609,12 @@ async function handleMetaActions(action, tabId) {
         success: true,
         data: {
           layers: {
-            os_input: daemonConnected,
+            os_input: osInput.click.available && osInput.key.available && osInput.type.available,
             tabCapture: true,
             cdp_debugger: hasDebugger,
             debugger_active: debuggerActive
           },
+          osInput,
           userScripts: {
             manifest_permission: hasUserScriptsPermission,
             api_present: userScriptsApi,
@@ -5771,11 +5906,17 @@ async function routeAction(action, tabId) {
   if (POWER_IDLE_ACTIONS.has(action.type))
     return handlePowerIdleActions(action);
   const contentResult = await sendToContentScript(tabId, action, action.frameId);
-  const shouldSceneEscalate = action.type === "scene_click" && contentResult.success && (action.os === true || contentResult.warning?.includes("no DOM change")) && activeTransport !== "none";
-  const shouldClickEscalate = (action.type === "click" || action.type === "click_selector") && contentResult.success && contentResult.warning?.includes("no DOM change") && activeTransport !== "none";
-  if (shouldClickEscalate || shouldSceneEscalate) {
+  const explicitScene = action.type === "scene_click" && action.os === true;
+  if (!explicitScene && ["click", "click_selector", "scene_click"].includes(action.type) && contentResult.success && contentResult.warning?.includes("no DOM change")) {
+    const next = action.type === "scene_click" ? `interceptor scene click --trusted ${action.id ?? "<id>"}` : `interceptor click --trusted ${contentResult.refId ?? action.ref ?? action.index ?? "<ref>"}`;
+    return { ...contentResult, warning: `no DOM change after click; no trusted click was sent. If the site needs trusted events: ${next}`, tabId };
+  }
+  if (explicitScene && contentResult.success) {
+    const click = (await extensionOsInputSupport(action.osInput)).click;
+    if (!click.available) {
+      return { success: false, error: click.reason, delivered: false };
+    }
     const resolvedAt = typeof contentResult.data === "object" && contentResult.data ? contentResult.data.at : undefined;
-    console.log(`auto-escalating ${action.type} to OS-level input`);
     const osResult = await handleOsInputActions({
       ...action,
       type: "os_click",
@@ -5789,29 +5930,21 @@ async function routeAction(action, tabId) {
         data: {
           ...typeof osResult.data === "object" && osResult.data || {},
           escalated: {
-            from: action.os === true ? "explicit" : "synthetic",
+            from: "explicit",
             to: "os_click",
-            reason: action.os === true ? "scene click requested trusted input" : "no DOM mutation after synthetic click"
+            reason: "scene click requested trusted input"
           }
         },
         tabId
       };
     }
-    const guardRefused = action.os !== true && !!(typeof osResult.data === "object" && osResult.data && osResult.data.hint);
-    if (guardRefused) {
-      return {
-        ...contentResult,
-        warning: `${contentResult.warning}; OS-level escalation skipped: ${osResult.error}`,
-        tabId
-      };
-    }
     return {
       success: false,
-      error: "click failed at all layers",
+      error: "trusted scene click failed",
       data: {
         diagnostics: {
-          layers_tried: ["synthetic", "os_click"],
-          reason: action.os === true ? "trusted scene click failed" : "synthetic produced no DOM change, os_click failed",
+          layers_tried: ["os_click"],
+          reason: "trusted scene click failed",
           os_error: osResult.error,
           suggestion: typeof osResult.data === "object" && osResult.data && osResult.data.hint || "verify element is interactive and Chrome window is visible"
         }
@@ -5997,6 +6130,9 @@ function resolveGroupDispatchScope(action) {
 }
 async function managedTabGateError(tabId, groupLabel, groupHard) {
   try {
+    const owner = transferringTabOwner(tabId);
+    if (owner)
+      return `group '${owner}' transfer in progress; retry after it completes`;
     if (groupHard) {
       const inNamed = await isTabInNamedGroup(tabId, groupLabel);
       return inNamed ? null : `tab ${tabId} is not in group '${groupLabel}' — pass the owning group, or --any-tab to bypass`;
@@ -6130,7 +6266,13 @@ async function handleDaemonMessage(msg) {
     }
   }
   if (!tabId && needsTab(action.type) && groupLabel) {
-    const groupId = await ensureNamedGroup(groupLabel);
+    let groupId;
+    try {
+      groupId = await ensureNamedGroup(groupLabel);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
     if (groupId !== -1) {
       const groupTabs = await chrome.tabs.query({ groupId });
       const candidate = groupTabs.filter((t) => typeof t.id === "number").sort((a, b) => b.id - a.id)[0];
@@ -6184,14 +6326,19 @@ async function handleDaemonMessage(msg) {
     let refusal = null;
     if (action.type === "group_close") {
       const label = typeof action.label === "string" ? action.label : null;
-      if (label && await ensureNamedGroup(label) !== -1)
-        refusal = foreignSessionCloseError("group", label, groupLabel, label);
+      try {
+        if (label && await ensureNamedGroup(label) !== -1)
+          refusal = foreignSessionCloseError("group", label, groupLabel, label);
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error));
+        return;
+      }
     } else {
       const closeId = moveTabId ?? (action.tabId || tabId);
       try {
         const tab = await chrome.tabs.get(closeId);
         await readoptNamedGroups();
-        refusal = foreignSessionCloseError("tab", labelForGroupId(tab.groupId), groupLabel, closeId);
+        refusal = foreignSessionCloseError("tab", transferringTabOwner(closeId) ?? labelForGroupId(tab.groupId), groupLabel, closeId);
       } catch {}
     }
     if (refusal) {

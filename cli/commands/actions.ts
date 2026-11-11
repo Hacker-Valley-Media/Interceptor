@@ -4,7 +4,7 @@
  */
 
 import { parseElementTarget } from "../parse"
-import { hasTrustedFlag, TRUSTED_FLAG_VALUES } from "./flags"
+import { hasTrustedFlag, trustedSelectorError, TRUSTED_FLAG_VALUES } from "./flags"
 import { inferMime, baseName } from "../../shared/upload"
 import { MAX_UPLOAD_FILE_BYTES } from "../../shared/platform"
 import { readFileSync } from "node:fs"
@@ -21,18 +21,13 @@ function parseAt(filtered: string[]): { x?: number; y?: number } {
 
 export function parseActionsCommand(filtered: string[], positionalCount?: number): Action {
   const cmd = filtered[0]
+  const selectorError = trustedSelectorError(cmd, positionalCount === undefined ? filtered : filtered.slice(positionalCount + 1))
+  if (selectorError) { console.error(selectorError); process.exit(1) }
 
   switch (cmd) {
     case "click": {
       const useOs = hasTrustedFlag(filtered)
-      // Click by CSS SELECTOR.
-      //
-      // `click` resolved only a11y refs/indices, while `query` locates elements
-      // by selector and returns no ref. On any page whose a11y tree comes back
-      // empty the tool could therefore SEE an element and be unable to click
-      // it — the two halves never met. Observed on perplexity.ai answer pages,
-      // where the tree is empty while `query "button span"` finds the control
-      // exactly.
+      // CSS-selector clicks use synthetic input. Query returns refs for trusted input.
       const selIdx = filtered.indexOf("--selector")
       const nthIdx = filtered.indexOf("--nth")
       if (selIdx !== -1) {

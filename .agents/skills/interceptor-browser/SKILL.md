@@ -35,6 +35,13 @@ Assume the person is using this browser and this computer while you work. Never 
 
 ## Core Rules
 
+- Before choosing `--trusted` (or `--os`), read `interceptor capabilities`. `data.osInput` reports availability, foreground/background support and refusal reasons for click, key, type and move. The legacy `layers.os_input` flag requires click, key and type; it can be true while move is unavailable.
+- With an older daemon, preserve legacy trusted dispatch and report that per-operation support was not provided. <!-- os:darwin -->
+- A synthetic click with no observed DOM change returns a warning and sends no trusted click. Use `--trusted` (or `--os`) when one native click is required.
+- With an older daemon, native browser input reports unavailable until the matching current Full package is installed. <!-- os:win32,linux -->
+- Trusted browser input uses the Full native provider in a qualified graphical session. Windows click, key and type require an active tab in a visible, non-minimized foreground window. Clicks also check the input point; key and type do not check occlusion. Bring the window forward and remove any obstruction only when authorized, or use synthetic input. Read the page before any retry after possibly delivered input. <!-- os:win32 -->
+- Browser OS input is unavailable in 2.1.12 because native browser window identity was not qualified in the tested desktop session. Click, key and type report unavailable and refuse before delivery. Use synthetic input. <!-- os:linux -->
+- New transfers made with `window new --group my-group` avoid the browser crash. Groups already moved between windows by 2.1.11, or moved by dragging the whole group, can still crash when closed. Save your work and record the URLs, restart the browser, then restore the session or reopen the URLs in a fresh named group. Use `window new --group my-group` for later moves. Updating the extension alone does not clear the old browser state.
 - Use compound commands (`open`, `websearch`, `read`, `act`, `inspect`) before low-level verbs.
 - `websearch "<query>"` searches through the browser's configured default provider in an Interceptor-managed background tab and returns the provider page. It is not Google-specific. `find "<query>"` never navigates: it searches the current page's complete rendered-text snapshot plus accessible elements. Use `find --text-only` for passages and `find --elements-only`/`--role` for controls.
 - Browser commands operate inside managed Interceptor tab groups. Do not use `--any-tab` unless the user explicitly authorizes acting outside those groups.

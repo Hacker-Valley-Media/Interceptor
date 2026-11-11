@@ -19,6 +19,12 @@ const receipts = (...answers: unknown[]) => {
 }
 
 describe("confirmDelivery", () => {
+  test("portable native receipt fields survive page confirmation", async () => {
+    const native = { method: "Win32.SendInput", targetPid: 42, focusUnchanged: true }
+    const result = await confirmDelivery({ success: true, data: native }, target, receipts({ events: ["input"] }), noWait)
+    expect(result.received).toBe(true)
+    expect(result.data).toBe(JSON.stringify(native) + "; the page received it")
+  })
   test("events reaching the page confirm it and drop the hidden warning", async () => {
     const result = await confirmDelivery(delivered, target, receipts({ events: ["mousedown"], hidden: true }), noWait)
     expect(result.success).toBe(true)
@@ -157,7 +163,7 @@ describe("wiring", () => {
   test("act prints a refusal's hint and treats a refusal as nothing sent", () => {
     const act = read("cli/commands/compound.ts")
     expect(act).toContain("data: actionResult!.data,")
-    expect(gate.match(/delivered: false/g)!.length).toBe(3)
+    expect(gate.match(/delivered: false/g)!.length).toBe(4)
   })
 
   test("wait_stable keeps its clock in the background, and batch still reaches it", () => {

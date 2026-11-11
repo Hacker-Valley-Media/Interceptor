@@ -58,7 +58,7 @@ export function verifyEnvelope(text: string, rawKey: string): Payload {
 }
 /** Sparkle's sign_update signs any file with the Ed25519 key in the login keychain. */
 export function sparkleSign(bytes: Buffer): Buffer {
-  const tools = process.env.INTERCEPTOR_SPARKLE_TOOLS_DIR ?? join(process.env.HOME ?? "", ".cache/interceptor-sparkle", process.env.INTERCEPTOR_SPARKLE_VERSION ?? "2.9.1")
+  const tools = process.env.INTERCEPTOR_SPARKLE_TOOLS_DIR ?? join(process.env.HOME ?? "", ".cache/interceptor-sparkle", process.env.INTERCEPTOR_SPARKLE_VERSION ?? "2.9.2")
   const signer = join(tools, "bin/sign_update")
   if (!existsSync(signer)) throw new Error(`${signer} is missing; run scripts/publish-sparkle.sh once to cache the Sparkle tools`)
   const scratch = mkdtempSync(join(tmpdir(), "interceptor-feed-"))

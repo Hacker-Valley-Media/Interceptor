@@ -48,6 +48,9 @@ interceptor act e9 "turing award" --submit         # Type, then submit the field
 interceptor act e11 --keys "Escape"                # Focus e11, then send the key
 interceptor act '[e7]'                             # A ref copied with its brackets works (quote it in zsh)
 interceptor act e15 --trusted                      # HID-sourced click; page sees isTrusted: true. ESCALATION ONLY. <!-- os:darwin -->
+interceptor act e15 --trusted --no-read --json --ws # Full native foreground input; inspect capabilities.data.osInput first <!-- os:win32 -->
+interceptor capabilities # Browser OS input is unavailable in 2.1.12; trusted operations refuse before delivery. Use synthetic input. <!-- os:linux -->
+interceptor capabilities # Windows trusted click/key/type require an active tab in a visible foreground window; clicks check the input point, key/type do not check occlusion <!-- os:win32 -->
 interceptor act e20 --no-read
 # act takes the ref directly (act e5, never act click e5). A timeout or closed channel after dispatch
 # is reported as unverified delivery: read the target before retrying so you do not click twice.
@@ -55,11 +58,15 @@ interceptor act e20 --no-read
 
 **After `act --trusted` reports success, read the page once and commit.** Do not re-execute the same click via a different surface (`interceptor macos click ...`, manual coordinates, etc.) to "verify" — the page's own state is the verification, and the trusted event is the same trusted event regardless of which surface posted it. Escalating to a different surface to redo a successful browser action is the most common way to blow the command budget. `interceptor macos` remains the right surface for native-app tasks; this rule only constrains within-task redo behavior on the browser. <!-- os:darwin -->
 
+`capabilities.data.osInput` lists click, key, type and move with `available`, `foreground`, `background` and an unavailable `reason`. The legacy `layers.os_input` flag requires click, key and type; move is independent. `--os` aliases `--trusted`. Unsupported operations refuse before dispatch. After any possibly delivered input, read the target before another attempt.
+
 Unqualified `find` returns two typed current-page sections: literal case-insensitive matches from the complete `document.body.innerText` snapshot, and semantic accessible-element matches. It does not navigate, scroll, focus, or highlight. `--limit` caps returned matches per category while preserving total counts. Low-level actions when `act` is not enough:
 
 ```bash
 interceptor click e7
 interceptor click --selector "button span" --nth 4   # CSS-selector click; 0-based --nth matches query output; quote selectors with spaces
+interceptor query "button span"                    # Returns e-refs; use interceptor click <ref> --trusted for native input
+# --selector with --trusted/--os refuses before sending input. act/type/keys also reject that combination.
 interceptor type e9 "..."
 interceptor keys "Meta+K"               # Events carry legacy keyCode/which/charCode; Enter is 13, Shift+a arrives as A
 interceptor select e12 "Option label"   # native select: exact value first, then one exact label
@@ -70,7 +77,7 @@ Native `select`, `type`, and `act <ref> <value>` share option validation. Invali
 
 Password inputs and vault-filled controls are masked in tree, forms, snapshots/diff, scoped reads, and HTML/value-attribute output. Text-backed credential fields are masked in text/markdown/query output too, and `scene list`, `scene selected`, and `scene text` mask the same fields. Eval, screenshots, network/storage capture, and page-created copies of credentials are outside this masking boundary.
 
-On pages whose a11y tree comes back empty (some SPAs render nothing tree-visible), `interceptor query "<css>"` still finds elements. Every result reports the total `count`, serialized `returned` count, and `truncated` flag; at most 20 elements are serialized. Each element carries a clickable `e<ref>`, so every ref verb (`click`, `type`, `check`, …) works on what query found. `click`, `type`, and `check` also take a `role:name` target (`checkbox:Remember me`) that the page resolves by accessible role and name. A navigating click resolves as `{navigated: true, url}` rather than an error; a selector click that produces no DOM change auto-escalates to an OS-level click when the OS transport is available.
+On pages whose a11y tree comes back empty (some SPAs render nothing tree-visible), `interceptor query "<css>"` still finds elements. Every result reports the total `count`, serialized `returned` count, and `truncated` flag; at most 20 elements are serialized. Each element carries a clickable `e<ref>`, so every ref verb (`click`, `type`, `check`, …) works on what query found. `click`, `type`, and `check` also take a `role:name` target (`checkbox:Remember me`) that the page resolves by accessible role and name. A navigating click resolves as `{navigated: true, url}` rather than an error; a selector click that produces no DOM change returns a warning, sends no trusted click, and suggests `--trusted` when one native click is required.
 
 Every CSS-selector verb reaches inside web components: `query`, `exists`, `count`, `click --selector`, `wait`, `table`, `attr`, `style`, `rect`, and `screenshot --selector` search open and closed shadow roots after the light DOM. Light-DOM matches come first in document order, so `--nth` keeps its meaning on a page without shadow hosts. `wait` polls as well as observing, so an element rendered later inside an existing shadow root is found.
 

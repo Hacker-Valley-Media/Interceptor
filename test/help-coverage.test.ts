@@ -71,4 +71,10 @@ describe("help coverage", () => {
     const page = helpForCommand("open")
     expect(page).not.toBeNull()
   })
+
+  test("act help includes the current host trusted-input boundary", () => {
+    const page = helpForCommand("act")
+    expect(page).toContain("capabilities.data.osInput")
+    expect(page).toContain(process.platform === "darwin" ? "Safari" : process.platform === "win32" ? "foreground" : "unavailable in 2.1.12")
+  })
 })

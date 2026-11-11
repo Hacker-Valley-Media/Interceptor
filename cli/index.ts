@@ -52,6 +52,7 @@ import { runDaemonCommand } from "./commands/daemon"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs, parseFrameFlag } from "./global-flags"
 import { normalizeArgsSplit, flagBundleHint } from "./normalize"
+import { trustedSelectorError } from "./commands/flags"
 
 // console.log must not be used for CLI output: Bun's console.log writer
 // silently drops everything past 64 KiB at exit when stderr and stdout share
@@ -242,6 +243,9 @@ async function main() {
     }
     return
   }
+
+  const selectorError = trustedSelectorError(cmd, filtered.slice(normalized.positionalCount + 1))
+  if (selectorError) { console.error(selectorError); process.exit(1) }
 
   if (!ALL_KNOWN_CMDS.has(cmd)) {
     console.error(`error: unknown command '${cmd}'. Run 'interceptor help' for usage.${flagBundleHint(cmd)}`)

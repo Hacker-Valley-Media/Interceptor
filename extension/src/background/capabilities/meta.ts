@@ -1,6 +1,7 @@
 import { activeTransport, chromeCall, detectInstallType } from "../transport"
 import { debuggerAttached, cdpAttachActDetach } from "../cdp"
 import { resolveTabLifecycle } from "../tab-lifecycle"
+import { extensionOsInputSupport } from "../os-input-support"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -90,6 +91,7 @@ export async function handleMetaActions(
 
     case "capabilities": {
       const daemonConnected = activeTransport !== "none"
+      const osInput = await extensionOsInputSupport(action.osInput)
       const hasDebugger = chrome.runtime.getManifest().permissions?.includes("debugger") ?? false
       const hasUserScriptsPermission = chrome.runtime.getManifest().permissions?.includes("userScripts") ?? false
       const debuggerActive = debuggerAttached.size > 0
@@ -109,11 +111,12 @@ export async function handleMetaActions(
         success: true,
         data: {
           layers: {
-            os_input: daemonConnected,
+            os_input: osInput.click.available && osInput.key.available && osInput.type.available,
             tabCapture: true,
             cdp_debugger: hasDebugger,
             debugger_active: debuggerActive
           },
+          osInput,
           userScripts: {
             manifest_permission: hasUserScriptsPermission,
             api_present: userScriptsApi,

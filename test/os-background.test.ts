@@ -105,6 +105,8 @@ describe("background trusted input → result", () => {
 
 describe('portable browser background routing and outcomes',()=>{
   const click={type:'os_click',background:TARGET,windowBounds:BOUNDS,pageX:400,pageY:300,chromeUiHeight:81}
+  const nativeWindow={title:TARGET.title+' - Brave',pid:42,windowId:'84',frame:{x:BOUNDS.left,y:BOUNDS.top,width:BOUNDS.width,height:BOUNDS.height}}
+  const inputReply=(reply:{success:boolean;data?:unknown})=>async(action:Record<string,unknown>)=>action.type==='desktop_windows'?{success:true,data:[nativeWindow]}:reply
   for(const platform of ['win32','linux']){
     test(`${platform} targets the desktop provider with mandatory background-only delivery`,()=>{
       expect(bridgeActionFor(click,platform)).toEqual({type:'desktop_click',coords:'400,411',right:false,double:false,backgroundOnly:true,windowTitle:TARGET.title,windowBounds:BOUNDS})
@@ -113,13 +115,15 @@ describe('portable browser background routing and outcomes',()=>{
     })
     test(`${platform} preserves actual receipt fields without claiming page acceptance`,async()=>{
       const receipt={method:'owned native receipt fixture',background:true,foregroundUsed:false,focusUnchanged:true,cursorUnchanged:true,targetPid:42,windowId:'84',delivered:2,effectRequiresObservation:true}
-      const result=await deliverInBackground(click,async()=>({success:true,data:receipt}),platform)
+      const calls:Record<string,unknown>[]=[]
+      const result=await deliverInBackground(click,async a=>{calls.push(a);return inputReply({success:true,data:receipt})(a)},platform)
       expect(result).toEqual({success:true,data:receipt})
+      expect(calls).toEqual([{type:'desktop_windows'},{...bridgeActionFor(click,platform),windowTitle:nativeWindow.title,window:84,pid:42}])
     })
     test(`${platform} preserves an unknown outcome and never resends`,async()=>{
       let calls=0
       const details={dispatched:true,delivered:1,verified:false,effectRequiresObservation:true}
-      const result=await deliverInBackground(click,async()=>{calls++;return{success:false,code:'timeout_unknown_outcome',error:'native window changed after press',details}},platform)
+      const result=await deliverInBackground(click,async a=>{if(a.type==='desktop_windows')return{success:true,data:[nativeWindow]};calls++;return{success:false,code:'timeout_unknown_outcome',error:'native window changed after press',details}},platform)
       expect(calls).toBe(1)
       expect(result).toMatchObject({success:false,code:'timeout_unknown_outcome',details})
       expect(result.error).toContain('native window changed after press')
@@ -127,9 +131,26 @@ describe('portable browser background routing and outcomes',()=>{
     test(`${platform} treats missing or contradictory receipt fields as unknown outcomes`,async()=>{
       const receipt={method:'owned native receipt fixture',background:true,foregroundUsed:false,targetPid:42,effectRequiresObservation:true}
       for(const data of ['delivered',{...receipt,background:false},{...receipt,foregroundUsed:true},{...receipt,foregroundUsed:undefined},{...receipt,targetPid:undefined},{...receipt,effectRequiresObservation:false}]){
-        const result=await deliverInBackground(click,async()=>({success:true,data}),platform)
+        const result=await deliverInBackground(click,inputReply({success:true,data}),platform)
         expect(result).toMatchObject({success:false,code:'timeout_unknown_outcome',details:{dispatched:true,verified:false,effectRequiresObservation:true}})
       }
+    })
+    test(`${platform} refuses absent, ambiguous, moved or invalid native identities before input`,async()=>{
+      for(const data of [undefined,[],[nativeWindow,nativeWindow],[{...nativeWindow,title:TARGET.title+' extra'}],[{...nativeWindow,frame:{...nativeWindow.frame,x:1}}],[{...nativeWindow,pid:0}],[{...nativeWindow,windowId:'9007199254740993'}]]){
+        const calls:Record<string,unknown>[]=[]
+        const result=await deliverInBackground(click,async a=>{calls.push(a);return{success:true,data}},platform)
+        expect(result).toMatchObject({success:false,delivered:false})
+        expect(calls).toEqual([{type:'desktop_windows'}])
+      }
+    })
+    test(`${platform} prefers an exact title and retains inventory failures without input`,async()=>{
+      const calls:Record<string,unknown>[]=[]
+      await deliverInBackground(click,async a=>{calls.push(a);return a.type==='desktop_windows'?{success:true,data:[nativeWindow,{...nativeWindow,title:TARGET.title,windowId:'85'}]}:{success:false,error:'fixture input refusal'}},platform)
+      expect(calls[1]).toMatchObject({windowTitle:TARGET.title,window:85,pid:42})
+      const failed:Record<string,unknown>[]=[]
+      const result=await deliverInBackground(click,async a=>{failed.push(a);return{success:false,code:'permission_denied',error:'inventory denied'}},platform)
+      expect(result).toMatchObject({success:false,code:'permission_denied',delivered:false})
+      expect(failed).toEqual([{type:'desktop_windows'}])
     })
   }
   test('zero browser UI inset and negative monitor origins retain their coordinates',()=>{
