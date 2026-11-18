@@ -214,6 +214,23 @@ main() {
     say "Installing the Full edition (pass --browser for browser only)"
   fi
 
+  if [[ $os == Darwin ]]; then
+    local mac_version major alternative=""
+    mac_version="$(sw_vers -productVersion)" || die "could not read the macOS version"
+    major="${mac_version%%.*}"
+    [[ $major =~ ^[0-9]+$ ]] || die "could not read the macOS version from '$mac_version'"
+    if [[ $mode == full ]] && (( 10#$major < 15 )); then
+      if (( 10#$major >= 13 )); then alternative=" Use --browser for the Browser-only edition."; fi
+      die "Interceptor Full requires macOS 15.0 or later. This Mac runs macOS $mac_version.$alternative"
+    fi
+    if [[ $mode == browser ]] && (( 10#$major < 13 )); then
+      die "Interceptor Browser requires macOS 13.0 or later. This Mac runs macOS $mac_version."
+    fi
+    if [[ $safari == 1 ]] && (( 10#$major < 14 )); then
+      die "The Safari add-on requires macOS 14.0 or later. This Mac runs macOS $mac_version."
+    fi
+  fi
+
   # The update host's version file for this OS names the release its /latest/ links point at.
   local version src="$LATEST" vfile=desktop.txt
   [[ $os == Darwin ]] && vfile=macos.txt

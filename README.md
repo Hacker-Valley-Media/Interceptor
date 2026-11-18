@@ -122,9 +122,9 @@ Each link below always gets the newest release. Start with Browser for web tasks
 
 | Package | Download | What it enables |
 |---|---|---|
-| macOS Browser | [Interceptor-Browser.pkg](https://updates.hackervalley.media/latest/Interceptor-Browser.pkg) | CLI, daemon, and browser extension files. |
-| macOS Full | [Interceptor-Full.pkg](https://updates.hackervalley.media/latest/Interceptor-Full.pkg) | Browser package plus the native Mac bridge and iPhone tooling. The bridge requires macOS 15+. |
-| macOS Safari add-on | [Interceptor-Safari.pkg](https://updates.hackervalley.media/latest/Interceptor-Safari.pkg) | Safari extension, installed after either core package. |
+| macOS Browser (Apple silicon, macOS 13+) | [Interceptor-Browser.pkg](https://updates.hackervalley.media/latest/Interceptor-Browser.pkg) | CLI, daemon, and browser extension files. |
+| macOS Full (Apple silicon, macOS 15+) | [Interceptor-Full.pkg](https://updates.hackervalley.media/latest/Interceptor-Full.pkg) | Browser package plus the native Mac bridge and iPhone tooling. |
+| macOS Safari add-on (Apple silicon, macOS 14+) | [Interceptor-Safari.pkg](https://updates.hackervalley.media/latest/Interceptor-Safari.pkg) | Safari extension, installed after either core package. |
 | Windows Browser | [x64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Browser-windows-arm64.exe) | Browser automation on Windows 10 22H2+ or Windows 11 (x64); Windows 11 24H2+ (ARM64). [Windows guide](docs/windows-install.md). |
 | Windows Full | [x64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-x64.exe) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Full-windows-arm64.exe) | Browser automation plus [native app control](#windows) with `interceptor desktop`. Windows 10 22H2 x64 or Windows 11 24H2+ (x64/ARM64). |
 | Linux Browser | [x64](https://updates.hackervalley.media/latest/Interceptor-Browser-linux-x64.tar.gz) · [ARM64](https://updates.hackervalley.media/latest/Interceptor-Browser-linux-arm64.tar.gz) | Browser automation and install scripts. |

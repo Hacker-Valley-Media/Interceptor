@@ -184,8 +184,43 @@ describe("closeGroupWhenDone sweep", () => {
     expect(calls.createArgs).toEqual([])
     // The one G2-G5 candidate (tab 3) was screened and kept as dirty, and that
     // all-dirty pass is what re-stamps the idle clock.
-    expect(calls.scripted).toBe(1)
+    expect(calls.scripted).toBe(2)
     expect(calls.sessionSet.some((s) => STAMP_KEY in s)).toBe(true)
+  })
+
+  test("a page-world unload property in a child frame protects the group even if isolated inspection fails", async () => {
+    const calls = installChrome({ policy: { idleCloseMinutes: 1 }, groupTabs: STUCK_TABS, profileTabs: 12 })
+    Object.assign(chrome.scripting, {
+      executeScript: async (injection: { world?: string; target: { allFrames?: boolean } }) => {
+        expect(injection.target.allFrames).toBe(true)
+        if (injection.world !== "MAIN") throw new Error("isolated inspection failed")
+        return [{ result: false }, { result: true }]
+      },
+    })
+    await runTabLifecycleSweep(NOW)
+    expect(calls.removed).toEqual([])
+    expect(stampTouched(calls)).toBe(true)
+  })
+
+  test("a legacy draft survives while the same script-prefilled field in a tracked document closes", async () => {
+    const { GlobalRegistrator } = await import("@happy-dom/global-registrator")
+    try { GlobalRegistrator.register() } catch {}
+    const doc = document as Document & { __interceptorEdited?: boolean }
+    const field = doc.createElement("input")
+    doc.body.replaceChildren(field)
+    field.value = "prefill"
+    try {
+      for (const tracked of [false, true]) {
+        if (tracked) doc.__interceptorEdited = false
+        else delete doc.__interceptorEdited
+        const calls = installChrome({ policy: { idleCloseMinutes: 1 }, groupTabs: STUCK_TABS, profileTabs: 12 })
+        Object.assign(chrome.scripting, {
+          executeScript: async (injection: { func: () => boolean }) => [{ result: injection.func() }],
+        })
+        await runTabLifecycleSweep(NOW)
+        expect(calls.removed).toEqual(tracked ? [[3]] : [])
+      }
+    } finally { delete doc.__interceptorEdited; field.remove() }
   })
 })
 

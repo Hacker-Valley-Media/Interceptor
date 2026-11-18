@@ -2,6 +2,7 @@ import { getAccessibleName, getEffectiveRole } from "../a11y-tree"
 import { getShadowRoot, isVisible, walkWithShadow } from "../element-discovery"
 import { boundingBox, clickAtViewport } from "./ops"
 import { isSensitive, safeValue, SECURE_MASK } from "../sensitive"
+import { markDocumentEdited } from "../document-edits"
 import type {
   SceneObject,
   SceneObjectType,
@@ -397,7 +398,9 @@ export function writeToFocusedWritableSurface(text: string, clear = false): Scen
   } catch {}
 
   if (surface.kind === "input" || surface.kind === "textarea" || surface.kind === "hidden-input" || surface.kind === "application-proxy") {
-    const ok = setInputValue(surface.element as HTMLInputElement | HTMLTextAreaElement, next)
+    const field = surface.element as HTMLInputElement | HTMLTextAreaElement
+    const ok = setInputValue(field, next)
+    if (ok || field.value !== current) markDocumentEdited()
     return {
       success: ok,
       error: ok ? undefined : "focused input surface did not accept the value update",
@@ -416,6 +419,7 @@ export function writeToFocusedWritableSurface(text: string, clear = false): Scen
       surface.element.dispatchEvent(new Event("input", { bubbles: true }))
       const updated = surface.element.textContent || ""
       const verified = clear ? updated === text : updated.includes(text)
+      if (verified || updated !== current) markDocumentEdited()
       return {
         success: verified,
         error: verified ? undefined : "contenteditable surface did not reflect inserted text",
@@ -432,6 +436,7 @@ export function writeToFocusedWritableSurface(text: string, clear = false): Scen
     surface.element.dispatchEvent(new Event("input", { bubbles: true }))
     const updated = surface.element.textContent || ""
     const verified = updated === next
+    if (verified || updated !== current) markDocumentEdited()
     return {
       success: verified,
       error: verified ? undefined : "textbox surface did not reflect inserted text",

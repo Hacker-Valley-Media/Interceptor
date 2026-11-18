@@ -18,6 +18,38 @@ function lib(command: string) {
 }
 
 describe("get-interceptor.sh", () => {
+  test("macOS edition preflight checks the selected package and Safari before downloading", () => {
+    const cases = [
+      ["14.6.1", "--full", "", "Full", "15.0"],
+      ["14.6.1", "", "full", "Full", "15.0"],
+      ["12.7", "--browser", "", "Browser", "13.0"],
+      ["13.6", "--browser --safari", "", "Safari", "14.0"],
+      ["13.0", "--browser", "", "", ""],
+      ["14.6.1", "--safari", "browser", "", ""],
+      ["15.0", "", "", "", ""],
+    ]
+    for (const [version, flags, prior, edition, minimum] of cases) {
+      const attempted = join(dir, `download-${version}-${flags}-${prior}`)
+      const r = lib(`
+        uname() { echo Darwin; }
+        sysctl() { echo 1; }
+        sw_vers() { echo ${version}; }
+        installed_mode() { echo '${prior}'; }
+        has_tty() { return 1; }
+        curl() { touch "${attempted}"; return 1; }
+        main ${flags}
+      `)
+      expect(existsSync(attempted)).toBe(!edition)
+      if (edition) {
+        expect(r.status).toBe(1)
+        for (const part of [edition, version, minimum]) expect(r.stderr).toContain(part)
+        if (edition === "Full") expect(r.stderr).toContain("--browser")
+      } else {
+        expect(r.stderr).toContain("could not reach")
+      }
+    }
+  })
+
   test("picks the release asset for each OS, CPU and edition", () => {
     const r = lib(`asset_name Darwin arm64 full 2.1.5; asset_name Darwin arm64 browser 2.1.5; asset_name Linux x64 browser 2.1.5; asset_name Linux arm64 full 2.1.5`)
     expect(r.status).toBe(0)

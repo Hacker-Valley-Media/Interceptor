@@ -1,4 +1,5 @@
 import { resolveElement } from "../input-simulation"
+import { markDocumentEdited } from "../document-edits"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
@@ -217,6 +218,7 @@ export async function handleFileUpload(action: Action): Promise<ActionResult> {
     const dt = new DataTransfer()
     dt.items.add(file)
     fileInput.files = dt.files
+    if (fileInput.files.length > 0) markDocumentEdited()
     fileInput.dispatchEvent(new Event("input", { bubbles: true }))
     fileInput.dispatchEvent(new Event("change", { bubbles: true }))
     const verified = fileInput.files.length > 0
@@ -234,6 +236,8 @@ export async function handleFileUpload(action: Action): Promise<ActionResult> {
   if (!bridged) isolatedDrop(target, file)
   const method = bridged ? "dropzone-trusted" : "dropzone-isolated"
   const verified = await verifyUploaded(target, fileName, nameAlreadyPresent)
+  // A replacement preview can hold the file without displaying its name.
+  if (verified || !target.isConnected) markDocumentEdited()
   return {
     success: true,
     data: { method, fileName, size: bytes.byteLength, verified,

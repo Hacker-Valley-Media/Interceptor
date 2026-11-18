@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { GlobalRegistrator } from "@happy-dom/global-registrator"
 try { GlobalRegistrator.register() } catch {}
-import { markSensitive, isSensitive, safeValue, safeText, safeHtml, SECURE_MASK } from "./sensitive"
+import { markSensitive, isSensitive, safeValue, safeText, safeHtml, SECURE_MASK, watchCredentialReveals } from "./sensitive"
 import { getRelevantAttrs } from "./element-tree"
 import { getAccessibleName } from "./a11y-tree"
 import { getOrAssignRef, refRegistry } from "./ref-registry"
@@ -148,4 +148,60 @@ test("focused credential delivery preserves the deepest shadow input and marks o
   `], { cwd: new URL("../../..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe" })
   const error = await new Response(child.stderr).text()
   expect(await child.exited, error).toBe(0)
+})
+
+test("credential autocomplete fields mask whatever their type, and stay masked", async () => {
+  document.body.innerHTML = '<form><input id="cur" type="text" autocomplete="section-login current-password"><input id="new" autocomplete="new-password"><input id="otp" inputmode="numeric" autocomplete="one-time-code"><input id="user" autocomplete="username" value="ordinary"></form>'
+  for (const id of ["cur", "new", "otp"]) {
+    const el = document.getElementById(id) as HTMLInputElement
+    el.value = canary
+    expect(safeValue(el)).toBe(SECURE_MASK)
+    masked(getRelevantAttrs(el))
+    el.removeAttribute("autocomplete")
+    expect(safeValue(el)).toBe(SECURE_MASK)
+  }
+  masked(await handleForms({ type: "forms" }))
+  expect(safeValue(document.getElementById("user")!)).toBe("ordinary")
+})
+
+test("a password field the page reveals before any read stays masked", async () => {
+  document.body.innerHTML = '<input id="pw" type="password"><input id="other" type="text">'
+  const observer = watchCredentialReveals(document)
+  const pw = document.getElementById("pw") as HTMLInputElement
+  pw.value = canary
+  pw.type = "text"
+  const other = document.getElementById("other") as HTMLInputElement
+  other.type = "search"
+  other.value = "ordinary"
+  await new Promise(resolve => setTimeout(resolve, 0))
+  observer.disconnect()
+  expect(safeValue(pw)).toBe(SECURE_MASK)
+  masked(getRelevantAttrs(pw))
+  expect(safeValue(other)).toBe("ordinary")
+})
+
+test("a credential autocomplete the page removes before any read stays masked", async () => {
+  document.body.innerHTML = '<input id="otp" autocomplete="one-time-code"><input id="user" autocomplete="username">'
+  const observer = watchCredentialReveals(document)
+  const otp = document.getElementById("otp") as HTMLInputElement
+  otp.value = canary
+  otp.removeAttribute("autocomplete")
+  const user = document.getElementById("user") as HTMLInputElement
+  user.value = "ordinary"
+  user.setAttribute("autocomplete", "off")
+  await new Promise(resolve => setTimeout(resolve, 0))
+  observer.disconnect()
+  expect(safeValue(otp)).toBe(SECURE_MASK)
+  expect(safeValue(user)).toBe("ordinary")
+})
+
+test("a type change on a public help wrapper keeps its label readable", async () => {
+  document.body.innerHTML = '<div type="password">Public help label</div>'
+  const wrapper = document.querySelector("div")!
+  const observer = watchCredentialReveals(document)
+  try {
+    wrapper.setAttribute("type", "text")
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(safeText(wrapper)).toBe("Public help label")
+  } finally { observer.disconnect() }
 })

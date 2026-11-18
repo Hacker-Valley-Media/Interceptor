@@ -113,6 +113,8 @@ interceptor desktop cdp raw Runtime.evaluate '{"expression":"6*7","returnByValue
 interceptor desktop cdp detach --context <contextId>
 ```
 
+Use the context ID returned by `connect`. A second endpoint showing the same hostname gets a port suffix. If the generated IDs or an explicit `--app` name are occupied, choose another name or detach the holder first.
+
 `cdp launch <app> --port N` relaunches the app and refuses without `--confirm`. On this OS, `cdp launch` and `cdp app attach` have only been tested for their refusals, not against an installed Electron app.
 
 ## Settings

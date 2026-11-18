@@ -26,6 +26,7 @@ import { handleModals, handlePanels } from "./content/inspection/modals"
 import { handleFindElement, handleSemanticResolve, handleFindAndClick, handleFindAndType, handleFindAndCheck } from "./content/find"
 import { handleCanvasAction } from "./content/scene/engine"
 import { handleDomScreenshot } from "./content/dom-screenshot"
+import { watchCredentialReveals } from "./content/sensitive"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown; changes?: unknown }
@@ -42,6 +43,8 @@ type ActionResult = { success: boolean; error?: string; warning?: string; data?:
 const __interceptorContentGlobal = globalThis as unknown as { __interceptorContentLoaded?: boolean }
 const __interceptorContentAlreadyLoaded = __interceptorContentGlobal.__interceptorContentLoaded === true
 __interceptorContentGlobal.__interceptorContentLoaded = true
+
+if (!__interceptorContentAlreadyLoaded) watchCredentialReveals(document)
 
 if (!__interceptorContentAlreadyLoaded) chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "execute_action") {
