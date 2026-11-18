@@ -23,3 +23,18 @@ test("text inside an editable field is masked, labels and page text are not", ()
   expect(out).toContain(`[3] textbox "Empty"`)
   expect(out).toContain(`[6] StaticText "ordinary page text"`)
 })
+
+test("an editable node's content-derived name is masked and its explicit label is preserved", () => {
+  const sources = [{ type: "contents", value: { value: canary } }]
+  const editable = node("1", "button", canary, [], true)
+  const labelled = node("2", "button", "Public label", [], true)
+  const out = formatAXTree([
+    { ...editable, name: { ...editable.name, sources } },
+    { ...labelled, name: { ...labelled.name, sources: [
+      { type: "attribute", value: labelled.name },
+      { ...sources[0], superseded: true },
+    ] } },
+  ])
+  expect(out).not.toContain(canary)
+  expect(out).toContain(`[2] button "Public label"`)
+})

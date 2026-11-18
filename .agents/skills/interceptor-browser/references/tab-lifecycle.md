@@ -13,8 +13,9 @@ Give the job and its cleanup step the same live, group-capable context and uniqu
 
 ```bash
 set -o pipefail
-export INTERCEPTOR_CONTEXT="${JOB_BROWSER_CONTEXT:?set the job's browser context}"
-export INTERCEPTOR_GROUP="job-$(bun -e 'console.log(crypto.randomUUID().replaceAll("-", "").slice(0, 28))')"
+export INTERCEPTOR_CONTEXT="${JOB_BROWSER_CONTEXT:?set the browser context for this job}"
+INTERCEPTOR_GROUP="job-$(bun -e 'console.log(crypto.randomUUID().replaceAll("-", "").slice(0, 28))')" || exit 1
+export INTERCEPTOR_GROUP
 group_absent() {
   interceptor --json group list | jq -es --arg g "$INTERCEPTOR_GROUP" \
     'length == 1 and (.[0] | .success == true and (.data | type == "array") and all(.data[]; .label != $g))'
@@ -25,7 +26,8 @@ group_absent || exit 1
 In the job owner's finalization hook or CI cleanup step, wait for the browser-using child processes to exit. Then close the group's tabs and verify the result with the same environment.
 
 ```bash
-interceptor group close "$INTERCEPTOR_GROUP" && group_absent
+interceptor group close "$INTERCEPTOR_GROUP" || true
+group_absent
 ```
 
 Preserve the job's exit status if it failed. Report cleanup failures and fail an otherwise successful job if cleanup cannot be verified. If the job created no tabs or the idle sweep already closed them, confirm that the label and the recorded tab IDs are gone in the original context.

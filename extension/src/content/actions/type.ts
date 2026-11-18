@@ -134,7 +134,8 @@ export async function handleSelectOption(action: Action): Promise<ActionResult> 
     data: { options: options.slice(0, 30).map(o => ({ value: o.value.slice(0, 160), label: o.label.slice(0, 160), disabled: o.matches(":disabled") })), total: options.length, truncated: options.length > 30 }
   }
   if (option.matches(":disabled")) return { success: false, error: "option or its optgroup is disabled" }
-  if (el.selectedOptions.length === 1 && el.selectedOptions[0] === option) {
+  const previous = Array.from(el.selectedOptions)
+  if (previous.length === 1 && previous[0] === option) {
     return { success: true, data: { value: option.value, label: option.label, changed: false } }
   }
   el.selectedIndex = options.indexOf(option)
@@ -142,6 +143,7 @@ export async function handleSelectOption(action: Action): Promise<ActionResult> 
   el.dispatchEvent(new Event("change", { bubbles: true }))
   await Promise.resolve()
   if (!el.isConnected || el.selectedOptions.length !== 1 || el.selectedOptions[0] !== option) {
+    if (el.isConnected && (el.selectedOptions.length !== previous.length || previous.some(o => !o.selected))) markDocumentEdited()
     return { success: false, error: "page did not retain the selected option; read the dropdown before retrying" }
   }
   markDocumentEdited()

@@ -49,3 +49,25 @@ test("form and scene writes protect their document, a no-op toggle does not", as
   await handleCheck({ type: "check", ref: check, checked: true })
   expect(doc.__interceptorEdited).toBe(false)
 })
+
+test("a page that substitutes another option retains a draft", async () => {
+  doc.body.innerHTML = "<select><option>A</option><option>B</option><option>C</option></select>"
+  const field = doc.querySelector("select")!
+  Object.defineProperty(field, "selectedOptions", { get: () => Array.from(field.options).filter(o => o.selected) })
+  field.onchange = () => { field.selectedIndex = 2 }
+  doc.__interceptorEdited = false
+  expect((await handleSelectOption({ type: "select_option", ref: getOrAssignRef(field), value: "B" })).success).toBe(false)
+  expect(field.value).toBe("C")
+  expect(doc.__interceptorEdited).toBe(true)
+})
+
+test("a normalized scene write protects the value the page kept", () => {
+  doc.body.innerHTML = "<input>"
+  const field = doc.querySelector("input")!
+  field.oninput = () => { field.value = field.value.toUpperCase() }
+  field.focus()
+  doc.__interceptorEdited = false
+  expect(writeToFocusedWritableSurface("mixed").success).toBe(false)
+  expect(field.value).toBe("MIXED")
+  expect(doc.__interceptorEdited).toBe(true)
+})

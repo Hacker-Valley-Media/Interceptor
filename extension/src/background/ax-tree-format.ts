@@ -1,6 +1,6 @@
 import { SECURE_MASK } from "../content/sensitive"
 
-type AXValue = { value?: unknown }
+type AXValue = { value?: unknown; sources?: Array<{ type?: string; value?: { value?: unknown }; superseded?: boolean }> }
 export type AXNode = { nodeId?: string; role?: AXValue; name?: AXValue; childIds?: string[]; properties?: Array<{ name?: string }> }
 
 /**
@@ -18,7 +18,9 @@ export function formatAXTree(nodes: AXNode[]): string {
     for (const child of byId.get(id)?.childIds || []) markInside(child)
   }
   for (const n of nodes) {
-    if (n.properties?.some(p => p.name === "editable")) for (const child of n.childIds || []) markInside(child)
+    if (!n.properties?.some(p => p.name === "editable")) continue
+    for (const child of n.childIds || []) markInside(child)
+    if (n.nodeId && n.name?.sources?.some(s => s.type === "contents" && s.value && !s.superseded)) insideEditable.add(n.nodeId)
   }
   return nodes.map(n => {
     const role = String(n.role?.value || "")
