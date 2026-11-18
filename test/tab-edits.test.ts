@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test"
 import { GlobalRegistrator } from "@happy-dom/global-registrator"
 import { handleCheck, handleInputText, handleSelectOption } from "../extension/src/content/actions/type"
+import { handleFileUpload } from "../extension/src/content/actions/file"
 import { writeToFocusedWritableSurface } from "../extension/src/content/scene/adaptive"
 import { getOrAssignRef } from "../extension/src/content/ref-registry"
 
@@ -70,4 +71,39 @@ test("a normalized scene write protects the value the page kept", () => {
   expect(writeToFocusedWritableSurface("mixed").success).toBe(false)
   expect(field.value).toBe("MIXED")
   expect(doc.__interceptorEdited).toBe(true)
+})
+
+test("replacing a select with its retained draft protects the document", async () => {
+  doc.body.innerHTML = "<select><option>A</option><option>B</option></select>"
+  const field = doc.querySelector("select")!
+  Object.defineProperty(field, "selectedOptions", { get: () => Array.from(field.options).filter(o => o.selected) })
+  field.onchange = () => {
+    const draft = doc.createElement("div")
+    draft.textContent = field.value
+    field.replaceWith(draft)
+  }
+  doc.__interceptorEdited = false
+  expect((await handleSelectOption({ type: "select_option", ref: getOrAssignRef(field), value: "B" })).success).toBe(false)
+  expect(doc.body.textContent).toBe("B")
+  expect(doc.__interceptorEdited).toBe(true)
+})
+
+test("a dropzone replaced by a preview protects the document without claiming a verified upload", async () => {
+  const zone = doc.createElement("div")
+  doc.body.append(zone)
+  zone.addEventListener("__interceptor_file_drop", event => {
+    zone.replaceWith("Attachment preview")
+    zone.dispatchEvent(new CustomEvent("__interceptor_file_drop_ack", { detail: { id: (event as CustomEvent).detail.id, ok: true } }))
+  })
+  doc.__interceptorEdited = false
+  const url = spyOn(URL, "createObjectURL").mockReturnValue("blob:fixture")
+  try {
+    const result = await handleFileUpload({ type: "file_upload", ref: getOrAssignRef(zone), fileName: "fixture.txt", dataBase64: "QQ==" })
+    expect(result.success).toBe(true)
+    expect(result.data).toMatchObject({ verified: false })
+    expect(doc.body.textContent).toBe("Attachment preview")
+    expect(doc.__interceptorEdited).toBe(true)
+  } finally {
+    url.mockRestore()
+  }
 })

@@ -143,7 +143,7 @@ export async function handleSelectOption(action: Action): Promise<ActionResult> 
   el.dispatchEvent(new Event("change", { bubbles: true }))
   await Promise.resolve()
   if (!el.isConnected || el.selectedOptions.length !== 1 || el.selectedOptions[0] !== option) {
-    if (el.isConnected && (el.selectedOptions.length !== previous.length || previous.some(o => !o.selected))) markDocumentEdited()
+    if (!el.isConnected || el.selectedOptions.length !== previous.length || previous.some(o => !o.selected)) markDocumentEdited()
     return { success: false, error: "page did not retain the selected option; read the dropdown before retrying" }
   }
   markDocumentEdited()

@@ -236,7 +236,8 @@ export async function handleFileUpload(action: Action): Promise<ActionResult> {
   if (!bridged) isolatedDrop(target, file)
   const method = bridged ? "dropzone-trusted" : "dropzone-isolated"
   const verified = await verifyUploaded(target, fileName, nameAlreadyPresent)
-  if (verified) markDocumentEdited()
+  // A replacement preview can hold the file without displaying its name.
+  if (verified || !target.isConnected) markDocumentEdited()
   return {
     success: true,
     data: { method, fileName, size: bytes.byteLength, verified,
