@@ -20,8 +20,8 @@ describe("Windows production release contract", () => {
     const lock = JSON.parse(read("scripts/installer/windows-toolchain.lock.json"))
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/)
     expect(extension.version).toBe(pkg.version)
-    expect(read(".bun-version").trim()).toBe("1.3.14")
-    expect(lock.bun.version).toBe("1.3.14")
+    expect(read(".bun-version").trim()).toBe("1.4.4")
+    expect(lock.bun.version).toBe("1.4.4")
     expect(lock.runner.label).toBe("windows-2025")
     expect(lock.runner.imageOS).toBe("win25-vs2026")
     // Cross-compile target seeds must track the pinned Bun version exactly —

@@ -1,4 +1,4 @@
-import { safeText } from "./sensitive"
+import { safeText, safeValue } from "./sensitive"
 import { isVisible, isInteractive, INTERACTIVE_TAGS, INTERACTIVE_ROLES, getShadowRoot } from "./element-discovery"
 import { getOrAssignRef } from "./ref-registry"
 import { getRelevantAttrs, getStyleBundle } from "./element-tree"
@@ -118,7 +118,7 @@ export function displayRoleName(el: Element, role: string, name: string): { role
     const type = (el.getAttribute("type") || "").toLowerCase()
     if (BUTTON_INPUT_TYPES.has(type)) {
       const fallback = type === "reset" ? "Reset" : type === "button" ? "" : "Submit"
-      return { role: "button", name: lineName(name || (el as HTMLInputElement).value || el.getAttribute("alt") || fallback) }
+      return { role: "button", name: lineName(name || safeValue(el) || el.getAttribute("alt") || fallback) }
     }
   }
   return { role, name: lineName(name) }

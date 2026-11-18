@@ -6,6 +6,7 @@ try { GlobalRegistrator.register() } catch { /* shared test DOM already register
 
 import { getRelevantAttrs, TREE_HREF_CHARS } from "../extension/src/content/element-tree"
 import { displayRoleName, lineName, getEffectiveRole } from "../extension/src/content/a11y-tree"
+import { markSensitive, SECURE_MASK } from "../extension/src/content/sensitive"
 import { ISOLATED_SAVE_UNAVAILABLE } from "../extension/src/background/capabilities/binary-sink"
 import { rewriteCspEvalError } from "../cli/format"
 
@@ -23,6 +24,16 @@ describe("hrefs", () => {
 })
 
 describe("names and button inputs", () => {
+  test("a marked button value is masked when it supplies the caption, and a public label wins", () => {
+    const button = document.createElement("input")
+    button.type = "button"
+    button.value = "example caption"
+    expect(displayRoleName(button, "textbox", "").name).toBe("example caption")
+    markSensitive(button)
+    expect(displayRoleName(button, "textbox", "").name).toBe(SECURE_MASK)
+    expect(displayRoleName(button, "textbox", "Public label").name).toBe("Public label")
+  })
+
   test("a name with line breaks prints on one line", () => {
     expect(lineName("Search by keyword,\n      term, or phrase")).toBe("Search by keyword, term, or phrase")
   })

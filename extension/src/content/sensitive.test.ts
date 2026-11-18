@@ -194,3 +194,14 @@ test("a credential autocomplete the page removes before any read stays masked", 
   expect(safeValue(otp)).toBe(SECURE_MASK)
   expect(safeValue(user)).toBe("ordinary")
 })
+
+test("a type change on a public help wrapper keeps its label readable", async () => {
+  document.body.innerHTML = '<div type="password">Public help label</div>'
+  const wrapper = document.querySelector("div")!
+  const observer = watchCredentialReveals(document)
+  try {
+    wrapper.setAttribute("type", "text")
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(safeText(wrapper)).toBe("Public help label")
+  } finally { observer.disconnect() }
+})

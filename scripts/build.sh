@@ -17,6 +17,15 @@ for arg in "$@"; do
   esac
 done
 
+if [[ "$(uname -s)" == Darwin ]]; then
+  pinned_bun=$(<.bun-version)
+  actual_bun=$(bun --version)
+  if [[ "$actual_bun" != "$pinned_bun" ]]; then
+    echo "This build requires Bun $pinned_bun. Found Bun $actual_bun on PATH." >&2
+    exit 1
+  fi
+fi
+
 stamp_version() {
   local sha date pkg_version platform_targets agent_dylibs_bundled
   sha=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")

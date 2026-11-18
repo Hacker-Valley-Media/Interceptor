@@ -42,7 +42,7 @@ export function watchCredentialReveals(root: Node): MutationObserver {
     for (const record of records) {
       if (!(record.target instanceof Element)) continue
       const wasCredential = record.attributeName === "type"
-        ? record.oldValue?.toLowerCase() === "password"
+        ? record.target.tagName === "INPUT" && record.oldValue?.toLowerCase() === "password"
         : hasCredentialToken(record.oldValue) && (record.target.tagName === "INPUT" || record.target.tagName === "TEXTAREA")
       if (wasCredential) markSensitive(record.target)
     }
