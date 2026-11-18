@@ -2,6 +2,7 @@ import { activeTransport, chromeCall, detectInstallType } from "../transport"
 import { debuggerAttached, cdpAttachActDetach } from "../cdp"
 import { resolveTabLifecycle } from "../tab-lifecycle"
 import { extensionOsInputSupport } from "../os-input-support"
+import { formatAXTree, type AXNode } from "../ax-tree-format"
 
 type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: number }
 
@@ -135,13 +136,7 @@ export async function handleMetaActions(
         tabId, "Accessibility.getFullAXTree", depth ? { depth } : undefined
       )
       if (!result.success) return { success: false, error: result.error }
-      const nodes = result.data?.nodes || []
-      const formatted = nodes.map((n: any) => {
-        const role = n.role?.value || ""
-        const name = n.name?.value || ""
-        const nodeId = n.nodeId || ""
-        return `[${nodeId}] ${role} "${name}"`
-      }).join("\n")
+      const formatted = formatAXTree((result.data?.nodes || []) as AXNode[])
       return { success: true, data: formatted || "empty tree" }
     }
 

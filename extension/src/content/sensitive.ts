@@ -8,12 +8,47 @@ export function markSensitive(el: Element): void {
   sensitiveElements.add(el)
 }
 
+// Autofill tokens that name a credential, whatever the field's current type:
+// sign-in pages keep these on a plain text field, or on a password field they
+// switch to type="text" for "show password".
+const CREDENTIAL_AUTOCOMPLETE = new Set(["current-password", "new-password", "one-time-code"])
+
+function hasCredentialToken(autocomplete: string | null): boolean {
+  return (autocomplete || "").toLowerCase().split(/\s+/).some(token => CREDENTIAL_AUTOCOMPLETE.has(token))
+}
+
+function isCredentialField(node: Element): boolean {
+  if (node.tagName === "INPUT" && (node as HTMLInputElement).type === "password") return true
+  if (node.tagName !== "INPUT" && node.tagName !== "TEXTAREA") return false
+  return hasCredentialToken(node.getAttribute("autocomplete"))
+}
+
 export function isSensitive(el: Element): boolean {
   for (let node: Element | null = el; node; node = node.parentElement || (node.getRootNode() as ShadowRoot).host || null) {
-    if (node.tagName === "INPUT" && (node as HTMLInputElement).type === "password") markSensitive(node)
+    if (isCredentialField(node)) markSensitive(node)
     if (sensitiveElements.has(node)) return true
   }
   return false
+}
+
+/**
+ * A page's "show password" switches the field to type="text", or drops its
+ * credential autocomplete, before any read sees it as a credential. Mark the
+ * field at the change, so the mask stays sticky. This sees changes made after
+ * the content script is injected, in the document tree and not in shadow roots.
+ */
+export function watchCredentialReveals(root: Node): MutationObserver {
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (!(record.target instanceof Element)) continue
+      const wasCredential = record.attributeName === "type"
+        ? record.oldValue?.toLowerCase() === "password"
+        : hasCredentialToken(record.oldValue) && (record.target.tagName === "INPUT" || record.target.tagName === "TEXTAREA")
+      if (wasCredential) markSensitive(record.target)
+    }
+  })
+  observer.observe(root, { subtree: true, attributes: true, attributeFilter: ["type", "autocomplete"], attributeOldValue: true })
+  return observer
 }
 
 export const SECURE_MASK = "***SECURE***"
