@@ -286,7 +286,7 @@ resolve_min_sys_ver() {
   local mode="$1" signed_pkg="$2"
   case "$mode" in
     browser-only)
-      echo "11.0"
+      echo "13.0"
       ;;
     full)
       local tmpdir expand_dir plist min_ver

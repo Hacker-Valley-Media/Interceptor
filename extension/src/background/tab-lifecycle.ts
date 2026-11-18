@@ -230,8 +230,8 @@ export function planGroupPurge(
 // --- G9: dirty-form guard -----------------------------------------------------
 // Verified live (2026-08-07): chrome.tabs.remove BYPASSES beforeunload — the
 // handler never runs, no dialog appears, the tab closes silently. So the sweep
-// must detect unsaved user state itself. A tab is "dirty" when any form control
-// differs from its default, or the page registered window.onbeforeunload
+// must detect unsaved user state itself. Keep documents with observed edits
+// or a page-assigned window.onbeforeunload property
 // (addEventListener-registered handlers are undetectable — accepted gap).
 // Injection failure = not dirty (an unreachable page holds no typed state we
 // can preserve). Conservative by design: a skipped-but-closable tab lingers
@@ -239,8 +239,8 @@ export function planGroupPurge(
 
 function pageHasDirtyState(): boolean {
   try {
-    const w = window as Window & { onbeforeunload?: unknown }
-    if (typeof w.onbeforeunload === "function") return true
+    if (typeof document.__interceptorEdited === "boolean") return document.__interceptorEdited
+    // Documents opened before the tracker was installed can already contain drafts.
     for (const el of Array.from(document.querySelectorAll("input, textarea, select"))) {
       if (el instanceof HTMLTextAreaElement) {
         if (el.value !== el.defaultValue) return true
@@ -286,12 +286,16 @@ async function isTabDirty(tabId: number): Promise<boolean> {
   try {
     const scripting = (chrome as unknown as { scripting?: typeof chrome.scripting }).scripting
     if (typeof scripting?.executeScript !== "function") return false
-    return await boundedDirtyInspection(
-      scripting.executeScript({
-        target: { tabId, allFrames: true },
-        func: pageHasDirtyState,
-      }).then((results) => results.some((r) => r?.result === true))
-    )
+    const inspect = async (world: "ISOLATED" | "MAIN", func: () => boolean) => {
+      const results = await scripting.executeScript({ target: { tabId, allFrames: true }, world, func })
+      return results.some(r => r.result === true)
+    }
+    const inspections = [
+      inspect("ISOLATED", pageHasDirtyState),
+      inspect("MAIN", () => typeof window.onbeforeunload === "function"),
+    ]
+    return await boundedDirtyInspection(Promise.allSettled(inspections).then(results =>
+      results.some(result => result.status === "fulfilled" && result.value)))
   } catch {
     return false
   }

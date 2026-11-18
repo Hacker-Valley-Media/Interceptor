@@ -121,6 +121,7 @@ Each workflow is a complete self-contained "you are doing X" procedure. Open the
 | [`references/blob-export-capture.md`](references/blob-export-capture.md) | Deep mechanic: capture a webapp's client-side export bytes (PNG/PDF/SVG) with no Save dialog |
 | [`references/monitor-and-replay.md`](references/monitor-and-replay.md) | Monitor session behavior, replay-plan generation, cross-tab/focus-follow notes |
 | [`references/command-catalog.md`](references/command-catalog.md) | Full browser command surface with flags and examples |
+| [`references/tab-lifecycle.md`](references/tab-lifecycle.md) | Idle-tab protection and closing a job's group on completion |
 | [`references/screenshot-policy.md`](references/screenshot-policy.md) | VLM-aware screenshot budget table; agent-default recipe |
 
 ## When To Switch Surfaces

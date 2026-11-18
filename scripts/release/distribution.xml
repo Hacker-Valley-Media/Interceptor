@@ -25,6 +25,16 @@
         Containerization package for VM lifecycle support, and
         interceptor-bridge/Package.swift declares platforms[.macOS(.v15)].
     -->
+    <installation-check script="checkHost()"/>
+    <script><![CDATA[
+    function checkHost() {
+        var version = system.version.ProductVersion;
+        if (system.compareVersions(version, "15.0") >= 0) return true;
+        my.result.type = "Fatal";
+        my.result.message = "Interceptor Full requires macOS 15.0 or later. This Mac runs macOS " + version + ". The Browser-only package supports macOS 13.0 or later.";
+        return false;
+    }
+    ]]></script>
     <volume-check>
         <allowed-os-versions>
             <os-version min="15.0"/>

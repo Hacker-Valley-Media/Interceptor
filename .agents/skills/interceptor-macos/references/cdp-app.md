@@ -34,6 +34,8 @@ debuggable is unnecessary and can terminate some apps.
 
 ## Command catalog
 
+Use the context ID returned by `connect`. The first connection to a page hostname gets the bare ID, such as `cdp:localhost`. A second endpoint showing that hostname gets the debug port as a suffix, such as `cdp:localhost-9612`. If an explicit `--app` name is in use, or both generated IDs are occupied, choose another `--app` name or detach the holder first.
+
 ```
 # Path A — direct CDP
 interceptor macos cdp discover                       # list running Electron apps + CDP/debug-port status

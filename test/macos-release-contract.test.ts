@@ -6,6 +6,36 @@ const root = resolve(import.meta.dir, "..")
 const read = (path: string) => readFileSync(resolve(root, path), "utf-8")
 
 describe("macOS release contract", () => {
+  for (const [edition, file, floor] of [
+    ["Full", "distribution.xml", "15.0"],
+    ["Browser", "distribution-browser.xml", "13.0"],
+  ]) {
+    test(`${edition} checks the host and explains its macOS minimum before destination selection`, () => {
+      const xml = read(`scripts/release/${file}`).replace(/<!--[\s\S]*?-->/g, "")
+      expect(xml.match(/<os-version min="([^"]+)"/)?.[1]).toBe(floor)
+      const call = xml.match(/<installation-check\s+script="([^"]+)"/)?.[1]
+      const script = xml.match(/<script>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/script>/)?.[1]
+      expect(call).toBeDefined()
+      expect(script).toBeDefined()
+      const check = new Function("system", "my", `${script}\nreturn ${call}`)
+      for (const version of ["12.7", "13.0", "14.6.1", "15.0", "27.0"]) {
+        const result = { type: "", message: "" }
+        const compareVersions = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true })
+        const eligible = compareVersions(version, floor) >= 0
+        expect(check({ version: { ProductVersion: version }, compareVersions }, { result })).toBe(eligible)
+        if (!eligible) {
+          expect(result.type).toBe("Fatal")
+          for (const word of [edition, version, floor]) expect(result.message).toContain(word)
+          if (edition === "Full") expect(result.message).toContain("Browser")
+        }
+      }
+    })
+  }
+
+  test("the Browser Sparkle item advertises the package's deployment target", () => {
+    expect(read("scripts/publish-sparkle.sh")).toMatch(/browser-only\)\s+echo "13\.0"/)
+  })
+
   // release.sh runs build.sh for the release host, and the macOS packages are
   // built on Apple silicon, so the CLI, daemon, and bridge they install are
   // arm64-only. hostArchitectures is what Installer checks before it installs:

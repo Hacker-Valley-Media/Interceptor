@@ -218,10 +218,11 @@ export class CdpManager {
     const page = pickPageTarget(discovered.targets, urlHint)
     if (!page) return { success: false, error: `no debuggable page target on ${host}:${port}` }
 
-    const name = typeof action.app === "string" && action.app
-      ? action.app
-      : deriveNameFromUrl(page.url) || `app-${port}`
-    const contextId = cdpContextId(name)
+    const explicitName = typeof action.app === "string" && action.app
+    const hostname = deriveNameFromUrl(page.url)
+    const name = explicitName || hostname || `app-${port}`
+    const bareId = cdpContextId(name)
+    const candidates = !explicitName && hostname ? [bareId, `${bareId}-${port}`] : [bareId]
 
     const conn = new CdpConnection(page.webSocketDebuggerUrl)
     try {
@@ -229,10 +230,20 @@ export class CdpManager {
     } catch (err) {
       return { success: false, error: `failed to open CDP target: ${(err as Error).message}` }
     }
-    // New connection is live — only now retire any previous one for this context
-    // (so a failed reconnect never leaves a zombie disconnected context).
-    const existing = this.contexts.get(contextId)
-    if (existing) existing.conn.close()
+    // Claim synchronously after the handshake so concurrent connects see the current owner.
+    // Prefer this endpoint's old id even if the bare name has since become free.
+    const sameEndpoint = candidates.filter(id => {
+      const holder = this.contexts.get(id)?.descriptor
+      return holder?.host === host && holder.port === port
+    })
+    const contextId = sameEndpoint.find(id => this.contexts.get(id)?.conn.isOpen)
+      ?? sameEndpoint[0] ?? candidates.find(id => !this.contexts.get(id)?.conn.isOpen)
+    if (!contextId) {
+      conn.close()
+      const holder = this.contexts.get(bareId)!.descriptor
+      return { success: false, error: `${bareId} is held by ${holder.host}:${holder.port}. Pass a different --app name or detach it first.` }
+    }
+    this.contexts.get(contextId)?.conn.close()
     const { net, exec } = this.buildContext(conn)
     conn.onClose((reason) => {
       this.deps.emit("cdp_disconnected", { contextId, reason })

@@ -21,15 +21,21 @@
         hostArchitectures="arm64"/>
 
     <!--
-        Browser-only mode has no Swift bridge, so the macOS 14 SDK floor that
-        the Full pkg's distribution.xml enforces does not apply here. The
-        binary floor is determined by the Bun runtime that compiled the CLI
-        and daemon (currently macOS 11+ for bun-darwin-arm64 / bun-darwin-x64).
-        We set a conservative 11.0 floor here.
+        The Bun runtime embedded in the Browser CLI and daemon requires macOS 13.
     -->
+    <installation-check script="checkHost()"/>
+    <script><![CDATA[
+    function checkHost() {
+        var version = system.version.ProductVersion;
+        if (system.compareVersions(version, "13.0") >= 0) return true;
+        my.result.type = "Fatal";
+        my.result.message = "Interceptor Browser requires macOS 13.0 or later. This Mac runs macOS " + version + ".";
+        return false;
+    }
+    ]]></script>
     <volume-check>
         <allowed-os-versions>
-            <os-version min="11.0"/>
+            <os-version min="13.0"/>
         </allowed-os-versions>
     </volume-check>
 

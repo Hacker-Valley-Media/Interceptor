@@ -2,6 +2,7 @@ import { resolveElement, staleElementError } from "../input-simulation"
 import { getShadowRoot } from "../element-discovery"
 import { getOrAssignRef } from "../ref-registry"
 import { isSensitive, markSensitive } from "../sensitive"
+import { markDocumentEdited } from "../document-edits"
 
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
@@ -38,6 +39,7 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
     }
     inputEl.dispatchEvent(new Event("input", { bubbles: true }))
     inputEl.dispatchEvent(new Event("change", { bubbles: true }))
+    markDocumentEdited()
     return { success: true, data: { typed: true, elementType: "input", method: "nativeSetter" } }
   }
 
@@ -57,7 +59,7 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
         selection.addRange(range)
       }
     }
-    document.execCommand("insertText", false, text)
+    if (document.execCommand("insertText", false, text)) markDocumentEdited()
     el.dispatchEvent(new Event("input", { bubbles: true }))
     return { success: true, data: { typed: true, elementType: "contenteditable", method: "execCommand" } }
   }
@@ -76,6 +78,7 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
       el.textContent = ""
     }
     el.textContent = (action.clear ? "" : (el.textContent || "")) + text
+    markDocumentEdited()
     el.dispatchEvent(new Event("input", { bubbles: true }))
     return { success: true, data: { typed: true, elementType: `role=${role}`, method: "textContent" } }
   }
@@ -141,6 +144,7 @@ export async function handleSelectOption(action: Action): Promise<ActionResult> 
   if (!el.isConnected || el.selectedOptions.length !== 1 || el.selectedOptions[0] !== option) {
     return { success: false, error: "page did not retain the selected option; read the dropdown before retrying" }
   }
+  markDocumentEdited()
   return { success: true, data: { value: option.value, label: option.label, changed: true } }
 }
 
@@ -150,6 +154,7 @@ export async function handleCheck(action: Action): Promise<ActionResult> {
   const target = action.checked !== undefined ? !!(action.checked) : !el.checked
   if (el.checked !== target) {
     el.checked = target
+    if (el.checked === target) markDocumentEdited()
     el.dispatchEvent(new Event("change", { bubbles: true }))
     el.dispatchEvent(new Event("input", { bubbles: true }))
   }
