@@ -109,6 +109,19 @@ index 6cb7eb4022867ec2632a84b2ca16d156ba210bea..f3c4806fc42d304bf71d2e5ca431bc9c
  
      // Tesseract.js-core versions through 4.0.3 create a module named `global.TesseractCoreWASM`,
      // so we account for that here to preserve backwards compatibility.
+diff --git a/src/worker-script/browser/index.js b/src/worker-script/browser/index.js
+index b9b9063515b020088d5e49766137ced455fd0064..0111a002c69fc10aea6235a6cd5b39eb2a1448f9 100644
+--- a/src/worker-script/browser/index.js
++++ b/src/worker-script/browser/index.js
+@@ -10,6 +10,8 @@
+  * @author Jerome Wu <jeromewus@gmail.com>
+  */
+ 
++// The upstream webpack build supplies Buffer to the gzip and BMP decoders.
++global.Buffer = require('buffer').Buffer;
+ const worker = require('..');
+ const getCore = require('./getCore');
+ const gunzip = require('./gunzip');
 diff --git a/src/worker-script/index.js b/src/worker-script/index.js
 index 4321a8ff08a393d5b341a9cb4183511ace719b8c..73f763203095795a9d46b4ffdec0208f9bcd3c55 100644
 --- a/src/worker-script/index.js

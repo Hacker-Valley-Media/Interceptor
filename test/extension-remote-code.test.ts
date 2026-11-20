@@ -5,7 +5,7 @@ import { join, resolve } from "node:path"
 import { runInNewContext } from "node:vm"
 import { checkExtensionCode } from "../scripts/check-extension-code"
 
-test("the bundled OCR worker and offscreen document only load packaged code", () => {
+test("the bundled OCR worker and offscreen document only load packaged code", async () => {
   const dir = mkdtempSync(join(tmpdir(), "interceptor-ocr-code-"))
   try {
     mkdirSync(join(dir, "tesseract"))
@@ -20,11 +20,24 @@ test("the bundled OCR worker and offscreen document only load packaged code", ()
     }
     checkExtensionCode(dir)
     // new Worker(path) loads a classic script and supplies no Node global.
-    const listeners: string[] = []
+    type Packet = { status: string; data: unknown }
+    const reply = Promise.withResolvers<Packet>()
+    let dispatch: ((event: { data: object }) => void) | undefined
     runInNewContext(readFileSync(join(dir, "tesseract/worker.min.js"), "utf8"), {
-      addEventListener: (event: string) => listeners.push(event),
+      WorkerGlobalScope: class {},
+      addEventListener: (event: string, listener: typeof dispatch) => { if (event === "message") dispatch = listener },
+      postMessage: (packet: Packet) => { if (packet.status !== "progress") reply.resolve(packet) },
+      fetch: (url: string) => {
+        expect(url).toBe("chrome-extension://fixture/tesseract/eng.traineddata.gz")
+        return new Response(Bun.gzipSync(new TextEncoder().encode("test language data")))
+      },
     })
-    expect(listeners).toContain("message")
+    expect(dispatch).toBeFunction()
+    dispatch!({ data: { action: "loadLanguage", payload: { langs: "eng", options: {
+      cacheMethod: "none", langPath: "chrome-extension://fixture/tesseract/",
+    } } } })
+    const result = await reply.promise
+    expect(result.status, String(result.data)).toBe("resolve")
 
     // The store checks every script, including ones outside the OCR bundles.
     const extra = join(dir, "extra.js")
