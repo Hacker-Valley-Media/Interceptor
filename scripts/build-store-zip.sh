@@ -12,22 +12,24 @@ cd "$(dirname "$0")/.."
 [[ -f extension/dist/manifest.json ]] || { echo "extension/dist missing; run scripts/build.sh first" >&2; exit 1; }
 VERSION=$(sed -nE 's/.*"version": *"([^"]+)".*/\1/p' extension/dist/manifest.json | head -1)
 
-STAGE=$(mktemp -d)
+mkdir -p dist
+STAGE=$(mktemp -d "$PWD/dist/.store-zip.XXXXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
-cp -R extension/dist/. "$STAGE/"
+cp -R extension/dist "$STAGE/extension"
 bun -e '
 const fs = require("fs"); const p = process.argv[1]
 const m = JSON.parse(fs.readFileSync(p, "utf8")); delete m.key
 fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n")
-' "$STAGE/manifest.json"
+' "$STAGE/extension/manifest.json"
 
-mkdir -p dist
 OUT="$PWD/dist/Interceptor-Extension-$VERSION.zip"
-rm -f "$OUT"
-(cd "$STAGE" && zip -qr -X "$OUT" . -x '.DS_Store' '*/.DS_Store')
+(cd "$STAGE/extension" && zip -qr -X "$STAGE/store.zip" . -x '.DS_Store' '*/.DS_Store')
 
-# Self-check: the uploaded manifest must not carry the development key.
-if unzip -p "$OUT" manifest.json | grep -q '"key"'; then
+# Verify the actual archive before replacing the last good zip.
+unzip -q "$STAGE/store.zip" -d "$STAGE/check"
+if grep -q '"key"' "$STAGE/check/manifest.json"; then
   echo "store zip still contains manifest#key" >&2; exit 1
 fi
+bun scripts/check-extension-code.ts "$STAGE/check"
+mv -f "$STAGE/store.zip" "$OUT"
 echo "$OUT ($(du -h "$OUT" | cut -f1), $(unzip -l "$OUT" | tail -1 | awk '{print $2}') files)"

@@ -1,0 +1,149 @@
+diff --git a/src/index.js b/src/index.js
+index e32751b9299bec1bd92a40c6c3a2699caf99a635..d681322ddffffd69151e0d64b405a9b9d7aac537 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -9,7 +9,6 @@
+  * @author Guillermo Webster <gui@mit.edu>
+  * @author Jerome Wu <jeromewus@gmail.com>
+  */
+-require('regenerator-runtime/runtime');
+ const createScheduler = require('./createScheduler');
+ const createWorker = require('./createWorker');
+ const Tesseract = require('./Tesseract');
+diff --git a/src/worker/browser/defaultOptions.js b/src/worker/browser/defaultOptions.js
+index 248c83900a26a2ae8a6d0a3068a6c4f5c553eada..e4916231ad9948c68f508406480272345ac25db9 100644
+--- a/src/worker/browser/defaultOptions.js
++++ b/src/worker/browser/defaultOptions.js
+@@ -1,12 +1,3 @@
+ 'use strict';
+ 
+-const version = require('../../../package.json').version;
+-const defaultOptions = require('../../constants/defaultOptions');
+-
+-/*
+- * Default options for browser worker
+- */
+-module.exports = {
+-  ...defaultOptions,
+-  workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@v${version}/dist/worker.min.js`,
+-};
++module.exports = require('../../constants/defaultOptions');
+diff --git a/src/worker/browser/spawnWorker.js b/src/worker/browser/spawnWorker.js
+index f17fcd2ca310f578f09ee03cb69d2da67f36a6e2..967179ad24b229cf3f45fb6287e0e187df0c991b 100644
+--- a/src/worker/browser/spawnWorker.js
++++ b/src/worker/browser/spawnWorker.js
+@@ -7,16 +7,4 @@
+  * @function create a new Worker in browser
+  * @access public
+  */
+-module.exports = ({ workerPath, workerBlobURL }) => {
+-  let worker;
+-  if (Blob && URL && workerBlobURL) {
+-    const blob = new Blob([`importScripts("${workerPath}");`], {
+-      type: 'application/javascript',
+-    });
+-    worker = new Worker(URL.createObjectURL(blob));
+-  } else {
+-    worker = new Worker(workerPath);
+-  }
+-
+-  return worker;
+-};
++module.exports = ({ workerPath }) => new Worker(workerPath);
+diff --git a/src/worker-script/browser/getCore.js b/src/worker-script/browser/getCore.js
+index 6cb7eb4022867ec2632a84b2ca16d156ba210bea..f3c4806fc42d304bf71d2e5ca431bc9cf7a62000 100644
+--- a/src/worker-script/browser/getCore.js
++++ b/src/worker-script/browser/getCore.js
+@@ -1,7 +1,6 @@
+ 'use strict';
+ 
+ const { simd, relaxedSimd } = require('wasm-feature-detect');
+-const coreVersion = require('../../../package.json').dependencies['tesseract.js-core'];
+ 
+ module.exports = async (lstmOnly, corePath, res) => {
+   if (typeof global.TesseractCore === 'undefined') {
+@@ -9,41 +8,12 @@ module.exports = async (lstmOnly, corePath, res) => {
+ 
+     res.progress({ status: statusText, progress: 0 });
+ 
+-    // If the user specifies a core path, we use that
+-    // Otherwise, default to CDN
+-    const corePathImport = corePath || `https://cdn.jsdelivr.net/npm/tesseract.js-core@v${coreVersion.substring(1)}`;
+-
+-    // If a user specifies a specific JavaScript file, load that file.
+-    // Otherwise, assume a directory has been provided, and load either
+-    // tesseract-core.wasm.js or tesseract-core-simd.wasm.js depending
+-    // on whether this device has SIMD support.
+-    let corePathImportFile;
+-    if (corePathImport.slice(-2) === 'js') {
+-      corePathImportFile = corePathImport;
+-    } else {
+-      const simdSupport = await simd();
+-      const relaxedSimdSupport = await relaxedSimd();
+-      if (relaxedSimdSupport) {
+-        if (lstmOnly) {
+-          corePathImportFile = `${corePathImport.replace(/\/$/, '')}/tesseract-core-relaxedsimd-lstm.wasm.js`;
+-        } else {
+-          corePathImportFile = `${corePathImport.replace(/\/$/, '')}/tesseract-core-relaxedsimd.wasm.js`;
+-        }
+-      } else if (simdSupport) {
+-        if (lstmOnly) {
+-          corePathImportFile = `${corePathImport.replace(/\/$/, '')}/tesseract-core-simd-lstm.wasm.js`;
+-        } else {
+-          corePathImportFile = `${corePathImport.replace(/\/$/, '')}/tesseract-core-simd.wasm.js`;
+-        }
+-      } else if (lstmOnly) {
+-        corePathImportFile = `${corePathImport.replace(/\/$/, '')}/tesseract-core-lstm.wasm.js`;
+-      } else {
+-        corePathImportFile = `${corePathImport.replace(/\/$/, '')}/tesseract-core.wasm.js`;
+-      }
++    if (corePath !== new URL('.', global.location.href).href) {
++      throw Error('corePath must point to the packaged worker directory');
+     }
+-
+-    // Create a module named `global.TesseractCore`
+-    global.importScripts(corePathImportFile);
++    const variant = await relaxedSimd() ? '-relaxedsimd' : await simd() ? '-simd' : '';
++    const model = lstmOnly ? '-lstm' : '';
++    global.importScripts(`./tesseract-core${variant}${model}.wasm.js`);
+ 
+     // Tesseract.js-core versions through 4.0.3 create a module named `global.TesseractCoreWASM`,
+     // so we account for that here to preserve backwards compatibility.
+diff --git a/src/worker-script/browser/index.js b/src/worker-script/browser/index.js
+index b9b9063515b020088d5e49766137ced455fd0064..0111a002c69fc10aea6235a6cd5b39eb2a1448f9 100644
+--- a/src/worker-script/browser/index.js
++++ b/src/worker-script/browser/index.js
+@@ -10,6 +10,8 @@
+  * @author Jerome Wu <jeromewus@gmail.com>
+  */
+ 
++// The upstream webpack build supplies Buffer to the gzip and BMP decoders.
++global.Buffer = require('buffer').Buffer;
+ const worker = require('..');
+ const getCore = require('./getCore');
+ const gunzip = require('./gunzip');
+diff --git a/src/worker-script/index.js b/src/worker-script/index.js
+index 4321a8ff08a393d5b341a9cb4183511ace719b8c..73f763203095795a9d46b4ffdec0208f9bcd3c55 100644
+--- a/src/worker-script/index.js
++++ b/src/worker-script/index.js
+@@ -9,7 +9,6 @@
+  * @author Guillermo Webster <gui@mit.edu>
+  * @author Jerome Wu <jeromewus@gmail.com>
+  */
+-require('regenerator-runtime/runtime');
+ const isURL = require('is-url');
+ const dump = require('./utils/dump');
+ const env = require('../utils/getEnvironment')('type');
+@@ -124,10 +123,8 @@ res) => {
+       if (typeof _lang === 'string') {
+         let path = null;
+ 
+-        // If `langPath` if not explicitly set by the user, the jsdelivr CDN is used.
+-        // Data supporting the Legacy model is only included if `lstmOnly` is not true.
+-        // This saves a significant amount of data for the majority of users that use LSTM only.
+-        const langPathDownload = langPath || (lstmOnly ? `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${lang}/4.0.0_best_int` : `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${lang}/4.0.0`);
++        if (!langPath) throw Error('A packaged langPath is required');
++        const langPathDownload = langPath;
+ 
+         // For Node.js, langPath may be a URL or local file path
+         // The is-url package is used to tell the difference
