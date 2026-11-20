@@ -135,7 +135,8 @@ build_extension() {
   # (browser-only / non-macOS). Loaded from extension-local URLs by the
   # offscreen document; lazy-initialized on first `ocr` request.
   mkdir -p extension/dist/tesseract
-  cp node_modules/tesseract.js/dist/worker.min.js extension/dist/tesseract/
+  bun build extension/src/tesseract-worker.ts --target=browser --minify --format=iife \
+    --define=global=globalThis --outfile=extension/dist/tesseract/worker.min.js
   # OEM 1 (LSTM) cores: Tesseract.js picks relaxed-SIMD on Chrome/Brave 116+
   # (the manifest min), with plain SIMD-LSTM as the one-tier fallback.
   cp node_modules/tesseract.js-core/tesseract-core-relaxedsimd-lstm.wasm.js extension/dist/tesseract/
