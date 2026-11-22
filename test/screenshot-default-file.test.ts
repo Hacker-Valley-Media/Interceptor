@@ -1,6 +1,6 @@
 // A text-mode screenshot is written to a file; --data-url keeps the old output.
 import { expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseScreenshotCommand, tempScreenshotDir, writeTempScreenshot } from "../cli/commands/screenshot"
@@ -32,4 +32,20 @@ test("--data-url is parsed for foreground and background captures", () => {
   expect(parseScreenshotCommand(["screenshot", "--data-url"]).dataUrl).toBe(true)
   expect(parseScreenshotCommand(["screenshot", "--background", "--data-url"]).dataUrl).toBe(true)
   expect(parseScreenshotCommand(["screenshot"]).dataUrl).toBeUndefined()
+})
+
+test.skipIf(process.platform === "win32")("an older open folder is made private; a linked screenshots folder is refused", () => {
+  const base = mkdtempSync(join(tmpdir(), "screenshot-file-"))
+  try {
+    mkdirSync(join(base, "interceptor", "screenshots"), { recursive: true })
+    chmodSync(join(base, "interceptor"), 0o755)
+    chmodSync(join(base, "interceptor", "screenshots"), 0o775)
+    writeTempScreenshot(new Uint8Array([1]), "png", base)
+    expect(statSync(join(base, "interceptor")).mode & 0o777).toBe(0o700)
+    expect(statSync(join(base, "interceptor", "screenshots")).mode & 0o777).toBe(0o700)
+    rmSync(join(base, "interceptor", "screenshots"), { recursive: true })
+    mkdirSync(join(base, "elsewhere"))
+    symlinkSync(join(base, "elsewhere"), join(base, "interceptor", "screenshots"))
+    expect(() => writeTempScreenshot(new Uint8Array([1]), "png", base)).toThrow("not a folder of this user")
+  } finally { rmSync(base, { recursive: true, force: true }) }
 })

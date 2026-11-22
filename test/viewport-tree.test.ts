@@ -47,3 +47,18 @@ test("a button scrolled out of its overflow container is not on screen, even ins
   expect(out).not.toContain('"Clipped"')
   expect(out.split("\n").at(-1)).toContain("1 below")
 })
+
+test("a clipping box that is off screen hides its children; an absolute child escapes a static clip", () => {
+  const h = innerHeight
+  document.body.innerHTML = `<div id="off" style="overflow-x: hidden; overflow-y: hidden"><button id="edge">Edge</button></div><div id="outer" style="position: relative"><div id="wrap" style="overflow-x: hidden; overflow-y: hidden"><button id="abs" style="position: absolute">Abs</button></div></div>`
+  for (const [id, top, height] of [["off", h + 5, 200], ["outer", 0, 400], ["wrap", 50, 100]] as const) {
+    const el = document.getElementById(id)!
+    Object.defineProperty(el, "offsetParent", { configurable: true, get: () => document.body })
+    el.getBoundingClientRect = () => ({ top, bottom: top + height, left: 0, right: 300, width: 300, height, x: 0, y: top, toJSON() {} }) as DOMRect
+  }
+  place(document.getElementById("edge")!, h - 5)
+  place(document.getElementById("abs")!, 200)
+  const out = buildA11yTree(document.body, 0, 15, "interactive", false, "verbose", { viewport: true })
+  expect(out).not.toContain('"Edge"')
+  expect(out).toContain('"Abs"')
+})

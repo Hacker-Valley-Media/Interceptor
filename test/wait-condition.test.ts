@@ -6,6 +6,7 @@ try { GlobalRegistrator.register() } catch { /* shared test DOM already register
 
 import { parseWaitCondition } from "../cli/commands/navigation"
 import { waitCondition } from "../extension/src/background/content-bridge"
+import { pickTimeoutForAction } from "../cli/transport"
 const { handleConditionCheck } = await import("../extension/src/content/actions/wait")
 
 describe("wait parser", () => {
@@ -85,6 +86,17 @@ describe("background wait loop", () => {
     expect(Date.now() - started).toBeLessThan(1000)
     expect(r.success).toBe(false)
     expect((r.data as { met: unknown }).met).toBeNull()
+  })
+  test("a single check (timeout 0) is bounded too", async () => {
+    ;(globalThis as { chrome: { tabs: { sendMessage: unknown } } }).chrome.tabs.sendMessage = () => {}
+    const started = Date.now()
+    const r = await waitCondition(1, { type: "wait_condition", kind: "text", text: "x", timeout: 0 }, undefined, 20)
+    expect(Date.now() - started).toBeLessThan(7_000)
+    expect((r.data as { met: unknown }).met).toBeNull()
+  }, 10_000)
+  test("the request deadline outlasts a long condition timeout", () => {
+    expect(pickTimeoutForAction({ type: "wait_condition", kind: "text", text: "x", timeout: 60_000 })).toBeGreaterThanOrEqual(65_000)
+    expect(pickTimeoutForAction({ type: "wait_condition", kind: "text", text: "x", timeout: 0 })).toBe(pickTimeoutForAction({ type: "wait_stable" }))
   })
   test("timeout 0 checks once (verify)", async () => {
     const r = await waitCondition(1, { type: "wait_condition", kind: "text", text: "x", timeout: 0 }, undefined, 20)

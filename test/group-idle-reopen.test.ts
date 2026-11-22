@@ -55,6 +55,8 @@ test("floors persist in storage.local, survive concurrent writes, and are pruned
     expect((await lastReapedUrl("game", now))?.url).toBe("https://a.example/play")
     await setReopenFloor("game", now)
     expect(await lastReapedUrl("game", now)).toBeNull()
+    await setReopenFloor("__proto__", now)
+    expect(await reopenFloor("__proto__")).toBe(now)
   } finally {
     ;(globalThis as { chrome?: unknown }).chrome = saved
   }

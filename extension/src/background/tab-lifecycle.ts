@@ -518,7 +518,10 @@ export function pickReopen(log: unknown[], label: string, now: number, floor = 0
 async function readReopenFloors(): Promise<Record<string, number>> {
   const stored = (await chrome.storage.local.get(REOPEN_FLOORS_KEY)) as Record<string, unknown>
   const floors = stored?.[REOPEN_FLOORS_KEY]
-  return floors && typeof floors === "object" ? { ...(floors as Record<string, number>) } : {}
+  // Null prototype: a group label such as __proto__ must be an own key.
+  const out: Record<string, number> = Object.create(null)
+  if (floors && typeof floors === "object") for (const [k, v] of Object.entries(floors)) out[k] = Number(v)
+  return out
 }
 
 // Writes are chained so two labels closing at once do not drop each other's floor.

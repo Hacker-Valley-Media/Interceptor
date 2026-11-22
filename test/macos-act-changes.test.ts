@@ -16,6 +16,11 @@ describe("macos act parse", () => {
     expect(parseMacosCommand(["macos", "act", "e1", "--per-char"])).toMatchObject({ ref: "e1", text: undefined })
     expect(parseMacosCommand(["macos", "act", "e1", "hi", "--per-char"])).toMatchObject({ ref: "e1", text: "hi", perChar: true })
   })
+  test("--app or --pid without a value, or a non-numeric pid, is refused instead of clicking", () => {
+    expect(() => parseMacosCommand(["macos", "act", "e1", "--app"])).toThrow("--app requires a value")
+    expect(() => parseMacosCommand(["macos", "act", "e1", "--pid", "--tree"])).toThrow("--pid requires a value")
+    expect(() => parseMacosCommand(["macos", "act", "e1", "--pid", "Notes"])).toThrow("process id")
+  })
   test("text equal to a flag value is still the text", () => {
     expect(parseMacosCommand(["macos", "act", "e1", "--app", "Notes", "Notes"])).toMatchObject({ ref: "e1", text: "Notes", app: "Notes" })
   })

@@ -1,7 +1,7 @@
 /**
  * cli/commands/screenshot.ts — screenshot, canvas, capture
  */
-import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, extname, join, resolve } from "node:path"
 import { normalizeArgsSplit } from "../normalize"
@@ -54,13 +54,17 @@ export function writeTempScreenshot(bytes: Uint8Array, ext: string, base?: strin
   const dir = tempScreenshotDir(base)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   if (typeof process.getuid === "function") {
-    const top = lstatSync(dirname(dir))
-    if (top.isSymbolicLink() || top.uid !== process.getuid()) {
-      throw new Error(`screenshot: ${dirname(dir)} belongs to another user; pass --out <file> or --save`)
+    for (const level of [dirname(dir), dir]) {
+      const st = lstatSync(level)
+      if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== process.getuid()) {
+        throw new Error(`screenshot: ${level} is not a folder of this user; pass --out <file> or --save`)
+      }
+      // A folder this user made before the files were private.
+      if (st.mode & 0o077) chmodSync(level, 0o700)
     }
   }
   const path = join(dir, `screenshot-${Date.now()}-${process.pid}.${ext}`)
-  writeFileSync(path, bytes, { mode: 0o600 })
+  writeFileSync(path, bytes, { mode: 0o600, flag: "wx" })
   return path
 }
 

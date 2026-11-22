@@ -408,6 +408,8 @@ export function describeCondition(a: WaitConditionAction): string {
  * wait survives a navigation; a page check that fails while a new document
  * loads is retried until the deadline. A timeout of 0 checks once (verify).
  */
+const SINGLE_CHECK_MS = 5_000
+
 export async function waitCondition(
   tabId: number,
   action: WaitConditionAction,
@@ -432,11 +434,13 @@ export async function waitCondition(
       const check = sendToContentScriptOnce(tabId, { type: "condition_check", kind: action.kind, text: action.text, selector: action.selector, count: action.count }, frameId)
         .catch((err: Error) => ({ success: false, error: err.message }) as ContentScriptResult)
       // A frame that never answers (a busy or hung renderer) must not hold the
-      // wait past its deadline; a reply after that is ignored.
+      // wait past its deadline; a reply after that is ignored. A single check
+      // (timeout 0, as verify sends) gets a few seconds.
       let timer: ReturnType<typeof setTimeout> | undefined
-      const reply = timeout === 0 ? await check : await Promise.race([
+      const bound = timeout === 0 ? SINGLE_CHECK_MS : Math.max(1, timeout - (Date.now() - start))
+      const reply = await Promise.race([
         check,
-        new Promise<ContentScriptResult>(r => { timer = setTimeout(() => r({ success: false, error: "the page did not answer" }), Math.max(1, timeout - (Date.now() - start))) }),
+        new Promise<ContentScriptResult>(r => { timer = setTimeout(() => r({ success: false, error: "the page did not answer" }), bound) }),
       ])
       if (timer !== undefined) clearTimeout(timer)
       if (reply.success) {

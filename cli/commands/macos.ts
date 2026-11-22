@@ -1455,7 +1455,13 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       let text: string | undefined
       for (let i = 3; i < filtered.length; i++) {
         const value = filtered[i]
-        if (value === "--app" || value === "--pid") { i++; continue }
+        if (value === "--app" || value === "--pid") {
+          const operand = filtered[i + 1]
+          if (operand === undefined || operand.startsWith("--")) throw new Error(`macos act ${value} requires a value`)
+          if (value === "--pid" && !/^\d+$/.test(operand)) throw new Error(`macos act --pid takes a process id, not '${operand}'`)
+          i++
+          continue
+        }
         if (value === "--tree" || value === "--per-char") continue
         text = value
         break

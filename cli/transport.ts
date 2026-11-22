@@ -199,6 +199,11 @@ export function pickTimeoutForAction(action: Action): number {
   if ((action.type === "ios_web_eval" || action.type === "ios_web_call") && typeof action.timeout === "number" && action.timeout > 0) {
     return Math.max(ACTION_TIMEOUT_OVERRIDES_MS[action.type] ?? INTERCEPTOR_TIMEOUT_MS, action.timeout + 5_000)
   }
+  // A condition wait (wait --text, act --until, verify) runs for its own
+  // --timeout; the request must outlast it.
+  if (action.type === "wait_condition" && typeof action.timeout === "number" && action.timeout > 0) {
+    return Math.max(INTERCEPTOR_TIMEOUT_MS, action.timeout + 5_000)
+  }
   return ACTION_TIMEOUT_OVERRIDES_MS[action.type] ?? INTERCEPTOR_TIMEOUT_MS
 }
 

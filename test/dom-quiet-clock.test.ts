@@ -54,3 +54,9 @@ describe("dom_quiet clock", () => {
     expect(getLastMutation()).toBeGreaterThanOrEqual(later)
   })
 })
+
+test("a page that swaps in a new body moves the page clock", () => {
+  const before = performance.now()
+  document.documentElement.replaceChild(document.createElement("body"), document.body)
+  expect(getLastMutation()).toBeGreaterThanOrEqual(before)
+})
