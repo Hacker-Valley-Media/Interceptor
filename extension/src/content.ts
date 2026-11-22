@@ -2,6 +2,8 @@ import "./content/canvas-bridge"
 import "./content/dom-observer"
 import "./content/monitor"
 import { getDomDirty, setDomDirty } from "./content/dom-observer"
+import { isReadAction } from "./background/read-actions"
+import { newTreeLines } from "./content/tree-lines"
 import { cacheSnapshot, computeSnapshotDiff, computeTextDiff } from "./content/snapshot-diff"
 import { pruneStaleRefs } from "./content/ref-registry"
 import { buildA11yTree } from "./content/a11y-tree"
@@ -10,7 +12,7 @@ import { dispatchClickSequence, dispatchKeySequence, resolveElement, staleElemen
 import { handleClick, handleClickSelector, handleDblclick, handleRightclick, handleClickAt, handleWhatAt } from "./content/actions/click"
 import { handleInputText, handleSelectOption, handleCheck, handleSubmitForm } from "./content/actions/type"
 import { handleScroll, handleScrollAbsolute, handleScrollTo, handleGetPageDimensions } from "./content/actions/scroll"
-import { handleWait, handleWaitFor, handleWaitStable, handleDomQuiet } from "./content/actions/wait"
+import { handleWait, handleWaitFor, handleWaitStable, handleDomQuiet, handleConditionCheck } from "./content/actions/wait"
 import { handleInputWatch, handleInputWatchRead } from "./content/actions/input-watch"
 import { handleDrag } from "./content/actions/drag"
 import { handleFileUpload, handleFileUploadChunk } from "./content/actions/file"
@@ -64,7 +66,10 @@ if (!__interceptorContentAlreadyLoaded) chrome.runtime.onMessage.addListener((ms
 })
 
 async function handleAction(action: Action): Promise<ActionResult> {
-  const warnDirty = getDomDirty()
+  // The stale-refs note only matters to an input aimed at a ref or index
+  // picked from an earlier read. On reads it was noise on nearly every call
+  // (478 hits in 119 sessions).
+  const warnDirty = getDomDirty() && !isReadAction(action.type) && (action.ref !== undefined || action.index !== undefined)
   const wantChanges = !!(action.changes)
   if (wantChanges) cacheSnapshot()
   const result = await executeAction(action)
@@ -150,20 +155,26 @@ async function executeAction(action: Action): Promise<ActionResult> {
           ? resolveElement(action.index as number | undefined, action.ref as string | undefined)
           : document.body
         if (wantsTarget && !root) return staleElementError(action, "read")
-        const treeOutput = buildA11yTree(root || document.body, 0, maxDepth, filter, includeStyle, treeFormat)
+        const treeOutput = buildA11yTree(root || document.body, 0, maxDepth, filter, includeStyle, treeFormat, { viewport: action.viewport === true })
         const truncated = treeOutput.length > maxChars
-          ? treeOutput.slice(0, maxChars) + `\n... (tree truncated at ${maxChars} chars: pass --tree-format compact, scope with 'read e<ref>', or raise INTERCEPTOR_TREE_MAX_CHARS)`
+          ? treeOutput.slice(0, maxChars) + `\n... (tree truncated at ${maxChars} chars: pass --viewport for what is on screen, scope with 'read e<ref>', or raise INTERCEPTOR_TREE_MAX_CHARS)`
           : treeOutput
+        // A tree read is a state read: refs are fresh again.
+        setDomDirty(false)
         cacheSnapshot()
-        return { success: true, data: truncated }
+        // Ref lines new since the previous whole-page read with the same
+        // settings, so `act` can report a revealed control without printing
+        // the whole tree. Null when there is no comparable read.
+        const treeAdded = wantsTarget ? null : newTreeLines(`${filter}|${treeFormat}|${action.viewport === true}`, treeOutput)
+        return { success: true, data: truncated, ...(treeAdded ? { treeAdded } : {}) }
       }
       case "diff": {
         // Text first: it is compared even when no element changed (the DOM
         // observer does not see text-node edits).
+        // Always compare elements: a checkbox tick, a typed value or an
+        // aria-expanded toggle adds no child node, so the old dirty-flag
+        // short-circuit reported them as no change.
         const textDiff = computeTextDiff() ?? {}
-        if (!getDomDirty() && (await import("./content/snapshot-diff")).lastSnapshot.length > 0) {
-          return { success: true, data: { changes: 0, added: [], removed: [], changed: [], ...textDiff } }
-        }
         const diffResult = computeSnapshotDiff()
         if (diffResult.success && typeof diffResult.data === "string") {
           const lines = diffResult.data === "no changes" ? [] : (diffResult.data as string).split("\n")
@@ -206,6 +217,7 @@ async function executeAction(action: Action): Promise<ActionResult> {
         return await handleCanvasAction(action)
       case "wait_stable":         return handleWaitStable(action)
       case "dom_quiet":           return handleDomQuiet(action)
+      case "condition_check":     return handleConditionCheck(action)
       case "input_watch":         return handleInputWatch(action)
       case "input_watch_read":    return handleInputWatchRead()
       case "batch": {

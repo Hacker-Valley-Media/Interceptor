@@ -417,7 +417,9 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
 
         let inputAction: [String: Any]
         if let text = text {
-            inputAction = ["type": "macos_type", "ref": ref, "text": text]
+            var typeAction: [String: Any] = ["type": "macos_type", "ref": ref, "text": text]
+            if action["perChar"] as? Bool == true { typeAction["perChar"] = true }
+            inputAction = typeAction
         } else {
             inputAction = ["type": "macos_click", "ref": ref]
         }
@@ -428,15 +430,26 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
                 return
             }
 
-            usleep(200_000)
-
-            let treeAction = self.buildAction("macos_tree", app: appName, pid: pid, extra: ["filter": "interactive", "depth": 10])
-            router.route(action: treeAction) { treeResult in
-                completion(WireFormat.success([
-                    "action": text != nil ? "typed" : "clicked",
-                    "ref": ref,
-                    "tree": treeResult["data"] ?? ""
-                ]))
+            // Settle on the app's own notifications instead of a fixed 200 ms,
+            // off the main thread so their callbacks can arrive.
+            DispatchQueue.global().async {
+                let settledMs: Int
+                if let pid, let settled = AXSettle.wait(pid: pid, transport: LiveAXTransport()) {
+                    settledMs = settled.ms
+                } else {
+                    usleep(200_000)
+                    settledMs = 200
+                }
+                let treeAction = self.buildAction("macos_tree", app: appName, pid: pid, extra: ["filter": "interactive", "depth": 10, "diff": true])
+                router.route(action: treeAction) { treeResult in
+                    completion(WireFormat.success([
+                        "action": text != nil ? "typed" : "clicked",
+                        "ref": ref,
+                        "tree": treeResult["data"] ?? "",
+                        "changes": treeResult["changes"] ?? NSNull(),
+                        "settledMs": settledMs
+                    ]))
+                }
             }
         }
     }

@@ -27,7 +27,7 @@ export function parseNavigationCommand(filtered: string[]): Action {
       }
 
     case "wait":
-      return { type: "wait", ms: parseInt(filtered[1]) }
+      return parseWaitCondition(filtered) ?? { type: "wait", ms: parseInt(filtered[1]) }
 
     case "wait-stable": {
       const ms = filtered.includes("--ms")
@@ -50,4 +50,38 @@ export function parseNavigationCommand(filtered: string[]): Action {
       console.error(`error: unknown navigation command '${cmd}'`)
       process.exit(1)
   }
+}
+
+const WAIT_KINDS: Array<[flag: string, kind: string, field: "text" | "selector"]> = [
+  ["--text", "text", "text"], ["--gone", "gone", "text"], ["--url", "url", "text"],
+  ["--selector", "selector", "selector"], ["--gone-selector", "gone_selector", "selector"],
+]
+
+/**
+ * `wait --text <t>`, `--gone <t>`, `--url <t>`, `--selector <css> [--count <n>]`,
+ * `--gone-selector <css>`, each with `--timeout <ms>` (default 10000). Null
+ * when no condition flag is present, so `wait <ms>` keeps its meaning.
+ * Agents were writing sleep loops inside eval for these.
+ */
+export function parseWaitCondition(filtered: string[]): { type: string; [key: string]: unknown } | null {
+  const present = WAIT_KINDS.filter(([flag]) => filtered.includes(flag))
+  if (present.length === 0) {
+    if (filtered.includes("--count")) throw new Error("wait --count needs --selector <css>, e.g. interceptor wait --selector \".row\" --count 10")
+    return null
+  }
+  if (present.length > 1) throw new Error(`wait takes one condition; got ${present.map(([f]) => f).join(" and ")}`)
+  const [flag, kind, field] = present[0]
+  const value = filtered[filtered.indexOf(flag) + 1]
+  if (value === undefined || value.startsWith("--")) throw new Error(`wait ${flag} requires a value`)
+  const action: { type: string; [key: string]: unknown } = { type: "wait_condition", kind, [field]: value }
+  if (filtered.includes("--count")) {
+    if (kind !== "selector") throw new Error("wait --count goes with --selector")
+    const n = Number(filtered[filtered.indexOf("--count") + 1])
+    if (!Number.isInteger(n) || n < 0) throw new Error("wait --count requires a whole number")
+    action.count = n
+  }
+  const tIdx = filtered.indexOf("--timeout")
+  action.timeout = tIdx === -1 ? 10_000 : Number(filtered[tIdx + 1])
+  if (!Number.isFinite(action.timeout as number) || (action.timeout as number) < 0) throw new Error("wait --timeout requires milliseconds")
+  return action
 }

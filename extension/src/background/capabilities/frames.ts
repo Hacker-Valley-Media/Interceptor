@@ -91,6 +91,7 @@ export async function handleFrameActions(
         }
         if (targetIndex !== undefined) treeAction.index = targetIndex
         if (targetRef) treeAction.ref = targetRef
+        if (action.viewport === true) treeAction.viewport = true
         const treeResp = await sendFrame(
           tabId,
           treeAction,

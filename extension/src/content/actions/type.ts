@@ -7,6 +7,21 @@ import { markDocumentEdited } from "../document-edits"
 type Action = { type: string; [key: string]: unknown }
 type ActionResult = { success: boolean; error?: string; warning?: string; data?: unknown }
 
+/**
+ * A field whose form an agent most likely wants to submit next: a search box,
+ * or any field in a form that has a submit control. Feeds the act --submit
+ * hint; agents used --submit 0 times in 126 commands.
+ */
+export function isSubmittableField(el: HTMLInputElement | HTMLTextAreaElement): boolean {
+  if (el.tagName === "TEXTAREA") return false
+  const type = (el.getAttribute("type") || "text").toLowerCase()
+  if (type === "search" || el.getAttribute("role") === "searchbox") return true
+  const form = el.form
+  if (!form) return false
+  if (form.getAttribute("role") === "search") return true
+  return !!form.querySelector("button:not([type]), button[type=submit], input[type=submit], input[type=image]")
+}
+
 export async function handleInputText(action: Action): Promise<ActionResult> {
   const el = resolveElement(action.index as number | undefined, action.ref as string | undefined) as HTMLElement | null
   if (!el) return staleElementError(action, "typed")
@@ -40,7 +55,7 @@ export async function handleInputText(action: Action): Promise<ActionResult> {
     inputEl.dispatchEvent(new Event("input", { bubbles: true }))
     inputEl.dispatchEvent(new Event("change", { bubbles: true }))
     markDocumentEdited()
-    return { success: true, data: { typed: true, elementType: "input", method: "nativeSetter" } }
+    return { success: true, data: { typed: true, elementType: "input", method: "nativeSetter", ...(isSubmittableField(inputEl) ? { submittable: true } : {}) } }
   }
 
   if (isContentEditable) {

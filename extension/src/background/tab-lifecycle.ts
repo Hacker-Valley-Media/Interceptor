@@ -487,3 +487,69 @@ export function registerTabLifecycle(): void {
     })
   }
 }
+
+// ── Reopen after the idle sweep ─────────────────────────────────
+// "group … has no tabs" hit 72 times in 40 sessions since 2026-10-15, most of
+// them a group the 10-minute idle sweep had closed under a working agent. The
+// sweep log already records the URLs it closed, so the dispatcher can bring the
+// last one back. A group the agent closed itself must stay closed: `group
+// close` and each reopen move a floor, and only sweep closures after it count.
+export const REOPEN_WINDOW_MS = 24 * 60 * 60 * 1000
+// Floors live in storage.local next to the sweep log: an extension reload
+// clears storage.session, which would let an older sweep entry reopen a group
+// the agent closed. One key, pruned to the reopen window on each write.
+const REOPEN_FLOORS_KEY = "groupReopenFloors"
+
+type SweepEntry = { at?: unknown; group?: unknown; urls?: unknown }
+
+export function pickReopen(log: unknown[], label: string, now: number, floor = 0): { url: string; closedAt: number; minutesAgo: number } | null {
+  for (let i = log.length - 1; i >= 0; i--) {
+    const e = log[i] as SweepEntry
+    if (!e || e.group !== label) continue
+    const closedAt = typeof e.at === "string" ? Date.parse(e.at) : NaN
+    if (!Number.isFinite(closedAt) || closedAt <= floor || now - closedAt > REOPEN_WINDOW_MS) return null
+    const urls = Array.isArray(e.urls) ? (e.urls as unknown[]).filter((u): u is string => typeof u === "string" && /^https?:|^file:/.test(u)) : []
+    if (!urls.length) return null
+    return { url: urls[urls.length - 1], closedAt, minutesAgo: Math.max(0, Math.round((now - closedAt) / 60_000)) }
+  }
+  return null
+}
+
+async function readReopenFloors(): Promise<Record<string, number>> {
+  const stored = (await chrome.storage.local.get(REOPEN_FLOORS_KEY)) as Record<string, unknown>
+  const floors = stored?.[REOPEN_FLOORS_KEY]
+  // Null prototype: a group label such as __proto__ must be an own key.
+  const out: Record<string, number> = Object.create(null)
+  if (floors && typeof floors === "object") for (const [k, v] of Object.entries(floors)) out[k] = Number(v)
+  return out
+}
+
+// Writes are chained so two labels closing at once do not drop each other's floor.
+let floorWrites: Promise<void> = Promise.resolve()
+
+export function setReopenFloor(label: string, at = Date.now()): Promise<void> {
+  floorWrites = floorWrites.then(async () => {
+    const floors = await readReopenFloors()
+    for (const [key, t] of Object.entries(floors)) if (!(at - Number(t) < REOPEN_WINDOW_MS)) delete floors[key]
+    floors[label] = Math.max(at, Number(floors[label]) || 0)
+    await chrome.storage.local.set({ [REOPEN_FLOORS_KEY]: floors })
+  }).catch(() => {})
+  return floorWrites
+}
+
+/** The time before which sweep closures of this group no longer reopen it. */
+export async function reopenFloor(label: string): Promise<number> {
+  await floorWrites
+  try { return Number((await readReopenFloors())[label]) || 0 } catch { return 0 }
+}
+
+export async function lastReapedUrl(label: string, now = Date.now()): Promise<{ url: string; closedAt: number; minutesAgo: number } | null> {
+  if (!label) return null
+  try {
+    const stored = (await chrome.storage.local.get(SWEEP_LOG_KEY)) as Record<string, unknown>
+    const log = Array.isArray(stored?.[SWEEP_LOG_KEY]) ? (stored[SWEEP_LOG_KEY] as unknown[]) : []
+    return pickReopen(log, label, now, await reopenFloor(label))
+  } catch {
+    return null
+  }
+}

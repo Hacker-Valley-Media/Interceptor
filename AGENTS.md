@@ -26,6 +26,8 @@ Operating rules:
 
 - Use `./dist/interceptor ...` inside this repo when the binary isn't on `PATH`.
 - Prefer compound commands (`open`, `websearch`, `read`, `act`, `inspect`) over low-level verbs.
+- `act` (browser and `macos act`) returns what changed since your last read, not the whole tree; pass `--tree` for it. Wait for conditions (`wait --text|--gone|--url|--selector`), never fixed sleeps inside `eval`. Check results with `verify` (passed / failed / unverifiable; exit 0 / 1 / 2) before reporting done, and batch known steps with `run -` (one command per line, `expect <verify flags>` lines, stops at the first failure). Over MCP use `interceptor_browser` `steps`, which gates every step; `run` itself is exec tier there.
+- A text-mode `screenshot` is a file under `$TMPDIR/interceptor/screenshots` (the result carries `filePath`); `--data-url` or `--json` returns the image inline.
 - Use `websearch "<query>"` for browser-provider web search. It targets the browser's configured default provider in a managed, background-first tab; it is not guaranteed to be Google. Use `find "<query>"` for the current page: bounded rendered-text snippets plus accessible element refs, with no navigation or mutation.
 - Prefer structured reads (DOM tree, AX tree, scene graph) over screenshots — see `.agents/skills/interceptor-browser/references/screenshot-policy.md` for budgets and the agent-default recipe.
 - Use the user's existing browser session. No clean profiles, no isolated automation contexts, no synthetic fingerprint profile unless the user asks for that.

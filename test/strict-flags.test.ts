@@ -142,6 +142,7 @@ const MODULE_COMMANDS: Record<string, string[]> = {
   "override.ts": ["override"], "upgrade.ts": ["upgrade"], "init.ts": ["init"],
   "research.ts": ["research"], "extensions.ts": ["extensions", "contexts"], "skills.ts": ["skills"],
   "daemon.ts": ["daemon"], "power.ts": ["keepawake", "idle"],
+  "verify.ts": ["verify"], "run.ts": ["run"],
 }
 
 // Inventory commands with no harvestable module: dispatched inline in

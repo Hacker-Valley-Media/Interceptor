@@ -1,4 +1,4 @@
-import { sendToContentScript, waitStable } from "./content-bridge"
+import { sendToContentScript, waitStable, waitCondition } from "./content-bridge"
 import { extensionOsInputSupport } from "./os-input-support"
 import { handleOsInputActions } from "./capabilities/os-input"
 import { handleScreenshotActions } from "./capabilities/screenshot"
@@ -106,6 +106,7 @@ export async function routeAction(
   tabId: number
 ): Promise<ActionResult> {
   if (OS_INPUT_ACTIONS.has(action.type)) return handleOsInputActions(action, tabId)
+  if (action.type === "wait_condition") return waitCondition(tabId, action, action.frameId as number | undefined)
   if (action.type === "wait_stable") {
     return waitStable(tabId, (action.ms as number) || undefined, (action.timeout as number) || undefined, action.frameId as number | undefined)
   }

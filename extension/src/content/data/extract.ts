@@ -33,7 +33,8 @@ export async function handleExtractText(action: Action): Promise<ActionResult> {
     const raw = safeText(el).trim()
     return { success: true, data: withTruncationMarker(raw, Math.min(maxChars, ELEMENT_MAX_CHARS)) }
   }
-  return { success: true, data: withTruncationMarker(safeText(document.body, true), maxChars) }
+  // hidden: the CLI hints at tab keepalive when a hidden tab reads nearly empty.
+  return { success: true, data: withTruncationMarker(safeText(document.body, true), maxChars), ...(document.hidden ? { hidden: true } : {}) } as ActionResult
 }
 
 export async function handleExtractMarkdown(action: Action): Promise<ActionResult> {

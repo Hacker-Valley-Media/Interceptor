@@ -10,6 +10,7 @@ export const READ_ACTIONS = new Set([
   "links", "images", "meta", "modals", "panels", "regions", "rect", "what_at",
   "get_focus", "get_page_dimensions", "get_state", "attr_get", "style_get",
   "selection_get", "semantic_resolve", "diff", "wait", "wait_for", "wait_stable",
+  "wait_condition", "condition_check",
   "dom_screenshot", "storage_read", "clipboard_read",
   "scene_list", "scene_selected", "scene_text", "scene_profile", "scene_hit",
   "scene_slide_list", "scene_slide_current", "scene_notes", "scene_render", "scene_cursor",

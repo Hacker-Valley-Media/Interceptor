@@ -42,7 +42,9 @@ interceptor find "Submit" --elements-only          # Accessible controls + actio
 interceptor read --include-frames                   # Populate child-frame element refs
 interceptor find "privacy" --include-frames        # Frame IDs + framed refs such as e2_7
 
-interceptor act e7                                 # Click + read after; '--- changes ---' lists text and elements that changed
+interceptor act e7                                 # Click + what changed (text, element states, new refs); same page: no tree
+interceptor act e7 --tree                          # Also the whole tree (always printed after a navigation)
+interceptor act e7 --until "Saved"                 # After the click, wait for that text (default 10 s)
 interceptor act e9 "example user"                  # Type into field
 interceptor act e9 "turing award" --submit         # Type, then submit the field's form (a synthetic Enter never submits)
 interceptor act e11 --keys "Escape"                # Focus e11, then send the key
@@ -217,6 +219,11 @@ interceptor forward
 interceptor scroll down
 interceptor wait 1000
 interceptor wait-stable
+interceptor wait --text "Order placed"             # Page text contains it (case-insensitive); --timeout <ms>, default 10000
+interceptor wait --gone "Loading"                  # That text is gone
+interceptor wait --url "/checkout/done"            # Tab URL contains it (survives navigation)
+interceptor wait --selector ".result" --count 10   # At least 10 matches (shadow roots included)
+interceptor wait --gone-selector "#spinner"        # No match left
 
 interceptor tabs                                   # 'tab list' does the same
 interceptor tab new <url>             # Background tab in the interceptor group
@@ -282,6 +289,23 @@ Tab-scoped request-header rewrites:
 interceptor headers add x-debug 1
 interceptor headers remove x-debug
 interceptor headers clear
+```
+
+## Verify + Run
+
+```bash
+interceptor verify --text "Order placed" --url "/done"      # Page checks: passed / failed / unverifiable each
+interceptor verify --file ~/Downloads/report.csv --contains "Total" --modified-within 300
+interceptor verify --app TextEdit --ax-text "Draft saved"    # Native app check (macOS) <!-- os:darwin -->
+# exit 0 all passed, 1 a check failed, 2 none failed but some could not be checked
+
+interceptor run - <<'EOF'
+open https://example.com/login
+act e3 "me@example.com"
+act e5 --submit
+expect --url "/dashboard"
+EOF
+# one command per line, no interceptor prefix; stops at the first failure (--keep-going to continue, --full for whole outputs)
 ```
 
 ## Batch + Raw

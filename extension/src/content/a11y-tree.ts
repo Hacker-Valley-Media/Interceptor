@@ -176,13 +176,50 @@ export function buildA11yTree(
   maxDepth: number,
   filter: string,
   includeStyle = false,
-  format: "verbose" | "compact" = "verbose"
+  format: "verbose" | "compact" = "verbose",
+  opts: { viewport?: boolean } = {}
 ): string {
   if (depth > maxDepth) return ""
   const lines: string[] = []
   const compact = format === "compact"
+  // --viewport: only what is on screen now, plus a count of the
+  // refs scrolled out of view, so an agent reading a long page gets the part
+  // it can act on instead of the document head.
+  const viewH = globalThis.innerHeight || document.documentElement.clientHeight || 0
+  const viewW = globalThis.innerWidth || document.documentElement.clientWidth || 0
+  let above = 0, below = 0, aside = 0
+  type Clip = { top: number; bottom: number; left: number; right: number }
+  const screen: Clip = { top: 0, bottom: viewH, left: 0, right: viewW }
+  const placement = (el: Element, clip: Clip): "in" | "above" | "below" | "aside" => {
+    if (!opts.viewport) return "in"
+    const r = el.getBoundingClientRect()
+    if (r.bottom <= clip.top) return "above"
+    if (r.top >= clip.bottom) return "below"
+    if (r.right <= clip.left || r.left >= clip.right) return "aside"
+    // A clipping box that is itself off screen leaves no visible area.
+    if (clip.bottom <= clip.top || clip.right <= clip.left) return r.top >= viewH ? "below" : r.bottom <= 0 ? "above" : "aside"
+    return "in"
+  }
+  // A scrolling or clipping box hides what lies outside it, even when that
+  // part is inside the browser window.
+  const innerClip = (el: Element, style: CSSStyleDeclaration | null, clip: Clip): Clip => {
+    if (!opts.viewport || !style) return clip
+    const clipsY = !!style.overflowY && style.overflowY !== "visible", clipsX = !!style.overflowX && style.overflowX !== "visible"
+    if (!clipsX && !clipsY) return clip
+    const r = el.getBoundingClientRect()
+    return {
+      top: clipsY ? Math.max(clip.top, r.top) : clip.top,
+      bottom: clipsY ? Math.min(clip.bottom, r.bottom) : clip.bottom,
+      left: clipsX ? Math.max(clip.left, r.left) : clip.left,
+      right: clipsX ? Math.min(clip.right, r.right) : clip.right,
+    }
+  }
 
-  function walk(el: Element, d: number) {
+  // `absClip` is the clip at the nearest positioned ancestor: an absolutely
+  // positioned box escapes overflow on ancestors between it and its
+  // containing block. ponytail: transform-created containing blocks are not
+  // tracked; a fixed box inside a transformed ancestor is placed against the screen.
+  function walk(el: Element, d: number, clip: Clip = screen, absClip: Clip = screen) {
     if (d > maxDepth) return
 
     // Visibility disposition. `display:none` / `visibility:hidden` hide the
@@ -208,7 +245,9 @@ export function buildA11yTree(
     const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES, style ?? undefined)
     const prefix = compact ? ">".repeat(d) : "  ".repeat(d)
 
-    if (selfVisible && isLandmark && !isInteractiveEl) {
+    // A fixed box escapes its ancestors' clipping.
+    const own = !opts.viewport ? clip : style?.position === "fixed" ? screen : style?.position === "absolute" ? absClip : clip
+    if (selfVisible && isLandmark && !isInteractiveEl && placement(el, own) === "in") {
       const rawName = getAccessibleName(el)
       const hasName = !!rawName && rawName !== (el.textContent || "").trim().slice(0, 80)
       const name = lineName(rawName)
@@ -220,7 +259,12 @@ export function buildA11yTree(
       }
     }
 
-    if (selfVisible && isHeading && filter === "all") {
+    const where = selfVisible && isInteractiveEl ? placement(el, own) : "in"
+    if (where === "above") above++
+    else if (where === "below") below++
+    else if (where === "aside") aside++
+
+    if (selfVisible && isHeading && filter === "all" && placement(el, own) === "in") {
       const name = lineName(getAccessibleName(el))
       if (compact) {
         lines.push(`${prefix}heading|${name}`)
@@ -229,7 +273,7 @@ export function buildA11yTree(
       }
     }
 
-    if (selfVisible && isInteractiveEl) {
+    if (selfVisible && isInteractiveEl && where === "in") {
       const refId = getOrAssignRef(el)
       const shown = displayRoleName(el, role || tag, getAccessibleName(el))
       const name = shown.name
@@ -251,20 +295,29 @@ export function buildA11yTree(
       }
     }
 
+    const inner = innerClip(el, style, own)
+    const innerAbs = style?.position && style.position !== "static" ? inner : absClip
     const shadow = getShadowRoot(el)
     if (shadow) {
       const shadowPrefix = compact ? ">".repeat(d + 1) : `${prefix}  `
       lines.push(`${shadowPrefix}shadow-root`)
       for (const child of Array.from(shadow.children)) {
-        walk(child, d + 2)
+        walk(child, d + 2, inner, innerAbs)
       }
     }
 
     for (const child of Array.from(el.children)) {
-      walk(child, isLandmark && selfVisible ? d + 1 : d)
+      walk(child, isLandmark && selfVisible ? d + 1 : d, inner, innerAbs)
     }
   }
 
   walk(root, depth)
+  if (opts.viewport) lines.push(viewportNote(above, below, aside))
   return lines.join("\n")
+}
+
+export function viewportNote(above: number, below: number, aside: number): string {
+  const parts = [`${above} above`, `${below} below`]
+  if (aside) parts.push(`${aside} beside`)
+  return `(viewport only: ${parts.join(", ")} the visible area; scroll, or drop --viewport for the whole page)`
 }

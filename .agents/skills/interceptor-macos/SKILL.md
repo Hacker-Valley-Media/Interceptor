@@ -33,6 +33,8 @@ interceptor macos act e3 "hello"         # 6. AX value-set of ref e3 — no focu
 
 Treat `eN` refs as short-lived. AX state can change between calls; re-read before acting.
 
+`macos act` waits until the app stops sending accessibility notifications (100 ms quiet, 1 s cap) and prints what changed since your last read (`added`, `removed`, `changed` lines with refs), not the whole tree; `--tree` adds it. The first act on an app prints the tree as the baseline. `macos type "<text>" --app <name>` sends up to 20 characters per key event; add `--per-char` for an app that drops chunked text. Check a native result with `interceptor verify --app <name> --ax-text "<text>"` or `--window-title "<text>"`.
+
 ## The One Rule
 
 **Only two commands move focus:** `interceptor macos app activate <app>` and `interceptor macos open <app> --activate`. Everything else is background-first by contract — `open` (without `--activate`), all input verbs, all reads, capture, AX, menu, intent dispatch, scroll, drag, vision, overlays. If you call any other command and the user's frontmost app changes, that is a bug — file it. One opt-in asks for a permission and gives focus back: `camera start --prompt` shows the macOS camera prompt, then returns to the app that was in front.

@@ -16,14 +16,14 @@ import {
   markMonitorTaskSourceAttachFailed,
   resolveOrCreateMonitorTask,
 } from "../shared/monitor-tasks"
-import { ensureDaemon } from "./daemon-spawn"
+import { ensureDaemon, startDaemon } from "./daemon-spawn"
 import { parseStateCommand } from "./commands/state"
 import { parseActionsCommand } from "./commands/actions"
 import { parsePowerCommand, runDelegateCommand } from "./commands/power"
 import { parseNavigationCommand } from "./commands/navigation"
 import { parseTabsCommand } from "./commands/tabs"
 import { parseNetworkCommand } from "./commands/network"
-import { parseScreenshotCommand } from "./commands/screenshot"
+import { parseScreenshotCommand, writeTempScreenshot } from "./commands/screenshot"
 import { parseDataCommand } from "./commands/data"
 import { parseMetaCommand } from "./commands/meta"
 import { parseEvalCommand, evalCutMessage } from "./commands/eval"
@@ -51,7 +51,9 @@ import { runExtensionsCommand } from "./commands/extensions"
 import { runDaemonCommand } from "./commands/daemon"
 import { VERSION, BUILD_SHA, BUILD_DATE } from "./version"
 import { buildFilteredArgs, parseFrameFlag } from "./global-flags"
-import { normalizeArgsSplit, flagBundleHint } from "./normalize"
+import { normalizeArgsSplit, flagBundleHint, expandFlagBundles } from "./normalize"
+import { runVerify } from "./commands/verify"
+import { runScript } from "./commands/run"
 import { trustedSelectorError } from "./commands/flags"
 
 // console.log must not be used for CLI output: Bun's console.log writer
@@ -101,12 +103,15 @@ const DAEMON_CMDS = new Set(["daemon"])
 const SKILLS_CMDS = new Set(["skills"])
 const MANIFEST_CMDS = new Set(["manifest"])
 const MCP_CMDS = new Set(["mcp"])
+// Verify (D12) and run (D13). Both start the daemon themselves only when a step needs it.
+const VERIFY_CMDS = new Set(["verify"])
+const RUN_CMDS = new Set(["run"])
 
 // Commands that don't require a daemon connection (or, in init's case,
 // bootstrap it themselves rather than relying on the pre-dispatch auto-spawn).
 // `research` prints guidance / manages an on-disk ledger — no browser, no daemon.
 // `diagnose` reads local state + optionally probes the daemon — never auto-spawns.
-const NO_DAEMON = new Set(["status", "help", "events", "delegate", "session", "upgrade", "init", "research", "extensions", "skills", "manifest", "diagnose", "mcp", "daemon"])
+const NO_DAEMON = new Set(["status", "help", "events", "delegate", "session", "upgrade", "init", "research", "extensions", "skills", "manifest", "diagnose", "mcp", "daemon", "verify", "run"])
 
 // Every command the CLI dispatches. Used to reject unknown commands
 // before any daemon-spawning side effect runs.
@@ -117,7 +122,7 @@ const ALL_KNOWN_CMDS = new Set<string>([
   ...COMPOUND_CMDS, ...OVERRIDE_CMDS, ...MACOS_CMDS, ...DESKTOP_CMDS, ...IOS_CMDS,
   ...UPDATE_CMDS, ...UPGRADE_CMDS, ...INIT_CMDS, ...RESEARCH_CMDS, ...EXTENSIONS_CMDS,
   ...SKILLS_CMDS, ...MANIFEST_CMDS, ...DIAGNOSE_CMDS, ...MCP_CMDS, ...DAEMON_CMDS,
-  ...POWER_CMDS, ...DELEGATE_CMDS, ...BROWSER_CMDS,
+  ...POWER_CMDS, ...DELEGATE_CMDS, ...BROWSER_CMDS, ...VERIFY_CMDS, ...RUN_CMDS,
   "help", "contexts",
 ])
 
@@ -129,7 +134,10 @@ function unwrapResult(response: DaemonResponse): DaemonResult {
 }
 
 async function main() {
-  const args = process.argv.slice(2)
+  // A flag bundle the shell passed as one word is split when that is unambiguous.
+  const bundles = expandFlagBundles(process.argv.slice(2))
+  const args = bundles.args
+  for (const word of bundles.split) console.error(`note: split '${word}' into separate flags (the shell passed them as one word; in zsh write \${=VAR})`)
   const optionTerminator = args.indexOf("--")
   const globalArgs = optionTerminator === -1 ? args : args.slice(0, optionTerminator)
   const jsonMode = globalArgs.includes("--json")
@@ -223,6 +231,13 @@ async function main() {
       console.log(shortHelp(detectSurfaces(args)))
       return
     }
+    // `macos click --help` printed the whole 14,718-byte macOS page for every
+    // sub-verb; `help macos click` already had the slice.
+    const nativeSub = filtered[1]
+    if ((cmd === "macos" || cmd === "desktop") && nativeSub && !nativeSub.startsWith("-") && nativeSub !== "cdp" && nativeSub !== "runtime") {
+      const page = helpForCommand(cmd, nativeSub)
+      if (page) { console.log(page); return }
+    }
     if (cmd === "macos" && (filtered[1] === "cdp" || filtered[1] === "runtime")) {
       await runMacosCommand(filtered, { jsonMode, useWs, globalTabId, contextId: globalContextId })
       return
@@ -301,6 +316,15 @@ async function main() {
 
   if (needsDaemon && !useWs) {
     await ensureDaemon()
+  }
+
+  if (VERIFY_CMDS.has(cmd)) {
+    process.exitCode = await runVerify(filtered, { jsonMode, tabId: globalTabId, contextId: globalContextId, anyTab, startDaemon })
+    return
+  }
+  if (RUN_CMDS.has(cmd)) {
+    process.exitCode = await runScript(filtered, args, { jsonMode })
+    return
   }
 
   // Dispatch to command module
@@ -660,7 +684,13 @@ async function main() {
   const isScreenshot = action.type === "screenshot" || action.type === "screenshot_background"
   const screenshotOutPath = isScreenshot && typeof action.out === "string" ? action.out : undefined
   if (screenshotOutPath !== undefined) delete action.out
-  const screenshotSave = isScreenshot && action.save === true
+  // --data-url keeps the old text output (the image inline as base64).
+  const screenshotDataUrl = isScreenshot && action.dataUrl === true
+  if (isScreenshot) delete action.dataUrl
+  // A text-mode screenshot is a file: the data URL alone was
+  // 2.78 MB on stdout for one GitHub page. --json keeps the data URL.
+  const screenshotTemp = isScreenshot && !jsonMode && !screenshotDataUrl && action.save !== true && screenshotOutPath === undefined
+  const screenshotSave = isScreenshot && (action.save === true || screenshotTemp)
 
   try {
     const response = useWs
@@ -719,6 +749,8 @@ async function main() {
           process.exit(1)
         }
         d.filePath = screenshotOutPath
+      } else if (screenshotTemp) {
+        d.filePath = writeTempScreenshot(bytes, ext)
       } else {
         const filename = `interceptor-screenshot-${Date.now()}.${ext}`
         await Bun.write(filename, bytes)

@@ -66,11 +66,13 @@ export const COMMAND_SPECS: CommandSpec[] = [
   },
   {
     name: "act", surface: "browser",
-    usage: "interceptor act <ref> [value…] [--submit] [--keys <combo>] [--trusted] [--append] [--no-read] [--timeout <ms>]",
-    summary: "Click (no value) or type (with value) on a ref, wait, return updated tree + what changed",
-    returns: "Updated a11y tree, then a '--- changes ---' block of plain lines: text added/removed and elements added/removed/changed since your last read of the page. --json keeps {tree, diff}; the diff gains textAdded/textRemoved.",
+    usage: "interceptor act <ref> [value…] [--submit] [--keys <combo>] [--until <text>] [--tree] [--trusted] [--append] [--no-read] [--timeout <ms>]",
+    summary: "Click (no value) or type (with value) on a ref, wait, return what changed",
+    returns: "Same page: a '--- changes ---' block of plain lines (text added/removed, elements changed, new refs on the page) and no tree; refs from your last read still work. After a navigation, or with --tree: the a11y tree first, and the new page's text after a navigation. --json keeps {tree, diff, text}.",
     flags: [
       { name: "--keys", value: "<combo>", description: "focus the ref, then send a keyboard shortcut (e.g. Escape, cmd+shift+p); a synthetic Enter does not submit a form" },
+      { name: "--tree", description: "also print the whole tree on a same-page action" },
+      { name: "--until", value: "<text>", description: "after the action, wait (default 10 s, or --timeout above 2 s) for that text to appear" },
       { name: "--submit", description: "after typing (or alone), submit the ref's form the way Enter would (form.requestSubmit with its default button); refuses outside a form" },
       { name: "--trusted", description: "HID-sourced input — page sees isTrusted: true; on a full install it reaches a background window, and a tab that is not showing gets a background window of its own and goes back (never moves focus); elsewhere it needs the tab active in the OS-focused window" },
       { name: "--append", description: "type without clearing the field first" },
@@ -166,7 +168,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "delegate", surface: "browser", usage: "interceptor delegate log [--since <ms>] [--follow]", summary: "Read human→agent delegation intents (right-click menu / hotkey)", returns: "list of delegation_intent events." },
   { name: "click-at", surface: "browser", usage: "interceptor click-at <x,y>", summary: "Click page coordinates", returns: "ok." },
   { name: "navigate", surface: "browser", usage: "interceptor navigate <url>", summary: "Navigate the active tab", returns: "ok." },
-  { name: "wait", surface: "browser", usage: "interceptor wait <ms>", summary: "Sleep", returns: "ok." },
+  { name: "wait", surface: "browser", usage: "interceptor wait <ms> | wait --text <t> | --gone <t> | --url <t> | --selector <css> [--count <n>] | --gone-selector <css> [--timeout <ms>]", summary: "Sleep, or wait for text, a URL or elements", returns: "ok for <ms>; for a condition {met, elapsed, observed}, or an error naming what it last saw when the timeout (default 10000) passes." },
+  { name: "verify", surface: "browser", usage: `interceptor verify [--text <t>] [--gone <t>] [--url <t>] [--selector <css> [--count <n>]] [--file <path> [--contains <t>] [--min-bytes <n>] [--modified-within <s>]]${process.platform === "darwin" ? " [--app <name> --ax-text <t> | --window-title <t>]" : ""} [--timeout <ms>]`, summary: `Check a result on the page${process.platform === "darwin" ? ", in a file, or in a native app" : " or in a file"}`, returns: "One line per check: passed, failed or unverifiable (the surface could not be read), then a total. Exit 0 all passed, 1 a check failed, 2 none failed but some could not be checked. --json: {status, checks:[{check, status, observed}]}." },
   { name: "wait-stable", surface: "browser", usage: "interceptor wait-stable [--ms <n>] [--timeout <ms>]", summary: "Wait for DOM stability", returns: "ok when the DOM stops mutating." },
   // ── tabs / network / capture / data ─────────────────────────────────────────
   { name: "tabs", surface: "browser", usage: "interceptor tabs   (or: interceptor tab list)", summary: "List managed tabs", returns: "Tab list (id, url, title)." },
@@ -183,6 +186,12 @@ export const COMMAND_SPECS: CommandSpec[] = [
     ],
   },
   {
+    name: "run", surface: "local",
+    usage: "interceptor run <file> | run - [--keep-going] [--full]",
+    summary: "Run one interceptor command per line in one call; 'expect <verify flags>' lines check results",
+    returns: "Per step: a header with exit status and time, then its output (1500 chars per step except the last unless --full). Then one summary line. Stops at the first failure unless --keep-going; exits with the failed step's code. --json: {completed, total, steps}.",
+  },
+  {
     name: "update", surface: "local",
     usage: "interceptor update [status|check]",
     summary: "Update Interceptor itself: checks the update feed and reports its selected version or no-update result. A newer release opens the update window and installs when the user clicks Install Update (Sparkle on macOS). Full install only.",
@@ -191,7 +200,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
   },
   { name: "network", surface: "browser", usage: "interceptor net [log] [--filter <pattern>] [--limit <n>] [--format har|json|pcapng --out <path>]", summary: "Passive network log (bare 'net' is 'net log')", returns: "Recent requests (method, url, status, type); exportable to HAR/pcapng." },
   { name: "headers", surface: "browser", usage: "interceptor headers [--filter <pattern>]", summary: "Request headers seen", returns: "Header sets per request." },
-  { name: "screenshot", surface: "browser", usage: "interceptor screenshot [--element <ref>] [--out <path> | --save] [--format png|jpeg|webp] [--quality <n>]", summary: "Screenshot page/element", returns: "Image. --out <path> writes that file (the extension picks the format; the folder must exist); --save writes one auto-named file in the current directory. Either prints 'saved: <path>' on stderr and filePath in the result." },
+  { name: "screenshot", surface: "browser", usage: "interceptor screenshot [--element <ref>] [--out <path> | --save] [--format png|jpeg|webp] [--quality <n>]", summary: "Screenshot page/element", returns: "Image file. Without --out or --save the image is written under $TMPDIR/interceptor/screenshots; --out <path> writes that file (the extension picks the format; the folder must exist); --save writes one auto-named file in the current directory. Each prints 'saved: <path>' on stderr and filePath in the result. --data-url (or --json) carries the image inline as dataUrl instead." },
   { name: "eval", surface: "browser", usage: "interceptor eval <expr> [--main] [--frame <id>] [--no-reload]", summary: "Evaluate JS in the requested frame and world (isolated by default)", returns: "Expression result. Isolated eval needs userScripts support when extension CSP blocks eval. MAIN CSP recovery can reload the tab and returns {value,cspBypassApplied,originalError}; never switches world or frame. --no-reload refuses that reload and returns the CSP error instead. Use it on a stateful page a reload would destroy." },
   { name: "save", surface: "browser", usage: "interceptor save --out <abs-path> <expr>", summary: "Stream page-produced bytes (Blob/File/ArrayBuffer) to disk", returns: "{path, bytes, sha256} — integrity-checked." },
   { name: "cookies", surface: "browser", usage: "interceptor cookies [domain] | cookies set/delete …", summary: "Read/write cookies", returns: "Cookie list." },

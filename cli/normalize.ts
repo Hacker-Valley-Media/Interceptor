@@ -98,7 +98,7 @@ const POWER = ["--interval", "--since"]
 
 const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   // compound
-  open: COMPOUND, read: COMPOUND, act: COMPOUND, inspect: COMPOUND,
+  open: COMPOUND, read: COMPOUND, act: [...COMPOUND, "--until"], inspect: COMPOUND,
   websearch: COMPOUND, search: COMPOUND,
   // state
   state: STATE, tree: STATE, diff: STATE, find: STATE, text: STATE, html: STATE,
@@ -107,7 +107,7 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   hover: ACTIONS, drag: ACTIONS, dblclick: ACTIONS, rightclick: ACTIONS,
   check: ACTIONS, keys: ACTIONS, "click-at": ACTIONS, "what-at": ACTIONS, regions: ACTIONS,
   // navigation
-  navigate: NAV, back: NAV, forward: NAV, scroll: NAV, wait: NAV, "wait-stable": NAV, wait_for: NAV,
+  navigate: NAV, back: NAV, forward: NAV, scroll: NAV, wait: [...NAV, "--count", "--gone", "--gone-selector", "--selector", "--text", "--url"], "wait-stable": NAV, wait_for: NAV,
   // tabs (window carries the resize value flags; the rest are boolean-only)
   tabs: [], tab: [], window: WINDOW, frames: [], session: [],
   // network
@@ -127,6 +127,8 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
   upgrade: [], init: [], research: RESEARCH, extensions: [], contexts: [],
   skills: SKILLS, daemon: DAEMON, manifest: [],
   keepawake: POWER, idle: POWER,
+  verify: ["--app", "--ax-text", "--contains", "--count", "--file", "--gone", "--min-bytes", "--modified-within", "--selector", "--text", "--timeout", "--url", "--window-title"],
+  run: [],
 }
 
 // Boolean (valueless) flags per family — the other half of the contract,
@@ -137,8 +139,8 @@ const VALUE_FLAGS_BY_CMD: Record<string, string[]> = {
 // `act --trusted` while help advertised it). The reverse-direction block in
 // test/strict-flags.test.ts now re-harvests module sources over every
 // consumption pattern, so keep it in sync when adding a family here.
-const COMPOUND_BOOL = ["--activate", "--append", "--full", "--include-frames", "--include-style", "--markdown", "--net-only", "--no-read", "--no-reuse", "--no-wait", "--os", "--reuse", "--text-only", "--tree-only", "--trusted"]
-const STATE_BOOL = ["--elements-only", "--full", "--include-frames", "--markdown", "--native", "--text-only"]
+const COMPOUND_BOOL = ["--activate", "--append", "--full", "--include-frames", "--include-style", "--markdown", "--net-only", "--no-read", "--no-reuse", "--no-wait", "--os", "--reuse", "--text-only", "--tree-only", "--trusted", "--viewport"]
+const STATE_BOOL = ["--elements-only", "--full", "--include-frames", "--markdown", "--native", "--text-only", "--viewport"]
 const ACTIONS_BOOL = ["--append", "--dropzone", "--picker", "--trusted", "--os", "--user"]
 const TABS_BOOL = ["--incognito"]
 const TAB_BOOL = ["--activate", "--no-reuse", "--off", "--reuse"]
@@ -157,7 +159,7 @@ const RESEARCH_BOOL = ["--capture", "--full", "--stdin", "--no-research-hint"]
 const SKILLS_BOOL = ["--all", "--force", "--no-skills-hint"]
 
 const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
-  open: COMPOUND_BOOL, read: COMPOUND_BOOL, act: [...COMPOUND_BOOL, "--submit"], inspect: COMPOUND_BOOL,
+  open: COMPOUND_BOOL, read: COMPOUND_BOOL, act: [...COMPOUND_BOOL, "--submit", "--tree"], inspect: COMPOUND_BOOL,
   websearch: COMPOUND_BOOL, search: COMPOUND_BOOL,
   state: STATE_BOOL, tree: STATE_BOOL, diff: STATE_BOOL, find: STATE_BOOL, text: STATE_BOOL, html: STATE_BOOL,
   click: ACTIONS_BOOL, type: ACTIONS_BOOL, select: ACTIONS_BOOL, focus: ACTIONS_BOOL, blur: ACTIONS_BOOL,
@@ -166,7 +168,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   navigate: [], back: [], forward: [], scroll: [], wait: [], "wait-stable": [], wait_for: [],
   tabs: TABS_BOOL, tab: TAB_BOOL, window: WINDOW_BOOL, frames: [], session: [],
   network: NET_BOOL, net: NET_BOOL, headers: NET_BOOL,
-  screenshot: SCREENSHOT_BOOL, canvas: SCREENSHOT_BOOL, capture: SCREENSHOT_BOOL, ocr: SCREENSHOT_BOOL,
+  screenshot: [...SCREENSHOT_BOOL, "--data-url"], canvas: SCREENSHOT_BOOL, capture: SCREENSHOT_BOOL, ocr: SCREENSHOT_BOOL,
   cookies: DATA_BOOL, storage: DATA_BOOL, history: DATA_BOOL, bookmarks: DATA_BOOL, downloads: DATA_BOOL, clear: DATA_BOOL, clipboard: DATA_BOOL,
   status: META_BOOL, reload: META_BOOL, meta: META_BOOL, links: META_BOOL, images: META_BOOL, forms: META_BOOL,
   info: META_BOOL, page_info: META_BOOL, query: META_BOOL, exists: META_BOOL, count: META_BOOL, table: META_BOOL,
@@ -177,6 +179,7 @@ const BOOLEAN_FLAGS_BY_CMD: Record<string, string[]> = {
   upgrade: ["--full"], init: ["--explain", "--verbose"], research: RESEARCH_BOOL, extensions: ["--remove"], contexts: ["--clear", "--verbose"],
   skills: SKILLS_BOOL, daemon: [], manifest: [],
   keepawake: POWER_BOOL, idle: POWER_BOOL,
+  verify: [], run: ["--full", "--keep-going"],
 }
 
 // Exposed for the table-driven inventory test (test/strict-flags.test.ts):
@@ -197,6 +200,44 @@ let warnedLaxFlags = false
  * arrives whole (67 errors in 54 sessions). Explain it;
  * never split it, since guessing at quoting could pass the wrong value.
  */
+/**
+ * Split an argv word that holds several flags, when that is unambiguous
+ *. 21 failures in 20 sessions
+ * since 2026-10-01 still cost a turn each. A word is split only when it starts
+ * with --, holds whitespace and no quote or backslash, and every part is a
+ * known global flag or the one value of a global value flag. Anything else is left
+ * whole, and the existing hint explains it.
+ */
+export function expandFlagBundles(args: string[]): { args: string[]; split: string[] } {
+  // Global flags only, and only before the command: every observed bundle
+  // was a variable holding --context/--group, while a word after the command
+  // may be text meant for type, find or a flag's value, and splitting it
+  // would route the call to another context.
+  const value = new Set<string>(GLOBAL_VALUE_FLAGS)
+  const known = new Set<string>([...value, ...GLOBAL_BOOLEAN_FLAGS])
+  const out: string[] = []
+  const split: string[] = []
+  let command = false
+  args.forEach((tok, i) => {
+    if (command || tok === "--") { command = true; out.push(tok); return }
+    if (!tok.startsWith("-")) { command = !value.has(args[i - 1] ?? ""); out.push(tok); return }
+    if (!/\s/.test(tok) || /["'\\]/.test(tok)) { out.push(tok); return }
+    const parts = tok.trim().split(/\s+/)
+    let ok = true
+    for (let j = 0; j < parts.length && ok; j++) {
+      const name = parts[j].split("=", 1)[0]
+      if (!known.has(name)) { ok = false; break }
+      if (value.has(name) && !parts[j].includes("=")) {
+        const next = parts[j + 1]
+        if (next === undefined || next.startsWith("-")) ok = false
+        else j++
+      }
+    }
+    if (ok) { out.push(...parts); split.push(tok) } else out.push(tok)
+  })
+  return { args: out, split }
+}
+
 export function flagBundleHint(tok: string): string {
   if (!tok.startsWith("--") || !/\s/.test(tok)) return ""
   return ` That one argument holds several flags, because the shell passed them as a single word (zsh does not split an unquoted $VAR). Split them: write \${=VAR} in zsh (interceptor \${=IC} tabs), or use a shell function such as ic() { interceptor --context <id> "$@"; }.`

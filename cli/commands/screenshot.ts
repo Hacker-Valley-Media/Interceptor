@@ -1,8 +1,9 @@
 /**
  * cli/commands/screenshot.ts — screenshot, canvas, capture
  */
-import { existsSync } from "node:fs"
-import { dirname, extname, resolve } from "node:path"
+import { chmodSync, existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { dirname, extname, join, resolve } from "node:path"
 import { normalizeArgsSplit } from "../normalize"
 import { normalizeRefArg } from "../parse"
 
@@ -38,6 +39,35 @@ export function screenshotOut(filtered: string[], format: string | undefined): {
   return { out, format: inferred }
 }
 
+/**
+ * Where a text-mode screenshot goes when no --out or --save was given.
+ * `$TMPDIR` is per user on macOS and Windows; a shared temp folder (no
+ * TMPDIR, as on most Linux systems) gets one folder per user.
+ */
+export function tempScreenshotDir(base?: string, uid = typeof process.getuid === "function" ? process.getuid() : undefined): string {
+  const shared = base === undefined && !process.env.TMPDIR && uid !== undefined
+  return join(base ?? process.env.TMPDIR ?? tmpdir(), shared ? `interceptor-${uid}` : "interceptor", "screenshots")
+}
+
+/** Captured page content: the folder and file are private to this user. */
+export function writeTempScreenshot(bytes: Uint8Array, ext: string, base?: string): string {
+  const dir = tempScreenshotDir(base)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  if (typeof process.getuid === "function") {
+    for (const level of [dirname(dir), dir]) {
+      const st = lstatSync(level)
+      if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== process.getuid()) {
+        throw new Error(`screenshot: ${level} is not a folder of this user; pass --out <file> or --save`)
+      }
+      // A folder this user made before the files were private.
+      if (st.mode & 0o077) chmodSync(level, 0o700)
+    }
+  }
+  const path = join(dir, `screenshot-${Date.now()}-${process.pid}.${ext}`)
+  writeFileSync(path, bytes, { mode: 0o600, flag: "wx" })
+  return path
+}
+
 export function parseScreenshotCommand(filtered: string[], positionalCount?: number): Action {
   const normalized = positionalCount === undefined ? normalizeArgsSplit(filtered) : { argv: filtered, positionalCount }
   filtered = normalized.argv
@@ -55,11 +85,13 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
         if (formatFlag) bgAction.format = formatFlag
         if (filtered.includes("--quality")) bgAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
         if (filtered.includes("--save")) bgAction.save = true
+        if (filtered.includes("--data-url")) bgAction.dataUrl = true
         if (outTarget) Object.assign(bgAction, { save: true, out: outTarget.out, format: outTarget.format })
         return bgAction
       }
       const ssAction: Action = { type: "screenshot" }
       if (filtered.includes("--save")) ssAction.save = true
+      if (filtered.includes("--data-url")) ssAction.dataUrl = true
       if (formatFlag) ssAction.format = formatFlag
       if (outTarget) Object.assign(ssAction, { save: true, out: outTarget.out, format: outTarget.format })
       if (filtered.includes("--quality")) ssAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])

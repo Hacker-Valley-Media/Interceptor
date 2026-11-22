@@ -16,7 +16,7 @@ import { captureSubprocess } from "../../daemon/subprocess"
  * dev (`bun run cli/index.ts mcp serve`), execPath is bun and argv[1] is the
  * script → run `bun <script> …`.
  */
-function selfPrefix(): string[] {
+export function selfPrefix(): string[] {
   const argv1 = process.argv[1]
   if (argv1 && (argv1.endsWith(".ts") || argv1.endsWith(".js"))) {
     return [process.execPath, argv1]

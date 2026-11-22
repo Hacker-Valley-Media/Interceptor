@@ -166,7 +166,16 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
         buildTree(element: root, pid: pid, depth: 0, maxDepth: depth, filter: filter, output: &output, maxChars: maxChars, budget: budget)
         if !budget.stopMarker.isEmpty { output += budget.stopMarker + "\n" }
 
-        completion(WireFormat.success(output))
+        // Remember this read so `macos act` can say what changed.
+        // The diff is computed here, as the stored tree is replaced: act reads
+        // its post-action tree through this same handler.
+        let memoryKey = "\(pid)|\(filter)|\(depth)|\(action["window"] as? Int ?? 0)"
+        let previous = AXTreeMemory.shared.swap(key: memoryKey, tree: output)
+        var result = WireFormat.success(output)
+        if action["diff"] as? Bool == true {
+            result["changes"] = previous.map { AXTreeMemory.diff(old: $0, new: AXTreeMemory.lines(output)) } ?? NSNull()
+        }
+        completion(result)
     }
 
     /// signal AX interest to Electron/Chromium apps so they expose
@@ -183,11 +192,41 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     /// removal. AppKit apps don't need either flag — their AX tree is
     /// always populated. Chromium needs only AXManualAccessibility.
     func wakeAXTree(app: AXUIElement) {
-        _ = transport.setAttributeValue(app, "AXManualAccessibility", kCFBooleanTrue)
+        let accepted = transport.setAttributeValue(app, "AXManualAccessibility", kCFBooleanTrue) == .success
         // Tiny grace so Chromium's BrowserAccessibilityManager has a chance
         // to assemble the tree before we walk it. ~30 ms is enough on M-series
-        // for typical Electron renderers.
+        // for typical Electron renderers. Only the first wake of an app that
+        // took the flag needs it: AppKit apps refuse the attribute, and a
+        // woken Chromium tree stays built (it used to cost 30 ms
+        // on every tree, find, focused and windows call).
+        guard accepted else { return }
+        let (pidResult, pid) = transport.pid(app)
+        let key = pidResult == .success ? pid ?? -1 : -1
+        if key != -1, !Self.wokenPids.insert(key) { return }
         usleep(30_000)
+    }
+
+    /// pids whose AX tree was already woken (first-wake sleep only).
+    static let wokenPids = WokenPidSet()
+
+    /// The attributes one tree line needs, read in a single AX message.
+    static let treeAttributes: [String] = [
+        kAXRoleAttribute as String, kAXSubroleAttribute as String, kAXTitleAttribute as String,
+        kAXValueAttribute as String, kAXDescriptionAttribute as String, kAXChildrenAttribute as String,
+    ]
+
+    /// One batched read of role, subrole, title, value, description and
+    /// children. Secure classification uses the batched role and subrole, so a
+    /// secure value never leaves this function. Nil when the batch call fails;
+    /// the caller then falls back to single reads.
+    func readTreeNode(_ element: AXUIElement) -> (role: String, title: String?, value: String?, desc: String?, children: [AXUIElement]?)? {
+        let (err, values) = transport.copyMultipleAttributeValues(element, Self.treeAttributes, stopOnError: false)
+        guard err == .success, let v = values, v.count == Self.treeAttributes.count else { return nil }
+        let role = AXValueCodec.displayString(v[0]) ?? "unknown"
+        let subrole = AXValueCodec.displayString(v[1])
+        let secure = AXSecureRedaction.isSecure(role: role, subrole: subrole)
+        let value = secure ? AXSecureRedaction.placeholder : AXValueCodec.displayString(v[3])
+        return (role, AXValueCodec.displayString(v[2]), value, AXValueCodec.displayString(v[4]), v[5] as? [AXUIElement])
     }
 
     // internal (not private) so the budget-bounded traversal is unit-testable
@@ -195,12 +234,20 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
     func buildTree(element: AXUIElement, pid: pid_t, depth: Int, maxDepth: Int, filter: String, output: inout String, maxChars: Int, budget: AXBudget) {
         guard depth < maxDepth, output.count < maxChars, !budget.shouldStop() else { return }
         budget.countNode()
-        budget.countCalls(7)   // 4 attributes, 2 secure-classification reads, 1 children read
 
-        let role = getStringAttribute(element, kAXRoleAttribute as CFString) ?? "unknown"
-        let title = getStringAttribute(element, kAXTitleAttribute as CFString)
-        let value = getStringAttribute(element, kAXValueAttribute as CFString)
-        let desc = getStringAttribute(element, kAXDescriptionAttribute as CFString)
+        let role: String, title: String?, value: String?, desc: String?
+        var batchedChildren: [AXUIElement]?? = nil
+        if let node = readTreeNode(element) {
+            budget.countCalls(1)   // one AXUIElementCopyMultipleAttributeValues
+            (role, title, value, desc) = (node.role, node.title, node.value, node.desc)
+            batchedChildren = .some(node.children)
+        } else {
+            budget.countCalls(7)   // 4 attributes, 2 secure-classification reads, 1 children read
+            role = getStringAttribute(element, kAXRoleAttribute as CFString) ?? "unknown"
+            title = getStringAttribute(element, kAXTitleAttribute as CFString)
+            value = getStringAttribute(element, kAXValueAttribute as CFString)
+            desc = getStringAttribute(element, kAXDescriptionAttribute as CFString)
+        }
         let label = title ?? desc ?? ""
 
         let isInteractive = ["AXButton", "AXTextField", "AXTextArea", "AXCheckBox",
@@ -234,8 +281,15 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
             output += line + "\n"
         }
 
-        let (childResult, children) = transport.copyAttributeValue(element, kAXChildrenAttribute as String)
-        guard childResult == .success, let childArray = children as? [AXUIElement] else { return }
+        let childArray: [AXUIElement]
+        if case .some(let batched) = batchedChildren {
+            guard let kids = batched else { return }
+            childArray = kids
+        } else {
+            let (childResult, children) = transport.copyAttributeValue(element, kAXChildrenAttribute as String)
+            guard childResult == .success, let kids = children as? [AXUIElement] else { return }
+            childArray = kids
+        }
 
         for child in childArray {
             buildTree(element: child, pid: pid, depth: depth + 1, maxDepth: maxDepth, filter: filter, output: &output, maxChars: maxChars, budget: budget)
@@ -767,5 +821,106 @@ final class AccessibilityDomain: DomainHandler, @unchecked Sendable {
 
     static func buildSearchableText(title: String, description: String, value: String, identifier: String, roleDescription: String, displayRole: String) -> String {
         "\(title) \(description) \(value) \(identifier) \(roleDescription) \(displayRole)".lowercased()
+    }
+}
+
+
+/// Thread-safe set of pids (the bridge serves requests on several queues).
+final class WokenPidSet: @unchecked Sendable {
+    private var pids = Set<pid_t>()
+    private let lock = NSLock()
+    /// True when the pid was not in the set yet.
+    func insert(_ pid: pid_t) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return pids.insert(pid).inserted
+    }
+    func removeAll() { lock.lock(); pids.removeAll(); lock.unlock() }
+}
+
+/// The last tree read per app, pid, filter, depth and window, as ref → line
+///. Refs are stable for the same element (RefRegistry uses
+/// CFEqual), so two reads diff by ref like the browser's snapshot diff.
+final class AXTreeMemory: @unchecked Sendable {
+    static let shared = AXTreeMemory()
+    private var trees: [String: [String: String]] = [:]
+    private let lock = NSLock()
+
+    /// Store the new tree and return the one it replaces.
+    func swap(key: String, tree: String) -> [String: String]? {
+        let lines = Self.lines(tree)
+        lock.lock(); defer { lock.unlock() }
+        let old = trees[key]
+        trees[key] = lines
+        if trees.count > 64 { trees.removeAll(keepingCapacity: true); trees[key] = lines }
+        return old
+    }
+
+    static func lines(_ tree: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for raw in tree.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("[e"), let close = line.firstIndex(of: "]") else { continue }
+            out[String(line[line.index(after: line.startIndex)..<close])] = line
+        }
+        return out
+    }
+
+    /// added / removed / changed lines, ordered by ref number.
+    static func diff(old: [String: String], new: [String: String]) -> [String: [String]] {
+        func num(_ ref: String) -> Int { Int(ref.dropFirst()) ?? 0 }
+        let added = new.keys.filter { old[$0] == nil }.sorted { num($0) < num($1) }.map { new[$0]! }
+        let removed = old.keys.filter { new[$0] == nil }.sorted { num($0) < num($1) }.map { old[$0]! }
+        let changed = new.keys.filter { old[$0] != nil && old[$0] != new[$0] }.sorted { num($0) < num($1) }.map { "\(old[$0]!) → \(new[$0]!)" }
+        return ["added": added, "removed": removed, "changed": changed]
+    }
+}
+
+/// Waits for an app to stop changing after an input, on its own AX
+/// notifications: returns once nothing arrived for `quietMs`,
+/// or at `capMs`. Nil when no observer could be set up (caller keeps the
+/// old fixed wait). Polls off the main thread; callbacks arrive on the main
+/// run loop.
+final class AXSettle: @unchecked Sendable {
+    static let notifications: [String] = [
+        kAXValueChangedNotification as String, kAXFocusedUIElementChangedNotification as String,
+        kAXLayoutChangedNotification as String, kAXTitleChangedNotification as String,
+        kAXCreatedNotification as String, kAXUIElementDestroyedNotification as String,
+        kAXMenuOpenedNotification as String, kAXSheetCreatedNotification as String,
+        kAXSelectedChildrenChangedNotification as String, kAXWindowCreatedNotification as String,
+    ]
+    private let lock = NSLock()
+    private var last = DispatchTime.now().uptimeNanoseconds
+    private(set) var events = 0
+
+    func bump() { lock.lock(); last = DispatchTime.now().uptimeNanoseconds; events += 1; lock.unlock() }
+    func lastEvent() -> UInt64 { lock.lock(); defer { lock.unlock() }; return last }
+
+    static func wait(pid: pid_t, transport: any AXTransport, quietMs: Int = 100, capMs: Int = 1000) -> (ms: Int, events: Int)? {
+        let box = AXSettle()
+        let callback: AXObserverCallback = { _, _, _, refcon in
+            guard let refcon else { return }
+            Unmanaged<AXSettle>.fromOpaque(refcon).takeUnretainedValue().bump()
+        }
+        let (created, observer) = transport.observerCreate(pid: pid, callback: callback)
+        guard created == .success, let observer else { return nil }
+        let app = transport.createApplication(pid: pid)
+        let refcon = Unmanaged.passRetained(box).toOpaque()
+        let added = notifications.filter { transport.observerAddNotification(observer, app, $0, refcon) == .success }
+        guard !added.isEmpty else { Unmanaged<AXSettle>.fromOpaque(refcon).release(); return nil }
+        let source = transport.observerGetRunLoopSource(observer)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+        let start = DispatchTime.now().uptimeNanoseconds
+        while true {
+            usleep(10_000)
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now - start >= UInt64(capMs) * 1_000_000 { break }
+            if now - box.lastEvent() >= UInt64(quietMs) * 1_000_000 { break }
+        }
+        for note in added { _ = transport.observerRemoveNotification(observer, app, note) }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode)
+        let ms = Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        let events = box.events
+        Unmanaged<AXSettle>.fromOpaque(refcon).release()
+        return (ms, events)
     }
 }

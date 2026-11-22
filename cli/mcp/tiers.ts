@@ -35,7 +35,7 @@ const READ_VERBS: Record<Surface, Set<string>> = {
     "net", "network", "headers", "inspect", "tabs", "read", "status", "meta",
     "info", "page_info", "events", "modals", "panels", "sessions", "capabilities",
     "delegate", "idle", "history", "bookmarks", "downloads", "frames", "canvas",
-    "ocr", "what-at", "contexts", "manifest",
+    "ocr", "what-at", "contexts", "manifest", "verify",
   ]),
   macos: new Set([
     "tree", "find", "inspect", "focused", "windows", "text", "menu", "apps",
@@ -58,6 +58,10 @@ READ_VERBS.desktop = new Set([...READ_VERBS.macos, "status", "capabilities", "pr
 // ── ARBITRARY-EXEC (runs attacker-or-model-authored code) ─────────────────────
 const EXEC: TierMap = {
   "browser:eval": "exec", "browser:save": "exec", "browser:raw": "exec",
+  // run executes a script of commands in child processes that never pass
+  // through this gate; MCP callers use interceptor_browser steps instead,
+  // which gates every step.
+  "browser:run": "exec", "local:run": "exec",
   "macos:script": "exec", "macos:intent": "exec", "macos:container": "exec",
   // issue #244: sudo runs an arbitrary command as root; reveal prints a secret
   // to a human and is refused for model callers anyway (INTERCEPTOR_MCP).
