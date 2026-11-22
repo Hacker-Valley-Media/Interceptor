@@ -429,8 +429,16 @@ export async function waitCondition(
       readable = !!tab
       observed = `URL is ${url || "(unknown)"}`
     } else {
-      const reply = await sendToContentScriptOnce(tabId, { type: "condition_check", kind: action.kind, text: action.text, selector: action.selector, count: action.count }, frameId)
+      const check = sendToContentScriptOnce(tabId, { type: "condition_check", kind: action.kind, text: action.text, selector: action.selector, count: action.count }, frameId)
         .catch((err: Error) => ({ success: false, error: err.message }) as ContentScriptResult)
+      // A frame that never answers (a busy or hung renderer) must not hold the
+      // wait past its deadline; a reply after that is ignored.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const reply = timeout === 0 ? await check : await Promise.race([
+        check,
+        new Promise<ContentScriptResult>(r => { timer = setTimeout(() => r({ success: false, error: "the page did not answer" }), Math.max(1, timeout - (Date.now() - start))) }),
+      ])
+      if (timer !== undefined) clearTimeout(timer)
       if (reply.success) {
         const d = reply.data as { met?: boolean; observed?: string }
         met = d?.met === true

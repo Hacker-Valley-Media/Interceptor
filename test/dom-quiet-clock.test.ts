@@ -5,6 +5,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator"
 try { GlobalRegistrator.register() } catch { /* shared test DOM already registered */ }
 
 const { handleDomQuiet, resetDomQuietForTest } = await import("../extension/src/content/actions/wait")
+const { getLastMutation } = await import("../extension/src/content/dom-observer")
 
 const quietMs = (r: { data?: unknown }) => (r.data as { quietMs: number }).quietMs
 // Fake times sit after the real clock: another test file may have loaded the
@@ -30,10 +31,26 @@ describe("dom_quiet clock", () => {
     expect(quietMs(handleDomQuiet({ type: "dom_quiet" }, T + 12_000, T + 5_000))).toBe(7_000)
   })
 
-  test("a mutation seen by the observer resets the clock", async () => {
+  test("a mutation seen by the quiet observer resets the clock", async () => {
+    // The page-lifetime stamp is pinned at 0 on both calls, so only the quiet
+    // observer can bring the answer under 200 ms.
     handleDomQuiet({ type: "dom_quiet" }, performance.now(), 0)
     document.body.appendChild(document.createElement("p"))
     await new Promise(r => setTimeout(r, 0))
-    expect(quietMs(handleDomQuiet({ type: "dom_quiet" }))).toBeLessThan(200)
+    expect(quietMs(handleDomQuiet({ type: "dom_quiet" }, performance.now(), 0))).toBeLessThan(200)
+  })
+
+  test("the page-lifetime clock counts attribute and text changes, not only added nodes", async () => {
+    const p = document.body.appendChild(document.createElement("p"))
+    p.textContent = "a"
+    await new Promise(r => setTimeout(r, 0))
+    const before = performance.now()
+    p.setAttribute("data-state", "busy")
+    await new Promise(r => setTimeout(r, 0))
+    expect(getLastMutation()).toBeGreaterThanOrEqual(before)
+    const later = performance.now()
+    ;(p.firstChild as Text).data = "b"
+    await new Promise(r => setTimeout(r, 0))
+    expect(getLastMutation()).toBeGreaterThanOrEqual(later)
   })
 })

@@ -7,7 +7,7 @@ import { routeAction } from "./router"
 import { needsTab } from "./no-tab-actions"
 import { isReadAction, TAB_FREE_ACTIONS } from "./read-actions"
 import { resolveWorkingTabId } from "./resolve-tab"
-import { recordGroupActivity, lastReapedUrl, setReopenFloor } from "./tab-lifecycle"
+import { recordGroupActivity, lastReapedUrl, setReopenFloor, reopenFloor } from "./tab-lifecycle"
 import { handleTabActions } from "./capabilities/tabs"
 import { waitForTabLoad } from "./content-bridge"
 import { consumeSwitchBack } from "./switch-back"
@@ -273,10 +273,15 @@ export async function handleDaemonMessage(msg: {
       if (reaped) {
         const created = await handleTabActions({ type: "tab_create", url: reaped.url, group: groupLabel, reuse: false }, -1).catch(() => null)
         const newId = (created?.data as { tabId?: number } | undefined)?.tabId
-        if (created?.success && typeof newId === "number") {
+        // A group close that landed while the tab was being created wins.
+        if (created?.success && typeof newId === "number" && await reopenFloor(groupLabel!) >= reaped.closedAt) {
+          await chrome.tabs.remove(newId).catch(() => undefined)
+        } else if (created?.success && typeof newId === "number") {
           await setReopenFloor(groupLabel!)
           await waitForTabLoad(newId).catch(() => undefined)
-          const note = `group '${groupLabel}' was closed by the idle timer ${reaped.minutesAgo} min ago and was reopened at ${reaped.url} in background tab ${newId} (page state from before is gone)`
+          // No URL here: warnings reach an MCP client outside the untrusted-data
+          // fence, and a page address can carry text. A read shows it.
+          const note = `group '${groupLabel}' was closed by the idle timer ${reaped.minutesAgo} min ago and its last page was reopened in background tab ${newId} (page state from before is gone)`
           if (!isReadAction(action.type)) {
             fail(`${note}. Nothing was clicked or typed: read the page first (interceptor read), since refs from before do not exist on it.`)
             return

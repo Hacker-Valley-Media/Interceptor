@@ -118,8 +118,21 @@ function readRuntimeReadiness(): { ready: boolean } {
  * was the "daemon failed to start" deadlock). Only a free port leads to spawn.
  */
 export async function ensureDaemon(): Promise<void> {
+  const failure = await startDaemon()
+  if (failure) {
+    console.error(failure.startsWith("error:") ? failure : `error: ${failure}`)
+    process.exit(1)
+  }
+}
+
+/**
+ * Start the daemon when it is not running. Returns why it could not, instead
+ * of exiting, for callers that report the failure themselves (verify answers
+ * unverifiable). Install maintenance still throws.
+ */
+export async function startDaemon(): Promise<string | undefined> {
   assertNoInstallMaintenance()
-  if (readRuntimeReadiness().ready) return
+  if (readRuntimeReadiness().ready) return undefined
 
   // Ask the port: a live owner rewrites a missing or drifted lock/pid while
   // answering, and the probe alone decides what follows. A live pid in the
@@ -129,11 +142,8 @@ export async function ensureDaemon(): Promise<void> {
   const probe = await probeDaemonHealth(WS_PORT)
   const pidOwner = probe.state === "interceptor" ? pidOwnership(probe.pid) : "own"
   const recovery = decideDaemonRecovery(probe, readRuntimeReadiness().ready, WS_PORT, LOG_PATH, pidOwner)
-  if (recovery.action === "connect") return
-  if (recovery.action === "fail") {
-    console.error(`error: ${recovery.message}`)
-    process.exit(1)
-  }
+  if (recovery.action === "connect") return undefined
+  if (recovery.action === "fail") return recovery.message
 
   // recovery.action === "spawn": the port is free, so stale files are ours to clear.
   {
@@ -175,13 +185,10 @@ export async function ensureDaemon(): Promise<void> {
         }
       }
 
-      if (!daemonAlive) {
-        console.error(`error: daemon failed to start. Check ${LOG_PATH}`)
-        process.exit(1)
-      }
+      if (!daemonAlive) return `daemon failed to start. Check ${LOG_PATH}`
     } else {
-      console.error(formatMissingDaemonBinaryError(candidates))
-      process.exit(1)
+      return formatMissingDaemonBinaryError(candidates)
     }
   }
+  return undefined
 }

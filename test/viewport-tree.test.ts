@@ -34,3 +34,16 @@ test("without --viewport every button is listed and no count line is added", () 
   for (const name of ["Up", "Here", "Down", "Side"]) expect(out).toContain(`"${name}"`)
   expect(out).not.toContain("viewport only")
 })
+
+test("a button scrolled out of its overflow container is not on screen, even inside the window", () => {
+  document.body.innerHTML = `<div id="box" style="overflow-x: hidden; overflow-y: auto"><button id="seen">Seen</button><button id="clipped">Clipped</button></div>`
+  const box = document.getElementById("box")!
+  Object.defineProperty(box, "offsetParent", { configurable: true, get: () => document.body })
+  box.getBoundingClientRect = () => ({ top: 50, bottom: 150, left: 0, right: 300, width: 300, height: 100, x: 0, y: 50, toJSON() {} }) as DOMRect
+  place(document.getElementById("seen")!, 80)
+  place(document.getElementById("clipped")!, 300)
+  const out = buildA11yTree(document.body, 0, 15, "interactive", false, "verbose", { viewport: true })
+  expect(out).toContain('"Seen"')
+  expect(out).not.toContain('"Clipped"')
+  expect(out.split("\n").at(-1)).toContain("1 below")
+})

@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync, rmSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parseVerifyArgs, checkFile, checkPage, checkApp, pageVerdict, overall, formatVerify, VERIFY_EXIT, STALE_EXTENSION_OBSERVED, staleHintFor } from "../cli/commands/verify"
+import { parseVerifyArgs, checkFile, checkPage, checkApp, pageVerdict, overall, formatVerify, VERIFY_EXIT, STALE_EXTENSION_OBSERVED, staleHintFor, sendOrUnreadable } from "../cli/commands/verify"
 import { staleExtensionHintLine } from "../cli/commands/diagnose"
 
 describe("parse", () => {
@@ -92,4 +92,15 @@ test("overall and exit codes", () => {
   expect(overall([{ check: "a", status: "failed", observed: "" }, { check: "b", status: "unverifiable", observed: "" }])).toBe("failed")
   expect(VERIFY_EXIT).toEqual({ passed: 0, failed: 1, unverifiable: 2 })
   expect(formatVerify([{ check: "a", status: "passed", observed: "ok" }])).toBe("passed: a (ok)\nverify: passed (1/1 passed)")
+})
+
+test("a daemon that cannot start makes page and app checks unverifiable, not an exit 1", async () => {
+  const send = sendOrUnreadable("error: daemon failed to start. Check /tmp/x.log", async () => { throw new Error("must not be called") })
+  const page = await checkPage(parseVerifyArgs(["--text", "Saved"]), send)
+  const app = await checkApp(parseVerifyArgs(["--app", "Notes", "--ax-text", "Hi"]).app!, send)
+  for (const r of [...page, ...app]) {
+    expect(r.status).toBe("unverifiable")
+    expect(r.observed).toBe("the daemon is not running: daemon failed to start. Check /tmp/x.log")
+  }
+  expect(VERIFY_EXIT[overall([...page, ...app])]).toBe(2)
 })

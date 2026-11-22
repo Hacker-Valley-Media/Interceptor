@@ -1,6 +1,6 @@
 // Interceptor run parses one command per line.
 import { describe, expect, test } from "bun:test"
-import { splitLine, parseScript, globalFlags, formatStep, STEP_OUTPUT_CHARS } from "../cli/commands/run"
+import { splitLine, parseScript, globalFlags, formatStep, runScript, STEP_OUTPUT_CHARS } from "../cli/commands/run"
 
 describe("splitLine", () => {
   test("quotes and escapes", () => {
@@ -22,6 +22,9 @@ describe("parseScript", () => {
   })
   test("no nested run", () => {
     expect(() => parseScript("run other.txt")).toThrow("run cannot run another run")
+    expect(() => parseScript("--group lane run loop.txt")).toThrow("run cannot run another run")
+    expect(() => parseScript("--context=main --json run -")).toThrow("run cannot run another run")
+    expect(parseScript("--group lane read")[0].argv).toEqual(["--group", "lane", "read"])
   })
 })
 
@@ -36,4 +39,13 @@ test("non-final step output is capped; the last is whole", () => {
   expect(formatStep(r, 0, 2, false, false)).toContain("step output cut")
   expect(formatStep(r, 1, 2, false, true)).not.toContain("step output cut")
   expect(formatStep({ ...r, code: 1, stdout: "error: nope" }, 0, 2, false, false).split("\n")[0]).toBe("[1/2] read  (failed, exit 1, 5 ms)")
+})
+
+test("a step cannot start another run, whatever its spelling", async () => {
+  process.env.INTERCEPTOR_IN_RUN = "1"
+  try {
+    await expect(runScript(["run", "-"], ["run", "-"], { jsonMode: false })).rejects.toThrow("run cannot run another run")
+  } finally {
+    delete process.env.INTERCEPTOR_IN_RUN
+  }
 })

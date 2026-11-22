@@ -795,8 +795,21 @@ export async function runAct(
     return
   }
 
+  // --until waits even with --no-read: that flag skips only the read after it.
+  // The condition's own default is 10 s; an explicit --timeout wins.
+  let untilNote: string | undefined
+  if (until !== undefined) {
+    try {
+      const waited = await send({ type: "wait_condition", kind: "text", text: until, timeout: timeoutIdx !== -1 ? timeout : 10_000 }, globalTabId, useWs, contextId)
+      untilNote = waited.success ? `"${until}" appeared` : `"${until}" did not appear: ${humanizeError(waited.error) ?? "timed out"}`
+    } catch (err) {
+      untilNote = `"${until}" could not be checked: ${(err as Error).message}`
+    }
+  }
+
   if (noRead) {
-    output(jsonMode, { success: true, data: "ok" })
+    const data = !untilNote ? "ok" : jsonMode ? { action: "ok", until: untilNote } : `ok\n--- until: ${untilNote} ---`
+    output(jsonMode, { success: true, data })
     return
   }
 
@@ -809,12 +822,7 @@ export async function runAct(
   // Step 2: Wait for DOM stability (may fail if page navigated)
   let treeResult: Result = { success: false }
   let diffResult: Result = { success: false }
-  let untilNote: string | undefined
   try {
-    if (until !== undefined) {
-      const waited = await send({ type: "wait_condition", kind: "text", text: until, timeout: timeout > 2000 ? timeout : 10_000 }, globalTabId, useWs, contextId)
-      untilNote = waited.success ? `"${until}" appeared` : `"${until}" did not appear: ${humanizeError(waited.error) ?? "timed out"}`
-    }
     await send({ type: "wait_stable", ms: 200, timeout }, globalTabId, useWs, contextId)
 
     // Step 3: diff BEFORE the tree read. The tree read caches a fresh

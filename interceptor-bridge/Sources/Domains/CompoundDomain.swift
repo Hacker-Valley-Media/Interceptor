@@ -417,7 +417,9 @@ final class CompoundDomain: DomainHandler, @unchecked Sendable {
 
         let inputAction: [String: Any]
         if let text = text {
-            inputAction = ["type": "macos_type", "ref": ref, "text": text]
+            var typeAction: [String: Any] = ["type": "macos_type", "ref": ref, "text": text]
+            if action["perChar"] as? Bool == true { typeAction["perChar"] = true }
+            inputAction = typeAction
         } else {
             inputAction = ["type": "macos_click", "ref": ref]
         }

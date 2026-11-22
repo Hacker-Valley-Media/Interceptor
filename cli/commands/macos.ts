@@ -1451,8 +1451,15 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       }
       const target = filtered[2]
       if (!target) { console.error("error: interceptor macos act requires a ref"); process.exit(1) }
-      // --tree is an output flag, never the text to type.
-      const text = filtered.slice(3).find(value => value !== "--tree" && value !== "--app" && value !== "--pid" && filtered[filtered.indexOf(value) - 1] !== "--app" && filtered[filtered.indexOf(value) - 1] !== "--pid")
+      // Flags and their values are never the text to type.
+      let text: string | undefined
+      for (let i = 3; i < filtered.length; i++) {
+        const value = filtered[i]
+        if (value === "--app" || value === "--pid") { i++; continue }
+        if (value === "--tree" || value === "--per-char") continue
+        text = value
+        break
+      }
       return {
         type: "macos_compound",
         sub: "act",
@@ -1460,6 +1467,7 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         text,
         app: flagVal(filtered, "--app"),
         pid: flagInt(filtered, "--pid"),
+        ...(filtered.includes("--per-char") ? { perChar: true } : {}),
       }
     }
 

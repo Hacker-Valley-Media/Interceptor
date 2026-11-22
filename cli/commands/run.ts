@@ -46,7 +46,7 @@ export function parseScript(text: string): Step[] {
     try { argv = splitLine(t) } catch (err) { throw new Error(`line ${i + 1}: ${(err as Error).message}`) }
     if (argv[0] === "interceptor") argv = argv.slice(1)
     if (!argv.length) return
-    if (argv[0] === "run") throw new Error(`line ${i + 1}: run cannot run another run`)
+    if (commandWord(argv) === "run") throw new Error(`line ${i + 1}: run cannot run another run`)
     if (argv[0] === "expect") argv = ["verify", ...argv.slice(1)]
     steps.push({ line: i + 1, text: t, argv })
   })
@@ -55,6 +55,16 @@ export function parseScript(text: string): Step[] {
 
 const GLOBAL_VALUE = new Set(["--context", "--group", "--tab", "--frame", "--group-color"])
 const GLOBAL_BOOL = new Set(["--any-tab", "--shared-group", "--json", "--ws", "--no-ws"])
+
+/** The step's command after any leading global flags (`--group x run f` is a run). */
+function commandWord(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i], name = a.split("=", 1)[0]
+    if (GLOBAL_VALUE.has(name)) { if (!a.includes("=")) i++; continue }
+    if (!GLOBAL_BOOL.has(a)) return a
+  }
+  return undefined
+}
 
 /** The run's own global flags, forwarded to every step. */
 export function globalFlags(args: string[]): string[] {
@@ -85,13 +95,18 @@ export function formatStep(r: StepResult, index: number, total: number, full: bo
 
 async function runStep(prefix: string[], step: Step): Promise<StepResult> {
   const start = Date.now()
-  const proc = Bun.spawn([...selfPrefix(), ...prefix, ...step.argv], { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: process.env })
+  const proc = Bun.spawn([...selfPrefix(), ...prefix, ...step.argv], { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env, [IN_RUN_ENV]: "1" } })
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   const code = await proc.exited
   return { line: step.line, command: step.text, code, ms: Date.now() - start, stdout, stderr }
 }
 
+// Set on every step, so a step that reaches `run` by any spelling is refused
+// instead of starting a chain of runs.
+const IN_RUN_ENV = "INTERCEPTOR_IN_RUN"
+
 export async function runScript(filtered: string[], rawArgs: string[], opts: { jsonMode: boolean }): Promise<number> {
+  if (process.env[IN_RUN_ENV] === "1") throw new Error("run cannot run another run")
   const src = filtered[1]
   const keepGoing = filtered.includes("--keep-going")
   const full = filtered.includes("--full")

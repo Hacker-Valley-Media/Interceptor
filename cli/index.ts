@@ -16,7 +16,7 @@ import {
   markMonitorTaskSourceAttachFailed,
   resolveOrCreateMonitorTask,
 } from "../shared/monitor-tasks"
-import { ensureDaemon } from "./daemon-spawn"
+import { ensureDaemon, startDaemon } from "./daemon-spawn"
 import { parseStateCommand } from "./commands/state"
 import { parseActionsCommand } from "./commands/actions"
 import { parsePowerCommand, runDelegateCommand } from "./commands/power"
@@ -319,7 +319,7 @@ async function main() {
   }
 
   if (VERIFY_CMDS.has(cmd)) {
-    process.exitCode = await runVerify(filtered, { jsonMode, tabId: globalTabId, contextId: globalContextId, ensureDaemon })
+    process.exitCode = await runVerify(filtered, { jsonMode, tabId: globalTabId, contextId: globalContextId, anyTab, startDaemon })
     return
   }
   if (RUN_CMDS.has(cmd)) {

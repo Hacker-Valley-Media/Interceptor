@@ -95,7 +95,7 @@ export function checkFile(f: NonNullable<VerifyPlan["file"]>, now = Date.now()):
   return out
 }
 
-type Send = (action: Record<string, unknown> & { type: string }) => Promise<{ success: boolean; error?: string; data?: unknown }>
+export type Send = (action: Record<string, unknown> & { type: string }) => Promise<{ success: boolean; error?: string; data?: unknown }>
 
 const PAGE_LABEL: Record<PageCheck["kind"], (c: PageCheck) => string> = {
   text: c => `page text contains "${c.value}"`,
@@ -185,13 +185,21 @@ export async function staleHintFor(results: VerifyResult[], hint: () => Promise<
   return results.some(r => r.observed === STALE_EXTENSION_OBSERVED) ? await hint() : undefined
 }
 
-export async function runVerify(filtered: string[], opts: { jsonMode: boolean; tabId?: number; contextId?: string; ensureDaemon: () => Promise<void>; staleHint?: () => Promise<string> }): Promise<number> {
+/** A daemon that could not start makes every page and app check unverifiable; file checks still run. */
+export function sendOrUnreadable(failure: string | undefined, send: Send): Send {
+  if (!failure) return send
+  const why = `the daemon is not running: ${failure.replace(/^error:\s*/, "").split("\n")[0]}`
+  return async () => ({ success: false, error: why })
+}
+
+export async function runVerify(filtered: string[], opts: { jsonMode: boolean; tabId?: number; contextId?: string; anyTab?: boolean; startDaemon: () => Promise<string | undefined>; staleHint?: () => Promise<string> }): Promise<number> {
   const plan = parseVerifyArgs(filtered.slice(1))
   const results: VerifyResult[] = []
   if (plan.file) results.push(...checkFile(plan.file))
   if (plan.page.length || plan.app) {
-    await opts.ensureDaemon()
-    const send: Send = async (action) => (await sendCommand(action, opts.tabId, opts.contextId)).result
+    const failure = await opts.startDaemon().catch((err: Error) => err.message)
+    const send = sendOrUnreadable(failure, async (action) =>
+      (await sendCommand(opts.anyTab ? { ...action, anyTab: true } : action, opts.tabId, opts.contextId)).result)
     if (plan.page.length) results.push(...await checkPage(plan, send))
     if (plan.app) results.push(...await checkApp(plan.app, send))
   }

@@ -1,5 +1,5 @@
 import { waitForElement, waitForDomStable } from "../input-simulation"
-import { getLastChildListMutation } from "../dom-observer"
+import { getLastMutation } from "../dom-observer"
 import { queryAllDeep } from "../deep-query"
 
 type Action = { type: string; [key: string]: unknown }
@@ -51,10 +51,10 @@ function disconnectQuietObserver(): void {
  * The first poll used to start the clock at "now", so every wait cost the
  * full debounce even on a page that had not changed in minutes (565 of 805
  * waits sat at the 200 ms floor). The clock now starts at the
- * page's last child-list mutation, which dom-observer.ts tracks from
+ * page's last mutation of any kind, which dom-observer.ts tracks from
  * content-script load, and the observer survives between waits.
  */
-export function handleDomQuiet(action: Action, now = performance.now(), seed = getLastChildListMutation()): ActionResult {
+export function handleDomQuiet(action: Action, now = performance.now(), pageLast = getLastMutation()): ActionResult {
   if (action.stop) {
     // Keep the clock; drop the observer only after a quiet spell with no polls.
     if (quietObserver && !idleTimer) idleTimer = setTimeout(disconnectQuietObserver, QUIET_OBSERVER_IDLE_MS)
@@ -63,15 +63,15 @@ export function handleDomQuiet(action: Action, now = performance.now(), seed = g
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
   if (!quietObserver) {
     mutations = 0
-    lastMutation = Math.max(lastMutation, seed)
+    lastMutation = Math.max(lastMutation, pageLast)
     quietObserver = new MutationObserver((records) => {
       mutations += records.length
       lastMutation = performance.now()
     })
     quietObserver.observe(document.body ?? document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true })
   }
-  // A child-list change seen by the page-lifetime observer counts too.
-  lastMutation = Math.max(lastMutation, getLastChildListMutation())
+  // A change seen by the page-lifetime observer counts too.
+  lastMutation = Math.max(lastMutation, pageLast)
   return { success: true, data: { quietMs: Math.max(0, now - lastMutation), mutations } }
 }
 

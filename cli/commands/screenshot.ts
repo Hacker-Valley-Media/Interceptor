@@ -1,7 +1,7 @@
 /**
  * cli/commands/screenshot.ts — screenshot, canvas, capture
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, extname, join, resolve } from "node:path"
 import { normalizeArgsSplit } from "../normalize"
@@ -39,16 +39,28 @@ export function screenshotOut(filtered: string[], format: string | undefined): {
   return { out, format: inferred }
 }
 
-/** Where a text-mode screenshot goes when no --out or --save was given. */
-export function tempScreenshotDir(base = process.env.TMPDIR || tmpdir()): string {
-  return join(base, "interceptor", "screenshots")
+/**
+ * Where a text-mode screenshot goes when no --out or --save was given.
+ * `$TMPDIR` is per user on macOS and Windows; a shared temp folder (no
+ * TMPDIR, as on most Linux systems) gets one folder per user.
+ */
+export function tempScreenshotDir(base?: string, uid = typeof process.getuid === "function" ? process.getuid() : undefined): string {
+  const shared = base === undefined && !process.env.TMPDIR && uid !== undefined
+  return join(base ?? process.env.TMPDIR ?? tmpdir(), shared ? `interceptor-${uid}` : "interceptor", "screenshots")
 }
 
+/** Captured page content: the folder and file are private to this user. */
 export function writeTempScreenshot(bytes: Uint8Array, ext: string, base?: string): string {
   const dir = tempScreenshotDir(base)
-  mkdirSync(dir, { recursive: true })
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  if (typeof process.getuid === "function") {
+    const top = lstatSync(dirname(dir))
+    if (top.isSymbolicLink() || top.uid !== process.getuid()) {
+      throw new Error(`screenshot: ${dirname(dir)} belongs to another user; pass --out <file> or --save`)
+    }
+  }
   const path = join(dir, `screenshot-${Date.now()}-${process.pid}.${ext}`)
-  writeFileSync(path, bytes)
+  writeFileSync(path, bytes, { mode: 0o600 })
   return path
 }
 

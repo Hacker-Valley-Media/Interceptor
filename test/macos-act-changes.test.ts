@@ -12,6 +12,13 @@ describe("macos act parse", () => {
   test("text still types", () => {
     expect(parseMacosCommand(["macos", "act", "e864", "hello", "--app", "Fixture"])).toMatchObject({ ref: "e864", text: "hello" })
   })
+  test("act --per-char is forwarded, not typed", () => {
+    expect(parseMacosCommand(["macos", "act", "e1", "--per-char"])).toMatchObject({ ref: "e1", text: undefined })
+    expect(parseMacosCommand(["macos", "act", "e1", "hi", "--per-char"])).toMatchObject({ ref: "e1", text: "hi", perChar: true })
+  })
+  test("text equal to a flag value is still the text", () => {
+    expect(parseMacosCommand(["macos", "act", "e1", "--app", "Notes", "Notes"])).toMatchObject({ ref: "e1", text: "Notes", app: "Notes" })
+  })
   test("macos type --per-char keeps one character per event and is not typed", () => {
     expect(parseMacosCommand(["macos", "type", "hello", "--app", "Fixture", "--per-char"])).toMatchObject({ type: "macos_type", text: "hello", perChar: true })
   })

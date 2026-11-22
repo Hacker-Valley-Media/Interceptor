@@ -209,16 +209,19 @@ let warnedLaxFlags = false
  * whole, and the existing hint explains it.
  */
 export function expandFlagBundles(args: string[]): { args: string[]; split: string[] } {
-  // Global flags only: every observed bundle was a variable holding
-  // --context/--group, and a verb flag inside a word could be text meant for
-  // type or find.
+  // Global flags only, and only before the command: every observed bundle
+  // was a variable holding --context/--group, while a word after the command
+  // may be text meant for type, find or a flag's value, and splitting it
+  // would route the call to another context.
   const value = new Set<string>(GLOBAL_VALUE_FLAGS)
   const known = new Set<string>([...value, ...GLOBAL_BOOLEAN_FLAGS])
   const out: string[] = []
   const split: string[] = []
-  const end = args.indexOf("--")
+  let command = false
   args.forEach((tok, i) => {
-    if ((end !== -1 && i >= end) || !tok.startsWith("--") || !/\s/.test(tok) || /["'\\]/.test(tok)) { out.push(tok); return }
+    if (command || tok === "--") { command = true; out.push(tok); return }
+    if (!tok.startsWith("-")) { command = !value.has(args[i - 1] ?? ""); out.push(tok); return }
+    if (!/\s/.test(tok) || /["'\\]/.test(tok)) { out.push(tok); return }
     const parts = tok.trim().split(/\s+/)
     let ok = true
     for (let j = 0; j < parts.length && ok; j++) {

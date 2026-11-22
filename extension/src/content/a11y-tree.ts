@@ -188,16 +188,32 @@ export function buildA11yTree(
   const viewH = globalThis.innerHeight || document.documentElement.clientHeight || 0
   const viewW = globalThis.innerWidth || document.documentElement.clientWidth || 0
   let above = 0, below = 0, aside = 0
-  const placement = (el: Element): "in" | "above" | "below" | "aside" => {
+  type Clip = { top: number; bottom: number; left: number; right: number }
+  const screen: Clip = { top: 0, bottom: viewH, left: 0, right: viewW }
+  const placement = (el: Element, clip: Clip): "in" | "above" | "below" | "aside" => {
     if (!opts.viewport) return "in"
     const r = el.getBoundingClientRect()
-    if (r.bottom <= 0) return "above"
-    if (r.top >= viewH) return "below"
-    if (r.right <= 0 || r.left >= viewW) return "aside"
+    if (r.bottom <= clip.top) return "above"
+    if (r.top >= clip.bottom) return "below"
+    if (r.right <= clip.left || r.left >= clip.right) return "aside"
     return "in"
   }
+  // A scrolling or clipping box hides what lies outside it, even when that
+  // part is inside the browser window.
+  const innerClip = (el: Element, style: CSSStyleDeclaration | null, clip: Clip): Clip => {
+    if (!opts.viewport || !style) return clip
+    const clipsY = style.overflowY !== "visible", clipsX = style.overflowX !== "visible"
+    if (!clipsX && !clipsY) return clip
+    const r = el.getBoundingClientRect()
+    return {
+      top: clipsY ? Math.max(clip.top, r.top) : clip.top,
+      bottom: clipsY ? Math.min(clip.bottom, r.bottom) : clip.bottom,
+      left: clipsX ? Math.max(clip.left, r.left) : clip.left,
+      right: clipsX ? Math.min(clip.right, r.right) : clip.right,
+    }
+  }
 
-  function walk(el: Element, d: number) {
+  function walk(el: Element, d: number, clip: Clip = screen) {
     if (d > maxDepth) return
 
     // Visibility disposition. `display:none` / `visibility:hidden` hide the
@@ -223,7 +239,9 @@ export function buildA11yTree(
     const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES, style ?? undefined)
     const prefix = compact ? ">".repeat(d) : "  ".repeat(d)
 
-    if (selfVisible && isLandmark && !isInteractiveEl && placement(el) === "in") {
+    // A fixed box escapes its ancestors' clipping.
+    const own = opts.viewport && style?.position === "fixed" ? screen : clip
+    if (selfVisible && isLandmark && !isInteractiveEl && placement(el, own) === "in") {
       const rawName = getAccessibleName(el)
       const hasName = !!rawName && rawName !== (el.textContent || "").trim().slice(0, 80)
       const name = lineName(rawName)
@@ -235,12 +253,12 @@ export function buildA11yTree(
       }
     }
 
-    const where = selfVisible && isInteractiveEl ? placement(el) : "in"
+    const where = selfVisible && isInteractiveEl ? placement(el, own) : "in"
     if (where === "above") above++
     else if (where === "below") below++
     else if (where === "aside") aside++
 
-    if (selfVisible && isHeading && filter === "all" && placement(el) === "in") {
+    if (selfVisible && isHeading && filter === "all" && placement(el, own) === "in") {
       const name = lineName(getAccessibleName(el))
       if (compact) {
         lines.push(`${prefix}heading|${name}`)
@@ -271,17 +289,18 @@ export function buildA11yTree(
       }
     }
 
+    const inner = innerClip(el, style, own)
     const shadow = getShadowRoot(el)
     if (shadow) {
       const shadowPrefix = compact ? ">".repeat(d + 1) : `${prefix}  `
       lines.push(`${shadowPrefix}shadow-root`)
       for (const child of Array.from(shadow.children)) {
-        walk(child, d + 2)
+        walk(child, d + 2, inner)
       }
     }
 
     for (const child of Array.from(el.children)) {
-      walk(child, isLandmark && selfVisible ? d + 1 : d)
+      walk(child, isLandmark && selfVisible ? d + 1 : d, inner)
     }
   }
 

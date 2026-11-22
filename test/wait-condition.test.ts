@@ -78,6 +78,14 @@ describe("background wait loop", () => {
     const r = await waitCondition(1, { type: "wait_condition", kind: "url", text: "/done", timeout: 2000 }, undefined, 20)
     expect(r.success).toBe(true)
   })
+  test("a frame that never answers cannot hold the wait past its deadline", async () => {
+    ;(globalThis as { chrome: { tabs: { sendMessage: unknown } } }).chrome.tabs.sendMessage = () => {}
+    const started = Date.now()
+    const r = await waitCondition(1, { type: "wait_condition", kind: "text", text: "x", timeout: 150 }, undefined, 20)
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(r.success).toBe(false)
+    expect((r.data as { met: unknown }).met).toBeNull()
+  })
   test("timeout 0 checks once (verify)", async () => {
     const r = await waitCondition(1, { type: "wait_condition", kind: "text", text: "x", timeout: 0 }, undefined, 20)
     expect(r.success).toBe(false)
