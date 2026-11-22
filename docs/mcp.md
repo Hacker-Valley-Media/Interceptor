@@ -50,6 +50,14 @@ sub-verbs, and return shapes live in the discovery resources:
 `interceptor://manifest`, `interceptor://help/macos`, `interceptor://help/desktop`, `interceptor://desktop/capabilities`, `interceptor://help/ios`,
 `interceptor://extensions`, and `interceptor://help/{verb}`.
 
+`interceptor_browser` also takes `steps: [{verb, args}]` in place of `verb` to run
+several browser commands in one call. Each step passes the same tier check as a
+single call, the first refused or failed step stops the list, and the result
+holds every step's output. Use `verify` as a step to check a result: it is a
+read-tier verb and also appears in the `interceptor_read` menu. The CLI's `run`
+verb is arbitrary-exec over MCP, because its child steps would not pass through
+the tier check; use `steps` instead.
+
 Neutral `desktop` calls request the CLI's JSON contract after the operator
 permission check. `structuredContent` preserves native refusal codes, delivery
 details and image metadata, including errors marked `isError: true`. An input

@@ -26,6 +26,13 @@
 </head>
 <body>
 <main>
+  <section data-sparkle-version="2.1.15">
+    <h2>Interceptor 2.1.15</h2>
+    <time datetime="2026-11-22">November 22, 2026</time>
+    <p>Pages settle faster: a page that is already quiet no longer waits a fixed 200 ms, and a navigation settles once, at DOM ready. <code>back</code> on a cached page returns in well under a second instead of 10. <code>act</code> on the same page prints what changed instead of the whole tree, <code>read --viewport</code> lists only what is on screen, links print shorter, and a screenshot is saved to a file instead of printed as base64.</p>
+    <p>New: <code>wait --text|--gone|--url|--selector</code>, <code>act --until</code>, <code>verify</code> (passed, failed or unverifiable for a page, a file or a native app), <code>run</code> (many commands in one call) and MCP <code>steps</code>. On macOS, tree reads use one accessibility message per element, <code>macos act</code> waits for the app to go quiet and reports what changed, and <code>macos type</code> sends up to 20 characters per key event.</p>
+    <p>A tab group closed by the idle timer reopens its last page on the next command, and a bundle of global flags passed as one word is split.</p>
+  </section>
   <section data-sparkle-version="2.1.14">
     <h2>Interceptor 2.1.14</h2>
     <time datetime="2026-11-20">November 20, 2026</time>

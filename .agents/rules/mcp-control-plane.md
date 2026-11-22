@@ -36,7 +36,9 @@ invariants; extend `test/mcp-*.test.ts` whenever you touch this surface.
    destructive+exec are refused unless `INTERCEPTOR_MCP_ALLOW` (operator env)
    permits the tier/verb, and then still require a `confirm:true` speed-bump.
    `interceptor_raw` is off unless `raw` is allowed. Do not weaken this to a
-   model-set gate.
+   model-set gate. `interceptor_browser` `steps` runs each step through the same
+   gate (`runSteps`); the `run` verb is exec tier because its child steps would
+   not pass through this gate.
 
 4. **Inbound content is fenced.** `output.ts` wraps content-bearing verb output
    (page text, trees, file/network reads) in an untrusted-data fence
