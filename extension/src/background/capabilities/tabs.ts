@@ -4,7 +4,7 @@ import {
   namedGroups, hydrateNamedGroups, hasTabGroupApi, managedGroupWindows, readoptNamedGroups,
   removeTabsAndEmptiedGroups
 } from "../tab-group"
-import { resolveTabLifecycle, policyMayDecideReuse } from "../tab-lifecycle"
+import { resolveTabLifecycle, policyMayDecideReuse, setReopenFloor } from "../tab-lifecycle"
 import { waitForTabLoad } from "../content-bridge"
 import { rememberPriorActive } from "../switch-back"
 import { setKeepalive } from "../tab-keepalive"
@@ -284,6 +284,8 @@ export async function handleTabActions(
       if (!label || !GROUP_LABEL_RE.test(label)) {
         return { success: false, error: `group_close requires a valid label (got '${label ?? ""}')` }
       }
+      // The agent closed it on purpose: an earlier idle-sweep closure must not bring it back.
+      await setReopenFloor(label)
       const groupId = await ensureNamedGroup(label)
       if (groupId === -1) {
         return { success: false, error: `group '${label}' not found` }

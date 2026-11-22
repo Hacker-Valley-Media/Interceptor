@@ -189,13 +189,37 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
     /// through `target`. Shared with AuthDialogDomain (issue #244) so the admin
     /// prompt gets exactly the delivery `type` uses. False when no event
     /// source could be created.
-    static func postUnicodeKeystrokes(_ text: String, to target: InputTarget, shouldContinue: () -> Bool = { true }) -> Bool {
+    /// Text split into key-event strings: up to `maxUnits` UTF-16
+    /// units each, never splitting a character. Newline, return and tab go in
+    /// events of their own, so apps that act on them see the same keys as before.
+    static func unicodeChunks(_ text: String, maxUnits: Int = 20) -> [[UniChar]] {
+        var chunks: [[UniChar]] = []
+        var current: [UniChar] = []
+        for char in text {
+            let units = Array(String(char).utf16)
+            if char == "\n" || char == "\r" || char == "\r\n" || char == "\t" {
+                if !current.isEmpty { chunks.append(current); current = [] }
+                chunks.append(units)
+                continue
+            }
+            if !current.isEmpty && current.count + units.count > maxUnits { chunks.append(current); current = [] }
+            current += units
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
+    }
+
+    /// `chunked` sends up to 20 UTF-16 units per key event instead of one
+    /// character: about 11 ms of fixed sleep per event, so 1,000 characters
+    /// went from about 11 s to about 0.6 s. The admin-dialog path keeps one
+    /// character per event.
+    static func postUnicodeKeystrokes(_ text: String, to target: InputTarget, chunked: Bool = false, shouldContinue: () -> Bool = { true }) -> Bool {
         // Text carries its own Unicode value. A held modifier from the shared
         // session would turn background text into shortcuts instead.
         guard let source = CGEventSource(stateID: .privateState) else { return false }
-        for char in text {
+        let pieces: [[UniChar]] = chunked ? unicodeChunks(text) : text.map { Array(String($0).utf16) }
+        for utf16 in pieces {
             guard shouldContinue() else { return false }
-            let utf16 = Array(String(char).utf16)
             // Allocate both before posting either. A partial delivery is never
             // reported as a completed sequence when event creation fails.
             guard let downEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
@@ -407,7 +431,7 @@ final class InputDomain: DomainHandler, @unchecked Sendable {
         DispatchQueue.global().async {
             guard let posted = BackgroundInputSession.gesture(session, {
                 if let physical { return Self.postPhysicalKeys(physical, to: postTarget) }
-                return Self.postUnicodeKeystrokes(text, to: postTarget)
+                return Self.postUnicodeKeystrokes(text, to: postTarget, chunked: action["perChar"] as? Bool != true)
             }) else {
                 completion(WireFormat.error(Self.deliveryFailed))
                 return

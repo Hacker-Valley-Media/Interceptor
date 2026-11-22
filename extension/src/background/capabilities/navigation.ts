@@ -6,7 +6,7 @@ type ActionResult = { success: boolean; error?: string; data?: unknown; tabId?: 
 // conclude there was nothing to go to.
 const HISTORY_GO_START_MS = 2000
 
-type HistoryDeps = { waitForTabLoad: (tabId: number) => Promise<unknown> }
+type HistoryDeps = { waitForTabLoad: (tabId: number, timeoutMs?: number, nav?: undefined, alreadyLoaded?: () => Promise<boolean>) => Promise<unknown> }
 
 async function waitForNavigationStart(tabId: number, beforeUrl: string, timeoutMs = HISTORY_GO_START_MS): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
@@ -33,11 +33,19 @@ export async function historyGo(tabId: number, delta: -1 | 1, deps: HistoryDeps 
   const label = delta < 0 ? "back" : "forward"
   const before = await chrome.tabs.get(tabId).catch(() => null)
   if (!before) return { success: false, error: `tab ${tabId} not found` }
+  // The history entry has another URL: once the tab shows it and reports
+  // complete, the step is done. A back/forward-cache restore
+  // fires no DOMContentLoaded and completes before the load listeners attach,
+  // so without this every `back` waited the 10 s stage-1 timer (10,062 ms).
+  const movedAndLoaded = async () => {
+    const now = await chrome.tabs.get(tabId).catch(() => null)
+    return !!now && now.status === "complete" && !!now.url && now.url !== before.url
+  }
   let apiError: string
   try {
     if (delta < 0) await chrome.tabs.goBack(tabId)
     else await chrome.tabs.goForward(tabId)
-    await deps.waitForTabLoad(tabId)
+    await deps.waitForTabLoad(tabId, undefined, undefined, movedAndLoaded)
     return { success: true }
   } catch (err) {
     apiError = (err as Error).message
@@ -66,14 +74,14 @@ export async function historyGo(tabId: number, delta: -1 | 1, deps: HistoryDeps 
     if (!(await waitForNavigationStart(tabId, before.url ?? ""))) {
       return { success: false, error: `${apiError} (page-side history.${label}() also failed: ${(err as Error).message})` }
     }
-    await deps.waitForTabLoad(tabId)
+    await deps.waitForTabLoad(tabId, undefined, undefined, movedAndLoaded)
     return { success: true }
   }
   if (ack === "popstate" || ack === "hashchange") return { success: true }
   if (!ack && !(await waitForNavigationStart(tabId, before.url ?? ""))) {
     return { success: false, error: `no ${label} history for tab ${tabId} — nothing to go ${label} to` }
   }
-  await deps.waitForTabLoad(tabId)
+  await deps.waitForTabLoad(tabId, undefined, undefined, movedAndLoaded)
   return { success: true }
 }
 

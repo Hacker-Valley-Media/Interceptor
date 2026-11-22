@@ -143,6 +143,32 @@ async function runVerb(
   return toResult({ surface, verb, run, fenceEnabled: session.fence })
 }
 
+/**
+ * Several browser commands in one MCP call. Each step is gated
+ * and run exactly like a single call; the first refused or failed step stops
+ * the list, and its error is the result's error.
+ */
+export async function runSteps(
+  steps: Array<{ verb: string; args?: string[] }>,
+  session: Session,
+  flags: { group?: string; context?: string; tab?: number; confirm?: boolean },
+  run: typeof runVerb = runVerb,
+): Promise<McpResult> {
+  const content: McpResult["content"] = []
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]
+    const args = step.args || []
+    const r = await run("browser", step.verb, args, session, flags, [step.verb, ...args])
+    content.push({ type: "text", text: `[${i + 1}/${steps.length}] ${[step.verb, ...args].join(" ")}${r.isError ? "  (failed)" : ""}` }, ...r.content)
+    if (r.isError) {
+      content.push({ type: "text", text: `stopped at step ${i + 1} of ${steps.length}` })
+      return { content, isError: true }
+    }
+  }
+  content.push({ type: "text", text: `${steps.length}/${steps.length} steps ok` })
+  return { content }
+}
+
 export function buildServer(platform: string = process.platform): McpServer {
   // Windows and Linux have no macOS or iOS surface: those tools are not offered there, and the
   // desktop menu lists only the families their provider has (shared/desktop-support.json).
@@ -165,17 +191,25 @@ export function buildServer(platform: string = process.platform): McpServer {
       "Drive the user's real signed-in Chrome/Brave/Safari via Interceptor (DOM, network, tabs, editors, screenshots). " +
       "verb menu: " + foldMenu(BROWSER_VERBS) +
       ". Put sub-args/flags in `args` (see the interceptor://manifest resource for exact flags/returns). " +
+      "Several commands in one call: pass `steps` [{verb, args}] instead of verb; each step is gated like a single call and the first error stops the list (use verb 'verify' as a step to check a result). " +
       "eval/save run page code and require operator opt-in + confirm.",
     inputSchema: {
-      verb: z.enum(verbEnum(BROWSER_VERBS)).describe("browser verb"),
+      verb: z.enum(verbEnum(BROWSER_VERBS)).optional().describe("browser verb (omit when passing steps)"),
       args: z.array(z.string()).optional().describe("verb arguments + flags, verbatim"),
+      steps: z.array(z.object({
+        verb: z.enum(verbEnum(BROWSER_VERBS)),
+        args: z.array(z.string()).optional(),
+      })).min(1).optional().describe("run these in order in one call; stops at the first error"),
       context: z.string().optional().describe("route to a specific browser context/profile"),
       tab: z.number().optional().describe("target a specific tab id"),
       confirm: z.boolean().optional().describe("required for exec-tier verbs (eval/save) when operator-allowed"),
     },
-  }, async (a: { verb: string; args?: string[]; context?: string; tab?: number; confirm?: boolean }) => {
+  }, async (a: { verb?: string; args?: string[]; steps?: Array<{ verb: string; args?: string[] }>; context?: string; tab?: number; confirm?: boolean }) => {
+    const flags = { group: gid(), context: a.context, tab: a.tab, confirm: a.confirm }
+    if (a.steps?.length) return runSteps(a.steps, session, flags)
+    if (!a.verb) return { content: [{ type: "text", text: "interceptor_browser needs a verb, or steps: [{verb, args}]" }], isError: true }
     const args = a.args || []
-    return runVerb("browser", a.verb, args, session, { group: gid(), context: a.context, tab: a.tab, confirm: a.confirm }, [a.verb, ...args])
+    return runVerb("browser", a.verb, args, session, flags, [a.verb, ...args])
   })
 
   // ── interceptor_macos ───────────────────────────────────────────────────────

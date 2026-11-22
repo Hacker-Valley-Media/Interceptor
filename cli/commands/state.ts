@@ -42,7 +42,8 @@ export function parseStateCommand(filtered: string[]): Action {
         type: "get_a11y_tree",
         depth: depthIdx !== -1 ? parseInt(filtered[depthIdx + 1]) : 15,
         filter: filterIdx !== -1 ? filtered[filterIdx + 1] : "interactive",
-        maxChars: maxCharsIdx !== -1 ? parseInt(filtered[maxCharsIdx + 1]) : 50000
+        maxChars: maxCharsIdx !== -1 ? parseInt(filtered[maxCharsIdx + 1]) : 50000,
+        ...(filtered.includes("--viewport") ? { viewport: true } : {})
       }
     }
 

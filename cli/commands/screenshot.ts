@@ -1,8 +1,9 @@
 /**
  * cli/commands/screenshot.ts — screenshot, canvas, capture
  */
-import { existsSync } from "node:fs"
-import { dirname, extname, resolve } from "node:path"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { dirname, extname, join, resolve } from "node:path"
 import { normalizeArgsSplit } from "../normalize"
 import { normalizeRefArg } from "../parse"
 
@@ -38,6 +39,19 @@ export function screenshotOut(filtered: string[], format: string | undefined): {
   return { out, format: inferred }
 }
 
+/** Where a text-mode screenshot goes when no --out or --save was given. */
+export function tempScreenshotDir(base = process.env.TMPDIR || tmpdir()): string {
+  return join(base, "interceptor", "screenshots")
+}
+
+export function writeTempScreenshot(bytes: Uint8Array, ext: string, base?: string): string {
+  const dir = tempScreenshotDir(base)
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, `screenshot-${Date.now()}-${process.pid}.${ext}`)
+  writeFileSync(path, bytes)
+  return path
+}
+
 export function parseScreenshotCommand(filtered: string[], positionalCount?: number): Action {
   const normalized = positionalCount === undefined ? normalizeArgsSplit(filtered) : { argv: filtered, positionalCount }
   filtered = normalized.argv
@@ -55,11 +69,13 @@ export function parseScreenshotCommand(filtered: string[], positionalCount?: num
         if (formatFlag) bgAction.format = formatFlag
         if (filtered.includes("--quality")) bgAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])
         if (filtered.includes("--save")) bgAction.save = true
+        if (filtered.includes("--data-url")) bgAction.dataUrl = true
         if (outTarget) Object.assign(bgAction, { save: true, out: outTarget.out, format: outTarget.format })
         return bgAction
       }
       const ssAction: Action = { type: "screenshot" }
       if (filtered.includes("--save")) ssAction.save = true
+      if (filtered.includes("--data-url")) ssAction.dataUrl = true
       if (formatFlag) ssAction.format = formatFlag
       if (outTarget) Object.assign(ssAction, { save: true, out: outTarget.out, format: outTarget.format })
       if (filtered.includes("--quality")) ssAction.quality = parseInt(filtered[filtered.indexOf("--quality") + 1])

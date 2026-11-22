@@ -176,11 +176,26 @@ export function buildA11yTree(
   maxDepth: number,
   filter: string,
   includeStyle = false,
-  format: "verbose" | "compact" = "verbose"
+  format: "verbose" | "compact" = "verbose",
+  opts: { viewport?: boolean } = {}
 ): string {
   if (depth > maxDepth) return ""
   const lines: string[] = []
   const compact = format === "compact"
+  // --viewport: only what is on screen now, plus a count of the
+  // refs scrolled out of view, so an agent reading a long page gets the part
+  // it can act on instead of the document head.
+  const viewH = globalThis.innerHeight || document.documentElement.clientHeight || 0
+  const viewW = globalThis.innerWidth || document.documentElement.clientWidth || 0
+  let above = 0, below = 0, aside = 0
+  const placement = (el: Element): "in" | "above" | "below" | "aside" => {
+    if (!opts.viewport) return "in"
+    const r = el.getBoundingClientRect()
+    if (r.bottom <= 0) return "above"
+    if (r.top >= viewH) return "below"
+    if (r.right <= 0 || r.left >= viewW) return "aside"
+    return "in"
+  }
 
   function walk(el: Element, d: number) {
     if (d > maxDepth) return
@@ -208,7 +223,7 @@ export function buildA11yTree(
     const isInteractiveEl = isInteractive(el, INTERACTIVE_TAGS, INTERACTIVE_ROLES, style ?? undefined)
     const prefix = compact ? ">".repeat(d) : "  ".repeat(d)
 
-    if (selfVisible && isLandmark && !isInteractiveEl) {
+    if (selfVisible && isLandmark && !isInteractiveEl && placement(el) === "in") {
       const rawName = getAccessibleName(el)
       const hasName = !!rawName && rawName !== (el.textContent || "").trim().slice(0, 80)
       const name = lineName(rawName)
@@ -220,7 +235,12 @@ export function buildA11yTree(
       }
     }
 
-    if (selfVisible && isHeading && filter === "all") {
+    const where = selfVisible && isInteractiveEl ? placement(el) : "in"
+    if (where === "above") above++
+    else if (where === "below") below++
+    else if (where === "aside") aside++
+
+    if (selfVisible && isHeading && filter === "all" && placement(el) === "in") {
       const name = lineName(getAccessibleName(el))
       if (compact) {
         lines.push(`${prefix}heading|${name}`)
@@ -229,7 +249,7 @@ export function buildA11yTree(
       }
     }
 
-    if (selfVisible && isInteractiveEl) {
+    if (selfVisible && isInteractiveEl && where === "in") {
       const refId = getOrAssignRef(el)
       const shown = displayRoleName(el, role || tag, getAccessibleName(el))
       const name = shown.name
@@ -266,5 +286,12 @@ export function buildA11yTree(
   }
 
   walk(root, depth)
+  if (opts.viewport) lines.push(viewportNote(above, below, aside))
   return lines.join("\n")
+}
+
+export function viewportNote(above: number, below: number, aside: number): string {
+  const parts = [`${above} above`, `${below} below`]
+  if (aside) parts.push(`${aside} beside`)
+  return `(viewport only: ${parts.join(", ")} the visible area; scroll, or drop --viewport for the whole page)`
 }

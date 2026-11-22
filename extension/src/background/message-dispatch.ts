@@ -7,7 +7,9 @@ import { routeAction } from "./router"
 import { needsTab } from "./no-tab-actions"
 import { isReadAction, TAB_FREE_ACTIONS } from "./read-actions"
 import { resolveWorkingTabId } from "./resolve-tab"
-import { recordGroupActivity } from "./tab-lifecycle"
+import { recordGroupActivity, lastReapedUrl, setReopenFloor } from "./tab-lifecycle"
+import { handleTabActions } from "./capabilities/tabs"
+import { waitForTabLoad } from "./content-bridge"
 import { consumeSwitchBack } from "./switch-back"
 
 export const MESSAGE_QUEUE_CAP = 50
@@ -212,6 +214,7 @@ export async function handleDaemonMessage(msg: {
   // handlers act on `action.tabId` whenever it is present, so the gate below
   // must validate that same tab, never a different one.
   let tabId = resolveWorkingTabId(msg.tabId, action.tabId)
+  let reopenNote: string | undefined
 
   const fail = (error: string): void => {
     clearTimeout(requestTimer)
@@ -261,6 +264,27 @@ export async function handleDaemonMessage(msg: {
         .filter(t => typeof t.id === "number")
         .sort((a, b) => (b.id as number) - (a.id as number))[0]
       tabId = candidate?.id
+    }
+    if (!tabId && groupHard) {
+      // The idle sweep closed this group under a working agent: bring its
+      // last page back in a background tab. A read continues on
+      // it; anything else stops, since refs from before do not exist there.
+      const reaped = await lastReapedUrl(groupLabel!)
+      if (reaped) {
+        const created = await handleTabActions({ type: "tab_create", url: reaped.url, group: groupLabel, reuse: false }, -1).catch(() => null)
+        const newId = (created?.data as { tabId?: number } | undefined)?.tabId
+        if (created?.success && typeof newId === "number") {
+          await setReopenFloor(groupLabel!)
+          await waitForTabLoad(newId).catch(() => undefined)
+          const note = `group '${groupLabel}' was closed by the idle timer ${reaped.minutesAgo} min ago and was reopened at ${reaped.url} in background tab ${newId} (page state from before is gone)`
+          if (!isReadAction(action.type)) {
+            fail(`${note}. Nothing was clicked or typed: read the page first (interceptor read), since refs from before do not exist on it.`)
+            return
+          }
+          tabId = newId
+          reopenNote = note
+        }
+      }
     }
     if (!tabId && groupHard) {
       // Explicitly-grouped requests resolve only within their group. Soft
@@ -379,6 +403,7 @@ export async function handleDaemonMessage(msg: {
     const result = await routeAction(action, tabId!)
     if (tabId) result.tabId = tabId
     if (softFallback && result.success) result.warning = result.warning ? `${softFallback}; ${result.warning}` : softFallback
+    if (reopenNote && result.success) result.warning = result.warning ? `${reopenNote}; ${result.warning}` : reopenNote
     clearTimeout(requestTimer)
     pendingRequests.delete(msg.id)
     console.log(`[${shortId}] complete ${action.type} ${Date.now() - startTime}ms`)

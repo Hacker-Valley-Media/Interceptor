@@ -10,7 +10,8 @@ test("compound parsing preserves empty text and ownership flags without treating
   expect(parseMacosCommand(["macos","inspect","--pid","2"],undefined,true)).toMatchObject({type:"macos_inspect_app",pid:2})
   expect(parseMacosCommand(["macos","inspect","--pid","2","e1"],undefined,true)).toMatchObject({type:"macos_inspect",ref:"e1",pid:2})
   for(const args of [["act"],["act","e1","a","b"],["act","e1","--pid"],["act","e1","--pid","1x"],["read","unexpected"],["read","--depth","1.5"],["read","--pid","1","--pid","2"],["inspect","--unknown","2"]])expect(()=>parseMacosCommand(["macos",...args],undefined,true)).toThrow()
-  expect(parseMacosCommand(["macos","act","e1","--pid","2"])).toMatchObject({type:"macos_compound",sub:"act",text:"--pid",pid:2})
+  // The macOS path typed the literal "--pid" (and "--app") into the target; like desktop, flags are never text now.
+  expect(parseMacosCommand(["macos","act","e1","--pid","2"])).toMatchObject({type:"macos_compound",sub:"act",text:undefined,pid:2})
 })
 
 test("compound reply validation checks request identity, action kind and explicit unknown metadata",()=>{

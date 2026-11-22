@@ -274,47 +274,81 @@ export async function sendNetAllFrames(
   return { ...top, data: merged.sort((a, b) => at(a) - at(b)) }
 }
 
+type NavEvent = { addListener(cb: (d: { tabId: number; frameId: number }) => void): void; removeListener(cb: (d: { tabId: number; frameId: number }) => void): void }
+
+/**
+ * Settles a navigation once: at DOMContentLoaded of the committed document
+ * plus one quiet window, or at `status: "complete"` plus one quiet window,
+ * whichever comes first. Waiting for `complete` alone held every
+ * reused-tab `open` and `navigate` until the page's last image and ad loaded.
+ * DOMContentLoaded only counts after a frame-0 commit seen here, so an earlier
+ * navigation of the same tab cannot end the wait. A back/forward-cache restore
+ * never fires DOMContentLoaded (webNavigation.md, "Event order"), and Safari
+ * and Electron may have no webNavigation, so the `complete` path stays.
+ */
 export function waitForTabLoad(
   tabId: number,
-  timeoutMs = 15000
-): Promise<{ ready: boolean; elapsed: number }> {
+  timeoutMs = 15000,
+  nav: { committed?: NavEvent; domContentLoaded?: NavEvent } = webNavigationEvents(),
+  // A caller that can tell the new document apart (history: the URL changed)
+  // passes a cheap check polled every 100 ms. A back/forward-cache restore
+  // completes before these listeners attach and fires no DOMContentLoaded, so
+  // without it `back` waited the full 10 s stage-1 timer (measured 10,062 ms).
+  alreadyLoaded?: () => Promise<boolean>
+): Promise<{ ready: boolean; elapsed: number; settledOn?: "dom" | "complete" | "timeout" }> {
   return new Promise((resolve) => {
     const start = Date.now()
     const stage1Timeout = Math.min(timeoutMs, 10000)
+    let finished = false
+    let committed = false
 
-    const hardTimer = setTimeout(async () => {
+    const finish = async (settledOn: "dom" | "complete" | "timeout", minRemaining: number) => {
+      if (finished) return
+      finished = true
+      clearTimeout(hardTimer)
+      clearTimeout(stage1Timer)
+      if (pollTimer) clearInterval(pollTimer)
       chrome.tabs.onUpdated.removeListener(listener)
-      const probeResult = await probeContentReady(tabId, Math.max(timeoutMs - (Date.now() - start), 1000))
-      resolve({ ready: probeResult, elapsed: Date.now() - start })
-    }, timeoutMs)
+      nav.committed?.removeListener(onCommitted)
+      nav.domContentLoaded?.removeListener(onDomContentLoaded)
+      const ready = await probeContentReady(tabId, Math.max(timeoutMs - (Date.now() - start), minRemaining))
+      resolve({ ready, elapsed: Date.now() - start, settledOn })
+    }
+
+    const hardTimer = setTimeout(() => { void finish("timeout", 1000) }, timeoutMs)
 
     function listener(updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
-        clearTimeout(hardTimer)
-        clearTimeout(stage1Timer)
-        chrome.tabs.onUpdated.removeListener(listener)
-        const remaining = Math.max(timeoutMs - (Date.now() - start), 2000)
-        probeContentReady(tabId, remaining).then((ready) => {
-          resolve({ ready, elapsed: Date.now() - start })
-        })
-      }
+      if (updatedTabId === tabId && changeInfo.status === "complete") void finish("complete", 2000)
+    }
+    function onCommitted(d: { tabId: number; frameId: number }) {
+      if (d.tabId === tabId && d.frameId === 0) committed = true
+    }
+    function onDomContentLoaded(d: { tabId: number; frameId: number }) {
+      if (d.tabId === tabId && d.frameId === 0 && committed) void finish("dom", 2000)
     }
 
     // Cleared on the listener path: a stray stage-1 probe would otherwise fire
     // seconds later against whatever tab state exists by then.
     const stage1Timer = setTimeout(async () => {
       const tab = await chrome.tabs.get(tabId).catch(() => null)
-      if (tab && tab.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener)
-        clearTimeout(hardTimer)
-        const remaining = Math.max(timeoutMs - (Date.now() - start), 2000)
-        const ready = await probeContentReady(tabId, remaining)
-        resolve({ ready, elapsed: Date.now() - start })
-      }
+      if (tab && tab.status === "complete") void finish("complete", 2000)
     }, stage1Timeout)
 
     chrome.tabs.onUpdated.addListener(listener)
+    nav.committed?.addListener(onCommitted)
+    nav.domContentLoaded?.addListener(onDomContentLoaded)
+    let polling = false
+    const pollTimer = alreadyLoaded ? setInterval(async () => {
+      if (polling || finished) return
+      polling = true
+      try { if (await alreadyLoaded()) void finish("complete", 2000) } catch {} finally { polling = false }
+    }, 100) : undefined
   })
+}
+
+function webNavigationEvents(): { committed?: NavEvent; domContentLoaded?: NavEvent } {
+  const wn = (chrome as unknown as { webNavigation?: { onCommitted?: NavEvent; onDOMContentLoaded?: NavEvent } }).webNavigation
+  return { committed: wn?.onCommitted, domContentLoaded: wn?.onDOMContentLoaded }
 }
 
 /**
@@ -351,5 +385,73 @@ export async function probeContentReady(tabId: number, timeoutMs: number): Promi
     return result.success && ((result.data as { stable?: boolean } | undefined)?.stable ?? true)
   } catch {
     return false
+  }
+}
+
+type WaitConditionAction = { type: string; kind?: unknown; text?: unknown; selector?: unknown; count?: unknown; timeout?: unknown; [key: string]: unknown }
+
+export function describeCondition(a: WaitConditionAction): string {
+  switch (a.kind) {
+    case "text": return `text "${a.text}"`
+    case "gone": return `text "${a.text}" to disappear`
+    case "url": return `the URL to contain "${a.text}"`
+    case "selector": return typeof a.count === "number" ? `${a.count} or more matches for ${a.selector}` : `an element matching ${a.selector}`
+    case "gone_selector": return `no element matching ${a.selector}`
+    default: return String(a.kind)
+  }
+}
+
+/**
+ * `wait --text|--gone|--url|--selector|--count` and `act --until` 
+ * Polled every 100 ms from the service worker: page timers in a hidden
+ * tab are throttled to about a second. The URL is read from the tab, so the
+ * wait survives a navigation; a page check that fails while a new document
+ * loads is retried until the deadline. A timeout of 0 checks once (verify).
+ */
+export async function waitCondition(
+  tabId: number,
+  action: WaitConditionAction,
+  frameId?: number,
+  pollMs = 100,
+): Promise<ContentScriptResult> {
+  const timeout = Math.max(0, Number(action.timeout ?? 10_000) || 0)
+  const start = Date.now()
+  let observed = "not checked"
+  // Whether the last look actually read the page. A wait that ends without
+  // one reports met: null, so verify says unverifiable rather than failed.
+  let readable = false
+  for (;;) {
+    let met = false
+    if (action.kind === "url") {
+      const tab = await chrome.tabs.get(tabId).catch(() => null)
+      const url = tab?.url ?? ""
+      met = url.includes(String(action.text ?? ""))
+      readable = !!tab
+      observed = `URL is ${url || "(unknown)"}`
+    } else {
+      const reply = await sendToContentScriptOnce(tabId, { type: "condition_check", kind: action.kind, text: action.text, selector: action.selector, count: action.count }, frameId)
+        .catch((err: Error) => ({ success: false, error: err.message }) as ContentScriptResult)
+      if (reply.success) {
+        const d = reply.data as { met?: boolean; observed?: string }
+        met = d?.met === true
+        readable = true
+        observed = d?.observed ?? observed
+      } else if (/unknown wait condition|invalid selector/.test(reply.error ?? "")) {
+        return { success: false, error: reply.error }
+      } else {
+        readable = false
+        observed = `page not readable yet (${reply.error ?? "no reply"})`
+      }
+    }
+    const elapsed = Date.now() - start
+    if (met) return { success: true, data: { met: true, elapsed, observed } }
+    if (elapsed >= timeout) {
+      return {
+        success: false,
+        error: timeout === 0 ? `not met: ${describeCondition(action)}; ${observed}` : `timed out after ${timeout} ms waiting for ${describeCondition(action)}; last seen: ${observed}`,
+        data: { met: readable ? false : null, elapsed, observed },
+      }
+    }
+    await new Promise(r => setTimeout(r, Math.min(pollMs, Math.max(1, timeout - elapsed))))
   }
 }

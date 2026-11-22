@@ -144,6 +144,11 @@ build_extension() {
   cp node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm.js extension/dist/tesseract/
   cp node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm extension/dist/tesseract/
   cp extension/tesseract-assets/eng.traineddata.gz extension/dist/tesseract/
+  # Fail here, not after signing and notarizing: a checkout whose node_modules
+  # lacks patches/tesseract.js@7.0.0.patch builds the remote-code fallbacks the
+  # Chrome Web Store rejected (Blue Argon), and only the store-zip step at the
+  # end of release.sh used to notice. Run `bun install`.
+  bun scripts/check-extension-code.ts extension/dist
   chmod 644 extension/dist/* 2>/dev/null || true
   chmod -R u+rwX,go+rX extension/dist/icons extension/dist/tesseract 2>/dev/null || true
 }

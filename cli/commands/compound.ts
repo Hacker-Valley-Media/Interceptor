@@ -59,6 +59,24 @@ export function textCap(full: boolean): { maxChars?: number } {
   return full || TEXT_MAX_CHARS > 50_000 ? { maxChars: FULL_TEXT_CHARS } : {}
 }
 
+// A hidden background tab of a lazy SPA can render almost nothing until it
+// reads as visible: YouTube gave 418 characters hidden and 2,857 after
+// `tab keepalive`.
+// A lazy page that painted nothing while hidden: no controls in its tree and
+// almost no text. Text length alone fired on ordinary short pages in every
+// hidden benchmark tab (345 and 109 characters, 2026-11-21), and on the
+// 109-character one it sent the agent into a wasted keepalive. A page whose
+// tree has refs rendered; without a tree read, only near-empty text counts.
+export const THIN_TEXT_CHARS = 200
+export const EMPTY_TEXT_CHARS = 40
+export function hiddenThinHint(textResult: Result | undefined, tabId: number | undefined, tree?: string): string | undefined {
+  if (!textResult?.success || (textResult as { hidden?: unknown }).hidden !== true) return undefined
+  const text = typeof textResult.data === "string" ? textResult.data.trim() : ""
+  if (tree !== undefined && /\[e\d/.test(tree)) return undefined
+  if (text.length >= (tree === undefined ? EMPTY_TEXT_CHARS : THIN_TEXT_CHARS)) return undefined
+  return `this tab is hidden and returned only ${text.length} characters of text; if the page renders lazily, run 'interceptor tab keepalive ${tabId ?? "<id>"}' and read again`
+}
+
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
   // Explicit truncation marker so agents know to scope or widen instead of
@@ -71,14 +89,19 @@ function truncateText(text: string, maxChars: number): string {
 // compound sub-actions get it here (it was accepted and dropped before).
 let anyTabForCompound = false
 
-// A read that fell back to the user's tab says so once,
-// on stderr (compound verbs do not print their sub-actions' warnings).
+// A read that fell back to the user's tab, or ran on a group the idle timer
+// had closed and the dispatcher reopened, says so once on
+// stderr (compound verbs do not print their sub-actions' warnings).
 let fallbackNoted = false
+export function compoundNotice(warning: unknown): string | undefined {
+  if (typeof warning !== "string") return undefined
+  return warning.split("; ").find(part => part.startsWith("reading the active tab") || part.includes("was closed by the idle timer"))
+}
 function noteFallback(result: Result): void {
-  const w = (result as { warning?: unknown }).warning
-  if (fallbackNoted || !result.success || typeof w !== "string" || !w.startsWith("reading the active tab")) return
+  const notice = result.success ? compoundNotice((result as { warning?: unknown }).warning) : undefined
+  if (fallbackNoted || !notice) return
   fallbackNoted = true
-  console.error(`warning: ${w.split("; ")[0]}`)
+  console.error(`warning: ${notice}`)
 }
 
 async function send(action: Action, tabId?: number, useWs = false, contextId?: string): Promise<Result> {
@@ -141,13 +164,15 @@ export function buildReadTreeAction(opts: {
   includeStyle: boolean
   includeFrames: boolean
   treeFormat?: "verbose" | "compact"
+  viewport?: boolean
 }): Action {
   const base: Omit<Action, "type"> = {
     depth: 15,
     filter: opts.filterMode,
     maxChars: TREE_MAX_CHARS,
     includeStyle: opts.includeStyle,
-    ...(opts.treeFormat === "compact" ? { treeFormat: "compact" } : {})
+    ...(opts.treeFormat === "compact" ? { treeFormat: "compact" } : {}),
+    ...(opts.viewport ? { viewport: true } : {})
   }
 
   if (opts.includeFrames) {
@@ -270,7 +295,7 @@ export async function runOpen(
 
   if (!textOnly) {
     treeResult = await send(
-      { type: "get_a11y_tree", depth: 15, filter: "interactive", maxChars: TREE_MAX_CHARS, ...(openTreeFormat === "compact" ? { treeFormat: "compact" } : {}) },
+      { type: "get_a11y_tree", depth: 15, filter: "interactive", maxChars: TREE_MAX_CHARS, ...(openTreeFormat === "compact" ? { treeFormat: "compact" } : {}), ...(filtered.includes("--viewport") ? { viewport: true } : {}) },
       tabId, useWs, contextId
     )
   }
@@ -321,6 +346,8 @@ export async function runOpen(
     parts.push(textContent)
   }
   console.log(parts.join("\n"))
+  const thin = hiddenThinHint(textResult, tabId, textOnly ? undefined : treeData)
+  if (thin) console.error(`hint: ${thin}`)
 
   // Layer C: one rate-limited, opt-out hint to stderr when an agent opens a
   // search engine and no research ledger is active. Information, not coercion —
@@ -553,6 +580,7 @@ export async function runRead(
   const treeFormatIdx = filtered.indexOf("--tree-format")
   const treeFormat: "verbose" | "compact" =
     treeFormatIdx !== -1 && filtered[treeFormatIdx + 1] === "compact" ? "compact" : "verbose"
+  const viewport = filtered.includes("--viewport")
 
   // Check for optional ref argument (skip flags)
   const refArg = filtered[1] && !filtered[1].startsWith("--") ? filtered[1] : undefined
@@ -567,7 +595,7 @@ export async function runRead(
   if (!textOnly) {
     if (includeFrames) {
       const framesResp = await send(
-        buildReadTreeAction({ target, filterMode, includeStyle, includeFrames, treeFormat }),
+        buildReadTreeAction({ target, filterMode, includeStyle, includeFrames, treeFormat, viewport }),
         globalTabId, useWs, contextId
       )
       if (framesResp.success && framesResp.data && typeof framesResp.data === "object" && Array.isArray((framesResp.data as { frames?: unknown[] }).frames)) {
@@ -592,7 +620,7 @@ export async function runRead(
       }
     } else {
       treeResult = await send(
-        buildReadTreeAction({ target, filterMode, includeStyle, includeFrames, treeFormat }),
+        buildReadTreeAction({ target, filterMode, includeStyle, includeFrames, treeFormat, viewport }),
         globalTabId, useWs, contextId
       )
     }
@@ -637,6 +665,8 @@ export async function runRead(
   }
   if (textContent) parts.push(textContent)
   console.log(parts.join("\n"))
+  const thin = hiddenThinHint(textResult, treeResult?.tabId ?? textResult?.tabId ?? globalTabId, textOnly ? undefined : treeData)
+  if (thin) console.error(`hint: ${thin}`)
 }
 
 // ── interceptor act <ref> [value] ───────────────────────────────────────────────────
@@ -667,6 +697,13 @@ export async function runAct(
   const append = flags.includes("--append")
   const submit = flags.includes("--submit")
   const noRead = flags.includes("--no-read")
+  const wantTree = flags.includes("--tree")
+  const untilIdx = flags.indexOf("--until")
+  const until = untilIdx !== -1 ? flags[untilIdx + 1] : undefined
+  if (untilIdx !== -1 && (until === undefined || until.startsWith("--"))) {
+    output(jsonMode, { success: false, error: "act --until requires the text to wait for, e.g. interceptor act e5 --until \"Saved\"" })
+    return
+  }
   const keysIdx = flags.indexOf("--keys")
   if (keysIdx !== -1 && (flags[keysIdx + 1] === undefined || flags[keysIdx + 1].startsWith("--"))) {
     output(jsonMode, { success: false, error: "act --keys requires a key chord, e.g. interceptor act e5 --keys Enter" })
@@ -763,10 +800,21 @@ export async function runAct(
     return
   }
 
+  // Typed into a field whose form is the obvious next step.
+  const hint = value !== undefined && !submit && keysIdx === -1 && !useOs &&
+    (actionResult!.data as { submittable?: unknown } | undefined)?.submittable === true
+    ? `the field is in a form: add --submit to submit it (interceptor act ${ref} "<text>" --submit)`
+    : undefined
+
   // Step 2: Wait for DOM stability (may fail if page navigated)
   let treeResult: Result = { success: false }
   let diffResult: Result = { success: false }
+  let untilNote: string | undefined
   try {
+    if (until !== undefined) {
+      const waited = await send({ type: "wait_condition", kind: "text", text: until, timeout: timeout > 2000 ? timeout : 10_000 }, globalTabId, useWs, contextId)
+      untilNote = waited.success ? `"${until}" appeared` : `"${until}" did not appear: ${humanizeError(waited.error) ?? "timed out"}`
+    }
     await send({ type: "wait_stable", ms: 200, timeout }, globalTabId, useWs, contextId)
 
     // Step 3: diff BEFORE the tree read. The tree read caches a fresh
@@ -807,19 +855,66 @@ export async function runAct(
   if (jsonMode) {
     output(jsonMode, {
       success: true,
-      data: { tree: treeData || undefined, diff: diffData || NO_DIFF, text: textContent || undefined }
-    })
+      data: { tree: treeData || undefined, diff: diffData || NO_DIFF, text: textContent || undefined, ...(untilNote ? { until: untilNote } : {}) },
+      ...(hint ? { hint } : {}),
+    } as Result)
     return
   }
 
+  console.log(formatActOutput({
+    treeData, diffResult, textContent, submit, wantTree,
+    treeAdded: (treeResult as { treeAdded?: unknown }).treeAdded,
+    untilNote,
+  }))
+  if (hint) console.error(`hint: ${hint}`)
+}
+
+/**
+ * act's text output. A same-page action prints what changed and
+ * the ref lines it revealed, not the whole tree (an act after a link click
+ * used to return a 50K tree). The tree prints after a navigation, with --tree,
+ * or when an older extension cannot say which lines are new.
+ */
+export function formatActOutput(o: {
+  treeData: string
+  diffResult: Result
+  textContent: string
+  submit: boolean
+  wantTree: boolean
+  treeAdded?: unknown
+  untilNote?: string
+}): string {
+  const navigated = opensNewPage(o.diffResult)
+  const added = Array.isArray(o.treeAdded) ? (o.treeAdded as unknown[]).map(String) : null
+  const showTree = navigated || o.wantTree || added === null
   const parts: string[] = []
-  if (treeData) parts.push(treeData)
-  const changes = formatActChanges(diffResult)
+  if (showTree && o.treeData) parts.push(o.treeData, "")
+  if (o.untilNote) parts.push(`--- until: ${o.untilNote} ---`)
+  const changes = formatActChanges(o.diffResult)
   // submit_form returns before the server answers, so the old page can still be here.
-  if (submit && changes[0] === "no visible changes") changes[0] = "no visible changes yet; the form may still be submitting, so read the page before submitting again"
-  parts.push("", "--- changes ---", ...changes)
-  if (textContent) parts.push("", "---", textContent)
-  console.log(parts.join("\n"))
+  if (o.submit && changes[0] === "no visible changes") changes[0] = "no visible changes yet; the form may still be submitting, so read the page before submitting again"
+  if (!showTree && added && added.length) {
+    if (changes[0] === "no visible changes") changes.length = 0
+    const changedRefs = new Set(changes.map(l => l.match(/^\s*~ (e\d+(?:_\d+)?)/)?.[1]).filter(Boolean))
+    const fresh = added.filter(l => !changedRefs.has(l.match(/^\[(e\d+(?:_\d+)?)/)?.[1] ?? ""))
+    if (fresh.length) {
+      changes.push("new on the page:")
+      for (const line of fresh.slice(0, ACT_CHANGE_LINES)) changes.push(`  ${line}`)
+      if (fresh.length > ACT_CHANGE_LINES) changes.push(`  … ${fresh.length - ACT_CHANGE_LINES} more (interceptor read)`)
+    }
+    if (!changes.length) changes.push("no visible changes")
+  }
+  parts.push("--- changes ---", ...changes)
+  if (!showTree) {
+    // Only claim old refs still work when the action removed none of them:
+    // a re-rendered list removes and re-adds its items under new refs.
+    const removedRefs = Array.isArray((o.diffResult.data as { removed?: unknown } | undefined)?.removed) && ((o.diffResult.data as { removed: unknown[] }).removed.length > 0)
+    parts.push("", removedRefs
+      ? "(same page: refs listed as removed are gone, use the new ones above; pass --tree for the whole tree)"
+      : "(same page: refs from your last read still work; pass --tree for the whole tree)")
+  }
+  if (o.textContent) parts.push("", "---", o.textContent)
+  return parts.join("\n")
 }
 
 // No earlier read of this page, so nothing was compared. `changes: null` keeps

@@ -171,11 +171,13 @@ needed. Go deeper on any verb:
 const MAP_BROWSER = `BROWSER — a signed-in Chrome/Brave profile, background tabs by default:
   Compound   open <url> · read [ref] · act <ref> ["text"] · inspect     one-call open / read / act / debug
   Read text  text (visible innerText) · text --markdown (keeps headings/tables) · html <ref> (raw markup)
-  Structure  tree (a11y refs) · find "<q>" (current-page text + elements) · state · diff
+  Structure  tree (a11y refs) · find "<q>" (current-page text + elements) · state · diff · read --viewport (only what is on screen)
   Web        websearch "<q>" (configured default provider → managed background tab + page read)
   Extract    table · links · images · forms · query <css> · exists · count · attr · style      structured JSON; query returns at most 20 plus count/returned/truncated
   Act        act <ref> · click · type · select · focus · hover · drag · dblclick · rightclick · check · keys · scroll
-  Navigate   navigate <url> · back · forward · scroll · wait <ms> · wait-stable
+  Navigate   navigate <url> · back · forward · scroll · wait --text|--gone|--url "<t>" · wait --selector <css> · wait <ms> · wait-stable
+  Check      verify --text|--url|--selector … (page) · verify --file <path>${process.platform === "darwin" ? ` · verify --app <name> --ax-text "<t>"` : ""}   passed / failed / unverifiable, exit 0/1/2
+             run -   many commands in one call, one per line; 'expect <verify flags>' lines check results; stops at the first failure
   Tabs       tabs · tab new|close|switch · window · frames · session · group (per-agent isolation) · contexts
   Network    net (passive log → HAR/pcapng) · headers · override (rewrite requests) · sse
   Capture    screenshot [--element <ref>] · canvas · ocr · save --out <path> <expr>  (page bytes straight to disk) · eval <js> [--main]
@@ -274,11 +276,14 @@ Compound (agent-optimized):
   interceptor read --include-frames          Walk all reachable frames (non-top refs are e<frameId>_<n>)
   interceptor read --tree-format compact     Compact tree (>-depth + [ref|role|name|attr=val]); agent context economy
   interceptor read --tree-format verbose     Indented legacy tree (default; humans prefer this)
+  interceptor read --viewport                Only refs on screen now, plus a count of refs above and below (also on open, tree)
   interceptor style inject --css "<rules>"  Inject a stylesheet; returns a handle (all frames by default)
   interceptor style inject --css "<rules>" --top-only   Inject only into the top frame
   interceptor style remove <handle>          Remove a previously injected stylesheet
-  interceptor act <ref>                      Click + wait + return updated tree + what changed (text and elements)
-  interceptor act <ref> "value"              Type into field + wait + return updated tree + what changed
+  interceptor act <ref>                      Click + wait + what changed (text, element states, new refs); same page: no tree, your refs still work
+  interceptor act <ref> "value"              Type into field + wait + what changed
+  interceptor act <ref> --tree               Also print the whole tree (always printed after a navigation)
+  interceptor act <ref> --until "<text>"     After the action, wait (default 10 s) for that text to appear
   interceptor act <ref> "value" --submit     Type, then submit the field's form (what Enter would do); 'act <ref> --submit' submits only
   interceptor act '[e5]'                     A ref copied with its brackets works too (quote it: zsh treats [..] as a pattern)
   interceptor act <ref> --trusted            Native OS input; inspect capabilities.data.osInput for click/key/type/move support. ${process.platform === "darwin" ? "Full reaches covered and hidden Chromium tabs without moving focus. Safari requires a showing tab in a non-minimized window. Browser-only keeps permission-qualified foreground input." : process.platform === "win32" ? "Requires Full and an active tab in a visible foreground window. Clicks also check the input point; key and type do not check occlusion. Hidden and minimized targets refuse before delivery." : "Browser OS input is unavailable in 2.1.12 because native browser window identity was not qualified. Use synthetic input; trusted requests refuse before delivery."}
@@ -304,6 +309,7 @@ State:
   interceptor tree                           Semantic accessibility tree
   interceptor tree --filter all              Include landmarks + headings
   interceptor tree --depth N --max-chars N   Limit depth and output size
+  interceptor tree --viewport                Only refs on screen now, plus a count of refs above and below
   interceptor diff                           Changes since last state/tree read
   interceptor find "query"                   Find current-page text + accessible elements
   interceptor find "query" --text-only       Return bounded rendered-text snippets only
@@ -386,6 +392,31 @@ Navigation:
   interceptor forward                        History forward
   interceptor scroll <up|down|top|bottom>    Scroll page
   interceptor wait <ms>                      Wait milliseconds
+  interceptor wait --text "<t>"              Wait until the page text contains it (case-insensitive; --timeout <ms>, default 10000)
+  interceptor wait --gone "<t>"              Wait until that text is gone
+  interceptor wait --url "<t>"               Wait until the tab URL contains it (survives navigation)
+  interceptor wait --selector <css> [--count N]   Wait until N (default 1) elements match (shadow roots included)
+  interceptor wait --gone-selector <css>     Wait until no element matches
+
+Extract (structured JSON, usually one fast call instead of an eval scraper):
+  interceptor table [selector]               Table rows and columns
+  interceptor links                          Every link: text and full href
+  interceptor forms                          Forms and their fields (password values masked)
+  interceptor images                         Images: src, alt, size
+  interceptor query <css>                    Elements matching a selector, with refs (at most 20, plus count)
+  interceptor exists <css> | count <css>     Whether / how many elements match
+  interceptor attr <ref> <name>              One attribute of an element
+  interceptor style <ref> <prop>             One computed style value
+  interceptor meta                           <meta> tags of the page
+
+Verify and script:
+  interceptor verify --text "<t>" | --gone "<t>" | --url "<t>" | --selector <css>   Check the page now
+  interceptor verify --file <path> [--contains "<t>"] [--min-bytes N] [--modified-within <s>]   Check a saved file
+${process.platform === "darwin" ? `  interceptor verify --app <name> --ax-text "<t>" | --window-title "<t>"   Check a native app
+` : ""}                                             Each check prints passed, failed or unverifiable; exit 0 all passed, 1 a check failed, 2 unverifiable
+  interceptor run <file> | run -             Run one command per line (no 'interceptor' prefix); 'expect <verify flags>' lines check results
+  interceptor run - --keep-going             Run every step even after a failure (default: stop at the first)
+  interceptor run - --full                   Print every step's whole output (default: 1500 chars per step except the last)
 
 Tabs:
   interceptor tabs                           List all tabs ('tab list' does the same)
@@ -408,7 +439,8 @@ Tabs:
                                              Change current window state; don't combine maximized/fullscreen/minimized with geometry
 
 Capture:
-  interceptor screenshot                     Full-page DOM-render screenshot (default — works without focus)
+  interceptor screenshot                     Full-page DOM-render screenshot (default — works without focus); saved to a file under $TMPDIR/interceptor/screenshots, result has filePath
+  interceptor screenshot --data-url          Print the image inline as a data URL instead (--json always carries dataUrl)
   interceptor screenshot --selector "h1"    Capture only the matching element
   interceptor screenshot --element N         Capture element by ref (off-screen elements supported)
   interceptor screenshot --region X,Y,W,H   Capture page region (rendered + cropped)
@@ -638,6 +670,8 @@ macOS Bridge (full install only):
   interceptor macos read [--app <name>]      Tree + frontmost app info
   interceptor macos act <ref>                Click ref via AX press → no focus change
   interceptor macos act <ref> "<text>"       Type via AX value-set → no focus change
+                                             Waits until the app stops sending AX notifications (100 ms quiet, 1 s cap), then prints what changed since your last read; no tree
+  interceptor macos act <ref> --tree         Also print the whole tree (printed anyway when there is no earlier read)
   interceptor macos inspect [--app <name>]   Tree + apps snapshot + frontmost info
   interceptor macos inspect <ref>            Full attributes for a ref
 
@@ -670,7 +704,8 @@ macOS Bridge (full install only):
   interceptor macos click X,Y                Coordinate click via system HID (legacy)
   interceptor macos click <ref> --double|--right
   interceptor macos type <ref> "<text>"      AX value-set on text-bearing role
-  interceptor macos type "<text>" --app <name> [--window <id>]   Type into that app's window
+  interceptor macos type "<text>" --app <name> [--window <id>]   Type into that app's window (up to 20 characters per key event)
+  interceptor macos type "<text>" --app <name> --per-char        One character per key event, for an app that drops chunked text
   interceptor macos type [<ref>] --secret <name> Type a vault secret by name (allowlisted per app)
   interceptor macos keys "Meta+A" [--app <name>|--pid N] [--window <id>]
   interceptor macos scroll up|down|left|right N [--app <name>] [--ref <ref>] [--window <id>] [--times N] [--interval-ms N]

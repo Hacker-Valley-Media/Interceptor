@@ -487,3 +487,44 @@ export function registerTabLifecycle(): void {
     })
   }
 }
+
+// ── Reopen after the idle sweep ─────────────────────────────────
+// "group … has no tabs" hit 72 times in 40 sessions since 2026-10-15, most of
+// them a group the 10-minute idle sweep had closed under a working agent. The
+// sweep log already records the URLs it closed, so the dispatcher can bring the
+// last one back. A group the agent closed itself must stay closed: `group
+// close` and each reopen move a floor, and only sweep closures after it count.
+export const REOPEN_WINDOW_MS = 24 * 60 * 60 * 1000
+const REOPEN_FLOOR_PREFIX = "groupReopenFloor:"
+
+type SweepEntry = { at?: unknown; group?: unknown; urls?: unknown }
+
+export function pickReopen(log: unknown[], label: string, now: number, floor = 0): { url: string; closedAt: number; minutesAgo: number } | null {
+  for (let i = log.length - 1; i >= 0; i--) {
+    const e = log[i] as SweepEntry
+    if (!e || e.group !== label) continue
+    const closedAt = typeof e.at === "string" ? Date.parse(e.at) : NaN
+    if (!Number.isFinite(closedAt) || closedAt <= floor || now - closedAt > REOPEN_WINDOW_MS) return null
+    const urls = Array.isArray(e.urls) ? (e.urls as unknown[]).filter((u): u is string => typeof u === "string" && /^https?:|^file:/.test(u)) : []
+    if (!urls.length) return null
+    return { url: urls[urls.length - 1], closedAt, minutesAgo: Math.max(0, Math.round((now - closedAt) / 60_000)) }
+  }
+  return null
+}
+
+export async function setReopenFloor(label: string, at = Date.now()): Promise<void> {
+  try { await sessionArea().set({ [`${REOPEN_FLOOR_PREFIX}${label}`]: at }) } catch {}
+}
+
+export async function lastReapedUrl(label: string, now = Date.now()): Promise<{ url: string; closedAt: number; minutesAgo: number } | null> {
+  if (!label) return null
+  try {
+    const stored = (await chrome.storage.local.get(SWEEP_LOG_KEY)) as Record<string, unknown>
+    const log = Array.isArray(stored?.[SWEEP_LOG_KEY]) ? (stored[SWEEP_LOG_KEY] as unknown[]) : []
+    const floorKey = `${REOPEN_FLOOR_PREFIX}${label}`
+    const floor = Number(((await sessionArea().get(floorKey)) as Record<string, unknown>)?.[floorKey] ?? 0) || 0
+    return pickReopen(log, label, now, floor)
+  } catch {
+    return null
+  }
+}

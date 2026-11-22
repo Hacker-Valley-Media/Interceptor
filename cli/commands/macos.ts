@@ -383,6 +383,8 @@ export async function runMacosCommand(
     console.log(JSON.stringify(result.data, null, 2))
   } else if (action.type === "macos_apps" && Array.isArray(result.data)) {
     console.log(formatAppRows(result.data))
+  } else if (action.type === "macos_compound" && action.sub === "act" && result.data && typeof result.data === "object") {
+    console.log(formatMacosAct(result.data as Record<string, unknown>, filtered.includes("--tree")))
   } else if (typeof result.data === "string") {
     console.log(result.data)
   } else if (result.data !== undefined && result.data !== null) {
@@ -390,6 +392,38 @@ export async function runMacosCommand(
   } else {
     console.log("ok")
   }
+}
+
+const MACOS_ACT_LINES = 20
+
+/**
+ * `macos act` in text: what the action did, how long the app
+ * took to settle, and what changed in its tree since your last read, instead
+ * of the whole tree (10,673 bytes for one fixture click). The tree prints with
+ * --tree, or when there was no earlier read to compare. --json is unchanged.
+ */
+export function formatMacosAct(d: Record<string, unknown>, wantTree: boolean): string {
+  const head = `${d.action ?? "acted"} ${d.ref ?? ""}${typeof d.settledMs === "number" ? ` (settled in ${d.settledMs} ms)` : ""}`.trim()
+  const c = d.changes && typeof d.changes === "object" ? d.changes as Record<string, unknown> : null
+  const tree = typeof d.tree === "string" ? d.tree.trimEnd() : ""
+  const parts = [head]
+  if (!c || wantTree) parts.push("", tree)
+  if (c) {
+    const list = (k: string) => Array.isArray(c[k]) ? (c[k] as unknown[]).map(String) : []
+    const lines: string[] = []
+    for (const [title, key, mark] of [["added", "added", "+"], ["removed", "removed", "-"], ["changed", "changed", "~"]] as const) {
+      const items = list(key)
+      if (!items.length) continue
+      lines.push(`${title}:`)
+      for (const item of items.slice(0, MACOS_ACT_LINES)) lines.push(`  ${mark} ${item}`)
+      if (items.length > MACOS_ACT_LINES) lines.push(`  … ${items.length - MACOS_ACT_LINES} more (interceptor macos read)`)
+    }
+    parts.push("", "--- changes ---", ...(lines.length ? lines : ["no visible changes"]))
+    if (!wantTree) parts.push("", "(refs from your last read still work; pass --tree for the whole tree)")
+  } else {
+    parts.push("", "(no earlier read of this app to compare; this tree is the baseline for the next act)")
+  }
+  return parts.join("\n")
 }
 
 /** Plain-text `apps`: one `[pid] name * (hidden) — bundle id` line per app; the fields after the name only when the host reports them. */
@@ -694,13 +728,15 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
         return action
       }
       if (physicalValues && (physicalValues.length > 2 || (physicalValues.length === 2 && !/^e\d+$/.test(physicalValues[0])))) throw new Error("physical type accepts text or ref plus text")
-      const typeValues = physicalValues ?? filtered.slice(2)
+      // --per-char: one character per key event (the old path) for an app that drops chunked text.
+      const typeValues = physicalValues ?? filtered.slice(2).filter(value => value !== "--per-char")
       const refOrText = typeValues[0]
       if (!refOrText) { if (desktop) throw new Error("type requires text or ref + text"); console.error("error: interceptor macos type requires text or ref + text"); process.exit(1) }
       const action: Action = /^e\d+$/.test(refOrText) && (desktop ? typeValues[1] !== undefined : !!typeValues[1])
         ? { type: "macos_type", ref: refOrText, text: typeValues[1] }
         : { type: "macos_type", text: refOrText }
       if (keycodesUS) action.keycodesUS = true
+      if (filtered.includes("--per-char")) action.perChar = true
       if (typeApp) action.app = typeApp
       if (typePid !== undefined) action.pid = typePid
       withWindow(action, filtered, desktop)
@@ -1415,7 +1451,8 @@ export function parseMacosCommand(filtered: string[], extensionPrefixes?: Set<st
       }
       const target = filtered[2]
       if (!target) { console.error("error: interceptor macos act requires a ref"); process.exit(1) }
-      const text = filtered[3]
+      // --tree is an output flag, never the text to type.
+      const text = filtered.slice(3).find(value => value !== "--tree" && value !== "--app" && value !== "--pid" && filtered[filtered.indexOf(value) - 1] !== "--app" && filtered[filtered.indexOf(value) - 1] !== "--pid")
       return {
         type: "macos_compound",
         sub: "act",

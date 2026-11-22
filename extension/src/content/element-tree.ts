@@ -33,6 +33,49 @@ export function buildSelector(el: Element): string {
 // the current URL, which an SPA changes, and would make diffs report every
 // relative link as changed.
 export const TREE_HREF_CHARS = 300
+export const TREE_QUERY_CHARS = 80
+
+// Query parameters that only say where a click came from. Dropped from tree
+// hrefs (links and inspect keep the whole value).
+const TRACKING_PARAM = /^(utm_[a-z0-9_]+|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid|igshid|yclid|_hsenc|_hsmi)$/i
+
+function cleanQuery(query: string): string {
+  if (!query) return ""
+  const kept = query.split("&").filter((pair) => pair && !TRACKING_PARAM.test(pair.split("=", 1)[0]))
+  const joined = kept.join("&")
+  return joined.length > TREE_QUERY_CHARS ? `${joined.slice(0, TREE_QUERY_CHARS)}…` : joined
+}
+
+/**
+ * The href as a tree line shows it. Hrefs were 50 to 67% of link
+ * line bytes. A same-origin absolute link prints as its path, tracking
+ * parameters go, and a query over 80 characters is cut. Relative hrefs keep
+ * their written form so a diff does not report every link as changed when an
+ * SPA moves to another route.
+ */
+export function shortHref(raw: string, origin: string): string {
+  let out = raw
+  const absolute = /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")
+  if (absolute) {
+    let url: URL | null = null
+    try { url = new URL(raw, origin) } catch {}
+    if (url && (url.protocol === "http:" || url.protocol === "https:")) {
+      const query = cleanQuery(url.search.slice(1))
+      const tail = `${url.pathname}${query ? `?${query}` : ""}${url.hash}`
+      out = url.origin === origin ? tail : `${url.origin}${tail}`
+    }
+  } else {
+    const hashAt = raw.indexOf("#")
+    const hash = hashAt === -1 ? "" : raw.slice(hashAt)
+    const beforeHash = hashAt === -1 ? raw : raw.slice(0, hashAt)
+    const queryAt = beforeHash.indexOf("?")
+    if (queryAt !== -1) {
+      const query = cleanQuery(beforeHash.slice(queryAt + 1))
+      out = `${beforeHash.slice(0, queryAt)}${query ? `?${query}` : ""}${hash}`
+    }
+  }
+  return out.length > TREE_HREF_CHARS ? `${out.slice(0, TREE_HREF_CHARS)}…` : out
+}
 
 export function getRelevantAttrs(el: Element): string {
   const attrs: string[] = []
@@ -43,7 +86,7 @@ export function getRelevantAttrs(el: Element): string {
 
   if (tag === "a") {
     const href = el.getAttribute("href")
-    if (href) attrs.push(`href="${href.length > TREE_HREF_CHARS ? `${href.slice(0, TREE_HREF_CHARS)}…` : href}"`)
+    if (href) attrs.push(`href="${shortHref(href, globalThis.location?.origin ?? "")}"`)
   }
   if (tag === "input") {
     const type = el.getAttribute("type")
